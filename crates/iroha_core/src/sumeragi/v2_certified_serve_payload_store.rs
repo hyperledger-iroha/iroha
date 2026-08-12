@@ -274,6 +274,11 @@ impl RecoveredCertifiedServeCompletedPayload<'_> {
 
 /// Closed recovered state of one Certified-Serve payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    variant_size_differences,
+    clippy::large_enum_variant,
+    reason = "the recovered state is a Copy borrowed view; boxing would allocate during startup recovery"
+)]
 pub(crate) enum RecoveredCertifiedServePayloadState<'a> {
     /// The exact request was admitted but has no durable terminal result.
     Pending,
@@ -307,7 +312,7 @@ impl RecoveredCertifiedServePayload<'_> {
     }
 
     /// Durable state recovered for the request.
-    pub(crate) const fn state(&self) -> RecoveredCertifiedServePayloadState<'_> {
+    pub(crate) fn state(&self) -> RecoveredCertifiedServePayloadState<'_> {
         match &self.payload.state {
             PersistedCertifiedServePayloadStateV1::Pending => {
                 RecoveredCertifiedServePayloadState::Pending
@@ -1876,7 +1881,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "certified-serve-payload-store-test".into(),
+            network_id: crate::sumeragi::synthetic_network_id("certified-serve-payload-store-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1920,7 +1925,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "certified-serve-payload-recovery-test".into(),
+            network_id: crate::sumeragi::synthetic_network_id(
+                "certified-serve-payload-recovery-test",
+            ),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -2261,7 +2268,7 @@ mod tests {
         let (request, response) = request_and_response(&context, &keys[0], 0, b"authslot".to_vec());
         let (mut store, _) =
             CertifiedServePayloadStoreV1::open(temporary.path(), &context).expect("open store");
-        store.persist_pending(&request).expect("persist pending");
+        let _pending_receipt = store.persist_pending(&request).expect("persist pending");
 
         let mut nonretaining = response.clone();
         nonretaining.responder = 3;
@@ -2283,7 +2290,7 @@ mod tests {
             store.persist_completed(&request, &wrong_signer),
             Err(CertifiedServePayloadStoreError::InvalidFrame { .. })
         ));
-        store
+        let _completed_receipt = store
             .persist_completed(&request, &response)
             .expect("invalid attempts leave the pending request recoverable");
     }
@@ -2359,7 +2366,7 @@ mod tests {
             .persist_pending_with_verified_retention(&verified, &keys[0], &request)
             .expect("persist verified locally retained request");
         let outcome = CertifiedServePayloadNegativeOutcome::Rejected(19);
-        store
+        let _negative_receipt = store
             .persist_negative(pending.id(), outcome)
             .expect("persist typed negative");
         drop(store);
@@ -2398,7 +2405,7 @@ mod tests {
         let (mut store, _) =
             CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
                 .expect("open payload store");
-        store
+        let _pending_receipt = store
             .persist_pending_with_verified_retention(&verified, &keys[0], &request)
             .expect("persist locally retained request");
         drop(store);
@@ -2535,7 +2542,7 @@ mod tests {
             .expect("persist verified locally retained request");
         let responder = 1;
         let response = signed_certified_response(&request, manifest, body, responder, &keys);
-        payload_store
+        let _completed_receipt = payload_store
             .persist_completed_with_durable_body(&request, &durable_body, &body_store, &response)
             .expect("persist completed response");
         drop(payload_store);
@@ -2567,7 +2574,7 @@ mod tests {
         let (mut store, _) =
             CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
                 .expect("open payload store");
-        store
+        let _pending_receipt = store
             .persist_pending(&request)
             .expect("persist structurally valid request");
         drop(store);
@@ -2642,7 +2649,7 @@ mod tests {
         let (mut store, _) =
             CertifiedServePayloadStoreV1::open_with_max_entries(temporary.path(), &context, 1)
                 .expect("open one-entry store");
-        store
+        let _first_receipt = store
             .persist_pending(&first)
             .expect("persist first request");
         assert!(matches!(
@@ -2720,7 +2727,7 @@ mod tests {
         let (request, _) = request_and_response(&context, &keys[0], 0, b"foreign!".to_vec());
         let (mut store, _) =
             CertifiedServePayloadStoreV1::open(temporary.path(), &context).expect("open store");
-        store.persist_pending(&request).expect("persist pending");
+        let _pending_receipt = store.persist_pending(&request).expect("persist pending");
         drop(store);
 
         let mut foreign = context.clone();

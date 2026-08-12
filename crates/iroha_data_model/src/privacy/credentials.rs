@@ -222,7 +222,7 @@ pub struct PrivacyNativeConsensusBindingV1 {
     /// Exact genesis-header-derived network identity.
     pub network_id: NetworkId,
     /// Trusted committed genesis-block hash for this network.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
     /// Zero-based privacy action index within the transaction.
     pub action_index: u32,
@@ -452,7 +452,7 @@ pub struct PrivacyEncryptedOutputV1 {
     /// Commitment to the plaintext output.
     pub commitment: PrivacyCommitmentV1,
     /// Canonical authenticated ciphertext bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ciphertext: Vec<u8>,
 }
 
@@ -1252,7 +1252,7 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
 )]
 pub struct PrivacyZkAmsPhcCanonicalPayloadV1(
     /// Exact closed credential payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub [u8; ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1],
 );
 
@@ -2012,6 +2012,13 @@ impl norito::json::FastJsonWrite for PrivacyX509KeyUsageRequirementV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -2028,6 +2035,30 @@ impl norito::json::JsonDeserialize for PrivacyX509KeyUsageRequirementV1 {
 
     fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
         <bool as norito::json::JsonDeserialize>::json_from_map_key(key).map(Self)
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod x509_key_usage_json_tests {
+    use super::*;
+
+    #[test]
+    fn transparent_boolean_json_has_exact_checked_bound() {
+        for value in [
+            PrivacyX509KeyUsageRequirementV1::new(false),
+            PrivacyX509KeyUsageRequirementV1::new(true),
+        ] {
+            let legacy = norito::json::to_json(&value).expect("serialize requirement");
+            assert_eq!(
+                norito::json::to_json_bounded(&value, legacy.len())
+                    .expect("serialize at exact bound"),
+                legacy
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(&value, legacy.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
     }
 }
 

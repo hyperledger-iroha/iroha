@@ -27,14 +27,17 @@
 //! excludes the currently borrowed 43-ciphertext set (about 3.2 GiB), packed
 //! owner (about 172 MiB), opening/plaintext-lift duplication (about 38 MiB),
 //! source adapter, allocator overhead, OS page cache, and RSS evidence. It is
-//! therefore not an end-to-end residency claim or release evidence. The
-//! ten-row spool and retained cross-limb aggregates impose an independently
-//! enumerated 3,785,356,320-byte minimum external peak. The classified work
+//! therefore not an end-to-end residency claim or release evidence. This
+//! retired test prototype's ten-row spool and retained cross-limb aggregates
+//! used an independently enumerated 3,785,356,320-byte minimum external peak;
+//! it is not the concrete V2 spool layout. The classified work
 //! total is only a lower accounting: it omits sampler/rejection, batch mixing,
 //! quotient construction, and hash-byte work, and is blocked explicitly below.
 //! Zeroization covers named heap coefficient owners on Rust drop paths only;
 //! arithmetic/register/compiler temporaries and panic-abort are outside that
 //! best-effort guarantee, so no confidentiality or release claim follows.
+
+#![cfg(test)]
 
 use core::fmt;
 
@@ -1654,7 +1657,9 @@ mod tests {
             .find("frame.extend_from_slice(&opening.r.to_be_bytes())")
             .expect("postcommit r absorption");
         assert!(root_offset < r_offset);
-        assert!(parent.contains("#[path = \"phase23_rns_link_q_pcs_masking.rs\"]\nmod masking;"));
+        assert!(parent.contains(
+            "#[cfg(test)]\n#[path = \"phase23_rns_link_q_pcs_masking.rs\"]\nmod masking;"
+        ));
         assert!(!parent.contains(concat!("pub use ", "masking")));
         for false_gate in [
             "fiat_shamir_relation_adapter_implemented: false",

@@ -573,7 +573,7 @@ pub enum NetworkMessage {
     SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
     /// Torii proxy request routed across bounded Torii ingress proxy hops.
     #[codec(index = 17)]
-    ToriiProxyRequest(Arc<torii_proxy::ToriiProxyRequestV5>),
+    ToriiProxyRequest(Arc<torii_proxy::ToriiProxyRequestV6>),
     /// Torii proxy response returned to the ingress node.
     #[codec(index = 18)]
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
@@ -1077,9 +1077,9 @@ mod tests {
             QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionPublicationV1,
             TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
             TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
-            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1,
+            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1,
             TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -2012,9 +2012,10 @@ mod tests {
                 ),
             },
         ));
-        let torii_request = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        let torii_request = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::prehashed([0x14; 32]),
+            deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
@@ -2063,6 +2064,53 @@ mod tests {
             assert_eq!(message.topic(), NetworkTopic::Control);
             assert_eq!(raw_network_topic(message), NetworkTopic::Control);
             assert_eq!(message.subscriber_route(), SubscriberRoute::ToriiProxy);
+            assert_eq!(
+                iroha_p2p::network::reliable_progress_class(
+                    message.topic(),
+                    message.subscriber_route(),
+                ),
+                None,
+                "Torii proxy request/response carriers must use recoverable best-effort admission, not the reliable-progress corridor"
+            );
+        }
+
+        let target = PeerId::from(checked_topic_keypair().public_key().clone());
+        let capped = crate::IrohaNetwork::closed_for_tests()
+            .with_topic_plaintext_frame_cap_for_tests(NetworkTopic::Control, 1);
+        for message in [torii_request.clone(), torii_response.clone()] {
+            match capped.post_best_effort_recoverable(iroha_p2p::Post {
+                data: message,
+                peer_id: target.clone(),
+                priority: iroha_p2p::Priority::High,
+            }) {
+                Err(iroha_p2p::network::NetworkPostAdmissionError::Rejected {
+                    message,
+                    reason: iroha_p2p::network::NetworkActorAdmissionRejection::FrameTooLarge,
+                }) => {
+                    assert_eq!(message.data.topic(), NetworkTopic::Control);
+                    assert_eq!(message.data.subscriber_route(), SubscriberRoute::ToriiProxy);
+                }
+                other => panic!(
+                    "oversized actual Torii proxy carrier must fail exact recoverable admission: {other:?}"
+                ),
+            }
+        }
+
+        let network = crate::IrohaNetwork::closed_for_tests();
+        for message in [torii_request, torii_response] {
+            match network.post_best_effort_recoverable(iroha_p2p::Post {
+                data: message,
+                peer_id: target.clone(),
+                priority: iroha_p2p::Priority::High,
+            }) {
+                Err(iroha_p2p::network::NetworkPostAdmissionError::Closed { message }) => {
+                    assert_eq!(message.data.topic(), NetworkTopic::Control);
+                    assert_eq!(message.data.subscriber_route(), SubscriberRoute::ToriiProxy);
+                }
+                other => panic!(
+                    "actual Torii proxy carrier must reach best-effort actor admission: {other:?}"
+                ),
+            }
         }
     }
 
@@ -2072,12 +2120,13 @@ mod tests {
         #[norito(schema_name = "iroha_core::NetworkMessage")]
         enum BoxToriiProxyCarrier {
             #[codec(index = 17)]
-            Request(Box<ToriiProxyRequestV5>),
+            Request(Box<ToriiProxyRequestV6>),
         }
 
-        let request = ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        let request = ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::prehashed([0x24; 32]),
+            deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),

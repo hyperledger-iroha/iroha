@@ -7,10 +7,7 @@
 
 #[cfg(test)]
 use std::time::SystemTime;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-};
+use std::{collections::BTreeMap, str::FromStr};
 
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
@@ -2609,10 +2606,9 @@ fn active_account_id_rekey_suffix_for_alias<'world>(
     let predecessors = record
         .active_account_id_rekey_predecessors()
         .map_err(|_| ())?;
-    let mut unique_predecessors = BTreeSet::new();
-    for predecessor in predecessors {
+    for (index, predecessor) in predecessors.iter().enumerate() {
         if predecessor == &active_account_id
-            || !unique_predecessors.insert(predecessor.clone())
+            || predecessors[..index].contains(predecessor)
             || world.account(predecessor).is_ok()
         {
             return Err(());

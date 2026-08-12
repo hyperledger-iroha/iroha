@@ -1629,6 +1629,24 @@ pub struct ContractDeploymentStateResponseDto {
 }
 
 #[cfg(feature = "app_api")]
+/// Maximum number of exact state keys accepted in one first-release request.
+const CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1: usize = 10_000;
+#[cfg(feature = "app_api")]
+/// Retained variable response budget, derived from sixteen maximum-size V1 state records.
+///
+/// Prefix reads stop and expose `next_offset` before crossing this boundary;
+/// exact and explicit-path reads fail closed so callers can split the request.
+const CONTRACT_STATE_RESPONSE_RETAINED_BYTES_V1: usize =
+    16 * ivm::state_value::MAX_STATE_VALUE_RECORD_BYTES;
+#[cfg(feature = "app_api")]
+/// Maximum number of query-relevant state schemas retained while decoding one response.
+const CONTRACT_STATE_SCHEMA_MAX_ENTRIES_V1: usize = 10_000;
+#[cfg(feature = "app_api")]
+/// Aggregate canonical bytes admitted for query-relevant state schemas.
+const CONTRACT_STATE_SCHEMA_MAX_CANONICAL_BYTES_V1: usize =
+    16 * ivm::state_value::MAX_STATE_VALUE_SCHEMA_BYTES;
+
+#[cfg(feature = "app_api")]
 #[derive(
     Clone,
     Debug,
@@ -4888,895 +4906,7 @@ pub async fn handle_list_vk(
     Ok(resp)
 }
 
-#[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
-/// Optional query-string overrides for `/v1/query` endpoint.
-pub struct QueryOptions {
-    /// Override cursor mode: "ephemeral" or "stored".
-    pub cursor_mode: Option<String>,
-    /// Count mode: "bounded" avoids full count scans; "exact" preserves exact remaining counts.
-    pub count_mode: Option<String>,
-    /// Gas units provided for stored cursor mode (integer). When config minimum > 0,
-    /// stored cursors require at least this many units.
-    #[allow(dead_code)]
-    pub gas_units: Option<u64>,
-}
-
-/// Verify a signed query and return the authenticated request payload.
-#[derive(Debug)]
-pub struct SignedQueryAdmission {
-    network_id: NetworkId,
-    max_clock_skew: Duration,
-    max_time_to_live: Duration,
-    replay_cache: ReplayCache,
-}
-
-/// Invalid relationship between signed-query freshness and replay retention.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "signed-query replay retention must exceed twice the maximum clock skew and leave a nonzero request TTL"
-)]
-pub struct SignedQueryAdmissionConfigError;
-
-impl SignedQueryAdmission {
-    /// Construct exact-lineage signed-query admission with bounded one-shot replay protection.
-    ///
-    /// The maximum accepted request TTL is derived rather than configured independently:
-    /// `replay_retention - 2 * max_clock_skew`. This guarantees every consumed nonce remains
-    /// protected throughout the complete interval in which its signed request can be accepted.
-    pub fn new(
-        network_id: NetworkId,
-        max_clock_skew: Duration,
-        replay_retention: Duration,
-        replay_capacity: NonZeroUsize,
-    ) -> core::result::Result<Self, SignedQueryAdmissionConfigError> {
-        let complete_skew_window = max_clock_skew
-            .checked_mul(2)
-            .ok_or(SignedQueryAdmissionConfigError)?;
-        let max_time_to_live = replay_retention
-            .checked_sub(complete_skew_window)
-            .filter(|ttl| !ttl.is_zero())
-            .ok_or(SignedQueryAdmissionConfigError)?;
-        Ok(Self {
-            network_id,
-            max_clock_skew,
-            max_time_to_live,
-            replay_cache: ReplayCache::new(replay_retention, replay_capacity),
-        })
-    }
-
-    /// Return the exact genesis-lineage identity accepted by this boundary.
-    #[must_use]
-    pub const fn network_id(&self) -> NetworkId {
-        self.network_id
-    }
-
-    /// Return the largest signature-bound query lifetime accepted by this boundary.
-    #[must_use]
-    pub const fn max_time_to_live(&self) -> Duration {
-        self.max_time_to_live
-    }
-}
-
-fn signed_query_now_unix_ms() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| {
-            Error::from(ValidationFail::NotPermitted(
-                "node clock precedes Unix epoch".to_owned(),
-            ))
-        })?
-        .as_millis()
-        .try_into()
-        .map_err(|_| {
-            Error::from(ValidationFail::NotPermitted(
-                "node clock exceeds signed-query timestamp range".to_owned(),
-            ))
-        })
-}
-
-fn validate_signed_query_context_at(
-    payload: &QueryRequestWithAuthority,
-    admission: &SignedQueryAdmission,
-    now_ms: u64,
-) -> Result<()> {
-    if payload.network_id != admission.network_id {
-        return Err(Error::from(ValidationFail::NotPermitted(
-            "signed query targets a different network genesis".to_owned(),
-        )));
-    }
-
-    let max_clock_skew_ms = u64::try_from(admission.max_clock_skew.as_millis()).unwrap_or(u64::MAX);
-    if payload.creation_time_ms > now_ms.saturating_add(max_clock_skew_ms) {
-        return Err(Error::from(ValidationFail::NotPermitted(
-            "signed query creation time exceeds the allowed future clock skew".to_owned(),
-        )));
-    }
-
-    let request_ttl = Duration::from_millis(payload.time_to_live_ms.get());
-    if request_ttl > admission.max_time_to_live {
-        return Err(Error::from(ValidationFail::NotPermitted(format!(
-            "signed query time-to-live {} ms exceeds the replay-retention bound {} ms",
-            payload.time_to_live_ms,
-            admission.max_time_to_live.as_millis()
-        ))));
-    }
-    let expires_at_ms = payload
-        .creation_time_ms
-        .checked_add(payload.time_to_live_ms.get())
-        .ok_or_else(|| {
-            Error::from(ValidationFail::NotPermitted(
-                "signed query creation time plus time-to-live overflows".to_owned(),
-            ))
-        })?;
-    if now_ms >= expires_at_ms {
-        return Err(Error::from(ValidationFail::QueryFailed(
-            QueryExecutionFail::Expired,
-        )));
-    }
-    if payload.nonce == [0_u8; 32] {
-        return Err(Error::from(ValidationFail::NotPermitted(
-            "signed query nonce must not be all-zero".to_owned(),
-        )));
-    }
-    Ok(())
-}
-
-fn consume_signed_query_nonce(
-    payload: &QueryRequestWithAuthority,
-    admission: &SignedQueryAdmission,
-) -> Result<()> {
-    let replay_key = format!(
-        "{}:{}:{}",
-        payload.network_id,
-        payload.authority,
-        hex::encode(payload.nonce)
-    );
-    match admission.replay_cache.check_and_insert(replay_key) {
-        Ok(()) => Ok(()),
-        Err(ReplayInsertError::Replay) => Err(Error::from(ValidationFail::NotPermitted(
-            "signed query nonce already used".to_owned(),
-        ))),
-        Err(ReplayInsertError::Capacity | ReplayInsertError::LifetimeOverflow) => Err(Error::from(
-            ValidationFail::QueryFailed(QueryExecutionFail::CapacityLimit),
-        )),
-    }
-}
-
-/// Verify and consume one exact-lineage, fresh signed query request.
-///
-/// Network and time bounds are checked before signature work. The nonce is consumed only after a
-/// valid single-key signature, and before account authorization or query execution.
-pub fn verify_signed_query_request(
-    query: SignedQuery,
-    admission: &SignedQueryAdmission,
-) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
-    let now_ms = signed_query_now_unix_ms()?;
-    verify_signed_query_request_at(query, admission, now_ms)
-}
-
-fn verify_signed_query_request_at(
-    query: SignedQuery,
-    admission: &SignedQueryAdmission,
-    now_ms: u64,
-) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
-    validate_signed_query_context_at(&query.payload, admission, now_ms)?;
-    query.verify_signature().map_err(|error| {
-        if matches!(error, SignedQueryValidationError::DecodeResourceLimit) {
-            return Error::from(ValidationFail::QueryFailed(
-                QueryExecutionFail::CapacityLimit,
-            ));
-        }
-        let reason = match error {
-            SignedQueryValidationError::AuthorityNotSingleKey => {
-                "signed query authority must use a single-key controller".to_owned()
-            }
-            SignedQueryValidationError::InvalidSignatureMaterial => {
-                "query signature material failed admission".to_owned()
-            }
-            SignedQueryValidationError::InvalidSignature => {
-                "query signature failed verification".to_owned()
-            }
-            SignedQueryValidationError::InvalidRequest(reason) => {
-                format!("signed query request is invalid: {reason}")
-            }
-            SignedQueryValidationError::DecodeResourceLimit => unreachable!(
-                "decode resource failure returned before validation diagnostic construction"
-            ),
-        };
-        Error::from(ValidationFail::NotPermitted(reason))
-    })?;
-    consume_signed_query_nonce(&query.payload, admission)?;
-    Ok(query.payload)
-}
-
-#[cfg(test)]
-mod signed_query_verification_tests {
-    use iroha_crypto::SignatureOf;
-    use iroha_data_model::{
-        account::{AccountId, MultisigMember, MultisigPolicy},
-        block::BlockHeader,
-        query::{
-            QueryRequest, QuerySignature, SingularQueryBox,
-            executor::prelude::FindExecutorDataModel, runtime::prelude::FindAbiVersion,
-        },
-    };
-
-    use super::*;
-
-    const NOW_MS: u64 = 1_000_000;
-
-    fn network_id(seed: u8) -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed([seed; Hash::LENGTH]),
-        ))
-    }
-
-    fn admission_for(network_id: NetworkId) -> SignedQueryAdmission {
-        admission_with_capacity(network_id, NonZeroUsize::new(16).expect("nonzero capacity"))
-    }
-
-    fn admission_with_capacity(
-        network_id: NetworkId,
-        replay_capacity: NonZeroUsize,
-    ) -> SignedQueryAdmission {
-        SignedQueryAdmission::new(
-            network_id,
-            Duration::from_secs(1),
-            Duration::from_secs(12),
-            replay_capacity,
-        )
-        .expect("valid signed-query admission fixture")
-    }
-
-    fn signed_find_abi_version(
-        key_pair: &KeyPair,
-        network_id: NetworkId,
-        creation_time_ms: u64,
-        time_to_live_ms: u64,
-        nonce_seed: u8,
-    ) -> SignedQuery {
-        let authority = AccountId::new(key_pair.public_key().clone());
-        QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
-            .with_authority(
-                network_id,
-                authority,
-                creation_time_ms,
-                NonZeroU64::new(time_to_live_ms).expect("nonzero query TTL fixture"),
-                [nonce_seed; 32],
-            )
-            .sign(key_pair)
-    }
-
-    fn fresh_signed_find_abi_version(
-        key_pair: &KeyPair,
-        network_id: NetworkId,
-        nonce_seed: u8,
-    ) -> SignedQuery {
-        signed_find_abi_version(key_pair, network_id, NOW_MS, 10_000, nonce_seed)
-    }
-
-    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
-        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-
-    fn signature_of_with_malformed_ed25519_r<T>(
-        signature: &SignatureOf<T>,
-        replacement_r: &[u8; 32],
-    ) -> SignatureOf<T> {
-        let mut payload = signature.payload().to_vec();
-        payload[..replacement_r.len()].copy_from_slice(replacement_r);
-        SignatureOf::from_signature(Signature::from_bytes(&payload))
-    }
-
-    #[test]
-    fn verified_signed_query_returns_authenticated_payload() {
-        let key_pair = checked_routing_fixture_keypair(
-            0xe3,
-            Algorithm::Ed25519,
-            "derive signed query fixture key",
-        );
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let network_id = network_id(0x31);
-        let admission = admission_for(network_id);
-        let signed = fresh_signed_find_abi_version(&key_pair, network_id, 1);
-
-        let verified = verify_signed_query_request_at(signed, &admission, NOW_MS)
-            .expect("signed query should verify");
-        let (verified_authority, verified_request) = verified.into_parts();
-
-        assert_eq!(verified_authority, authority);
-        assert!(matches!(
-            verified_request,
-            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))
-        ));
-    }
-
-    #[test]
-    fn verify_signed_query_rejects_mismatched_authority() {
-        let signer = checked_routing_fixture_keypair(
-            0xe4,
-            Algorithm::Ed25519,
-            "derive signed query signer fixture key",
-        );
-        let other = checked_routing_fixture_keypair(
-            0xe5,
-            Algorithm::Ed25519,
-            "derive signed query other authority fixture key",
-        );
-        let network_id = network_id(0x32);
-        let admission = admission_for(network_id);
-        let mut signed = fresh_signed_find_abi_version(&signer, network_id, 2);
-        signed.payload.authority = AccountId::new(other.public_key().clone());
-
-        assert!(verify_signed_query_request_at(signed, &admission, NOW_MS).is_err());
-    }
-
-    #[test]
-    fn verify_signed_query_rejects_multisig_authority_without_panicking() {
-        let signer = checked_routing_fixture_keypair(
-            0xe8,
-            Algorithm::Ed25519,
-            "derive signed query multisig fixture key",
-        );
-        let member =
-            MultisigMember::new(signer.public_key().clone(), 1).expect("valid multisig member");
-        let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
-        let network_id = network_id(0x33);
-        let admission = admission_for(network_id);
-        let mut malformed = fresh_signed_find_abi_version(&signer, network_id, 3);
-        malformed.payload.authority = AccountId::new_multisig(policy);
-
-        let response = match verify_signed_query_request_at(malformed, &admission, NOW_MS) {
-            Ok(_) => panic!("directly signed multisig query authority must be rejected"),
-            Err(error) => error.into_response(),
-        };
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-        verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, network_id, 3),
-            &admission,
-            NOW_MS,
-        )
-        .expect("a valid follow-up query must still verify");
-    }
-
-    #[test]
-    fn verify_signed_query_rejects_malformed_ed25519_signature_r() {
-        let signer = checked_routing_fixture_keypair(
-            0xe6,
-            Algorithm::Ed25519,
-            "derive signed query malformed signature fixture key",
-        );
-        let network_id = network_id(0x34);
-        let admission = admission_for(network_id);
-        for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
-            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
-        ] {
-            let mut invalid_signed = fresh_signed_find_abi_version(&signer, network_id, 4);
-            invalid_signed.signature = QuerySignature(signature_of_with_malformed_ed25519_r(
-                &invalid_signed.signature.0,
-                &replacement_r,
-            ));
-
-            let err = match verify_signed_query_request_at(invalid_signed, &admission, NOW_MS) {
-                Ok(_) => panic!("malformed signed query signature R must fail admission"),
-                Err(err) => err,
-            };
-            let message = format!("{err:?}");
-            assert!(
-                message.contains("query signature material failed admission"),
-                "{label} signed query signature R produced unexpected admission error: {message}"
-            );
-        }
-    }
-
-    #[test]
-    fn verify_signed_query_rejects_malformed_mldsa_signature_lengths() {
-        let signer = checked_routing_fixture_keypair(
-            0xe7,
-            Algorithm::MlDsa,
-            "derive signed query malformed ML-DSA signature fixture key",
-        );
-        let network_id = network_id(0x35);
-        let admission = admission_for(network_id);
-        verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, network_id, 5),
-            &admission,
-            NOW_MS,
-        )
-        .expect("valid ML-DSA signed query should verify before mutation");
-
-        for label in ["truncated", "extended"] {
-            let mut invalid_signed = fresh_signed_find_abi_version(&signer, network_id, 6);
-            let mut malformed_payload = invalid_signed.signature.0.payload().to_vec();
-            match label {
-                "truncated" => {
-                    malformed_payload.pop();
-                }
-                "extended" => malformed_payload.push(0),
-                _ => unreachable!("test labels are exhaustive"),
-            }
-            invalid_signed.signature = QuerySignature(SignatureOf::from_signature(
-                Signature::from_bytes(&malformed_payload),
-            ));
-
-            let err = match verify_signed_query_request_at(invalid_signed, &admission, NOW_MS) {
-                Ok(_) => {
-                    panic!("malformed signed query ML-DSA signature length must fail admission")
-                }
-                Err(err) => err,
-            };
-            let message = format!("{err:?}");
-            assert!(
-                message.contains("query signature material failed admission"),
-                "{label} signed query ML-DSA signature length produced unexpected admission error: {message}"
-            );
-        }
-    }
-
-    #[test]
-    fn signed_query_cannot_cross_genesis_lineages() {
-        let signer = checked_routing_fixture_keypair(
-            0xe9,
-            Algorithm::Ed25519,
-            "derive cross-network signed-query fixture key",
-        );
-        let source_network = network_id(0x41);
-        let other_network = network_id(0x42);
-        let error = match verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, source_network, 7),
-            &admission_for(other_network),
-            NOW_MS,
-        ) {
-            Ok(_) => panic!("a signed query must not cross genesis lineages"),
-            Err(error) => error,
-        };
-        assert!(format!("{error:?}").contains("different network genesis"));
-
-        verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, source_network, 7),
-            &admission_for(source_network),
-            NOW_MS,
-        )
-        .expect("wrong-network rejection must not invalidate the original request");
-    }
-
-    #[test]
-    fn signed_query_rejects_expired_and_excessively_future_timestamps() {
-        let signer = checked_routing_fixture_keypair(
-            0xea,
-            Algorithm::Ed25519,
-            "derive signed-query freshness fixture key",
-        );
-        let network_id = network_id(0x43);
-        let admission = admission_for(network_id);
-
-        let expired = signed_find_abi_version(&signer, network_id, NOW_MS - 10_000, 10_000, 8);
-        let error = match verify_signed_query_request_at(expired, &admission, NOW_MS) {
-            Ok(_) => panic!("expiry is exclusive at creation time plus TTL"),
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error,
-            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Expired))
-        ));
-
-        let future = signed_find_abi_version(&signer, network_id, NOW_MS + 1_001, 10_000, 9);
-        let error = match verify_signed_query_request_at(future, &admission, NOW_MS) {
-            Ok(_) => panic!("creation time beyond clock skew must fail"),
-            Err(error) => error,
-        };
-        assert!(format!("{error:?}").contains("future clock skew"));
-    }
-
-    #[test]
-    fn signed_query_rejects_zero_nonce_and_ttl_beyond_replay_retention() {
-        let signer = checked_routing_fixture_keypair(
-            0xee,
-            Algorithm::Ed25519,
-            "derive signed-query context-bound fixture key",
-        );
-        let network_id = network_id(0x49);
-        let admission = admission_for(network_id);
-
-        let zero_nonce = signed_find_abi_version(&signer, network_id, NOW_MS, 10_000, 0);
-        let error = match verify_signed_query_request_at(zero_nonce, &admission, NOW_MS) {
-            Ok(_) => panic!("the all-zero nonce sentinel must fail closed"),
-            Err(error) => error,
-        };
-        assert!(format!("{error:?}").contains("nonce must not be all-zero"));
-
-        let excessive_ttl = signed_find_abi_version(&signer, network_id, NOW_MS, 10_001, 14);
-        let error = match verify_signed_query_request_at(excessive_ttl, &admission, NOW_MS) {
-            Ok(_) => panic!("request lifetime must fit entirely inside replay retention"),
-            Err(error) => error,
-        };
-        assert!(format!("{error:?}").contains("replay-retention bound"));
-    }
-
-    #[test]
-    fn every_signed_context_field_is_integrity_protected() {
-        let signer = checked_routing_fixture_keypair(
-            0xeb,
-            Algorithm::Ed25519,
-            "derive signed-query tamper fixture key",
-        );
-        let source_network = network_id(0x44);
-        let admission = admission_for(source_network);
-        let mut mutations = Vec::new();
-
-        let mut changed_network = fresh_signed_find_abi_version(&signer, source_network, 10);
-        changed_network.payload.network_id = network_id(0x45);
-        mutations.push(("network_id", changed_network));
-
-        let mut changed_creation_time = fresh_signed_find_abi_version(&signer, source_network, 10);
-        changed_creation_time.payload.creation_time_ms += 1;
-        mutations.push(("creation_time_ms", changed_creation_time));
-
-        let mut changed_ttl = fresh_signed_find_abi_version(&signer, source_network, 10);
-        changed_ttl.payload.time_to_live_ms = NonZeroU64::new(9_999).expect("nonzero TTL");
-        mutations.push(("time_to_live_ms", changed_ttl));
-
-        let mut changed_nonce = fresh_signed_find_abi_version(&signer, source_network, 10);
-        changed_nonce.payload.nonce = [0x46; 32];
-        mutations.push(("nonce", changed_nonce));
-
-        let mut changed_request = fresh_signed_find_abi_version(&signer, source_network, 10);
-        changed_request.payload.request = QueryRequest::Singular(
-            SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
-        );
-        mutations.push(("request", changed_request));
-
-        for (field, mutation) in mutations {
-            let _error = match verify_signed_query_request_at(mutation, &admission, NOW_MS) {
-                Ok(_) => panic!("tampering with {field} must be rejected"),
-                Err(error) => error,
-            };
-        }
-
-        verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, source_network, 10),
-            &admission,
-            NOW_MS,
-        )
-        .expect("tampered requests must not consume the authentic nonce");
-    }
-
-    #[test]
-    fn signed_query_nonce_is_consumed_exactly_once() {
-        let signer = checked_routing_fixture_keypair(
-            0xec,
-            Algorithm::Ed25519,
-            "derive signed-query replay fixture key",
-        );
-        let network_id = network_id(0x47);
-        let admission = admission_for(network_id);
-        verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, network_id, 11),
-            &admission,
-            NOW_MS,
-        )
-        .expect("first use must pass");
-        let error = match verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, network_id, 11),
-            &admission,
-            NOW_MS,
-        ) {
-            Ok(_) => panic!("second use of the same signed nonce must fail"),
-            Err(error) => error,
-        };
-        assert!(format!("{error:?}").contains("nonce already used"));
-    }
-
-    #[test]
-    fn signed_query_replay_cache_saturation_fails_closed_without_eviction() {
-        let signer = checked_routing_fixture_keypair(
-            0xed,
-            Algorithm::Ed25519,
-            "derive signed-query capacity fixture key",
-        );
-        let network_id = network_id(0x48);
-        let admission = admission_with_capacity(
-            network_id,
-            NonZeroUsize::new(1).expect("nonzero replay capacity"),
-        );
-        let second = fresh_signed_find_abi_version(&signer, network_id, 13);
-
-        verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, network_id, 12),
-            &admission,
-            NOW_MS,
-        )
-        .expect("first nonce must fit");
-        let error = match verify_signed_query_request_at(second, &admission, NOW_MS) {
-            Ok(_) => panic!("a full live replay cache must fail closed"),
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error,
-            Error::Query(ValidationFail::QueryFailed(
-                QueryExecutionFail::CapacityLimit
-            ))
-        ));
-
-        let error = match verify_signed_query_request_at(
-            fresh_signed_find_abi_version(&signer, network_id, 12),
-            &admission,
-            NOW_MS,
-        ) {
-            Ok(_) => panic!("capacity rejection must not evict the live replay record"),
-            Err(error) => error,
-        };
-        assert!(format!("{error:?}").contains("nonce already used"));
-    }
-}
-
-/// Execute a previously verified query request with the provided options.
-#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub(crate) async fn execute_verified_query_with_opts(
-    live_query_store: LiveQueryStoreHandle,
-    state: Arc<CoreState>,
-    query: iroha_data_model::query::QueryRequestWithAuthority,
-    tel: MaybeTelemetry,
-    opts: QueryOptions,
-) -> Result<iroha_data_model::query::QueryResponse> {
-    execute_verified_query_with_opts_inner(live_query_store, state, query, tel, opts, None, None)
-        .await
-}
-
-/// Execute a previously verified query while retaining its physical-work admission permit.
-#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub(crate) async fn execute_admitted_verified_query_with_opts(
-    live_query_store: LiveQueryStoreHandle,
-    state: Arc<CoreState>,
-    query: iroha_data_model::query::QueryRequestWithAuthority,
-    tel: MaybeTelemetry,
-    opts: QueryOptions,
-    admission: crate::QueryAdmissionPermit,
-) -> Result<iroha_data_model::query::QueryResponse> {
-    execute_verified_query_with_opts_inner(
-        live_query_store,
-        state,
-        query,
-        tel,
-        opts,
-        Some(admission),
-        None,
-    )
-    .await
-}
-
-/// Output-specific Core limits carried by one server-owned fanout execution.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum FanoutQueryOutputLimits {
-    /// Canonical top-k retention limits for an admitted iterable query.
-    Iterable(iroha_core::smartcontracts::isi::query::CanonicalQueryOutputLimits),
-    /// Bounded producer/ownership limits for an admitted singular query.
-    Singular(iroha_core::smartcontracts::isi::query::SingularQueryOutputLimits),
-}
-
-/// Execute an admitted verified query in the server-owned bounded fanout lane.
-///
-/// This entry point always uses ephemeral cursor semantics and carries both the
-/// deterministic scan-work budget and output-specific memory limits into Core
-/// before any query result is projected or materialized.
-#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-pub(crate) async fn execute_admitted_verified_query_for_fanout(
-    live_query_store: LiveQueryStoreHandle,
-    state: Arc<CoreState>,
-    query: iroha_data_model::query::QueryRequestWithAuthority,
-    tel: MaybeTelemetry,
-    output_limits: FanoutQueryOutputLimits,
-    execution_budget: iroha_core::smartcontracts::isi::query::QueryExecutionBudget,
-    admission: crate::QueryAdmissionPermit,
-    fanout_reservation: crate::QueryFanoutMemoryReservation,
-) -> Result<iroha_data_model::query::QueryResponse> {
-    execute_verified_query_with_opts_inner(
-        live_query_store,
-        state,
-        query,
-        tel,
-        QueryOptions::default(),
-        Some(admission),
-        Some((output_limits, execution_budget, fanout_reservation)),
-    )
-    .await
-}
-
-#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-async fn execute_verified_query_with_opts_inner(
-    live_query_store: LiveQueryStoreHandle,
-    state: Arc<CoreState>,
-    query: iroha_data_model::query::QueryRequestWithAuthority,
-    tel: MaybeTelemetry,
-    opts: QueryOptions,
-    admission: Option<crate::QueryAdmissionPermit>,
-    fanout_execution: Option<(
-        FanoutQueryOutputLimits,
-        iroha_core::smartcontracts::isi::query::QueryExecutionBudget,
-        crate::QueryFanoutMemoryReservation,
-    )>,
-) -> Result<iroha_data_model::query::QueryResponse> {
-    use iroha_core::{
-        query::snapshot::{
-            CursorMode as LaneCursorMode, SnapshotQueryError,
-            run_on_snapshot_ephemeral_with_budget_arc,
-            run_on_snapshot_with_mode_arc_and_start_budget,
-        },
-        smartcontracts::isi::query::{QueryCountMode, QueryLimits},
-    };
-    #[cfg(feature = "telemetry")]
-    let start = std::time::Instant::now();
-
-    let authority = query.authority.clone();
-    let request = query.request;
-    let pipeline = state.pipeline_snapshot();
-
-    // Map config cursor mode to lane cursor mode (with query override)
-    let mode = if fanout_execution.is_some() {
-        LaneCursorMode::Ephemeral
-    } else {
-        match opts.cursor_mode.as_deref() {
-            Some("ephemeral") => LaneCursorMode::Ephemeral,
-            Some("stored") => LaneCursorMode::Stored,
-            Some(other) => {
-                iroha_logger::warn!(
-                    other,
-                    "unknown cursor_mode override; falling back to config"
-                );
-                match pipeline.query_default_cursor_mode {
-                    iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
-                        LaneCursorMode::Ephemeral
-                    }
-                    iroha_config::parameters::actual::QueryCursorMode::Stored => {
-                        LaneCursorMode::Stored
-                    }
-                }
-            }
-            None => match pipeline.query_default_cursor_mode {
-                iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
-                    LaneCursorMode::Ephemeral
-                }
-                iroha_config::parameters::actual::QueryCursorMode::Stored => LaneCursorMode::Stored,
-            },
-        }
-    };
-    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    let mode_label = match mode {
-        LaneCursorMode::Ephemeral => "ephemeral",
-        LaneCursorMode::Stored => "stored",
-    };
-
-    // Optional gas gating for stored cursor mode (resource bound).
-    // If configured (> 0) and the effective mode is Stored, enforce a minimum
-    // client-provided budget. For continuations, honor the cursor's gas budget.
-    // Budget-aware stored queries also enforce this allowance against projection
-    // work; other query types use it as the server-side cursor admission guard.
-    {
-        let min_gas = pipeline.query_stored_min_gas_units;
-        if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
-            let provided = match &request {
-                iroha_data_model::query::QueryRequest::Continue(cursor) => {
-                    cursor.gas_budget.unwrap_or(0)
-                }
-                _ => opts.gas_units.unwrap_or(0),
-            };
-            if provided < min_gas {
-                return Err(ValidationFail::NotPermitted(format!(
-                    "stored cursor requires at least {min_gas} gas units"
-                ))
-                .into());
-            }
-        }
-    }
-
-    // Execute on a captured snapshot using the selected mode, offloaded to
-    // a blocking worker pool to avoid tying up the server thread.
-    let state_cloned = Arc::clone(&state);
-    let store_cloned = live_query_store.clone();
-    let authority_cloned = authority.clone();
-    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    let continue_budget = match &request {
-        iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
-        _ => None,
-    };
-    let stored_start_budget = match &request {
-        iroha_data_model::query::QueryRequest::Start(_) => opts.gas_units,
-        _ => None,
-    };
-    let count_mode = match opts.count_mode.as_deref() {
-        Some("exact") => QueryCountMode::Exact,
-        Some("bounded") | None => QueryCountMode::Bounded,
-        Some(other) => {
-            iroha_logger::warn!(other, "unknown count_mode override; using bounded");
-            QueryCountMode::Bounded
-        }
-    };
-    let mut limits =
-        QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
-    if let Some((output_limits, _, _)) = fanout_execution.as_ref() {
-        limits = match output_limits {
-            FanoutQueryOutputLimits::Iterable(canonical) => {
-                limits.with_canonical_output_limits(*canonical)
-            }
-            FanoutQueryOutputLimits::Singular(singular) => {
-                limits.with_singular_output_limits(*singular)
-            }
-        };
-    }
-    let resp = tokio::task::spawn_blocking(move || {
-        // A cancelled HTTP future detaches `spawn_blocking`. Keep both the
-        // physical-work admission and the shared fanout-memory reservation in
-        // this worker until validation and execution have actually stopped.
-        let _admission = admission;
-        match fanout_execution {
-            Some((_, execution_budget, _fanout_reservation)) => {
-                run_on_snapshot_ephemeral_with_budget_arc(
-                    &state_cloned,
-                    &store_cloned,
-                    &authority_cloned,
-                    request,
-                    limits,
-                    execution_budget,
-                )
-            }
-            None => run_on_snapshot_with_mode_arc_and_start_budget(
-                &state_cloned,
-                &store_cloned,
-                &authority_cloned,
-                request,
-                mode,
-                limits,
-                stored_start_budget,
-            ),
-        }
-    })
-    .await
-    .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
-    .and_then(|r| {
-        r.map_err(|e| match e {
-            SnapshotQueryError::Validation(v) => v,
-            SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
-        })
-    })?;
-
-    #[cfg(feature = "telemetry")]
-    if tel.is_enabled() {
-        let ms = start.elapsed().as_secs_f64() * 1000.0;
-        let first_batch_ms = matches!(resp, QueryResponse::Iterable(_)).then_some(ms);
-        let mut gas_units = [0_u64; 2];
-        let mut gas_count = 0_usize;
-        if matches!(mode, LaneCursorMode::Stored) {
-            if let Some(units) = opts.gas_units {
-                gas_units[gas_count] = units;
-                gas_count += 1;
-            }
-            if let Some(units) = continue_budget {
-                gas_units[gas_count] = units;
-                gas_count += 1;
-            }
-        }
-        let _ = tel.with_metrics(|telemetry| {
-            telemetry.observe_torii_query_snapshot(
-                mode_label,
-                first_batch_ms,
-                &gas_units[..gas_count],
-            );
-        });
-    }
-
-    Ok(resp)
-}
+include!("routing/signed_query_execution.rs");
 
 // ---------------------- Iroha Connect (feature-gated) ----------------------
 
@@ -6597,7 +5727,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
 
 /// Maximum registered consensus-key records returned by the operator snapshot.
 const CONSENSUS_KEY_RESPONSE_CAP: usize = 128;
-
+#[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
 fn bounded_consensus_key_records<'a>(
     records: impl IntoIterator<Item = &'a ConsensusKeyRecord>,
 ) -> Vec<ConsensusKeyRecord> {
@@ -9994,7 +9124,7 @@ pub async fn handle_v1_sumeragi_phases(
 /// Maximum voting-roster identities returned by the BLS-key operator snapshot.
 const BLS_KEY_RESPONSE_CAP: usize =
     iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
-
+#[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
 fn bounded_bls_key_map<'a>(
     peers: impl IntoIterator<Item = &'a PeerId>,
 ) -> std::collections::BTreeMap<String, Option<String>> {
@@ -14570,7 +13700,7 @@ pub struct ContractStateQuery {
     pub contract_alias: Option<String>,
     /// Exact state key path (Name).
     pub path: Option<String>,
-    /// Comma-separated list of state key paths (Names).
+    /// Comma-separated list of at most 10,000 state key paths (Names).
     pub paths: Option<String>,
     /// Prefix for state key paths (Name).
     pub prefix: Option<String>,
@@ -14637,52 +13767,116 @@ fn parse_contract_state_decode_mode(
 }
 
 #[cfg(feature = "app_api")]
-fn register_contract_state_schema(
-    registry: &mut BTreeMap<String, Option<ivm::EmbeddedStateType>>,
-    name: String,
-    ty: ivm::EmbeddedStateType,
-) {
-    match registry.get_mut(&name) {
-        Some(Some(existing)) if *existing == ty => {}
-        Some(slot) => *slot = None,
-        None => {
-            registry.insert(name, Some(ty));
+enum ContractStateSelection {
+    Exact(StatePath),
+    Paths(Vec<StatePath>),
+    Prefix(StatePath),
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_schema_is_relevant(
+    selection: &ContractStateSelection,
+    schema_name: &str,
+) -> bool {
+    let path_uses_schema = |path: &str| {
+        path == schema_name
+            || path
+                .strip_prefix(schema_name)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    };
+    match selection {
+        ContractStateSelection::Exact(path) => path_uses_schema(path.as_ref()),
+        ContractStateSelection::Paths(paths) => {
+            paths.iter().any(|path| path_uses_schema(path.as_ref()))
+        }
+        ContractStateSelection::Prefix(prefix) => {
+            let prefix = prefix.as_ref();
+            schema_name.starts_with(prefix) || path_uses_schema(prefix)
         }
     }
+}
+
+#[cfg(feature = "app_api")]
+fn register_contract_state_schema(
+    registry: &mut BTreeMap<String, Option<ivm::EmbeddedStateType>>,
+    retained_canonical_bytes: &mut usize,
+    name: String,
+    ty: ivm::EmbeddedStateType,
+) -> core::result::Result<(), ()> {
+    match registry.get_mut(&name) {
+        Some(Some(existing)) if *existing == ty => return Ok(()),
+        Some(slot) => {
+            *slot = None;
+            return Ok(());
+        }
+        None => {
+            if registry.len() == CONTRACT_STATE_SCHEMA_MAX_ENTRIES_V1 {
+                return Err(());
+            }
+        }
+    }
+    let encoded_bytes = {
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::core::encoded_frame_len(&ty).map_err(|_| ())?
+    };
+    if encoded_bytes > ivm::state_value::MAX_STATE_VALUE_SCHEMA_BYTES {
+        return Err(());
+    }
+    let next = retained_canonical_bytes
+        .checked_add(name.len())
+        .and_then(|bytes| bytes.checked_add(encoded_bytes))
+        .ok_or(())?;
+    if next > CONTRACT_STATE_SCHEMA_MAX_CANONICAL_BYTES_V1 {
+        return Err(());
+    }
+    registry.insert(name, Some(ty));
+    *retained_canonical_bytes = next;
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
 fn collect_contract_state_schemas(
     world: &impl WorldReadOnly,
     contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
-) -> BTreeMap<String, Option<ivm::EmbeddedStateType>> {
+    selection: &ContractStateSelection,
+) -> core::result::Result<BTreeMap<String, Option<ivm::EmbeddedStateType>>, ()> {
     let mut registry = BTreeMap::new();
+    let mut retained_canonical_bytes = 0usize;
     let mut register_schemas_for = |code_hash: &iroha_crypto::Hash| {
         let Some(code_bytes) = world.contract_code().get(code_hash) else {
-            return;
+            return Ok(());
         };
         let Ok(parsed) = ivm::ProgramMetadata::parse(code_bytes.as_slice()) else {
-            return;
+            return Ok(());
         };
         let Some(contract_interface) = parsed.contract_interface else {
-            return;
+            return Ok(());
         };
         for state in contract_interface.states {
-            register_contract_state_schema(&mut registry, state.name, state.ty);
+            if contract_state_schema_is_relevant(selection, state.name.as_str()) {
+                register_contract_state_schema(
+                    &mut registry,
+                    &mut retained_canonical_bytes,
+                    state.name,
+                    state.ty,
+                )?;
+            }
         }
+        Ok(())
     };
 
     if let Some(contract_address) = contract_address {
         if let Some(code_hash) = world.contract_instances().get(contract_address) {
-            register_schemas_for(code_hash);
+            register_schemas_for(code_hash)?;
         }
-        return registry;
+        return Ok(registry);
     }
 
     for (_, code_hash) in world.contract_instances().iter() {
-        register_schemas_for(code_hash);
+        register_schemas_for(code_hash)?;
     }
-    registry
+    Ok(registry)
 }
 
 #[cfg(feature = "app_api")]
@@ -15831,7 +15025,7 @@ fn contract_state_logical_path_exists(
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_state(
     state: Arc<CoreState>,
-    NoritoQuery(q): NoritoQuery<ContractStateQuery>,
+    NoritoQuery(mut q): NoritoQuery<ContractStateQuery>,
 ) -> Result<JsonBody<ContractStateResponse>> {
     fn conversion_error(message: String) -> Error {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -15843,6 +15037,24 @@ pub async fn handle_get_contract_state(
         Error::AppQueryValidation {
             code: "contract_state_decode_failed",
             message: format!("failed to decode contract state `{path}` as json: {error}"),
+        }
+    }
+
+    fn contract_state_response_too_large() -> Error {
+        Error::AppQueryValidation {
+            code: "contract_state_response_too_large",
+            message: format!(
+                "contract state response exceeds the {CONTRACT_STATE_RESPONSE_RETAINED_BYTES_V1}-byte V1 retained-page limit"
+            ),
+        }
+    }
+
+    fn contract_state_schema_registry_too_large() -> Error {
+        Error::AppQueryValidation {
+            code: "contract_state_schema_registry_too_large",
+            message: format!(
+                "query-relevant contract state schemas exceed the V1 limits of {CONTRACT_STATE_SCHEMA_MAX_ENTRIES_V1} entries or {CONTRACT_STATE_SCHEMA_MAX_CANONICAL_BYTES_V1} canonical bytes"
+            ),
         }
     }
 
@@ -15872,6 +15084,32 @@ pub async fn handle_get_contract_state(
     let max_limit = 10_000u64;
     let decode_mode =
         parse_contract_state_decode_mode(q.decode.as_deref()).map_err(conversion_error)?;
+    let selection = if let Some(path_raw) = q.path.take() {
+        ContractStateSelection::Exact(parse_state_path(&path_raw, "path")?)
+    } else if let Some(paths_raw) = q.paths.take() {
+        let mut paths = Vec::new();
+        for raw in paths_raw.split(',') {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if paths.len() == CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1 {
+                return Err(conversion_error(format!(
+                    "paths supports at most {CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1} entries"
+                )));
+            }
+            paths.push(parse_state_path(trimmed, "path")?);
+        }
+        if paths.is_empty() {
+            return Err(conversion_error("paths is empty".to_owned()));
+        }
+        ContractStateSelection::Paths(paths)
+    } else {
+        ContractStateSelection::Prefix(parse_state_path(
+            q.prefix.take().as_deref().unwrap_or_default(),
+            "prefix",
+        )?)
+    };
 
     let world = state.world_view();
     let (resolved_contract_address, resolved_contract_alias) =
@@ -15927,8 +15165,14 @@ pub async fn handle_get_contract_state(
         }
     };
     let storage = world.smart_contract_state();
-    let schema_registry = matches!(decode_mode, Some(ContractStateDecodeMode::Json))
-        .then(|| collect_contract_state_schemas(&world, resolved_contract_address.as_ref()));
+    let schema_registry = if matches!(decode_mode, Some(ContractStateDecodeMode::Json)) {
+        Some(
+            collect_contract_state_schemas(&world, resolved_contract_address.as_ref(), &selection)
+                .map_err(|_| contract_state_schema_registry_too_large())?,
+        )
+    } else {
+        None
+    };
     let get_value = |path: &str| {
         let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
             format!("{prefix}{path}")
@@ -15963,36 +15207,99 @@ pub async fn handle_get_contract_state(
         .as_ref()
         .map(std::string::ToString::to_string);
 
-    let encode_entry =
-        |path: &str, value: Option<&Vec<u8>>, found: bool, value_json: Option<IrohaJson>| {
-            if !include_value {
-                return ContractStateEntry {
-                    path: path.to_string(),
-                    found,
-                    value_b64: None,
-                    value_len: None,
-                    value_json,
-                };
+    let retained_response_bytes =
+        std::cell::Cell::new(std::mem::size_of::<ContractStateResponse>());
+    let retained_string_charge = |len: usize| {
+        std::mem::size_of::<String>()
+            .checked_add(len.checked_mul(2).ok_or(())?)
+            .ok_or(())
+    };
+    let charge_retained_response = |additional: usize| {
+        let next = retained_response_bytes
+            .get()
+            .checked_add(additional)
+            .ok_or(())?;
+        if next > CONTRACT_STATE_RESPONSE_RETAINED_BYTES_V1 {
+            return Err(());
+        }
+        retained_response_bytes.set(next);
+        Ok(())
+    };
+    for value in [
+        contract_address_response.as_deref(),
+        contract_alias_response.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        charge_retained_response(
+            retained_string_charge(value.len()).map_err(|_| contract_state_response_too_large())?,
+        )
+        .map_err(|_| contract_state_response_too_large())?;
+    }
+
+    let encode_entry = |path: &str,
+                        value: Option<&Vec<u8>>,
+                        found: bool,
+                        value_json: Option<IrohaJson>,
+                        duplicate_path: bool|
+     -> core::result::Result<ContractStateEntry, ()> {
+        let path_charge = retained_string_charge(path.len())?;
+        let value_b64_len = if include_value {
+            match value {
+                Some(bytes) => bytes
+                    .len()
+                    .checked_add(2)
+                    .map(|length| length / 3)
+                    .and_then(|length| length.checked_mul(4))
+                    .ok_or(())?,
+                None => 0,
             }
-            let (value_b64, value_len) = if let Some(bytes) = value {
-                (
-                    Some(base64::engine::general_purpose::STANDARD.encode(bytes.as_slice())),
-                    Some(bytes.len() as u64),
-                )
-            } else {
-                (None, None)
-            };
-            ContractStateEntry {
+        } else {
+            0
+        };
+        let value_json_len = value_json.as_ref().map_or(0, |json| json.get().len());
+        // Prefix pages grow geometrically; charging two slots per retained
+        // entry covers both initialized entries and spare vector capacity.
+        let mut charge = std::mem::size_of::<ContractStateEntry>()
+            .checked_mul(2)
+            .ok_or(())?
+            .checked_add(path_charge)
+            .and_then(|charge| charge.checked_add(retained_string_charge(value_b64_len).ok()?))
+            .and_then(|charge| charge.checked_add(retained_string_charge(value_json_len).ok()?))
+            .ok_or(())?;
+        if duplicate_path {
+            charge = charge.checked_add(path_charge).ok_or(())?;
+        }
+        charge_retained_response(charge)?;
+
+        if !include_value {
+            return Ok(ContractStateEntry {
                 path: path.to_string(),
                 found,
-                value_b64,
-                value_len,
+                value_b64: None,
+                value_len: None,
                 value_json,
-            }
+            });
+        }
+        let (value_b64, value_len) = if let Some(bytes) = value {
+            (
+                Some(base64::engine::general_purpose::STANDARD.encode(bytes.as_slice())),
+                Some(bytes.len() as u64),
+            )
+        } else {
+            (None, None)
         };
+        Ok(ContractStateEntry {
+            path: path.to_string(),
+            found,
+            value_b64,
+            value_len,
+            value_json,
+        })
+    };
 
-    if let Some(path_raw) = q.path {
-        let state_path = parse_state_path(&path_raw, "path")?;
+    if let ContractStateSelection::Exact(state_path) = &selection {
         let path = state_path.as_ref();
         let stored = get_schema_aware_value(path);
         let logical_found = schema_registry
@@ -16018,7 +15325,8 @@ pub async fn handle_get_contract_state(
             )));
         }
 
-        let entry = encode_entry(path, stored.as_ref(), true, value_json);
+        let entry = encode_entry(path, stored.as_ref(), true, value_json, true)
+            .map_err(|_| contract_state_response_too_large())?;
         return Ok(JsonBody(ContractStateResponse {
             contract_address: contract_address_response.clone(),
             contract_alias: contract_alias_response.clone(),
@@ -16032,18 +15340,7 @@ pub async fn handle_get_contract_state(
         }));
     }
 
-    if let Some(paths_raw) = q.paths {
-        let mut parsed = Vec::new();
-        for raw in paths_raw.split(',') {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            parsed.push(parse_state_path(trimmed, "path")?);
-        }
-        if parsed.is_empty() {
-            return Err(conversion_error("paths is empty".to_string()));
-        }
+    if let ContractStateSelection::Paths(parsed) = &selection {
         let mut entries = Vec::with_capacity(parsed.len());
         let mut paths = Vec::with_capacity(parsed.len());
         for state_path in parsed {
@@ -16065,7 +15362,10 @@ pub async fn handle_get_contract_state(
                 }
                 _ => None,
             };
-            entries.push(encode_entry(path, stored.as_ref(), found, value_json));
+            entries.push(
+                encode_entry(path, stored.as_ref(), found, value_json, true)
+                    .map_err(|_| contract_state_response_too_large())?,
+            );
             paths.push(path.to_string());
         }
         let limit = entries.len() as u64;
@@ -16082,9 +15382,15 @@ pub async fn handle_get_contract_state(
         }));
     }
 
-    let prefix_raw = q.prefix.unwrap_or_default();
-    let prefix = parse_state_path(&prefix_raw, "prefix")?;
+    let ContractStateSelection::Prefix(prefix) = &selection else {
+        unreachable!("exact and explicit contract-state selections return above")
+    };
     let prefix_str = prefix.as_ref();
+    charge_retained_response(
+        retained_string_charge(prefix_str.len())
+            .map_err(|_| contract_state_response_too_large())?,
+    )
+    .map_err(|_| contract_state_response_too_large())?;
     let offset = q.offset.unwrap_or(0);
     let limit = q.limit.unwrap_or(default_limit).min(max_limit);
     let mut entries = Vec::new();
@@ -16139,7 +15445,14 @@ pub async fn handle_get_contract_state(
                     Ok(value_json) => Some(value_json),
                     Err(err) => return Err(contract_state_decode_failed(&logical_path, err)),
                 };
-                entries.push(encode_entry(&logical_path, None, true, value_json));
+                match encode_entry(&logical_path, None, true, value_json, false) {
+                    Ok(entry) => entries.push(entry),
+                    Err(()) if !entries.is_empty() => {
+                        has_more = true;
+                        break;
+                    }
+                    Err(()) => return Err(contract_state_response_too_large()),
+                }
             }
 
             let next_offset = if has_more {
@@ -16190,12 +15503,14 @@ pub async fn handle_get_contract_state(
             }
             _ => None,
         };
-        entries.push(encode_entry(
-            logical_key.as_str(),
-            Some(value),
-            true,
-            value_json,
-        ));
+        match encode_entry(logical_key.as_str(), Some(value), true, value_json, false) {
+            Ok(entry) => entries.push(entry),
+            Err(()) if !entries.is_empty() => {
+                has_more = true;
+                break;
+            }
+            Err(()) => return Err(contract_state_response_too_large()),
+        }
     }
     let next_offset = if has_more {
         Some(offset + entries.len() as u64)
@@ -16225,6 +15540,47 @@ mod contract_state_tests {
     use ivm::pointer_abi::PointerType;
 
     use super::*;
+
+    #[test]
+    fn contract_state_schema_interest_is_query_local() {
+        let exact = ContractStateSelection::Exact(
+            StatePath::from_str("orders/by-id").expect("exact state path"),
+        );
+        assert!(contract_state_schema_is_relevant(&exact, "orders"));
+        assert!(!contract_state_schema_is_relevant(&exact, "unrelated"));
+
+        let prefix =
+            ContractStateSelection::Prefix(StatePath::from_str("ord").expect("prefix state path"));
+        assert!(contract_state_schema_is_relevant(&prefix, "orders"));
+        assert!(!contract_state_schema_is_relevant(&prefix, "receipts"));
+    }
+
+    #[test]
+    fn contract_state_schema_registry_accepts_exact_budget_and_rejects_growth() {
+        let ty = ivm::EmbeddedStateType::Bool;
+        let encoded_bytes = norito::core::encoded_frame_len(&ty).expect("measure schema");
+        let name = "bounded".to_owned();
+        let mut retained = CONTRACT_STATE_SCHEMA_MAX_CANONICAL_BYTES_V1
+            .checked_sub(encoded_bytes + name.len())
+            .expect("one primitive schema fits the registry budget");
+        let mut registry = BTreeMap::new();
+
+        register_contract_state_schema(&mut registry, &mut retained, name.clone(), ty.clone())
+            .expect("exact aggregate boundary is accepted");
+        assert_eq!(retained, CONTRACT_STATE_SCHEMA_MAX_CANONICAL_BYTES_V1);
+        register_contract_state_schema(&mut registry, &mut retained, name, ty)
+            .expect("an identical schema does not grow the registry");
+        assert!(
+            register_contract_state_schema(
+                &mut registry,
+                &mut retained,
+                "overflow".to_owned(),
+                ivm::EmbeddedStateType::Bool,
+            )
+            .is_err(),
+            "the first aggregate byte beyond the V1 registry budget must fail"
+        );
+    }
 
     fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(7 + payload.len() + 32);
@@ -16569,6 +15925,79 @@ mod contract_state_tests {
         assert!(response.entries.is_empty());
         assert_eq!(response.offset, 0);
         assert_eq!(response.next_offset, None);
+    }
+
+    #[tokio::test]
+    async fn contract_state_explicit_paths_accept_v1_count_and_reject_first_overflow() {
+        let state = Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let mut paths = (0..CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1)
+            .map(|index| format!("p/{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let JsonBody(response) = handle_get_contract_state(
+            state.clone(),
+            NoritoQuery(ContractStateQuery {
+                paths: Some(paths.clone()),
+                include_value: Some(false),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("the exact V1 explicit-path count is accepted");
+        assert_eq!(response.entries.len(), CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1);
+
+        paths.push_str(&format!(",p/{CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1}"));
+        let error = handle_get_contract_state(
+            state,
+            NoritoQuery(ContractStateQuery {
+                paths: Some(paths),
+                include_value: Some(false),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("the first explicit path beyond the V1 count must fail");
+        assert!(error.to_string().contains("paths supports at most"));
+    }
+
+    #[tokio::test]
+    async fn contract_state_prefix_paginates_before_retained_page_overflow() {
+        let mut world = World::default();
+        let value = vec![0x5a; ivm::state_value::MAX_STATE_VALUE_RECORD_BYTES];
+        for index in 0..8 {
+            world.smart_contract_state_mut_for_testing().insert(
+                StatePath::from_str(&format!("alpha/{index:04}"))
+                    .expect("bounded state path fixture"),
+                value.clone(),
+            );
+        }
+        let state = Arc::new(CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let JsonBody(response) = handle_get_contract_state(
+            state,
+            NoritoQuery(ContractStateQuery {
+                prefix: Some("alpha".to_owned()),
+                limit: Some(8),
+                include_value: Some(true),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("prefix read paginates at the retained-byte boundary");
+
+        assert!(!response.entries.is_empty());
+        assert!(response.entries.len() < 8);
+        assert_eq!(
+            response.next_offset,
+            Some(u64::try_from(response.entries.len()).expect("entry count fits u64"))
+        );
     }
 
     #[tokio::test]

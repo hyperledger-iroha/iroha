@@ -15,13 +15,14 @@ macro_rules! impl_json_via_norito_bytes {
         $(
             impl norito::json::FastJsonWrite for $ty {
                 fn write_json(&self, out: &mut String) {
-                    let bytes = norito::encode_canonical(self)
-                        .expect("canonical Norito serialization must succeed");
-                    let encoded = base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        bytes,
-                    );
-                    norito::json::JsonSerialize::json_serialize(&encoded, out);
+                    norito::json::write_canonical_base64_json(self, out);
+                }
+
+                fn write_json_to(
+                    &self,
+                    out: &mut dyn norito::json::JsonWriteSink,
+                ) -> Result<(), norito::json::BoundedJsonError> {
+                    norito::json::write_canonical_base64_json_to(self, out)
                 }
             }
 
@@ -123,6 +124,27 @@ mod tests {
         let filter = EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new());
         let canonical_json =
             norito::json::to_json(&filter).expect("encode canonical event-filter JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&filter, canonical_json.len())
+                .expect("encode event filter at exact JSON bound"),
+            canonical_json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&filter, canonical_json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+        let event_type = TriggeringEventType::ExecuteTrigger;
+        let event_type_json =
+            norito::json::to_json(&event_type).expect("encode triggering-event type JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&event_type, event_type_json.len())
+                .expect("encode triggering-event type at exact JSON bound"),
+            event_type_json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&event_type, event_type_json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         {
@@ -265,6 +287,19 @@ impl JsonSerialize for TriggeringEventType {
             TriggeringEventType::ExecuteTrigger => "ExecuteTrigger",
         };
         json::write_json_string(label, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let label = match self {
+            TriggeringEventType::Pipeline => "Pipeline",
+            TriggeringEventType::Data => "Data",
+            TriggeringEventType::Time => "Time",
+            TriggeringEventType::ExecuteTrigger => "ExecuteTrigger",
+        };
+        json::write_json_string_to(label, out)
     }
 }
 
@@ -570,14 +605,14 @@ pub mod stream {
             #[norito(default)]
             #[cfg_attr(
                 feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option_vec")
+                norito(json = "crate::json_helpers::fixed_bytes::option_vec")
             )]
             pub proof_call_hash: Option<Vec<[u8; 32]>>,
             /// Accept only these envelope hashes (empty or None disables envelope hash filtering).
             #[norito(default)]
             #[cfg_attr(
                 feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option_vec")
+                norito(json = "crate::json_helpers::fixed_bytes::option_vec")
             )]
             pub proof_envelope_hash: Option<Vec<[u8; 32]>>,
         }

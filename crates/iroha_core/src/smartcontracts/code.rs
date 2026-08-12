@@ -670,10 +670,23 @@ pub(crate) fn bound_contract_subject_from_world(
     world: &impl WorldReadOnly,
     contract_address: &ContractAddress,
 ) -> Option<AccountId> {
+    borrow_bound_contract_subject_from_world(world, contract_address).cloned()
+}
+
+/// Borrow the validated consensus-persisted runtime authority for an active contract.
+///
+/// Read paths which immediately serialize the subject can avoid cloning a
+/// potentially nested account controller by keeping the world view alive for
+/// the duration of the checked write.
+#[must_use]
+pub fn borrow_bound_contract_subject_from_world<'a>(
+    world: &'a impl WorldReadOnly,
+    contract_address: &ContractAddress,
+) -> Option<&'a AccountId> {
     world.contract_instances().get(contract_address)?;
     let binding = world.contract_subject_bindings().get(contract_address)?;
     binding.validate_for(contract_address).ok()?;
-    Some(binding.subject.clone())
+    Some(&binding.subject)
 }
 
 /// Resolve a bound instance without cloning its manifest or bytecode.
@@ -950,8 +963,8 @@ mod tests {
         register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -1056,8 +1069,8 @@ mod tests {
         register_manifest(&authority, manifest, &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -1080,8 +1093,8 @@ mod tests {
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1298,8 +1311,8 @@ seiyaku LifecycleTwo {
         transaction.tx_call_hash = Some(Hash::new(b"one-execution-two-lifecycle-transitions"));
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             80,
             DataSpaceId::UNIVERSAL,
@@ -1335,8 +1348,8 @@ seiyaku LifecycleTwo {
         let (state, authority, keypair) = test_state();
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             81,
             DataSpaceId::UNIVERSAL,
@@ -1436,8 +1449,8 @@ seiyaku LifecycleAba {
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             8,
             DataSpaceId::UNIVERSAL,
@@ -1623,8 +1636,8 @@ seiyaku LifecycleAba {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1639,6 +1652,11 @@ seiyaku LifecycleAba {
         let bindings = world.contract_subject_bindings.view();
         let binding = bindings.get(&address).expect("binding");
         assert_eq!(binding.subject, address.subject_id());
+        let world_view = world.view();
+        assert_eq!(
+            borrow_bound_contract_subject_from_world(&world_view, &address),
+            Some(&binding.subject),
+        );
         assert_eq!(
             world
                 .contract_subject_addresses
@@ -1655,8 +1673,8 @@ seiyaku LifecycleAba {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             8,
             DataSpaceId::UNIVERSAL,

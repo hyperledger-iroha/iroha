@@ -144,7 +144,13 @@ impl LanePrivacyProof {
 )]
 pub struct LanePrivacyMerkleWitness {
     /// Leaf bytes used to derive the committed hash.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::fixed_bytes",
+            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
+        )
+    )]
     pub leaf: [u8; 32],
     /// Inclusion path from the leaf to the committed root.
     pub proof: MerkleProof<[u8; 32]>,

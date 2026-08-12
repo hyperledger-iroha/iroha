@@ -41,6 +41,9 @@ body_source_bytes = 34603008
 [network]
 address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:172.28.0.10:1337#0D24"
+max_frame_bytes = 23068700
+max_frame_bytes_block_sync = 23068672
+max_frame_bytes_tx_gossip = 11534336
 
 [torii]
 address = "addr:0.0.0.0:8080#B922"

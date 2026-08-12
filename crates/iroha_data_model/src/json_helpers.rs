@@ -1,8 +1,8 @@
 //! JSON helpers for custom (de)serialization in data-model types.
 //!
 //! These helpers are intended for app-facing DTOs and are used with Norito's
-//! `#[cfg_attr(feature = "json", norito(with = "..."))]` attribute. For base64 encoding, use
-//! `#[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]` on `Vec<u8>` fields.
+//! checked `#[cfg_attr(feature = "json", norito(json = "..."))]` attribute.
+//! For base64 encoding, select `crate::json_helpers::base64_vec` on `Vec<u8>` fields.
 
 #[cfg(feature = "json")]
 use std::collections::BTreeMap;
@@ -10,10 +10,61 @@ use std::{format, string::String, vec::Vec};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 #[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize, Parser, Value};
+use norito::json::{
+    self, BoundedJsonError, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser, Value,
+    write_base64_json_to,
+};
 
 #[cfg(feature = "json")]
 use crate::soranet::privacy_metrics::SoranetPrivacyModeV1;
+
+#[cfg(feature = "json")]
+fn write_u128_decimal_string(
+    mut value: u128,
+    out: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    let mut digits = [0_u8; 39];
+    let mut cursor = digits.len();
+    loop {
+        cursor -= 1;
+        digits[cursor] = b'0' + u8::try_from(value % 10).expect("decimal digit fits u8");
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    out.push('"')?;
+    for digit in &digits[cursor..] {
+        out.push(char::from(*digit))?;
+    }
+    out.push('"')
+}
+
+#[cfg(feature = "json")]
+fn write_i128_decimal_string(
+    value: i128,
+    out: &mut dyn JsonWriteSink,
+) -> Result<(), BoundedJsonError> {
+    let mut digits = [0_u8; 39];
+    let mut magnitude = value.unsigned_abs();
+    let mut cursor = digits.len();
+    loop {
+        cursor -= 1;
+        digits[cursor] = b'0' + u8::try_from(magnitude % 10).expect("decimal digit fits u8");
+        magnitude /= 10;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    out.push('"')?;
+    if value.is_negative() {
+        out.push('-')?;
+    }
+    for digit in &digits[cursor..] {
+        out.push(char::from(*digit))?;
+    }
+    out.push('"')
+}
 
 /// Serialize a `Vec<u8>` as a base64 string and deserialize from base64.
 #[cfg(feature = "json")]
@@ -23,6 +74,13 @@ pub mod base64_vec {
 
     pub fn serialize(bytes: &[u8], out: &mut String) {
         JsonSerialize::json_serialize(&B64.encode(bytes), out);
+    }
+
+    pub fn serialize_bounded(
+        bytes: &[u8],
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        write_base64_json_to(bytes, out)
     }
 
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<Vec<u8>, norito::json::Error> {
@@ -39,6 +97,16 @@ pub mod base64_vec {
         pub fn serialize(value: &Option<Vec<u8>>, out: &mut String) {
             match value.as_deref() {
                 Some(bytes) => super::serialize(bytes, out),
+                None => out.push_str("null"),
+            }
+        }
+
+        pub fn serialize_bounded(
+            value: &Option<Vec<u8>>,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            match value.as_deref() {
+                Some(bytes) => super::serialize_bounded(bytes, out),
                 None => out.push_str("null"),
             }
         }
@@ -63,6 +131,13 @@ pub mod i128_string {
 
     pub fn serialize(value: &i128, out: &mut String) {
         JsonSerialize::json_serialize(&value.to_string(), out);
+    }
+
+    pub fn serialize_bounded(
+        value: &i128,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        write_i128_decimal_string(*value, out)
     }
 
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<i128, norito::json::Error> {
@@ -102,6 +177,13 @@ pub mod u64_string {
         JsonSerialize::json_serialize(&value.to_string(), out);
     }
 
+    pub fn serialize_bounded(
+        value: &u64,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        write_u128_decimal_string(u128::from(*value), out)
+    }
+
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<u64, norito::json::Error> {
         parse_canonical(&parser.parse_string()?)
     }
@@ -113,6 +195,16 @@ pub mod u64_string {
         pub fn serialize(value: &Option<u64>, out: &mut String) {
             match value {
                 Some(value) => super::serialize(value, out),
+                None => out.push_str("null"),
+            }
+        }
+
+        pub fn serialize_bounded(
+            value: &Option<u64>,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            match value {
+                Some(value) => super::serialize_bounded(value, out),
                 None => out.push_str("null"),
             }
         }
@@ -152,6 +244,13 @@ pub mod u128_string {
         JsonSerialize::json_serialize(&value.to_string(), out);
     }
 
+    pub fn serialize_bounded(
+        value: &u128,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        write_u128_decimal_string(*value, out)
+    }
+
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<u128, norito::json::Error> {
         parse_canonical(&parser.parse_string()?)
     }
@@ -169,6 +268,23 @@ pub mod fixed_bytes {
         JsonSerialize::json_serialize(&tmp, out);
     }
 
+    pub fn serialize_bounded<const N: usize>(
+        bytes: &[u8; N],
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, byte) in bytes.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            byte.json_serialize_to(out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
+    }
+
     pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u8; N], json::Error> {
         let values = Vec::<u8>::json_deserialize(parser)?;
         vec_to_array::<N>(&values)
@@ -182,6 +298,16 @@ pub mod fixed_bytes {
         pub fn serialize<const N: usize>(value: &Option<[u8; N]>, out: &mut String) {
             match value.as_ref() {
                 Some(bytes) => super::serialize(bytes, out),
+                None => out.push_str("null"),
+            }
+        }
+
+        pub fn serialize_bounded<const N: usize>(
+            value: &Option<[u8; N]>,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            match value.as_ref() {
+                Some(bytes) => super::serialize_bounded(bytes, out),
                 None => out.push_str("null"),
             }
         }
@@ -209,6 +335,23 @@ pub mod fixed_bytes {
             JsonSerialize::json_serialize(&tmp, out);
         }
 
+        pub fn serialize_bounded<const N: usize>(
+            value: &[[u8; N]],
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            out.begin_container()?;
+            out.push('[')?;
+            for (index, bytes) in value.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                super::serialize_bounded(bytes, out)?;
+            }
+            out.push(']')?;
+            out.end_container();
+            Ok(())
+        }
+
         pub fn deserialize<const N: usize>(
             parser: &mut Parser<'_>,
         ) -> Result<Vec<[u8; N]>, json::Error> {
@@ -227,6 +370,16 @@ pub mod fixed_bytes {
         pub fn serialize<const N: usize>(value: &Option<Vec<[u8; N]>>, out: &mut String) {
             match value.as_deref() {
                 Some(items) => vec::serialize(items, out),
+                None => out.push_str("null"),
+            }
+        }
+
+        pub fn serialize_bounded<const N: usize>(
+            value: &Option<Vec<[u8; N]>>,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            match value.as_deref() {
+                Some(items) => vec::serialize_bounded(items, out),
                 None => out.push_str("null"),
             }
         }
@@ -265,6 +418,23 @@ pub mod fixed_u64_limbs {
         JsonSerialize::json_serialize(&limbs.as_slice().to_vec(), out);
     }
 
+    pub fn serialize_bounded<const N: usize>(
+        limbs: &[u64; N],
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, limb) in limbs.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            limb.json_serialize_to(out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
+    }
+
     pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u64; N], json::Error> {
         let limbs = Vec::<u64>::json_deserialize(parser)?;
         limbs.try_into().map_err(|limbs: Vec<u64>| {
@@ -291,6 +461,23 @@ pub mod fixed_u32_limbs {
             JsonSerialize::json_serialize(limb, out);
         }
         out.push(']');
+    }
+
+    pub fn serialize_bounded<const N: usize>(
+        limbs: &[u32; N],
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, limb) in limbs.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            limb.json_serialize_to(out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
     }
 
     pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u32; N], json::Error> {
@@ -348,6 +535,23 @@ pub mod fixed_array {
         out.push(']');
     }
 
+    pub fn serialize_bounded<T: JsonSerialize, const N: usize>(
+        values: &[T; N],
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, value) in values.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            value.json_serialize_to(out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
+    }
+
     pub fn deserialize<T: JsonDeserialize, const N: usize>(
         parser: &mut Parser<'_>,
     ) -> Result<[T; N], json::Error> {
@@ -372,6 +576,19 @@ pub mod fixed_bytes_hex {
         JsonSerialize::json_serialize(&encoded, out);
     }
 
+    pub fn serialize_bounded<const N: usize>(
+        bytes: &[u8; N],
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        out.push('"')?;
+        for byte in bytes {
+            out.push(char::from(HEX[usize::from(byte >> 4)]))?;
+            out.push(char::from(HEX[usize::from(byte & 0x0f)]))?;
+        }
+        out.push('"')
+    }
+
     pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u8; N], json::Error> {
         let raw = parser.parse_string()?;
         parse_hex_bytes::<N>(&raw)
@@ -385,6 +602,16 @@ pub mod fixed_bytes_hex {
         pub fn serialize<const N: usize>(value: &Option<[u8; N]>, out: &mut String) {
             match value.as_ref() {
                 Some(bytes) => super::serialize(bytes, out),
+                None => out.push_str("null"),
+            }
+        }
+
+        pub fn serialize_bounded<const N: usize>(
+            value: &Option<[u8; N]>,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            match value.as_ref() {
+                Some(bytes) => super::serialize_bounded(bytes, out),
                 None => out.push_str("null"),
             }
         }
@@ -437,6 +664,13 @@ pub mod privacy_mode {
         JsonSerialize::json_serialize(value.as_label(), out);
     }
 
+    pub fn serialize_bounded(
+        value: &SoranetPrivacyModeV1,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        value.as_label().json_serialize_to(out)
+    }
+
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<SoranetPrivacyModeV1, json::Error> {
         let label = parser.parse_string()?;
         match label.as_str() {
@@ -456,6 +690,13 @@ pub mod secret_string {
 
     pub fn serialize(_value: &str, out: &mut String) {
         JsonSerialize::json_serialize("", out);
+    }
+
+    pub fn serialize_bounded(
+        _value: &str,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.push_str("\"\"")
     }
 
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<String, json::Error> {
@@ -482,6 +723,50 @@ pub mod account_metadata_map {
             .map(|(account, metadata)| (account.to_string(), metadata.clone()))
             .collect();
         JsonSerialize::json_serialize(&string_keyed, out);
+    }
+
+    pub fn serialize_bounded(
+        value: &BTreeMap<AccountId, Metadata>,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        // `AccountId::Ord` is not the JSON key order. Select one canonical
+        // key at a time so byte parity does not require cloning the full map.
+        let mut previous_key: Option<String> = None;
+        let mut wrote_entry = false;
+        loop {
+            let mut next: Option<(String, &Metadata)> = None;
+            for (account, metadata) in value {
+                let candidate = account
+                    .canonical_i105()
+                    .map_err(|_| BoundedJsonError::Unsupported)?;
+                if previous_key
+                    .as_ref()
+                    .is_some_and(|key| candidate.as_str() <= key.as_str())
+                    || next
+                        .as_ref()
+                        .is_some_and(|(key, _)| candidate.as_str() >= key.as_str())
+                {
+                    continue;
+                }
+                next = Some((candidate, metadata));
+            }
+            let Some((key, metadata)) = next else {
+                break;
+            };
+            if wrote_entry {
+                out.push(',')?;
+            }
+            norito::json::write_json_string_to(&key, out)?;
+            out.push(':')?;
+            metadata.json_serialize_to(out)?;
+            previous_key = Some(key);
+            wrote_entry = true;
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 
     pub fn deserialize(
@@ -528,6 +813,32 @@ pub mod sora_inrou_guest_images_map {
         JsonSerialize::json_serialize(&string_keyed, out);
     }
 
+    pub fn serialize_bounded(
+        value: &BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        // Canonical JSON object keys sort `aarch64` before `x86_64`, unlike
+        // the enum's declaration order.
+        let mut wrote_entry = false;
+        for guest_isa in [SoraInrouGuestIsaV1::Aarch64, SoraInrouGuestIsaV1::X8664] {
+            let Some(image) = value.get(&guest_isa) else {
+                continue;
+            };
+            if wrote_entry {
+                out.push(',')?;
+            }
+            norito::json::write_json_string_to(guest_isa.as_str(), out)?;
+            out.push(':')?;
+            image.json_serialize_to(out)?;
+            wrote_entry = true;
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+
     pub fn deserialize(
         parser: &mut Parser<'_>,
     ) -> Result<BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>, norito::json::Error> {
@@ -567,15 +878,132 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::base64_vec",
+                bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
+            )
+        )]
         data: Vec<u8>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    struct FixedBytesWrapper {
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::fixed_bytes",
+                bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
+            )
+        )]
+        data: [u8; 4],
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::fixed_bytes::option",
+                bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
+            )
+        )]
+        optional: Option<[u8; 2]>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    struct ContainerHelpersWrapper {
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::base64_vec::option",
+                bounded_with = "crate::json_helpers::base64_vec::option::serialize_bounded"
+            )
+        )]
+        encoded: Option<Vec<u8>>,
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::fixed_bytes::vec",
+                bounded_with = "crate::json_helpers::fixed_bytes::vec::serialize_bounded"
+            )
+        )]
+        fixed: Vec<[u8; 2]>,
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::fixed_bytes::option_vec",
+                bounded_with = "crate::json_helpers::fixed_bytes::option_vec::serialize_bounded"
+            )
+        )]
+        optional_fixed: Option<Vec<[u8; 2]>>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    struct ScalarHelpersWrapper {
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::u64_string",
+                bounded_with = "crate::json_helpers::u64_string::serialize_bounded"
+            )
+        )]
+        count: u64,
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::u64_string::option",
+                bounded_with = "crate::json_helpers::u64_string::option::serialize_bounded"
+            )
+        )]
+        optional_count: Option<u64>,
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::u128_string",
+                bounded_with = "crate::json_helpers::u128_string::serialize_bounded"
+            )
+        )]
+        total: u128,
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::fixed_bytes_hex",
+                bounded_with = "crate::json_helpers::fixed_bytes_hex::serialize_bounded"
+            )
+        )]
+        digest: [u8; 4],
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::fixed_bytes_hex::option",
+                bounded_with = "crate::json_helpers::fixed_bytes_hex::option::serialize_bounded"
+            )
+        )]
+        optional_digest: Option<[u8; 2]>,
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::privacy_mode",
+                bounded_with = "crate::json_helpers::privacy_mode::serialize_bounded"
+            )
+        )]
+        mode: SoranetPrivacyModeV1,
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::secret_string",
+                bounded_with = "crate::json_helpers::secret_string::serialize_bounded"
+            )
+        )]
+        secret: String,
     }
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct FixedU64LimbsWrapper {
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_u64_limbs")
+            norito(
+                with = "crate::json_helpers::fixed_u64_limbs",
+                bounded_with = "crate::json_helpers::fixed_u64_limbs::serialize_bounded"
+            )
         )]
         limbs: [u64; 4],
     }
@@ -584,14 +1012,23 @@ mod tests {
     struct FixedU32LimbsWrapper {
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_u32_limbs")
+            norito(
+                with = "crate::json_helpers::fixed_u32_limbs",
+                bounded_with = "crate::json_helpers::fixed_u32_limbs::serialize_bounded"
+            )
         )]
         limbs: [u32; 4],
     }
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct FixedStringArrayWrapper {
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::fixed_array",
+                bounded_with = "crate::json_helpers::fixed_array::serialize_bounded"
+            )
+        )]
         values: [String; 2],
     }
 
@@ -605,6 +1042,10 @@ mod tests {
         let decoded: FixedU64LimbsWrapper =
             json::from_str(&encoded).expect("decode fixed u64 limbs");
         assert_eq!(decoded, wrapper);
+        assert_eq!(
+            json::to_json_bounded(&wrapper, encoded.len()).expect("exact bounded limb JSON"),
+            encoded
+        );
 
         let error = json::from_str::<FixedU64LimbsWrapper>(r#"{"limbs":[1,2,3]}"#)
             .expect_err("wrong fixed limb count must fail");
@@ -624,6 +1065,10 @@ mod tests {
         let decoded: FixedU32LimbsWrapper =
             json::from_str(&encoded).expect("decode fixed u32 limbs");
         assert_eq!(decoded, wrapper);
+        assert_eq!(
+            json::to_json_bounded(&wrapper, encoded.len()).expect("exact bounded u32 limb JSON"),
+            encoded
+        );
 
         let short = json::from_str::<FixedU32LimbsWrapper>(r#"{"limbs":[1,2,3]}"#)
             .expect_err("short fixed limb array must fail");
@@ -647,6 +1092,10 @@ mod tests {
         let decoded: FixedStringArrayWrapper =
             json::from_str(&encoded).expect("decode fixed string array");
         assert_eq!(decoded, wrapper);
+        assert_eq!(
+            json::to_json_bounded(&wrapper, encoded.len()).expect("exact bounded array JSON"),
+            encoded
+        );
 
         for malformed in [
             r#"{"values":["source"]}"#,
@@ -674,6 +1123,77 @@ mod tests {
 
         let decoded: Base64Wrapper = json::from_str(&json).expect("decode from JSON");
         assert_eq!(decoded, wrapper);
+        assert_eq!(
+            json::to_json_bounded(&wrapper, json.len()).expect("exact bounded base64 output"),
+            json
+        );
+        assert_eq!(
+            json::to_json_bounded(&wrapper, json.len() - 1),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[test]
+    fn fixed_bytes_checked_writer_matches_legacy_bytes_and_exact_bound() {
+        let wrapper = FixedBytesWrapper {
+            data: [0, 1, 42, 255],
+            optional: Some([7, 8]),
+        };
+        let legacy = json::to_json(&wrapper).expect("legacy fixed-byte JSON");
+        assert_eq!(legacy, r#"{"data":[0,1,42,255],"optional":[7,8]}"#);
+        assert_eq!(
+            json::to_json_bounded(&wrapper, legacy.len()).expect("exact fixed-byte JSON"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(&wrapper, legacy.len() - 1),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[test]
+    fn checked_container_helpers_match_legacy_bytes_at_exact_bound() {
+        let wrapper = ContainerHelpersWrapper {
+            encoded: Some(vec![0, 1, 2, 255]),
+            fixed: vec![[1, 2], [3, 4]],
+            optional_fixed: Some(vec![[5, 6]]),
+        };
+        let legacy = json::to_json(&wrapper).expect("legacy container-helper JSON");
+        assert_eq!(
+            json::to_json_bounded(&wrapper, legacy.len()).expect("exact container-helper JSON"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(&wrapper, legacy.len() - 1),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[test]
+    fn scalar_checked_helpers_match_legacy_bytes_at_exact_bound() {
+        let wrapper = ScalarHelpersWrapper {
+            count: u64::MAX,
+            optional_count: Some(0),
+            total: u128::MAX,
+            digest: [0x01, 0x23, 0xab, 0xcd],
+            optional_digest: Some([0xef, 0x42]),
+            mode: SoranetPrivacyModeV1::Entry,
+            secret: "must-not-escape".to_owned(),
+        };
+        let legacy = json::to_json(&wrapper).expect("legacy scalar-helper JSON");
+        assert!(legacy.contains(r#""count":"18446744073709551615""#));
+        assert!(legacy.contains(r#""total":"340282366920938463463374607431768211455""#));
+        assert!(legacy.contains(r#""digest":"0123abcd""#));
+        assert!(legacy.contains(r#""mode":"entry""#));
+        assert!(legacy.contains(r#""secret":"""#));
+        assert_eq!(
+            json::to_json_bounded(&wrapper, legacy.len()).expect("exact bounded scalar JSON"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(&wrapper, legacy.len() - 1),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
     }
 
     #[test]
@@ -692,7 +1212,13 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct I128Wrapper {
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::i128_string"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::i128_string",
+                bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
+            )
+        )]
         value: i128,
     }
 
@@ -707,6 +1233,10 @@ mod tests {
 
         let decoded: I128Wrapper = json::from_str(&json).expect("decode from JSON");
         assert_eq!(decoded, wrapper);
+        assert_eq!(
+            json::to_json_bounded(&wrapper, json.len()).expect("exact bounded i128 JSON"),
+            json
+        );
     }
 
     #[test]
@@ -727,7 +1257,7 @@ mod tests {
     struct InrouGuestImagesWrapper {
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::sora_inrou_guest_images_map")
+            norito(json = "crate::json_helpers::sora_inrou_guest_images_map")
         )]
         guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
     }
@@ -760,6 +1290,14 @@ mod tests {
         };
 
         let json = json::to_json(&wrapper).expect("serialize to JSON");
+        assert_eq!(
+            json::to_json_bounded(&wrapper, json.len()).expect("serialize at exact JSON limit"),
+            json
+        );
+        assert_eq!(
+            json::to_json_bounded(&wrapper, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         assert!(json.contains("\"x86_64\""));
         assert!(json.contains("\"aarch64\""));
 

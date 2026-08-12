@@ -85,7 +85,6 @@ const FINAL_SETTLE_WINDOW: Duration = Duration::from_secs(120);
 const LOAD_SUBMIT_RETRY_TIMEOUT_SECS: u64 = 3;
 const LOAD_SUBMIT_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 const LOG_TAIL_LINES: usize = 80;
-
 #[derive(Clone, Copy)]
 struct SimulationModes {
     process_churn: bool,
@@ -686,9 +685,8 @@ async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
         result,
     )
 }
-
+#[path = "taira_public_localnet/strict_restart.rs"]
 mod strict_restart;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "24-hour Taira-profile soak with validator restarts and packet impairment"]
 async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
@@ -3173,7 +3171,9 @@ fn localnet_tempdir(label: &str) -> Result<TempDir> {
     ensure!(!target.is_empty(), "CARGO_TARGET_DIR must not be empty");
     let root = PathBuf::from(target).join("taira-localnet");
     fs::create_dir_all(&root).wrap_err("create Taira localnet artifact root")?;
-    tempfile::Builder::new().prefix(label).tempdir_in(&root)
+    tempfile::Builder::new()
+        .prefix(label)
+        .tempdir_in(&root)
         .wrap_err("create taira localnet temp dir")
 }
 

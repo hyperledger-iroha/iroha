@@ -2308,6 +2308,12 @@ pub mod torii {
     pub const TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(4usize);
     /// Maximum signed transactions accepted by one HTTP batch submission.
     pub const TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS: NonZeroUsize = nonzero!(512usize);
+    /// Maximum concurrent verified-source compiler working sets.
+    pub const VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES: NonZeroUsize = nonzero!(1usize);
+    /// First-release upper bound for configured verified-source compiler concurrency.
+    pub const VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES_V1: usize = 4;
+    /// Absolute deadline for reading one admitted verified-source request body.
+    pub const VERIFIED_SOURCE_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
     /// Idle time before closing unused query subscriptions.
     pub const QUERY_IDLE_TIME: Duration = Duration::from_secs(10);
     /// Capacity of in-memory query result cache for all authorities.
@@ -2318,16 +2324,43 @@ pub mod torii {
     pub const QUERY_MAX_INFLIGHT: NonZeroUsize = nonzero!(128usize);
     /// Maximum concurrent heavy query executions admitted by Torii.
     pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
-    /// Aggregate bytes reserved for concurrently materialized cross-dataspace query fanouts.
+    /// Aggregate bytes split between bounded signed-query ingress and fanout working sets.
     pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(64_000_000);
     /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
     pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
+    /// Source-derived route/catalogue/key/candidate bytes in one V1 fanout.
+    pub const QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1: u64 = 8_514_114;
+    /// Variable-size units retained by the conservative V1 pre-body envelope.
+    pub const QUERY_FANOUT_PREBODY_UNITS_V1: u64 = 15;
+    /// Divisor reserving one quarter of aggregate query memory for ingress.
+    pub const QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1: u64 = 4;
+    /// Source-proven maximum bytes exposed to Hyper by one socket read.
+    pub const HTTP_READ_CHUNK_BYTES_V1: u64 = 8 * 1024;
     /// Reserved address-space headroom for fixed internal proxy decode state.
     pub const TORII_PROXY_HTTP_FIXED_MEMORY_HEADROOM_V1: u64 = 64 * 1024 * 1024;
     /// Variable-size representations in the internal proxy HTTP memory envelope.
     pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
     /// Maximum time a query waits for execution capacity before Torii rejects it.
     pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 25;
+    /// Absolute deadline for one admitted App routed-read body.
+    pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
+
+    /// Derive the V1 routed-read route-body phase during configuration parsing.
+    #[must_use]
+    pub fn app_api_routed_read_route_body_phase_bytes(
+        aggregate_bytes: u64,
+        max_content_bytes: u64,
+    ) -> Option<u64> {
+        let ingress_pool = aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1;
+        let fanout_pool = aggregate_bytes.checked_sub(ingress_pool)?;
+        let desired = max_content_bytes.checked_mul(QUERY_FANOUT_PREBODY_UNITS_V1)?
+            .checked_add(QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1)?;
+        let working_set = desired.min(fanout_pool);
+        working_set
+            .checked_sub(QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1)
+            .map(|remaining| remaining / QUERY_FANOUT_PREBODY_UNITS_V1)
+            .filter(|phase| *phase > 1)
+    }
     // Default per-authority query rate (tokens/sec). Set low but permissive.
     // None disables limiting; Some enables it.
     // Chosen to be friendly under normal usage while protecting from bursty abuse.
@@ -2467,6 +2500,23 @@ pub mod torii {
         /// Master enable switch for in-process RAM-LFE runtime wiring.
         pub const ENABLED: bool = false;
     }
+    /// Transaction-history visibility policy defaults.
+    pub mod tx_history {
+        /// Maximum bytes accepted from the mandatory-alias policy file.
+        pub const MANDATORY_ALIASES_MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
+        /// First-release hard ceiling for the mandatory-alias policy file.
+        pub const MANDATORY_ALIASES_MAX_FILE_BYTES_V1: usize = 16 * 1024 * 1024;
+        /// Complete raw-plus-retained units in the startup memory envelope.
+        ///
+        /// Seventeen units cover the raw document plus exact root-key and
+        /// flattened-alias arrays at their JSON grammar maxima, all decoded
+        /// string bytes, and conservative structural slack. The fixed
+        /// allowance below covers one-current normalization scratch and the
+        /// immutable policy handle.
+        pub const MANDATORY_ALIASES_MEMORY_PHASE_UNITS: usize = 17;
+        /// Fixed allowance for small-table rounding and one alias-normalization current.
+        pub const MANDATORY_ALIASES_NORMALIZATION_TRANSIENT_BYTES: usize = 64 * 1024;
+    }
     /// Retail recipient lookup defaults (disabled unless routes are configured).
     pub mod recipient_lookup {
         /// HTTP request timeout applied to configured bank Core API lookups.
@@ -2482,6 +2532,8 @@ pub mod torii {
         pub const ENABLED: bool = true;
         /// Allow the node identity key (from `[common]`) to sign operator requests.
         pub const ALLOW_NODE_KEY: bool = true;
+        /// Absolute deadline for collecting one request body before signature verification.
+        pub const BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
         /// Maximum allowed clock skew for signed operator requests (seconds).
         pub const MAX_CLOCK_SKEW_SECS: u64 = 60;
         /// TTL for operator nonces retained for replay detection (seconds).

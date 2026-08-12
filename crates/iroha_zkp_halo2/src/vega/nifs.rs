@@ -275,14 +275,16 @@ fn compute_cross_term(
     regular_instance: &Instance,
     regular_witness: &Witness,
 ) -> Result<Vec<Scalar>, NifsError> {
-    Ok(shape.derive_fold_cross_term(
-        &relaxed_witness.values,
-        relaxed_instance.relaxation,
-        &relaxed_instance.public_inputs,
-        &relaxed_witness.error,
-        &regular_witness.values,
-        &regular_instance.public_inputs,
-    )?)
+    shape
+        .derive_fold_cross_term(
+            &relaxed_witness.values,
+            relaxed_instance.relaxation,
+            &relaxed_instance.public_inputs,
+            &relaxed_witness.error,
+            &regular_witness.values,
+            &regular_instance.public_inputs,
+        )
+        .map_err(NifsError::from)
 }
 
 fn fold_public_instances(

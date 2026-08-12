@@ -105,11 +105,13 @@ fn owned_pointer_decoders_charge_their_wrapper_allocations() {
     }
 
     reset_decode_state();
+    // Use an alignment-one payload so this regression isolates the owned
+    // wrapper allocation rather than also charging a field realignment copy.
     let mut bytes = Vec::new();
-    serialize_to_buffer(&Box::new(7_u32), &mut bytes).expect("serialize Box");
-    let box_bytes = owned_box_allocation_bytes::<u32>();
+    serialize_to_buffer(&Box::new(7_u8), &mut bytes).expect("serialize Box");
+    let box_bytes = owned_box_allocation_bytes::<u8>();
     let error = with_decode_limits(limits_below(box_bytes), || {
-        <Box<u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
+        <Box<u8> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
     })
     .expect_err("Box allocation must be charged");
     assert!(matches!(
@@ -119,23 +121,26 @@ fn owned_pointer_decoders_charge_their_wrapper_allocations() {
     ));
 
     bytes.clear();
-    serialize_to_buffer(&Rc::new(7_u32), &mut bytes).expect("serialize Rc");
-    let rc_bytes = owned_rc_allocation_bytes::<u32>().expect("Rc layout must fit");
+    serialize_to_buffer(&Rc::new(7_u8), &mut bytes).expect("serialize Rc");
+    let rc_bytes = owned_rc_allocation_bytes::<u8>().expect("Rc layout must fit");
     let error = with_decode_limits(limits_below(rc_bytes), || {
-        <Rc<u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
+        <Rc<u8> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
     })
     .expect_err("Rc allocation must be charged");
-    assert!(matches!(
-        error,
-        Error::TotalAllocationExceeded { attempted, limit }
-            if attempted == rc_bytes as u64 && limit == (rc_bytes - 1) as u64
-    ));
+    assert!(
+        matches!(
+            error,
+            Error::TotalAllocationExceeded { attempted, limit }
+                if attempted == rc_bytes as u64 && limit == (rc_bytes - 1) as u64
+        ),
+        "unexpected Rc allocation error: {error:?}; wrapper bytes: {rc_bytes}"
+    );
 
     bytes.clear();
-    serialize_to_buffer(&Arc::new(7_u32), &mut bytes).expect("serialize Arc");
-    let arc_bytes = owned_arc_allocation_bytes::<u32>().expect("Arc layout must fit");
+    serialize_to_buffer(&Arc::new(7_u8), &mut bytes).expect("serialize Arc");
+    let arc_bytes = owned_arc_allocation_bytes::<u8>().expect("Arc layout must fit");
     let error = with_decode_limits(limits_below(arc_bytes), || {
-        <Arc<u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
+        <Arc<u8> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
     })
     .expect_err("Arc allocation must be charged");
     assert!(matches!(
@@ -992,6 +997,7 @@ fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
     let bounded =
         to_bytes_bounded(&value, canonical.len()).expect("encode canonical frame at exact bound");
     assert_eq!(bounded, canonical);
+    assert_eq!(bounded.capacity(), bounded.len());
 }
 
 #[test]

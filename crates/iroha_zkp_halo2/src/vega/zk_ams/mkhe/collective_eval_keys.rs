@@ -10,19 +10,45 @@
 #[cfg(test)]
 use super::gadget_decompose;
 use super::{
-    BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, MaskedRelaxedRandomSourceV1,
-    PartySet, RnsPolynomial, SecretPolynomial, WideUint, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
+    ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
+    RnsPolynomial, WideUint, ZkAmsMkheCksContributionWireV1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
+    ZkAmsMkheWireBindingV1,
+    active::ZkAmsMkheGovernedActiveRosterV1,
+    checked_coefficient_work, checked_ring_multiplication_work, checked_rns_polynomial_bytes,
+    cks::{
+        ZkAmsMkheCksProofV1, derive_cks_sparse_challenge, streaming_cks_auth_domain_v1,
+        streaming_cks_binding_v1, streaming_cks_challenge_seed_v1,
+        streaming_cks_key_context_digest_v1, streaming_cks_record_digest_v1,
+        streaming_cks_source_digest_v1, streaming_cks_wire_statement_digest_v1,
+        zk_ams_mkhe_cks_resource_evidence_v1,
+    },
+    collective_keys::{
+        ZkAmsMkheCollectiveEvaluatedKeyEntryV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
+        ZkAmsMkheCollectiveEvaluatedKeyPurposeV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
+    },
+    derive_uniform_rns_from_context,
+    manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
+    mod_add, mod_mul, mod_sub, modulus_product,
+    packing::{
+        ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
+        zk_ams_t256_galois_key_schedule_v1,
+    },
+    ring_multiplication_work, signed_mod,
+    wire::ZkAmsMkheGovernedRosterWireV1,
+};
+#[cfg(test)]
+use super::{
+    MaskedRelaxedRandomSourceV1, PartySet, SecretPolynomial,
     active::{
         ZkAmsMkheActiveCollectivePublicKeyStatementV1, ZkAmsMkheActiveGaloisSourceStatementV1,
         ZkAmsMkheActiveGaloisSourceWitnessV1, ZkAmsMkheActivePartySecretV1,
         ZkAmsMkheActiveRkgProofV1, ZkAmsMkheActiveRkgRoundOneStatementV1,
         ZkAmsMkheActiveRkgRoundOneWitnessV1, ZkAmsMkheActiveRkgRoundTwoStatementV1,
-        ZkAmsMkheActiveRkgRoundTwoWitnessV1, ZkAmsMkheGovernedActiveRosterV1,
-        prove_zk_ams_mkhe_active_galois_source_v1, prove_zk_ams_mkhe_active_rkg_round_one_v1,
-        prove_zk_ams_mkhe_active_rkg_round_two_v1, verify_zk_ams_mkhe_active_galois_source_v1,
-        verify_zk_ams_mkhe_active_rkg_round_one_v1, verify_zk_ams_mkhe_active_rkg_round_two_v1,
+        ZkAmsMkheActiveRkgRoundTwoWitnessV1, prove_zk_ams_mkhe_active_galois_source_v1,
+        prove_zk_ams_mkhe_active_rkg_round_one_v1, prove_zk_ams_mkhe_active_rkg_round_two_v1,
+        verify_zk_ams_mkhe_active_galois_source_v1, verify_zk_ams_mkhe_active_rkg_round_one_v1,
+        verify_zk_ams_mkhe_active_rkg_round_two_v1,
     },
-    checked_coefficient_work, checked_ring_multiplication_work, checked_rns_polynomial_bytes,
     cks::{
         ZkAmsMkheAuthenticatedCksContributionV1, ZkAmsMkheCksSourceCiphertextV1,
         ZkAmsMkheCksStatementV1, combine_zk_ams_mkhe_cks_v1, prove_zk_ams_mkhe_cks_contribution_v1,
@@ -33,24 +59,34 @@ use super::{
         ZkAmsMkheCollectivePublicKeyV1, aggregate_zk_ams_mkhe_collective_public_key_v1,
         validate_compact_for_key,
     },
-    collective_keys::{
-        ZkAmsMkheCollectiveEvaluatedKeyEntryV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
-        ZkAmsMkheCollectiveEvaluatedKeyPurposeV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
-    },
-    derive_rkg_common_a, derive_uniform_rns_from_context,
-    manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
-    modulus_product,
-    packing::{
-        ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
-        zk_ams_t256_galois_key_schedule_v1,
-    },
-    ring_multiplication_work,
-    wire::{ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheRnsPolynomialWireV1},
+    derive_rkg_common_a,
+    wire::ZkAmsMkheRnsPolynomialWireV1,
 };
-use crate::vega::sponge::{Keccak256, keccak256};
+use crate::vega::sponge::{Keccak256, Shake256Reader, keccak256};
+
+#[path = "collective_eval_keys/cks_stream.rs"]
+mod cks_stream;
+#[path = "collective_eval_keys/evidence_set.rs"]
+mod evidence_set;
+#[path = "collective_eval_keys/source_stream.rs"]
+mod source_stream;
+#[path = "collective_eval_keys/streaming_automorphism.rs"]
+mod streaming_automorphism;
+pub use evidence_set::{
+    ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1, verify_zk_ams_mkhe_evaluated_key_evidence_set_v1,
+};
+pub use source_stream::{
+    ZkAmsMkheTrustedSourceContextV1, ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
+};
+pub use streaming_automorphism::{
+    ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1,
+    automorphism_switch_zk_ams_mkhe_collective_streaming_v1,
+    zk_ams_mkhe_streaming_collective_automorphism_accounting_v1,
+};
 
 const EVALUATED_KEY_TARGET_A_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-target-a";
+const EVALUATED_KEY_TARGET_A_CONTEXT_BYTES_V1: usize = 176;
 const EVALUATED_KEY_EVIDENCE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-evidence";
 const EVALUATED_KEY_LINEAGE_DOMAIN_V1: &[u8] =
@@ -59,8 +95,16 @@ const EVALUATED_KEY_RUNTIME_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-runtime";
 const EVALUATED_KEY_PROVIDER_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-provider";
+const EVALUATED_KEY_LIMB_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-limb";
+const EVALUATED_KEY_LIMB_INDEX_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-limb-index";
 const SOURCE_EVIDENCE_RECORD_TAG_V1: [u8; 4] = *b"ZASE";
 const CKS_EVIDENCE_RECORD_TAG_V1: [u8; 4] = *b"ZACE";
+const CKS_VALIDATED_RECEIPT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.collective-cks-validated-receipt";
+const CKS_TRUSTED_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-cks-trusted-context";
+const RNS_NATIVE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial-digest";
+const RNS_WIRE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial";
 const EVIDENCE_RECORD_DIGEST_BYTES_V1: usize = 32;
 const SOURCE_EVIDENCE_COMMON_BODY_BYTES_V1: usize =
     4 + 1 + 1 + 8 + 1 + 4 + 1 + 32 + 32 + 32 + 8 + 32 + 32;
@@ -71,7 +115,7 @@ const SEEKABLE_EVALUATED_KEY_HEADER_BYTES_V1: usize =
     SEEKABLE_EVALUATED_KEY_BINDING_BYTES_V1 + 32 + 32 + 1;
 const SEEKABLE_EVALUATED_KEY_DIGIT_PREFIX_BYTES_V1: usize = 1 + 4;
 const SEEKABLE_EVALUATED_KEY_READ_BYTES_V1: usize = 8 * 1024;
-/// Largest signed-digit batch that fits the frozen 160 MiB workspace.
+/// Frozen signed-digit batch used by the release decomposition schedule.
 const HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1: usize = 5;
 
 /// Largest callback chunk used by the canonical evidence stream.
@@ -199,19 +243,30 @@ pub(super) fn seekable_evaluated_key_accounting(
 ) -> Result<ZkAmsMkheSeekableEvaluatedKeyAccountingV1, ZkAmsMkheErrorV1> {
     let layout = seekable_evaluated_key_layout(profile)?;
     let native_polynomial_allocation_bytes = layout.native_polynomial_bytes;
-    let validation_metadata_bytes = profile
+    let native_limb_allocation_bytes = profile
+        .ring_degree
+        .checked_mul(core::mem::size_of::<u64>())
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let digit_validation_metadata_bytes = profile
         .gadget_digits
         .checked_mul(core::mem::size_of::<SeekableEvaluatedKeyDigitV1>())
         .and_then(|value| u64::try_from(value).ok())
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let limb_validation_metadata_bytes = profile
+        .gadget_digits
+        .checked_mul(profile.moduli.len())
+        .and_then(|value| value.checked_mul(core::mem::size_of::<SeekableEvaluatedKeyLimbV1>()))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let validation_metadata_bytes = digit_validation_metadata_bytes
+        .checked_add(limb_validation_metadata_bytes)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let output_accumulator_bytes = native_polynomial_allocation_bytes
         .checked_mul(2)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let ntt_limb_scratch_bytes = profile
-        .ring_degree
+    let ntt_limb_scratch_bytes = native_limb_allocation_bytes
         .checked_mul(2)
-        .and_then(|words| words.checked_mul(core::mem::size_of::<u64>()))
-        .and_then(|bytes| u64::try_from(bytes).ok())
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let signed_decomposition_scratch_bytes = profile
         .ring_degree
@@ -234,42 +289,45 @@ pub(super) fn seekable_evaluated_key_accounting(
     let provider_hash_state_bytes =
         u64::try_from(core::mem::size_of::<norito::streaming::Blake3Hasher>())
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    // Target-layout owners and controls live across the arithmetic peak: one
+    // hoisted batch, two output owners, two limb owners, two borrowed limb
+    // views, and the optional automorphism selector.
     let explicit_multiplication_state_bytes = u64::try_from(
         core::mem::size_of::<HoistedHybridDigitBatchV1<'static>>()
             .checked_add(
-                4_usize
+                2_usize
                     .checked_mul(core::mem::size_of::<RnsPolynomial>())
                     .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
             )
             .and_then(|bytes| bytes.checked_add(2 * core::mem::size_of::<Vec<u64>>()))
+            .and_then(|bytes| bytes.checked_add(2 * core::mem::size_of::<&mut [u64]>()))
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<Option<usize>>()))
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
     )
     .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let decomposition_phase_bytes = output_accumulator_bytes
         .checked_add(signed_decomposition_scratch_bytes)
-        .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
+        .and_then(|bytes| bytes.checked_add(ntt_limb_scratch_bytes))
+        .and_then(|bytes| bytes.checked_add(crt_residue_scratch_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let provider_read_phase_bytes = output_accumulator_bytes
         .checked_add(signed_decomposition_scratch_bytes)
-        .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
-        .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
+        .and_then(|bytes| bytes.checked_add(ntt_limb_scratch_bytes))
         .and_then(|bytes| bytes.checked_add(provider_read_buffer_bytes))
         .and_then(|bytes| bytes.checked_add(provider_hash_state_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let peak_heap_allocation_bytes = output_accumulator_bytes
         .checked_add(signed_decomposition_scratch_bytes)
-        .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
-        .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
         .and_then(|bytes| bytes.checked_add(ntt_limb_scratch_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let multiplication_phase_bytes = peak_heap_allocation_bytes
+    let multiplication_phase_bytes = provider_read_phase_bytes
         .checked_add(explicit_multiplication_state_bytes)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let peak_managed_workspace_bytes = decomposition_phase_bytes
         .max(provider_read_phase_bytes)
         .max(multiplication_phase_bytes);
     let per_key_switch_read_bytes = layout
-        .digit_record_bytes
+        .native_polynomial_bytes
         .checked_mul(
             u64::try_from(profile.gadget_digits)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
@@ -316,6 +374,7 @@ pub(super) fn seekable_evaluated_key_accounting(
         incremental_validation_read_bytes: layout.payload_bytes,
         per_key_switch_read_bytes,
         native_polynomial_allocation_bytes,
+        native_limb_allocation_bytes,
         output_accumulator_bytes,
         signed_decomposition_scratch_bytes,
         crt_residue_scratch_bytes,
@@ -482,7 +541,9 @@ fn validate_seekable_expected_layout(
         || expected.roster_digest == [0; 32]
         || expected.epoch == 0
         || expected.transcript_digest == [0; 32]
+        || expected.collective_key_digest == [0; 32]
         || expected.contribution_proof_digest == [0; 32]
+        || expected.cks_compact_output_set_digest == [0; 32]
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -502,6 +563,61 @@ fn validate_seekable_expected_layout(
         }
     }
     Ok(layout)
+}
+
+fn seekable_evaluated_key_limb_hasher(
+    digit_index: usize,
+    limb_index: usize,
+    modulus: u64,
+    absolute_offset: u64,
+    canonical_bytes: u64,
+) -> Result<norito::streaming::Blake3Hasher, ZkAmsMkheErrorV1> {
+    let mut hasher = norito::streaming::Blake3Hasher::new();
+    hasher.update(EVALUATED_KEY_LIMB_DOMAIN_V1);
+    hasher.update(&[MKHE_VERSION_V1]);
+    hasher.update(
+        &u16::try_from(digit_index)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
+            .to_be_bytes(),
+    );
+    hasher.update(
+        &u16::try_from(limb_index)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
+            .to_be_bytes(),
+    );
+    hasher.update(&modulus.to_be_bytes());
+    hasher.update(&absolute_offset.to_be_bytes());
+    hasher.update(&canonical_bytes.to_be_bytes());
+    Ok(hasher)
+}
+
+fn seekable_evaluated_key_limb_index_digest(
+    entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
+    limbs: &[SeekableEvaluatedKeyLimbV1],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let mut hasher = norito::streaming::Blake3Hasher::new();
+    hasher.update(EVALUATED_KEY_LIMB_INDEX_DOMAIN_V1);
+    hasher.update(&[MKHE_VERSION_V1, entry.purpose() as u8, entry.ordinal()]);
+    hasher.update(&entry.galois_exponent().to_be_bytes());
+    hasher.update(&entry.payload_offset().to_be_bytes());
+    hasher.update(&entry.payload_bytes().to_be_bytes());
+    hasher.update(&entry.payload_blake3());
+    hasher.update(
+        &u32::try_from(limbs.len())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .to_be_bytes(),
+    );
+    for (index, limb) in limbs.iter().enumerate() {
+        hasher.update(
+            &u32::try_from(index)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+                .to_be_bytes(),
+        );
+        hasher.update(&limb.absolute_offset.to_be_bytes());
+        hasher.update(&limb.canonical_bytes.to_be_bytes());
+        hasher.update(&limb.blake3);
+    }
+    Ok(hasher.finalize())
 }
 
 fn validate_seekable_evaluated_key<P>(
@@ -528,6 +644,24 @@ where
     if digits.capacity() != profile.gadget_digits {
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
+    let limb_count = profile
+        .gadget_digits
+        .checked_mul(profile.moduli.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut limbs = Vec::new();
+    limbs
+        .try_reserve_exact(limb_count)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if limbs.capacity() != limb_count {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let limb_bytes = u64::try_from(
+        profile
+            .ring_degree
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+    )
+    .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let mut absolute_offset = expected
         .entry
         .payload_offset()
@@ -537,6 +671,12 @@ where
         )
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let mut buffer = [0_u8; SEEKABLE_EVALUATED_KEY_READ_BYTES_V1];
+    let mut compact_output_digest = evidence_set::CksCompactOutputSetDigestV1::new(
+        expected.entry.purpose(),
+        expected.entry.ordinal(),
+        expected.entry.galois_exponent(),
+        expected.collective_key_digest,
+    )?;
     for digit_index in 0..profile.gadget_digits {
         let expected_digit_offset = expected
             .entry
@@ -556,6 +696,8 @@ where
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         let mut digit_hasher = norito::streaming::Blake3Hasher::new();
+        let mut native_digest =
+            new_rns_digest_hasher(RNS_NATIVE_DIGEST_DOMAIN_V1, layout.residue_count)?;
         let mut prefix = [0_u8; SEEKABLE_EVALUATED_KEY_DIGIT_PREFIX_BYTES_V1];
         seekable_provider_read_exact(provider, before, &mut prefix)?;
         payload_hasher.update(&prefix);
@@ -571,42 +713,92 @@ where
         {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
-        let mut residue_index = 0_usize;
-        let mut remaining = usize::try_from(layout.native_polynomial_bytes)
-            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        while remaining != 0 {
-            let take = remaining.min(buffer.len());
-            seekable_provider_read_exact(provider, before, &mut buffer[..take])?;
-            payload_hasher.update(&buffer[..take]);
-            digit_hasher.update(&buffer[..take]);
-            for encoded in buffer[..take].chunks_exact(8) {
-                let residue = u64::from_be_bytes(
-                    encoded
-                        .try_into()
-                        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-                );
-                let limb = residue_index / profile.ring_degree;
-                if limb >= profile.moduli.len() || residue >= profile.moduli[limb] {
-                    return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
-                }
-                residue_index = residue_index
-                    .checked_add(1)
-                    .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        absolute_offset = absolute_offset
+            .checked_add(
+                u64::try_from(SEEKABLE_EVALUATED_KEY_DIGIT_PREFIX_BYTES_V1)
+                    .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+            )
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        for (limb_index, &modulus) in profile.moduli.iter().enumerate() {
+            let expected_limb_offset = expected_digit_offset
+                .checked_add(
+                    u64::try_from(SEEKABLE_EVALUATED_KEY_DIGIT_PREFIX_BYTES_V1)
+                        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+                )
+                .and_then(|value| {
+                    limb_bytes
+                        .checked_mul(u64::try_from(limb_index).ok()?)
+                        .and_then(|limb| value.checked_add(limb))
+                })
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+            if absolute_offset != expected_limb_offset {
+                return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
             }
-            remaining -= take;
+            let mut limb_hasher = seekable_evaluated_key_limb_hasher(
+                digit_index,
+                limb_index,
+                modulus,
+                absolute_offset,
+                limb_bytes,
+            )?;
+            let mut residues = 0_usize;
+            let mut remaining = usize::try_from(limb_bytes)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+            while remaining != 0 {
+                let take = remaining.min(buffer.len());
+                seekable_provider_read_exact(provider, before, &mut buffer[..take])?;
+                payload_hasher.update(&buffer[..take]);
+                digit_hasher.update(&buffer[..take]);
+                limb_hasher.update(&buffer[..take]);
+                native_digest.update(&buffer[..take]);
+                for encoded in buffer[..take].chunks_exact(core::mem::size_of::<u64>()) {
+                    let residue = u64::from_be_bytes(
+                        encoded
+                            .try_into()
+                            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+                    );
+                    if residue >= modulus {
+                        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+                    }
+                    residues = residues
+                        .checked_add(1)
+                        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+                }
+                remaining -= take;
+            }
+            if residues != profile.ring_degree {
+                return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+            }
+            limbs.push(SeekableEvaluatedKeyLimbV1 {
+                absolute_offset,
+                canonical_bytes: limb_bytes,
+                blake3: limb_hasher.finalize(),
+            });
+            absolute_offset = absolute_offset
+                .checked_add(limb_bytes)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         }
-        if residue_index != layout.residue_count {
+        if absolute_offset
+            != expected_digit_offset
+                .checked_add(layout.digit_record_bytes)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+        {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         digits.push(SeekableEvaluatedKeyDigitV1 {
-            absolute_offset,
+            absolute_offset: expected_digit_offset,
             canonical_bytes: layout.digit_record_bytes,
             blake3: digit_hasher.finalize(),
         });
-        absolute_offset = absolute_offset
-            .checked_add(layout.digit_record_bytes)
-            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        compact_output_digest.absorb(
+            u32::try_from(digit_index).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+            native_digest.finalize(),
+        )?;
     }
+    let compact_output_digest = compact_output_digest.finish(
+        u32::try_from(profile.gadget_digits)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+    )?;
     if absolute_offset
         != expected
             .entry
@@ -614,6 +806,7 @@ where
             .checked_add(expected.entry.payload_bytes())
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
         || payload_hasher.finalize() != expected.entry.payload_blake3()
+        || compact_output_digest != expected.cks_compact_output_set_digest
     {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
@@ -621,11 +814,17 @@ where
     if after != before {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
+    let limb_index_digest = seekable_evaluated_key_limb_index_digest(expected.entry, &limbs)?;
+    if limb_index_digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
     Ok(SeekableEvaluatedKeyValidationV1 {
         state: after,
         a_master_seed,
         contribution_proof_digest,
         digits,
+        limbs,
+        limb_index_digest,
     })
 }
 
@@ -635,6 +834,9 @@ fn seekable_provider_binding_digest(
     state: SeekableProviderStateV1,
     a_master_seed: [u8; 32],
     contribution_proof_digest: [u8; 32],
+    evidence_set_capability_seal: [u8; 32],
+    cks_compact_output_set_digest: [u8; 32],
+    limb_index_digest: [u8; 32],
 ) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(EVALUATED_KEY_PROVIDER_DOMAIN_V1);
@@ -655,6 +857,9 @@ fn seekable_provider_binding_digest(
     hash.update(&state.pointer.chunker_profile_digest());
     hash.update(&a_master_seed);
     hash.update(&contribution_proof_digest);
+    hash.update(&evidence_set_capability_seal);
+    hash.update(&cks_compact_output_set_digest);
+    hash.update(&limb_index_digest);
     hash.finalize()
 }
 
@@ -679,6 +884,7 @@ where
     ensure_seekable_provider_state(provider, validated_key_provider_state(key))
 }
 
+#[cfg(test)]
 fn read_seekable_evaluated_key_digit<P>(
     profile: &BgvProfile,
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -1173,7 +1379,8 @@ impl ZkAmsMkheGeneratedCollectiveEvaluatedKeyV1 {
 /// callback.  A durable sink serializes or otherwise persists their residues;
 /// retaining only the proof is deliberately insufficient.
 #[derive(Clone, Copy)]
-pub enum ZkAmsMkheCollectiveSourceStatementEvidenceV1<'a> {
+#[cfg(test)]
+pub(super) enum ZkAmsMkheCollectiveSourceStatementEvidenceV1<'a> {
     /// One party's first-round contribution to one canonical unordered RKG pair.
     RkgRoundOne {
         /// Common collective-public-key `a`.
@@ -1237,6 +1444,7 @@ pub enum ZkAmsMkheCollectiveSourceStatementEvidenceV1<'a> {
     },
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheCollectiveSourceStatementEvidenceV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -1278,7 +1486,8 @@ impl core::fmt::Debug for ZkAmsMkheCollectiveSourceStatementEvidenceV1<'_> {
 }
 
 /// Replayable evidence for one source proof in the exact generation sequence.
-pub struct ZkAmsMkheCollectiveSourceProofEvidenceV1<'a> {
+#[cfg(test)]
+pub(super) struct ZkAmsMkheCollectiveSourceProofEvidenceV1<'a> {
     ordinal: u8,
     source_record_index: u32,
     party_index: u8,
@@ -1292,6 +1501,7 @@ pub struct ZkAmsMkheCollectiveSourceProofEvidenceV1<'a> {
     proof: &'a ZkAmsMkheActiveRkgProofV1,
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheCollectiveSourceProofEvidenceV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1312,6 +1522,7 @@ impl core::fmt::Debug for ZkAmsMkheCollectiveSourceProofEvidenceV1<'_> {
     }
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheCollectiveSourceProofEvidenceV1<'a> {
     /// Evaluated-key ordinal containing this proof.
     #[must_use]
@@ -1687,228 +1898,10 @@ impl<'a> ZkAmsMkheCollectiveSourceProofEvidenceV1<'a> {
     }
 }
 
-/// Owned statement reconstructed from one exact canonical `ZASE` record.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1 {
-    /// Complete first-round RKG statement.
-    RkgRoundOne {
-        /// Common collective-public-key `a`.
-        public_a: ZkAmsMkheRnsPolynomialWireV1,
-        /// This party's collective-public-key `b_i`.
-        party_public_b: ZkAmsMkheRnsPolynomialWireV1,
-        /// Deterministic pair/digit RKG polynomial.
-        common_a: ZkAmsMkheRnsPolynomialWireV1,
-        /// First-round constant contribution.
-        h0: ZkAmsMkheRnsPolynomialWireV1,
-        /// First-round linear contribution.
-        h1: ZkAmsMkheRnsPolynomialWireV1,
-        /// Canonical left pair endpoint.
-        left: ZkAmsMkhePartyIdV1,
-        /// Canonical right pair endpoint.
-        right: ZkAmsMkhePartyIdV1,
-        /// Balanced gadget digit.
-        digit_index: u32,
-    },
-    /// Complete second-round RKG statement.
-    RkgRoundTwo {
-        /// Common collective-public-key `a`.
-        public_a: ZkAmsMkheRnsPolynomialWireV1,
-        /// This party's collective-public-key `b_i`.
-        party_public_b: ZkAmsMkheRnsPolynomialWireV1,
-        /// Deterministic pair/digit RKG polynomial.
-        common_a: ZkAmsMkheRnsPolynomialWireV1,
-        /// First-round constant contribution.
-        h0: ZkAmsMkheRnsPolynomialWireV1,
-        /// First-round linear contribution.
-        h1: ZkAmsMkheRnsPolynomialWireV1,
-        /// Ordered aggregate first-round constant.
-        aggregate_h0: ZkAmsMkheRnsPolynomialWireV1,
-        /// Ordered aggregate first-round linear term.
-        aggregate_h1: ZkAmsMkheRnsPolynomialWireV1,
-        /// This party's second-round constant contribution.
-        k0: ZkAmsMkheRnsPolynomialWireV1,
-        /// Canonical left pair endpoint.
-        left: ZkAmsMkhePartyIdV1,
-        /// Canonical right pair endpoint.
-        right: ZkAmsMkhePartyIdV1,
-        /// Balanced gadget digit.
-        digit_index: u32,
-    },
-    /// Complete automorphism-linked source statement.
-    Galois {
-        /// Common collective-public-key `a`.
-        public_a: ZkAmsMkheRnsPolynomialWireV1,
-        /// This party's collective-public-key `b_i`.
-        party_public_b: ZkAmsMkheRnsPolynomialWireV1,
-        /// Source-encryption constant polynomial.
-        source_constant: ZkAmsMkheRnsPolynomialWireV1,
-        /// Source-encryption linear polynomial.
-        source_linear: ZkAmsMkheRnsPolynomialWireV1,
-        /// Exact frozen schedule position.
-        schedule_index: u8,
-        /// Exact odd automorphism exponent.
-        exponent: u32,
-        /// Balanced gadget digit.
-        digit_index: u32,
-    },
-}
-
-impl ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1 {
-    fn borrowed(&self) -> ZkAmsMkheCollectiveSourceStatementEvidenceV1<'_> {
-        match self {
-            Self::RkgRoundOne {
-                public_a,
-                party_public_b,
-                common_a,
-                h0,
-                h1,
-                left,
-                right,
-                digit_index,
-            } => ZkAmsMkheCollectiveSourceStatementEvidenceV1::RkgRoundOne {
-                public_a,
-                party_public_b,
-                common_a,
-                h0,
-                h1,
-                left: *left,
-                right: *right,
-                digit_index: *digit_index,
-            },
-            Self::RkgRoundTwo {
-                public_a,
-                party_public_b,
-                common_a,
-                h0,
-                h1,
-                aggregate_h0,
-                aggregate_h1,
-                k0,
-                left,
-                right,
-                digit_index,
-            } => ZkAmsMkheCollectiveSourceStatementEvidenceV1::RkgRoundTwo {
-                public_a,
-                party_public_b,
-                common_a,
-                h0,
-                h1,
-                aggregate_h0,
-                aggregate_h1,
-                k0,
-                left: *left,
-                right: *right,
-                digit_index: *digit_index,
-            },
-            Self::Galois {
-                public_a,
-                party_public_b,
-                source_constant,
-                source_linear,
-                schedule_index,
-                exponent,
-                digit_index,
-            } => ZkAmsMkheCollectiveSourceStatementEvidenceV1::Galois {
-                public_a,
-                party_public_b,
-                source_constant,
-                source_linear,
-                schedule_index: *schedule_index,
-                exponent: *exponent,
-                digit_index: *digit_index,
-            },
-        }
-    }
-}
-
-/// One owned, exactly decoded and independently replayable `ZASE` record.
-pub struct ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1 {
-    ordinal: u8,
-    source_record_index: u32,
-    party_index: u8,
-    profile_digest: [u8; 32],
-    roster_digest: [u8; 32],
-    key_material_digest: [u8; 32],
-    epoch: u64,
-    transcript_digest: [u8; 32],
-    collective_key_digest: [u8; 32],
-    statement: ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1,
-    proof: ZkAmsMkheActiveRkgProofV1,
-    canonical_bytes: u64,
-    canonical_digest: [u8; 32],
-}
-
-impl core::fmt::Debug for ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1 {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1")
-            .field("ordinal", &self.ordinal)
-            .field("source_record_index", &self.source_record_index)
-            .field("party_index", &self.party_index)
-            .field("canonical_bytes", &self.canonical_bytes)
-            .field("canonical_digest", &hex::encode(self.canonical_digest))
-            .field("statement", &self.statement)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1 {
-    fn borrowed(&self) -> ZkAmsMkheCollectiveSourceProofEvidenceV1<'_> {
-        ZkAmsMkheCollectiveSourceProofEvidenceV1 {
-            ordinal: self.ordinal,
-            source_record_index: self.source_record_index,
-            party_index: self.party_index,
-            profile_digest: self.profile_digest,
-            roster_digest: self.roster_digest,
-            key_material_digest: self.key_material_digest,
-            epoch: self.epoch,
-            transcript_digest: self.transcript_digest,
-            collective_key_digest: self.collective_key_digest,
-            statement: self.statement.borrowed(),
-            proof: &self.proof,
-        }
-    }
-
-    /// Exact canonical record length accepted from durable storage.
-    #[must_use]
-    pub const fn canonical_bytes(&self) -> u64 {
-        self.canonical_bytes
-    }
-
-    /// Verified digest footer of every preceding canonical record byte.
-    #[must_use]
-    pub const fn canonical_digest(&self) -> [u8; 32] {
-        self.canonical_digest
-    }
-
-    /// Re-run the complete topology, CPK linkage, proof, and authentication checks.
-    pub fn verify(
-        &self,
-        roster: &ZkAmsMkheGovernedActiveRosterV1,
-        collective_key: &ZkAmsMkheCollectivePublicKeyV1,
-        shares: [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-    ) -> Result<(), ZkAmsMkheErrorV1> {
-        self.borrowed().verify(roster, collective_key, shares)
-    }
-
-    /// Decode exactly one `ZASE` record, require immediate EOF, and replay it
-    /// under independently trusted roster, aggregate CPK, and ordered shares.
-    pub fn decode_and_verify_canonical_exact<R: std::io::Read>(
-        reader: &mut R,
-        roster: &ZkAmsMkheGovernedActiveRosterV1,
-        collective_key: &ZkAmsMkheCollectivePublicKeyV1,
-        shares: [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let value = decode_source_evidence_record(reader)?;
-        require_canonical_reader_eof(reader)?;
-        value.verify(roster, collective_key, shares)?;
-        Ok(value)
-    }
-}
-
 /// Complete source, target-key context, proofs, and recomputed compact output
 /// for one full-roster CKS digit.
-pub struct ZkAmsMkheCollectiveCksDigitEvidenceV1<'a> {
+#[cfg(test)]
+pub(super) struct ZkAmsMkheCollectiveCksDigitEvidenceV1<'a> {
     ordinal: u8,
     digit_index: u8,
     collective_key_digest: [u8; 32],
@@ -1921,6 +1914,7 @@ pub struct ZkAmsMkheCollectiveCksDigitEvidenceV1<'a> {
     compact_constant: &'a ZkAmsMkheRnsPolynomialWireV1,
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheCollectiveCksDigitEvidenceV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1937,6 +1931,7 @@ impl core::fmt::Debug for ZkAmsMkheCollectiveCksDigitEvidenceV1<'_> {
     }
 }
 
+#[cfg(test)]
 impl ZkAmsMkheCollectiveCksDigitEvidenceV1<'_> {
     /// Evaluated-key ordinal containing this digit.
     #[must_use]
@@ -2182,20 +2177,204 @@ impl ZkAmsMkheCollectiveCksDigitEvidenceV1<'_> {
     }
 }
 
-/// One owned, exactly decoded and independently replayable `ZACE` record.
+/// Compact move-only trusted context for streaming CKS evidence verification.
+///
+/// The context retains only governed identity and polynomial digests. It is
+/// privately sealed after the collective key and all ordered shares have been
+/// validated, allowing their bulky polynomial owners to be dropped before a
+/// `ZACE` record is decoded.
+pub struct ZkAmsMkheTrustedCksContextV1 {
+    roster: ZkAmsMkheGovernedRosterWireV1,
+    key_material_digest: [u8; 32],
+    transcript_digest: [u8; 32],
+    collective_key_digest: [u8; 32],
+    share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    public_key_a_native_digest: [u8; 32],
+    public_key_a_wire_digest: [u8; 32],
+    party_public_b_native_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    party_public_b_wire_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    verification_seal: [u8; 32],
+}
+
+impl core::fmt::Debug for ZkAmsMkheTrustedCksContextV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ZkAmsMkheTrustedCksContextV1")
+            .field("roster_digest", &hex::encode(self.roster.roster_digest()))
+            .field(
+                "key_material_digest",
+                &hex::encode(self.key_material_digest),
+            )
+            .field("transcript_digest", &hex::encode(self.transcript_digest))
+            .field(
+                "collective_key_digest",
+                &hex::encode(self.collective_key_digest),
+            )
+            .field("share_count", &self.share_digests.len())
+            .field(
+                "public_key_a_native_digest",
+                &hex::encode(self.public_key_a_native_digest),
+            )
+            .field(
+                "public_key_a_wire_digest",
+                &hex::encode(self.public_key_a_wire_digest),
+            )
+            .field(
+                "party_public_b_native_digest_count",
+                &self.party_public_b_native_digests.len(),
+            )
+            .field(
+                "party_public_b_wire_digest_count",
+                &self.party_public_b_wire_digests.len(),
+            )
+            .field("privately_sealed", &(self.verification_seal != [0; 32]))
+            .finish_non_exhaustive()
+    }
+}
+
+impl ZkAmsMkheTrustedCksContextV1 {
+    /// Validate a materialized collective key and ordered shares, then mint the
+    /// compact context that remains after those bulky owners are dropped.
+    #[cfg(test)]
+    pub fn from_verified_collective_key_and_shares(
+        active_roster: &ZkAmsMkheGovernedActiveRosterV1,
+        collective_key: &ZkAmsMkheCollectivePublicKeyV1,
+        shares: [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        cks_stream::trusted_context_from_verified_key_and_shares(
+            active_roster,
+            collective_key,
+            shares,
+        )
+    }
+
+    /// Crate-private mint seam for a staged CPK verifier that already checked
+    /// the exact governed key/share relation without materializing all owners.
+    /// TODO: keep the release RSS gate closed until the staged finalizer has a
+    /// production orchestration caller and its provider/page-cache peak is
+    /// independently measured; the finalizer already calls this seam.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_staged_verified_digests(
+        roster: ZkAmsMkheGovernedRosterWireV1,
+        key_material_digest: [u8; 32],
+        transcript_digest: [u8; 32],
+        collective_key_digest: [u8; 32],
+        share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        public_key_a_native_digest: [u8; 32],
+        public_key_a_wire_digest: [u8; 32],
+        party_public_b_native_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        party_public_b_wire_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        if roster.profile_digest() != release_profile_v1().digest()?
+            || key_material_digest == [0; 32]
+            || transcript_digest == [0; 32]
+            || collective_key_digest == [0; 32]
+            || share_digests.iter().any(|digest| *digest == [0; 32])
+            || public_key_a_native_digest == [0; 32]
+            || public_key_a_wire_digest == [0; 32]
+            || party_public_b_native_digests
+                .iter()
+                .any(|digest| *digest == [0; 32])
+            || party_public_b_wire_digests
+                .iter()
+                .any(|digest| *digest == [0; 32])
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let verification_seal = trusted_cks_context_seal(
+            roster,
+            key_material_digest,
+            transcript_digest,
+            collective_key_digest,
+            &share_digests,
+            public_key_a_native_digest,
+            public_key_a_wire_digest,
+            &party_public_b_native_digests,
+            &party_public_b_wire_digests,
+        );
+        Ok(Self {
+            roster,
+            key_material_digest,
+            transcript_digest,
+            collective_key_digest,
+            share_digests,
+            public_key_a_native_digest,
+            public_key_a_wire_digest,
+            party_public_b_native_digests,
+            party_public_b_wire_digests,
+            verification_seal,
+        })
+    }
+
+    fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
+        let expected = trusted_cks_context_seal(
+            self.roster,
+            self.key_material_digest,
+            self.transcript_digest,
+            self.collective_key_digest,
+            &self.share_digests,
+            self.public_key_a_native_digest,
+            self.public_key_a_wire_digest,
+            &self.party_public_b_native_digests,
+            &self.party_public_b_wire_digests,
+        );
+        if self.verification_seal == [0; 32] || self.verification_seal != expected {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trusted_cks_context_seal(
+    roster: ZkAmsMkheGovernedRosterWireV1,
+    key_material_digest: [u8; 32],
+    transcript_digest: [u8; 32],
+    collective_key_digest: [u8; 32],
+    share_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    public_key_a_native_digest: [u8; 32],
+    public_key_a_wire_digest: [u8; 32],
+    party_public_b_native_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    party_public_b_wire_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(CKS_TRUSTED_CONTEXT_DOMAIN_V1);
+    hash.update(&roster.profile_digest());
+    hash.update(&roster.roster_digest());
+    hash.update(&roster.epoch().to_be_bytes());
+    hash.update(&key_material_digest);
+    hash.update(&transcript_digest);
+    hash.update(&collective_key_digest);
+    for digest in share_digests {
+        hash.update(digest);
+    }
+    hash.update(&public_key_a_native_digest);
+    hash.update(&public_key_a_wire_digest);
+    for digest in party_public_b_native_digests {
+        hash.update(digest);
+    }
+    for digest in party_public_b_wire_digests {
+        hash.update(digest);
+    }
+    hash.finalize()
+}
+
+/// Move-only receipt for one exactly decoded and fully verified `ZACE` record.
+///
+/// The receipt deliberately retains no polynomial, proof, canonical byte buffer,
+/// reader, path, or provider. Its private seal can only be minted after the
+/// seekable decoder has replayed all eight ordered proofs and the compact output.
 pub struct ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
     ordinal: u8,
     digit_index: u8,
     collective_key_digest: [u8; 32],
-    roster: ZkAmsMkheGovernedRosterWireV1,
-    source: ZkAmsMkheCksSourceCiphertextV1,
-    target_a: ZkAmsMkheRnsPolynomialWireV1,
-    public_key_a: ZkAmsMkheRnsPolynomialWireV1,
-    party_public_b: [ZkAmsMkheRnsPolynomialWireV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-    contributions: Vec<ZkAmsMkheAuthenticatedCksContributionV1>,
-    compact_constant: ZkAmsMkheRnsPolynomialWireV1,
+    source_digest: [u8; 32],
+    key_context_digest: [u8; 32],
+    compact_constant_digest: [u8; 32],
+    contribution_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     canonical_bytes: u64,
     canonical_digest: [u8; 32],
+    verification_seal: [u8; 32],
 }
 
 impl core::fmt::Debug for ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
@@ -2206,28 +2385,23 @@ impl core::fmt::Debug for ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
             .field("digit_index", &self.digit_index)
             .field("canonical_bytes", &self.canonical_bytes)
             .field("canonical_digest", &hex::encode(self.canonical_digest))
-            .field("source_digest", &hex::encode(self.source.source_digest()))
-            .field("contributions", &self.contributions.len())
+            .field(
+                "collective_key_digest",
+                &hex::encode(self.collective_key_digest),
+            )
+            .field("source_digest", &hex::encode(self.source_digest))
+            .field("key_context_digest", &hex::encode(self.key_context_digest))
+            .field(
+                "compact_constant_digest",
+                &hex::encode(self.compact_constant_digest),
+            )
+            .field("verified_contributions", &self.contribution_digests.len())
+            .field("privately_sealed", &(self.verification_seal != [0; 32]))
             .finish_non_exhaustive()
     }
 }
 
 impl ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
-    fn borrowed(&self) -> ZkAmsMkheCollectiveCksDigitEvidenceV1<'_> {
-        ZkAmsMkheCollectiveCksDigitEvidenceV1 {
-            ordinal: self.ordinal,
-            digit_index: self.digit_index,
-            collective_key_digest: self.collective_key_digest,
-            roster: &self.roster,
-            source: &self.source,
-            target_a: &self.target_a,
-            public_key_a: &self.public_key_a,
-            party_public_b: std::array::from_fn(|index| &self.party_public_b[index]),
-            contributions: &self.contributions,
-            compact_constant: &self.compact_constant,
-        }
-    }
-
     /// Exact canonical record length accepted from durable storage.
     #[must_use]
     pub const fn canonical_bytes(&self) -> u64 {
@@ -2240,37 +2414,28 @@ impl ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
         self.canonical_digest
     }
 
-    /// Re-run all eight CKS proofs, ordered CPK linkage, and compact output checks.
-    pub fn verify(
-        &self,
-        active_roster: &ZkAmsMkheGovernedActiveRosterV1,
-        collective_key: &ZkAmsMkheCollectivePublicKeyV1,
-        shares: [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-    ) -> Result<(), ZkAmsMkheErrorV1> {
-        self.borrowed()
-            .verify(active_roster, collective_key, shares)
-    }
-
-    /// Decode exactly one `ZACE` record, require immediate EOF, and replay it
-    /// under independently trusted roster, aggregate CPK, and ordered shares.
-    pub fn decode_and_verify_canonical_exact<R: std::io::Read>(
+    /// Decode exactly one seekable `ZACE` record and mint a bounded receipt.
+    ///
+    /// Seeking is required because canonical relation polynomials precede the
+    /// contribution proofs that reference them. Every reread is digest-checked;
+    /// callers may use a file, immutable object provider adapter, or a cursor,
+    /// but this API never prebuffers the complete `ZACE` record.
+    pub fn decode_and_verify_canonical_exact<R: std::io::Read + std::io::Seek>(
         reader: &mut R,
-        active_roster: &ZkAmsMkheGovernedActiveRosterV1,
-        collective_key: &ZkAmsMkheCollectivePublicKeyV1,
-        shares: [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        trusted_context: &ZkAmsMkheTrustedCksContextV1,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let value = decode_cks_evidence_record(reader, active_roster)?;
-        require_canonical_reader_eof(reader)?;
-        value.verify(active_roster, collective_key, shares)?;
+        let value =
+            cks_stream::decode_and_verify_cks_evidence_record_streaming(reader, trusted_context)?;
         Ok(value)
     }
 }
 
 /// Generation-driven durable sink for the exact canonical evidence byte stream.
 ///
-/// Generation first replays each complete statement and proof. It then feeds
-/// the same deterministic chunks, in the same order, to both the evidence-set
-/// hash and this sink. A sink error fails key generation; there is no advisory
+/// Generation first replays each complete statement and proof. It writes the
+/// exact deterministic record bytes to this sink, verifies the record digest,
+/// then adds the compact `{index, kind, bytes, digest}` descriptor to the shared
+/// set recurrence. A sink error fails key generation; there is no advisory
 /// callback path that could silently persist a different representation.
 pub trait ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1 {
     /// Open one source or CKS evidence set before its first record.
@@ -2306,6 +2471,7 @@ pub trait ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1 {
     ) -> Result<(), ZkAmsMkheErrorV1>;
 }
 
+#[cfg(test)]
 struct CeremonyContext<'a> {
     profile: BgvProfile,
     roster: &'a ZkAmsMkheGovernedActiveRosterV1,
@@ -2317,6 +2483,7 @@ struct CeremonyContext<'a> {
     collective_key: ZkAmsMkheCollectivePublicKeyV1,
 }
 
+#[cfg(test)]
 impl<'a> CeremonyContext<'a> {
     fn new(
         roster: &'a ZkAmsMkheGovernedActiveRosterV1,
@@ -2363,6 +2530,7 @@ impl<'a> CeremonyContext<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn validate_evidence_collective_context(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     profile_digest: [u8; 32],
@@ -2461,16 +2629,19 @@ fn expected_rkg_source_record_index(
     u32::try_from(index).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 trait CanonicalBodyWriter {
     fn write_body(&mut self, bytes: &[u8]) -> Result<(), ZkAmsMkheErrorV1>;
 }
 
+#[cfg(test)]
 struct CanonicalDigestWriter {
     hash: Keccak256,
     expected_bytes: usize,
     written_bytes: usize,
 }
 
+#[cfg(test)]
 impl CanonicalDigestWriter {
     fn new(expected_bytes: usize) -> Self {
         Self {
@@ -2488,6 +2659,7 @@ impl CanonicalDigestWriter {
     }
 }
 
+#[cfg(test)]
 impl CanonicalBodyWriter for CanonicalDigestWriter {
     fn write_body(&mut self, bytes: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
         self.written_bytes = self
@@ -2502,8 +2674,8 @@ impl CanonicalBodyWriter for CanonicalDigestWriter {
     }
 }
 
+#[cfg(test)]
 struct CanonicalRecordFanout<'a, S> {
-    set_hash: &'a mut Keccak256,
     sink: &'a mut S,
     header: ZkAmsMkheCollectiveEvidenceRecordHeaderV1,
     record_hash: Keccak256,
@@ -2514,12 +2686,12 @@ struct CanonicalRecordFanout<'a, S> {
     chunk_index: u32,
 }
 
+#[cfg(test)]
 impl<'a, S> CanonicalRecordFanout<'a, S>
 where
     S: ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1,
 {
     fn new(
-        set_hash: &'a mut Keccak256,
         sink: &'a mut S,
         header: ZkAmsMkheCollectiveEvidenceRecordHeaderV1,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -2530,7 +2702,6 @@ where
             .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
         sink.begin_evidence_record(header)?;
         Ok(Self {
-            set_hash,
             sink,
             header,
             record_hash: Keccak256::new(),
@@ -2548,7 +2719,6 @@ where
         }
         let chunk = &self.buffer[..self.buffered];
         self.record_hash.update(chunk);
-        self.set_hash.update(chunk);
         self.sink
             .write_evidence_record_chunk(self.header, self.chunk_index, chunk)?;
         self.chunk_index = self
@@ -2565,7 +2735,6 @@ where
         }
         self.flush_body_chunk()?;
         let digest = self.record_hash.finalize();
-        self.set_hash.update(&digest);
         self.sink
             .write_evidence_record_chunk(self.header, self.chunk_index, &digest)?;
         self.chunk_index = self
@@ -2582,6 +2751,7 @@ where
     }
 }
 
+#[cfg(test)]
 impl<S> CanonicalBodyWriter for CanonicalRecordFanout<'_, S>
 where
     S: ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1,
@@ -2608,6 +2778,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn write_canonical_bytes(
     writer: &mut impl CanonicalBodyWriter,
     bytes: &[u8],
@@ -2615,6 +2786,7 @@ fn write_canonical_bytes(
     writer.write_body(bytes)
 }
 
+#[cfg(test)]
 fn write_canonical_u8(
     writer: &mut impl CanonicalBodyWriter,
     value: u8,
@@ -2622,6 +2794,7 @@ fn write_canonical_u8(
     writer.write_body(&[value])
 }
 
+#[cfg(test)]
 fn write_canonical_u32(
     writer: &mut impl CanonicalBodyWriter,
     value: u32,
@@ -2629,6 +2802,7 @@ fn write_canonical_u32(
     writer.write_body(&value.to_be_bytes())
 }
 
+#[cfg(test)]
 fn write_canonical_u64(
     writer: &mut impl CanonicalBodyWriter,
     value: u64,
@@ -2646,6 +2820,7 @@ fn canonical_wire_polynomial_bytes() -> Result<usize, ZkAmsMkheErrorV1> {
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
+#[cfg(test)]
 fn write_canonical_wire_polynomial(
     writer: &mut impl CanonicalBodyWriter,
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
@@ -2696,6 +2871,17 @@ where
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         Ok((self.reader, self.hash.finalize()))
+    }
+}
+
+impl<R> CanonicalBodyReader<'_, R>
+where
+    R: std::io::Read + std::io::Seek,
+{
+    fn absolute_position(&mut self) -> Result<u64, ZkAmsMkheErrorV1> {
+        self.reader
+            .stream_position()
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
 }
 
@@ -2804,37 +2990,6 @@ fn read_canonical_party(
     ZkAmsMkhePartyIdV1::new(read_canonical_array(reader)?)
 }
 
-fn read_canonical_wire_polynomial(
-    reader: &mut impl std::io::Read,
-) -> Result<ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheErrorV1> {
-    let count = usize::try_from(read_canonical_u32(reader)?)
-        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-    let expected_count = canonical_polynomial_residue_count()?;
-    if count != expected_count {
-        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
-    }
-    let mut residues = Vec::new();
-    residues
-        .try_reserve_exact(expected_count)
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    const RESIDUES_PER_BATCH: usize = 1024;
-    let mut bytes = [0_u8; RESIDUES_PER_BATCH * core::mem::size_of::<u64>()];
-    let mut remaining = expected_count;
-    while remaining != 0 {
-        let take = remaining.min(RESIDUES_PER_BATCH);
-        read_canonical_raw_exact(reader, &mut bytes[..take * 8])?;
-        for encoded in bytes[..take * 8].chunks_exact(8) {
-            residues.push(u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            ));
-        }
-        remaining -= take;
-    }
-    ZkAmsMkheRnsPolynomialWireV1::new(residues)
-}
-
 fn read_canonical_vec_exact(
     reader: &mut impl std::io::Read,
     length: usize,
@@ -2875,274 +3030,180 @@ fn require_canonical_reader_eof(reader: &mut impl std::io::Read) -> Result<(), Z
     }
 }
 
-fn decode_source_evidence_record<R: std::io::Read>(
-    reader: &mut R,
-) -> Result<ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1, ZkAmsMkheErrorV1> {
-    const PREFIX_BYTES: usize = 4 + 1 + 1 + 8;
-    let mut prefix = [0_u8; PREFIX_BYTES];
-    read_canonical_raw_exact(reader, &mut prefix)?;
-    if prefix[..4] != SOURCE_EVIDENCE_RECORD_TAG_V1 || prefix[4] != MKHE_VERSION_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-    }
-    let kind = ZkAmsMkheCollectiveEvidenceRecordKindV1::decode(prefix[5])?;
-    if kind == ZkAmsMkheCollectiveEvidenceRecordKindV1::CksDigit {
-        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-    }
-    let canonical_bytes = u64::from_be_bytes(
-        prefix[6..14]
-            .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+include!("collective_eval_keys/zeroizing_vectors.rs");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IndexedCksPolynomialV1 {
+    residues_offset: u64,
+    native_digest: [u8; 32],
+    wire_digest: [u8; 32],
+    nonzero: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IndexedCksStatementV1 {
+    roster: ZkAmsMkheGovernedRosterWireV1,
+    transcript_digest: [u8; 32],
+    source_record_index: u32,
+    sample_index: u64,
+    level: u8,
+    source_digest: [u8; 32],
+    key_context_digest: [u8; 32],
+    source_constant: IndexedCksPolynomialV1,
+    source_components: [Option<IndexedCksPolynomialV1>; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    target_a: IndexedCksPolynomialV1,
+    public_key_a: IndexedCksPolynomialV1,
+    party_public_b: [IndexedCksPolynomialV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    compact_constant: IndexedCksPolynomialV1,
+}
+
+fn new_rns_digest_hasher(
+    domain: &[u8],
+    residue_count: usize,
+) -> Result<Keccak256, ZkAmsMkheErrorV1> {
+    let mut hash = Keccak256::new();
+    hash.update(domain);
+    hash.update(
+        &u32::try_from(residue_count)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?
+            .to_be_bytes(),
     );
-    let maximum = u64::try_from(maximum_source_evidence_record_bytes()?)
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let minimum =
-        u64::try_from(SOURCE_EVIDENCE_COMMON_BODY_BYTES_V1 + EVIDENCE_RECORD_DIGEST_BYTES_V1)
-            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    if canonical_bytes < minimum || canonical_bytes > maximum {
-        return Err(ZkAmsMkheErrorV1::WireTooLarge);
+    Ok(hash)
+}
+
+fn update_rns_digest_hasher(hash: &mut Keccak256, residues: &[u64]) {
+    const RESIDUES_PER_BATCH: usize = 512;
+    let mut bytes = [0_u8; RESIDUES_PER_BATCH * core::mem::size_of::<u64>()];
+    for batch in residues.chunks(RESIDUES_PER_BATCH) {
+        for (destination, residue) in bytes.chunks_exact_mut(8).zip(batch) {
+            destination.copy_from_slice(&residue.to_be_bytes());
+        }
+        hash.update(&bytes[..batch.len() * 8]);
     }
-    let body_bytes = canonical_bytes
-        .checked_sub(EVIDENCE_RECORD_DIGEST_BYTES_V1 as u64)
-        .and_then(|value| value.checked_sub(PREFIX_BYTES as u64))
-        .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-    let mut body = CanonicalBodyReader::new(reader, &prefix, body_bytes);
-    let ordinal = read_canonical_u8(&mut body)?;
-    let source_record_index = read_canonical_u32(&mut body)?;
-    let party_index = read_canonical_u8(&mut body)?;
-    let profile_digest = read_canonical_array(&mut body)?;
-    let roster_digest = read_canonical_array(&mut body)?;
-    let key_material_digest = read_canonical_array(&mut body)?;
-    let epoch = read_canonical_u64(&mut body)?;
-    let transcript_digest = read_canonical_array(&mut body)?;
-    let collective_key_digest = read_canonical_array(&mut body)?;
-    let statement = match kind {
-        ZkAmsMkheCollectiveEvidenceRecordKindV1::RkgRoundOne => {
-            let left = read_canonical_party(&mut body)?;
-            let right = read_canonical_party(&mut body)?;
-            let digit_index = read_canonical_u32(&mut body)?;
-            ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1::RkgRoundOne {
-                public_a: read_canonical_wire_polynomial(&mut body)?,
-                party_public_b: read_canonical_wire_polynomial(&mut body)?,
-                common_a: read_canonical_wire_polynomial(&mut body)?,
-                h0: read_canonical_wire_polynomial(&mut body)?,
-                h1: read_canonical_wire_polynomial(&mut body)?,
-                left,
-                right,
-                digit_index,
-            }
-        }
-        ZkAmsMkheCollectiveEvidenceRecordKindV1::RkgRoundTwo => {
-            let left = read_canonical_party(&mut body)?;
-            let right = read_canonical_party(&mut body)?;
-            let digit_index = read_canonical_u32(&mut body)?;
-            ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1::RkgRoundTwo {
-                public_a: read_canonical_wire_polynomial(&mut body)?,
-                party_public_b: read_canonical_wire_polynomial(&mut body)?,
-                common_a: read_canonical_wire_polynomial(&mut body)?,
-                h0: read_canonical_wire_polynomial(&mut body)?,
-                h1: read_canonical_wire_polynomial(&mut body)?,
-                aggregate_h0: read_canonical_wire_polynomial(&mut body)?,
-                aggregate_h1: read_canonical_wire_polynomial(&mut body)?,
-                k0: read_canonical_wire_polynomial(&mut body)?,
-                left,
-                right,
-                digit_index,
-            }
-        }
-        ZkAmsMkheCollectiveEvidenceRecordKindV1::GaloisSource => {
-            let schedule_index = read_canonical_u8(&mut body)?;
-            let exponent = read_canonical_u32(&mut body)?;
-            let digit_index = read_canonical_u32(&mut body)?;
-            ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1::Galois {
-                public_a: read_canonical_wire_polynomial(&mut body)?,
-                party_public_b: read_canonical_wire_polynomial(&mut body)?,
-                source_constant: read_canonical_wire_polynomial(&mut body)?,
-                source_linear: read_canonical_wire_polynomial(&mut body)?,
-                schedule_index,
-                exponent,
-                digit_index,
-            }
-        }
-        ZkAmsMkheCollectiveEvidenceRecordKindV1::CksDigit => unreachable!(),
-    };
-    let proof_bytes = read_canonical_u64(&mut body)?;
-    if proof_bytes == 0 || proof_bytes > body.remaining() {
-        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+}
+
+fn index_canonical_cks_polynomial<R>(
+    body: &mut CanonicalBodyReader<'_, R>,
+    profile: &BgvProfile,
+) -> Result<IndexedCksPolynomialV1, ZkAmsMkheErrorV1>
+where
+    R: std::io::Read + std::io::Seek,
+{
+    let residue_count = canonical_polynomial_residue_count()?;
+    if usize::try_from(read_canonical_u32(body)?).ok() != Some(residue_count) {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
-    let proof = ZkAmsMkheActiveRkgProofV1::decode_evidence_from_reader(&mut body, proof_bytes)?;
-    let canonical_digest = finish_canonical_body(body)?;
-    Ok(ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1 {
-        ordinal,
-        source_record_index,
-        party_index,
-        profile_digest,
-        roster_digest,
-        key_material_digest,
-        epoch,
-        transcript_digest,
-        collective_key_digest,
-        statement,
-        proof,
-        canonical_bytes,
-        canonical_digest,
+    let residues_offset = body.absolute_position()?;
+    let mut native_hash = new_rns_digest_hasher(RNS_NATIVE_DIGEST_DOMAIN_V1, residue_count)?;
+    let mut wire_hash = new_rns_digest_hasher(RNS_WIRE_DIGEST_DOMAIN_V1, residue_count)?;
+    let mut buffer = [0_u8; SEEKABLE_EVALUATED_KEY_READ_BYTES_V1];
+    let mut index = 0_usize;
+    let mut nonzero = false;
+    while index < residue_count {
+        let take_residues = (residue_count - index).min(buffer.len() / 8);
+        let take_bytes = take_residues * 8;
+        read_canonical_raw_exact(body, &mut buffer[..take_bytes])?;
+        native_hash.update(&buffer[..take_bytes]);
+        wire_hash.update(&buffer[..take_bytes]);
+        for encoded in buffer[..take_bytes].chunks_exact(8) {
+            let residue = u64::from_be_bytes(
+                encoded
+                    .try_into()
+                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+            );
+            let limb = index / profile.ring_degree;
+            if limb >= profile.moduli.len() || residue >= profile.moduli[limb] {
+                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+            }
+            nonzero |= residue != 0;
+            index += 1;
+        }
+    }
+    Ok(IndexedCksPolynomialV1 {
+        residues_offset,
+        native_digest: native_hash.finalize(),
+        wire_digest: wire_hash.finalize(),
+        nonzero,
     })
 }
 
-fn decode_cks_evidence_record<R: std::io::Read>(
+fn read_indexed_cks_limb<R>(
     reader: &mut R,
-    active_roster: &ZkAmsMkheGovernedActiveRosterV1,
-) -> Result<ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1, ZkAmsMkheErrorV1> {
-    const PREFIX_BYTES: usize = 4 + 1 + 8;
-    let mut prefix = [0_u8; PREFIX_BYTES];
-    read_canonical_raw_exact(reader, &mut prefix)?;
-    if prefix[..4] != CKS_EVIDENCE_RECORD_TAG_V1 || prefix[4] != MKHE_VERSION_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-    }
-    let canonical_bytes = u64::from_be_bytes(
-        prefix[5..13]
-            .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-    );
-    let maximum = u64::try_from(maximum_cks_evidence_record_bytes()?)
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let minimum =
-        u64::try_from(CKS_EVIDENCE_COMMON_BODY_BYTES_V1 + EVIDENCE_RECORD_DIGEST_BYTES_V1)
-            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    if canonical_bytes < minimum || canonical_bytes > maximum {
-        return Err(ZkAmsMkheErrorV1::WireTooLarge);
-    }
-    let body_bytes = canonical_bytes
-        .checked_sub(EVIDENCE_RECORD_DIGEST_BYTES_V1 as u64)
-        .and_then(|value| value.checked_sub(PREFIX_BYTES as u64))
-        .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-    let mut body = CanonicalBodyReader::new(reader, &prefix, body_bytes);
-    let ordinal = read_canonical_u8(&mut body)?;
-    let digit_index = read_canonical_u8(&mut body)?;
-    let collective_key_digest = read_canonical_array(&mut body)?;
-    let trusted_roster = active_roster.to_wire_roster()?;
-    let trusted_roster_bytes = trusted_roster.encode()?;
-    let roster_bytes = usize::try_from(read_canonical_u32(&mut body)?)
+    polynomial: IndexedCksPolynomialV1,
+    profile: &BgvProfile,
+    limb: usize,
+) -> Result<ZeroizingU64VectorV1, ZkAmsMkheErrorV1>
+where
+    R: std::io::Read + std::io::Seek,
+{
+    let offset = u64::try_from(limb)
+        .ok()
+        .and_then(|limb| limb.checked_mul(profile.ring_degree as u64))
+        .and_then(|residue| residue.checked_mul(8))
+        .and_then(|bytes| polynomial.residues_offset.checked_add(bytes))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    reader
+        .seek(std::io::SeekFrom::Start(offset))
         .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-    if roster_bytes != trusted_roster_bytes.len() || roster_bytes > 4_096 {
-        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-    }
-    let encoded_roster = read_canonical_vec_exact(&mut body, roster_bytes, 4_096)?;
-    let roster = ZkAmsMkheGovernedRosterWireV1::decode_exact(
-        &encoded_roster,
-        trusted_roster.profile_digest(),
-        trusted_roster.epoch(),
-    )?;
-    if roster != trusted_roster {
-        return Err(ZkAmsMkheErrorV1::InvalidPartySet);
-    }
-    let transcript_digest = read_canonical_array(&mut body)?;
-    let source_record_index = read_canonical_u32(&mut body)?;
-    let sample_index = read_canonical_u64(&mut body)?;
-    let level = read_canonical_u8(&mut body)?;
-    let encoded_source_digest = read_canonical_array(&mut body)?;
-    let source_constant = read_canonical_wire_polynomial(&mut body)?;
-    let component_count = usize::from(read_canonical_u8(&mut body)?);
-    if component_count != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidPartySet);
-    }
-    let mut components = Vec::with_capacity(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1);
-    for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        let party = read_canonical_party(&mut body)?;
-        if party != roster.parties()[party_index] {
-            return Err(ZkAmsMkheErrorV1::InvalidPartySet);
-        }
-        match read_canonical_u8(&mut body)? {
-            0 => {}
-            1 => components.push((party, read_canonical_wire_polynomial(&mut body)?)),
-            _ => return Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
+    let modulus = *profile
+        .moduli
+        .get(limb)
+        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let mut residues = ZeroizingU64VectorV1::with_capacity_exact(profile.ring_degree)?;
+    let mut buffer = [0_u8; SEEKABLE_EVALUATED_KEY_READ_BYTES_V1];
+    while residues.len() < profile.ring_degree {
+        let take_residues = (profile.ring_degree - residues.len()).min(buffer.len() / 8);
+        let take_bytes = take_residues * 8;
+        read_canonical_raw_exact(reader, &mut buffer[..take_bytes])?;
+        for encoded in buffer[..take_bytes].chunks_exact(8) {
+            let residue = u64::from_be_bytes(
+                encoded
+                    .try_into()
+                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+            );
+            if residue >= modulus {
+                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+            }
+            residues.push(residue);
         }
     }
-    let source = ZkAmsMkheCksSourceCiphertextV1::new(
-        &roster,
-        transcript_digest,
-        source_record_index,
-        sample_index,
-        level,
-        source_constant,
-        components,
-    )?;
-    if source.source_digest() != encoded_source_digest {
-        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
-    }
-    let target_a = read_canonical_wire_polynomial(&mut body)?;
-    let public_key_a = read_canonical_wire_polynomial(&mut body)?;
-    if usize::from(read_canonical_u8(&mut body)?) != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidPartySet);
-    }
-    let mut party_public_b = Vec::new();
-    party_public_b
-        .try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    for _ in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        party_public_b.push(read_canonical_wire_polynomial(&mut body)?);
-    }
-    let party_public_b: [ZkAmsMkheRnsPolynomialWireV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
-        party_public_b
-            .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
-    let compact_constant = read_canonical_wire_polynomial(&mut body)?;
-    if usize::from(read_canonical_u8(&mut body)?) != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidCksSet);
-    }
-    let party_public_b_refs = std::array::from_fn(|index| &party_public_b[index]);
-    let statement = ZkAmsMkheCksStatementV1::new(
-        &roster,
-        &source,
-        &target_a,
-        &public_key_a,
-        &party_public_b_refs,
-    )?;
-    let contribution_ceiling = maximum_cks_contribution_record_bytes()?;
-    let mut contributions = Vec::new();
-    contributions
-        .try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        let bytes = usize::try_from(read_canonical_u64(&mut body)?)
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-        if u64::try_from(bytes)
-            .ok()
-            .is_none_or(|bytes| bytes > body.remaining())
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-        }
-        let encoded = read_canonical_vec_exact(&mut body, bytes, contribution_ceiling)?;
-        contributions.push(
-            ZkAmsMkheAuthenticatedCksContributionV1::decode_release_wire_exact(
-                statement,
-                u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
-                &encoded,
-            )?,
-        );
-    }
-    let canonical_digest = finish_canonical_body(body)?;
-    Ok(ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1 {
-        ordinal,
-        digit_index,
-        collective_key_digest,
-        roster,
-        source,
-        target_a,
-        public_key_a,
-        party_public_b,
-        contributions,
-        compact_constant,
-        canonical_bytes,
-        canonical_digest,
-    })
+    Ok(residues)
 }
 
+fn load_indexed_cks_accumulator<R>(
+    reader: &mut R,
+    polynomial: IndexedCksPolynomialV1,
+    profile: &BgvProfile,
+) -> Result<ZeroizingU64VectorV1, ZkAmsMkheErrorV1>
+where
+    R: std::io::Read + std::io::Seek,
+{
+    let residue_count = canonical_polynomial_residue_count()?;
+    let mut accumulator = ZeroizingU64VectorV1::with_capacity_exact(residue_count)?;
+    let mut native_hash = new_rns_digest_hasher(RNS_NATIVE_DIGEST_DOMAIN_V1, residue_count)?;
+    let mut wire_hash = new_rns_digest_hasher(RNS_WIRE_DIGEST_DOMAIN_V1, residue_count)?;
+    for limb in 0..profile.moduli.len() {
+        let residues = read_indexed_cks_limb(reader, polynomial, profile, limb)?;
+        update_rns_digest_hasher(&mut native_hash, &residues);
+        update_rns_digest_hasher(&mut wire_hash, &residues);
+        accumulator.extend_from_slice(&residues);
+    }
+    if native_hash.finalize() != polynomial.native_digest
+        || wire_hash.finalize() != polynomial.wire_digest
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+    }
+    Ok(accumulator)
+}
+
+#[cfg(test)]
 struct EvidenceHasher {
-    hash: Keccak256,
+    digest: evidence_set::EvidenceSetDigestV1,
     records: u32,
     header: ZkAmsMkheCollectiveEvidenceSetHeaderV1,
 }
 
+#[cfg(test)]
 impl EvidenceHasher {
     fn new<S>(
         purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
@@ -3166,23 +3227,9 @@ impl EvidenceHasher {
             collective_key_digest,
         };
         sink.begin_evidence_set(header)?;
-        let mut hash = Keccak256::new();
-        hash.update(EVALUATED_KEY_EVIDENCE_DOMAIN_V1);
-        let evidence_kind: &[u8] = match kind {
-            ZkAmsMkheCollectiveEvidenceSetKindV1::Source => b"source",
-            ZkAmsMkheCollectiveEvidenceSetKindV1::Cks => b"cks",
-        };
-        hash.update(
-            &u8::try_from(evidence_kind.len())
-                .expect("fixed evidence kind length fits in one byte")
-                .to_be_bytes(),
-        );
-        hash.update(evidence_kind);
-        hash.update(&[MKHE_VERSION_V1, purpose as u8, ordinal]);
-        hash.update(&exponent.to_be_bytes());
-        hash.update(&collective_key_digest);
+        let digest = evidence_set::EvidenceSetDigestV1::new(header)?;
         Ok(Self {
-            hash,
+            digest,
             records: 0,
             header,
         })
@@ -3210,9 +3257,15 @@ impl EvidenceHasher {
             canonical_bytes: u64::try_from(canonical_bytes)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         };
-        let mut writer = CanonicalRecordFanout::new(&mut self.hash, sink, header)?;
+        let mut writer = CanonicalRecordFanout::new(sink, header)?;
         evidence.write_canonical_body(&mut writer, canonical_bytes)?;
-        writer.finish()?;
+        let canonical_digest = writer.finish()?;
+        self.digest.absorb_record(
+            header.record_index,
+            header.kind,
+            header.canonical_bytes,
+            canonical_digest,
+        )?;
         self.advance()
     }
 
@@ -3238,9 +3291,15 @@ impl EvidenceHasher {
             canonical_bytes: u64::try_from(canonical_bytes)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         };
-        let mut writer = CanonicalRecordFanout::new(&mut self.hash, sink, header)?;
+        let mut writer = CanonicalRecordFanout::new(sink, header)?;
         evidence.write_canonical_body(&mut writer, canonical_bytes)?;
-        writer.finish()?;
+        let canonical_digest = writer.finish()?;
+        self.digest.absorb_record(
+            header.record_index,
+            header.kind,
+            header.canonical_bytes,
+            canonical_digest,
+        )?;
         self.advance()
     }
 
@@ -3265,14 +3324,36 @@ impl EvidenceHasher {
         record_index: u32,
         canonical_bytes: &[u8],
     ) -> Result<(), ZkAmsMkheErrorV1> {
+        let record_kind = match self.header.kind {
+            ZkAmsMkheCollectiveEvidenceSetKindV1::Source => {
+                ZkAmsMkheCollectiveEvidenceRecordKindV1::RkgRoundOne
+            }
+            ZkAmsMkheCollectiveEvidenceSetKindV1::Cks => {
+                ZkAmsMkheCollectiveEvidenceRecordKindV1::CksDigit
+            }
+        };
+        self.test_descriptor_record(record_index, record_kind, canonical_bytes)
+    }
+
+    #[cfg(test)]
+    fn test_descriptor_record(
+        &mut self,
+        record_index: u32,
+        record_kind: ZkAmsMkheCollectiveEvidenceRecordKindV1,
+        canonical_bytes: &[u8],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
         self.expect_next(record_index)?;
-        self.hash.update(b"test-canonical-record");
-        self.hash.update(
-            &u64::try_from(canonical_bytes.len())
-                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
-                .to_be_bytes(),
-        );
-        self.hash.update(canonical_bytes);
+        let canonical_bytes_len = canonical_bytes
+            .len()
+            .checked_add(EVIDENCE_RECORD_DIGEST_BYTES_V1)
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        self.digest.absorb_record(
+            record_index,
+            record_kind,
+            canonical_bytes_len,
+            keccak256(canonical_bytes),
+        )?;
         self.advance()
     }
 
@@ -3287,8 +3368,7 @@ impl EvidenceHasher {
         if expected_records == 0 || self.records != expected_records {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-        self.hash.update(&self.records.to_be_bytes());
-        let digest = self.hash.finalize();
+        let digest = self.digest.finish(expected_records)?;
         sink.finish_evidence_set(ZkAmsMkheCollectiveEvidenceSetFooterV1 {
             header: self.header,
             record_count: self.records,
@@ -3298,6 +3378,7 @@ impl EvidenceHasher {
     }
 }
 
+#[cfg(test)]
 fn validated_source_evidence<'a>(
     context: &CeremonyContext<'_>,
     ordinal: u8,
@@ -3351,6 +3432,56 @@ fn evaluated_key_evidence_digest(
     clippy::too_many_arguments,
     reason = "the derivation binds each governed evaluated-key context axis explicitly"
 )]
+fn evaluated_key_target_a_context(
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    transcript_digest: [u8; 32],
+    collective_key_digest: [u8; 32],
+    purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
+    ordinal: u8,
+    exponent: u32,
+    master_seed: [u8; 32],
+    digit_index: usize,
+) -> Result<[u8; EVALUATED_KEY_TARGET_A_CONTEXT_BYTES_V1], ZkAmsMkheErrorV1> {
+    if transcript_digest == [0; 32] || collective_key_digest == [0; 32] || master_seed == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let profile_digest = roster.profile_digest();
+    let roster_digest = roster.roster_digest();
+    let epoch = roster.epoch().to_be_bytes();
+    let purpose_ordinal = [purpose as u8, ordinal];
+    let exponent = exponent.to_be_bytes();
+    let digit = u16::try_from(digit_index)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
+        .to_be_bytes();
+    let mut context = [0_u8; EVALUATED_KEY_TARGET_A_CONTEXT_BYTES_V1];
+    let mut cursor = 0_usize;
+    for value in [
+        profile_digest.as_slice(),
+        roster_digest.as_slice(),
+        epoch.as_slice(),
+        transcript_digest.as_slice(),
+        collective_key_digest.as_slice(),
+        purpose_ordinal.as_slice(),
+        exponent.as_slice(),
+        master_seed.as_slice(),
+        digit.as_slice(),
+    ] {
+        let end = cursor
+            .checked_add(value.len())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        context
+            .get_mut(cursor..end)
+            .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?
+            .copy_from_slice(value);
+        cursor = end;
+    }
+    if cursor != context.len() {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(context)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn derive_target_a(
     profile: &BgvProfile,
     roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -3362,30 +3493,113 @@ fn derive_target_a(
     master_seed: [u8; 32],
     digit_index: usize,
 ) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
-    if transcript_digest == [0; 32]
-        || collective_key_digest == [0; 32]
-        || master_seed == [0; 32]
-        || digit_index >= profile.gadget_digits
-    {
+    if digit_index >= profile.gadget_digits {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-    let mut context = Vec::with_capacity(192);
-    context.extend_from_slice(&roster.profile_digest());
-    context.extend_from_slice(&roster.roster_digest());
-    context.extend_from_slice(&roster.epoch().to_be_bytes());
-    context.extend_from_slice(&transcript_digest);
-    context.extend_from_slice(&collective_key_digest);
-    context.extend_from_slice(&[purpose as u8, ordinal]);
-    context.extend_from_slice(&exponent.to_be_bytes());
-    context.extend_from_slice(&master_seed);
-    context.extend_from_slice(
-        &u16::try_from(digit_index)
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
-            .to_be_bytes(),
-    );
+    let context = evaluated_key_target_a_context(
+        roster,
+        transcript_digest,
+        collective_key_digest,
+        purpose,
+        ordinal,
+        exponent,
+        master_seed,
+        digit_index,
+    )?;
     derive_uniform_rns_from_context(profile, EVALUATED_KEY_TARGET_A_DOMAIN_V1, &context)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn derive_target_a_limb(
+    profile: &BgvProfile,
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    transcript_digest: [u8; 32],
+    collective_key_digest: [u8; 32],
+    purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
+    ordinal: u8,
+    exponent: u32,
+    master_seed: [u8; 32],
+    digit_index: usize,
+    limb_index: usize,
+    output: &mut [u64],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    profile.validate()?;
+    if digit_index >= profile.gadget_digits
+        || limb_index >= profile.moduli.len()
+        || output.len() != profile.ring_degree
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let context = evaluated_key_target_a_context(
+        roster,
+        transcript_digest,
+        collective_key_digest,
+        purpose,
+        ordinal,
+        exponent,
+        master_seed,
+        digit_index,
+    )?;
+    let maximum_xof_bytes = profile
+        .ring_degree
+        .checked_mul(profile.moduli.len())
+        .and_then(|value| value.checked_mul(MAX_RANDOM_REJECTION_ATTEMPTS_V1))
+        .and_then(|value| value.checked_mul(core::mem::size_of::<u64>()))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    super::checked_rng_bytes(profile, maximum_xof_bytes)?;
+    let profile_digest = profile.digest()?;
+    const FRAME_BYTES: usize = EVALUATED_KEY_TARGET_A_DOMAIN_V1.len()
+        + 32
+        + 4
+        + EVALUATED_KEY_TARGET_A_CONTEXT_BYTES_V1
+        + 2;
+    let context_len = u32::try_from(context.len())
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
+        .to_be_bytes();
+    let limb = u16::try_from(limb_index)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
+        .to_be_bytes();
+    let mut frame = [0_u8; FRAME_BYTES];
+    let mut cursor = 0_usize;
+    for value in [
+        EVALUATED_KEY_TARGET_A_DOMAIN_V1,
+        profile_digest.as_slice(),
+        context_len.as_slice(),
+        context.as_slice(),
+        limb.as_slice(),
+    ] {
+        let end = cursor
+            .checked_add(value.len())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        frame
+            .get_mut(cursor..end)
+            .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?
+            .copy_from_slice(value);
+        cursor = end;
+    }
+    if cursor != frame.len() {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let modulus = profile.moduli[limb_index];
+    let zone = u64::MAX - u64::MAX % modulus;
+    let mut stream = Shake256Reader::new(&frame);
+    for coefficient in output {
+        let mut accepted = None;
+        for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
+            let mut bytes = [0_u8; 8];
+            stream.read(&mut bytes);
+            let candidate = u64::from_le_bytes(bytes);
+            if candidate < zone {
+                accepted = Some(candidate % modulus);
+                break;
+            }
+        }
+        *coefficient = accepted.ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn with_cks_statement<T>(
     context: &CeremonyContext<'_>,
     source: &ZkAmsMkheCksSourceCiphertextV1,
@@ -3411,6 +3625,7 @@ fn with_cks_statement<T>(
     operation(statement)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn compact_source_digit<R, S>(
     context: &CeremonyContext<'_>,
@@ -3943,6 +4158,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn sample_nonzero_ternary<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     random: &mut R,
@@ -3960,6 +4176,7 @@ fn sample_nonzero_ternary<R: MaskedRelaxedRandomSourceV1>(
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
+#[cfg(test)]
 fn scaled_error(
     profile: &BgvProfile,
     error: &SecretPolynomial,
@@ -3967,6 +4184,7 @@ fn scaled_error(
     error.as_rns(profile)?.scale_plaintext_modulus(profile)
 }
 
+#[cfg(test)]
 fn add_weighted_pair_source(
     profile: &BgvProfile,
     diagonal: bool,
@@ -3996,6 +4214,7 @@ fn add_weighted_pair_source(
 /// Diagonal terms have weight one and all 28 off-diagonal terms have weight
 /// two, so the source decrypts to exactly `g^d (sum_i s_i)^2`.  The complete
 /// source is then compacted by eight real proof-carrying CKS contributions.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn generate_zk_ams_mkhe_collective_relinearization_key_v1<R, S, P>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -4350,6 +4569,7 @@ where
 /// share.  The ordered aggregate is then compacted through the same real CKS
 /// path as relinearization.  The caller supplies a schedule index, not a free
 /// exponent, so missing, reordered, or substituted keys cannot be repaired.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn generate_zk_ams_mkhe_collective_galois_key_v1<R, S, P>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -4596,10 +4816,15 @@ pub struct ZkAmsMkheSeekableEvaluatedKeyAccountingV1 {
     pub canonical_digit_record_bytes: u64,
     /// Bytes read and incrementally hashed before a key can be used.
     pub incremental_validation_read_bytes: u64,
-    /// Bytes reread and per-digit authenticated by one complete key switch.
+    /// Bytes reread and per-limb authenticated by one complete key switch.
     pub per_key_switch_read_bytes: u64,
-    /// Exact heap capacity of one native limb-major polynomial.
+    /// Exact canonical allocation size of one native limb-major polynomial.
+    ///
+    /// The switch path does not allocate this shape; it remains exposed to
+    /// describe the canonical entry and legacy test reference.
     pub native_polynomial_allocation_bytes: u64,
+    /// Exact heap capacity of one degree-N native residue limb.
+    pub native_limb_allocation_bytes: u64,
     /// Exact heap capacity of the two owned output accumulators.
     pub output_accumulator_bytes: u64,
     /// Exact digit-major signed coefficient batch retained while switching one key.
@@ -4612,9 +4837,9 @@ pub struct ZkAmsMkheSeekableEvaluatedKeyAccountingV1 {
     pub provider_read_buffer_bytes: u64,
     /// Exact target-layout size of one incremental BLAKE3 state.
     pub provider_hash_state_bytes: u64,
-    /// Managed live bytes while retaining one batch and materializing one digit.
+    /// Managed live bytes while retaining one batch, both limbs, and CRT scratch.
     pub decomposition_phase_bytes: u64,
-    /// Managed live bytes while decoding and authenticating one stored digit.
+    /// Managed live bytes while decoding and authenticating one stored limb.
     pub provider_read_phase_bytes: u64,
     /// Managed live bytes at the in-place NTT multiply-accumulate peak.
     pub multiplication_phase_bytes: u64,
@@ -4626,7 +4851,7 @@ pub struct ZkAmsMkheSeekableEvaluatedKeyAccountingV1 {
     /// scratch objects, and fixed hash/read state, but excludes caller-owned
     /// immutable input ciphertexts and allocator metadata.
     pub peak_managed_workspace_bytes: u64,
-    /// Fixed metadata retained by a validated handle for every digit.
+    /// Fixed metadata retained for every digit and every authenticated limb.
     pub validation_metadata_bytes: u64,
     /// Accounted coefficient work for CRT/radix passes shared within each batch.
     pub balanced_decomposition_work_units: u64,
@@ -4660,6 +4885,13 @@ struct SeekableEvaluatedKeyDigitV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SeekableEvaluatedKeyLimbV1 {
+    absolute_offset: u64,
+    canonical_bytes: u64,
+    blake3: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SeekableProviderStateV1 {
     provider_identity: [u8; 32],
     snapshot_identity: [u8; 32],
@@ -4676,7 +4908,9 @@ struct SeekableEvaluatedKeyExpectedV1 {
     roster_digest: [u8; 32],
     epoch: u64,
     transcript_digest: [u8; 32],
+    collective_key_digest: [u8; 32],
     contribution_proof_digest: [u8; 32],
+    cks_compact_output_set_digest: [u8; 32],
 }
 
 struct SeekableEvaluatedKeyValidationV1 {
@@ -4684,6 +4918,8 @@ struct SeekableEvaluatedKeyValidationV1 {
     a_master_seed: [u8; 32],
     contribution_proof_digest: [u8; 32],
     digits: Vec<SeekableEvaluatedKeyDigitV1>,
+    limbs: Vec<SeekableEvaluatedKeyLimbV1>,
+    limb_index_digest: [u8; 32],
 }
 
 include!("collective_eval_keys/runtime.rs");

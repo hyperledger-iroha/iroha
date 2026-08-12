@@ -1684,9 +1684,9 @@ The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`4c1c7ba8e804f479467826e4e56be98f27ca64af262ef83c2b99bdf5261f985c`
+`2e459bb61376add309fcca9cb97ec11b4fc23ae2fbddac2ae7e9865c373687d6`
 and
-`bbcd73ea6aeb2aca20acba9ab7f589ec3436321a89f7513dc22303c78308c276`.
+`887c4806b912bef6b3d4a0a98b53fe15b8717089fe0ee735bea37927ee0ca643`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1963,9 +1963,9 @@ records. The current grouped JSON and wire TSV SHA-256 values are
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`4c1c7ba8e804f479467826e4e56be98f27ca64af262ef83c2b99bdf5261f985c`
+`2e459bb61376add309fcca9cb97ec11b4fc23ae2fbddac2ae7e9865c373687d6`
 and
-`bbcd73ea6aeb2aca20acba9ab7f589ec3436321a89f7513dc22303c78308c276`.
+`887c4806b912bef6b3d4a0a98b53fe15b8717089fe0ee735bea37927ee0ca643`.
 
 Those are development-source inventories, not SDK results. The JavaScript and
 OpenAPI generated artifacts require fresh deterministic regeneration. No

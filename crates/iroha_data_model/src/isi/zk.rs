@@ -257,7 +257,7 @@ isi! {
         /// Number of options (K).
         pub options: u32,
         /// Merkle root of eligible voters.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub eligible_root: [u8; 32],
         /// Start timestamp (ms since epoch).
         pub start_ts: u64,
@@ -288,7 +288,7 @@ isi! {
         /// ZK proof of eligibility and well-formed vote.
         pub ballot_proof: crate::proof::ProofAttachment,
         /// Unique ballot nullifier to prevent double-voting.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub nullifier: [u8; 32],
     }
 }

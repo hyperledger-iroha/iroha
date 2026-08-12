@@ -436,27 +436,27 @@ pub struct ValidationFeePlainElectorateRulesV1 {
     /// Exact amount locked by every eligible ballot.
     pub ballot_amount: Quantity,
     /// Exact inclusive ballot duration in blocks.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub ballot_duration_blocks: u64,
     /// Exact citizenship bond required for electorate membership.
     pub citizenship_amount: Quantity,
     /// Maximum number of citizens frozen into the eligible roster.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub max_members: u64,
     /// Number of locked blocks per additional PLAIN conviction step.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub conviction_step_blocks: u64,
     /// Maximum PLAIN conviction multiplier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub max_conviction: u64,
     /// Minimum final turnout required for approval.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub min_turnout: u128,
     /// Approval-fraction numerator.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub approval_threshold_numerator: u64,
     /// Approval-fraction denominator.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub approval_threshold_denominator: u64,
     /// Closed proposal-time citizen eligibility rule.
     pub eligibility_rule: ValidationFeePlainElectorateEligibilityRuleV1,
@@ -511,7 +511,7 @@ pub struct ValidationFeePlainElectorateMemberV1 {
     /// Canonical citizen account.
     pub account_id: AccountId,
     /// Height at which the uninterrupted citizenship bond began.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub bonded_height: u64,
     /// Exact citizenship amount observed at the snapshot boundary.
     pub bonded_amount: Quantity,
@@ -540,13 +540,13 @@ pub struct ValidationFeePlainElectorateSnapshotV1 {
     /// Proposal operator receiving the closed first-release eligibility exception.
     pub proposal_operator: AccountId,
     /// Exact referendum start height at whose boundary the roster was frozen.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub captured_at_height: u64,
     /// First height at which all seven Parliament bodies held approval quorum.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub approval_gate_height: u64,
     /// Exact number of canonically ordered members.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub member_count: u64,
     /// Canonically ordered, duplicate-free electorate.
     pub members: Vec<ValidationFeePlainElectorateMemberV1>,
@@ -721,10 +721,10 @@ impl ValidationFeePlainElectorateSnapshotV1 {
 )]
 pub struct ValidationFeeGovernanceWindowV1 {
     /// First height in the authorized window.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub lower: u64,
     /// Last height in the authorized window.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub upper: u64,
 }
 
@@ -738,27 +738,27 @@ pub struct ValidationFeeFinalizationEvidenceV1 {
     /// Referendum identifier, equal to the native proposal identifier.
     pub referendum_id: [u8; 32],
     /// Height at which the result was finalized.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub finalized_at_height: u64,
     /// Voting mode whose tally was finalized.
     pub mode: ValidationFeeGovernanceVotingModeV1,
     /// Final approve weight.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub approve: u128,
     /// Final reject weight.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub reject: u128,
     /// Final abstain weight.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub abstain: u128,
     /// Minimum turnout applied to this result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
     pub min_turnout: u128,
     /// Approval-threshold numerator applied to this result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub approval_threshold_numerator: u64,
     /// Approval-threshold denominator applied to this result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub approval_threshold_denominator: u64,
     /// Final deterministic decision.
     pub approved: bool,
@@ -808,20 +808,20 @@ pub struct ValidationFeeParliamentAuthorizationV1 {
     /// Commitment to the citizen electorate frozen at the referendum start boundary.
     pub plain_electorate_snapshot_root: [u8; 32],
     /// Exact number of citizens in the frozen PLAIN electorate.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub plain_electorate_snapshot_member_count: u64,
     /// Exact height at which the PLAIN electorate was frozen.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub plain_electorate_snapshot_captured_at_height: u64,
     /// Immutable seven-body approval gate used by the electorate eligibility rule.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub plain_electorate_snapshot_approval_gate_height: u64,
     /// Exact referendum window retained in consensus state.
     pub referendum_window: ValidationFeeGovernanceWindowV1,
     /// Deterministic finalized referendum result.
     pub finalization: ValidationFeeFinalizationEvidenceV1,
     /// Height at which the approved policy was appended to the registry.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub enacted_at_height: u64,
 }
 
@@ -1687,7 +1687,7 @@ pub struct ValidationFeePolicyV1 {
     /// Exact genesis-derived network identity bound into the policy.
     pub network_id: NetworkId,
     /// Monotonic policy version.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub policy_version: u64,
     /// Previous policy hash for policy-chain validation.
     #[norito(default)]
@@ -1703,13 +1703,13 @@ pub struct ValidationFeePolicyV1 {
     /// Charging mode.
     pub charging_mode: ValidationFeeChargingMode,
     /// First height at which the policy is active.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub effective_from_height: u64,
     /// Optional last active height.
     #[norito(default)]
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::u64_string::option")
+        norito(json = "crate::json_helpers::u64_string::option")
     )]
     pub expires_after_height: Option<u64>,
     /// Explicit exemption classes recognized by this policy.

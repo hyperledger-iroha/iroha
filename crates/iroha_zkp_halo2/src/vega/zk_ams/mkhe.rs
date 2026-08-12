@@ -88,12 +88,14 @@ mod cks;
 mod collective;
 #[allow(
     dead_code,
-    reason = "the fail-closed evaluated-key runtime remains private until its admission wiring is complete"
+    reason = "the evaluated-key runtime remains fail-closed pending stronger cross-set algebraic certification"
 )]
 #[path = "mkhe/collective_eval_keys.rs"]
 mod collective_eval_keys;
 #[path = "mkhe/collective_keys.rs"]
 mod collective_keys;
+#[path = "mkhe/cpk_ceremony.rs"]
+mod cpk_ceremony;
 // TODO: Remove all three CPK-membership dead-code allowances when the complete
 // streamed RNS relation and contribution-authentication verifier is connected.
 #[allow(
@@ -118,6 +120,12 @@ mod direct_object_transport;
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
+#[allow(
+    dead_code,
+    reason = "the bounded global-lookup statement remains a private, production-uninhabited source-budget prerequisite"
+)]
+#[path = "mkhe/global_lookup_statement_v1.rs"]
+mod global_lookup_statement_v1;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]
@@ -140,6 +148,8 @@ mod phase23_encrypted;
 mod phase23_ingress;
 #[path = "mkhe/phase23_mask_proof.rs"]
 mod phase23_mask_proof;
+#[path = "mkhe/phase23_materialized_wire.rs"]
+mod phase23_materialized_wire;
 #[path = "mkhe/phase23_rns_link.rs"]
 mod phase23_rns_link;
 #[allow(
@@ -160,6 +170,12 @@ mod resource;
 mod security;
 #[path = "mkhe/terminal.rs"]
 mod terminal;
+#[allow(
+    dead_code,
+    reason = "cross-basis kernel remains source-and-packing sealed until its consuming owner is wired"
+)]
+#[path = "mkhe/terminal_cross_basis_ipa.rs"]
+mod terminal_cross_basis_ipa;
 #[path = "mkhe/wire.rs"]
 mod wire;
 
@@ -167,66 +183,75 @@ pub use active::{
     ZkAmsMkheAbortReasonV1, ZkAmsMkheActiveCollectivePublicKeyStatementV1,
     ZkAmsMkheActiveCollectivePublicKeyWitnessV1, ZkAmsMkheActiveContributionV1,
     ZkAmsMkheActivePartySecretV1, ZkAmsMkheActiveRkgLinearProofSecurityV1,
-    ZkAmsMkheActiveRkgProofV1, ZkAmsMkheActiveRkgRoundOneStatementV1,
-    ZkAmsMkheActiveRkgRoundOneWitnessV1, ZkAmsMkheActiveRkgRoundTwoStatementV1,
-    ZkAmsMkheActiveRkgRoundTwoWitnessV1, ZkAmsMkheActiveRoundReceiptV1, ZkAmsMkheActiveRoundV1,
+    ZkAmsMkheActiveRkgProofV1, ZkAmsMkheActiveRoundReceiptV1, ZkAmsMkheActiveRoundV1,
     ZkAmsMkheGovernedActiveRosterV1, ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1,
     ZkAmsMkheGovernedParticipantV1, ZkAmsMkheIdentifiableAbortV1, ZkAmsMkheRosterKeyProofV1,
-    prove_zk_ams_mkhe_active_collective_public_key_v1, prove_zk_ams_mkhe_active_rkg_round_one_v1,
-    prove_zk_ams_mkhe_active_rkg_round_two_v1, verify_zk_ams_mkhe_active_collective_public_key_v1,
-    verify_zk_ams_mkhe_active_rkg_round_one_v1, verify_zk_ams_mkhe_active_rkg_round_two_v1,
-    zk_ams_mkhe_active_collective_public_a_v1, zk_ams_mkhe_active_rkg_linear_proof_security_v1,
-    zk_ams_mkhe_collect_active_round_v1,
+    prove_zk_ams_mkhe_active_collective_public_key_v1,
+    verify_zk_ams_mkhe_active_collective_public_key_v1, zk_ams_mkhe_active_collective_public_a_v1,
+    zk_ams_mkhe_active_rkg_linear_proof_security_v1, zk_ams_mkhe_collect_active_round_v1,
 };
 pub use cks::{
-    ZkAmsMkheAuthenticatedCksContributionV1, ZkAmsMkheCksAbortReasonV1, ZkAmsMkheCksProofV1,
-    ZkAmsMkheCksResourceEvidenceV1, ZkAmsMkheCksSourceCiphertextV1, ZkAmsMkheCksStatementV1,
-    ZkAmsMkheIdentifiableCksAbortV1, combine_zk_ams_mkhe_cks_v1,
-    prove_zk_ams_mkhe_cks_contribution_v1, verify_zk_ams_mkhe_cks_contribution_v1,
-    zk_ams_mkhe_cks_resource_evidence_v1,
+    ZkAmsMkheCksProofV1, ZkAmsMkheCksResourceEvidenceV1, zk_ams_mkhe_cks_resource_evidence_v1,
+};
+#[cfg(test)]
+pub use collective::{
+    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePublicKeyV1,
 };
 pub use collective::{
-    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1,
     ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
-    ZkAmsMkheCollectivePublicKeyV1, aggregate_zk_ams_mkhe_collective_public_key_v1,
-    encrypt_zk_ams_mkhe_collective_packed_v1, generate_zk_ams_mkhe_collective_party_state_v1,
+    ZkAmsMkhePreparedCollectivePublicAV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
+    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    encrypt_zk_ams_mkhe_collective_packed_streaming_v1,
+    generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1,
+    prepare_zk_ams_mkhe_collective_public_a_v1,
 };
 pub use collective_eval_keys::{
-    ZK_AMS_MKHE_EVIDENCE_CHUNK_BYTES_V1, ZkAmsMkheCollectiveCksDigitEvidenceV1,
-    ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1, ZkAmsMkheCollectiveEvaluatedKeyProviderV1,
-    ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1,
+    ZK_AMS_MKHE_EVIDENCE_CHUNK_BYTES_V1, ZkAmsMkheCollectiveEvaluatedKeyEvidenceSinkV1,
+    ZkAmsMkheCollectiveEvaluatedKeyProviderV1, ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1,
     ZkAmsMkheCollectiveEvaluatedKeyPublicationHeaderV1,
-    ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1, ZkAmsMkheCollectiveEvidenceRecordFooterV1,
-    ZkAmsMkheCollectiveEvidenceRecordHeaderV1, ZkAmsMkheCollectiveEvidenceRecordKindV1,
-    ZkAmsMkheCollectiveEvidenceSetFooterV1, ZkAmsMkheCollectiveEvidenceSetHeaderV1,
-    ZkAmsMkheCollectiveEvidenceSetKindV1, ZkAmsMkheCollectiveSourceProofEvidenceV1,
-    ZkAmsMkheCollectiveSourceStatementEvidenceV1, ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1,
-    ZkAmsMkheOwnedCollectiveSourceProofEvidenceV1,
-    ZkAmsMkheOwnedCollectiveSourceStatementEvidenceV1, ZkAmsMkheSeekableEvaluatedKeyAccountingV1,
+    ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1, ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1,
+    ZkAmsMkheCollectiveEvidenceRecordFooterV1, ZkAmsMkheCollectiveEvidenceRecordHeaderV1,
+    ZkAmsMkheCollectiveEvidenceRecordKindV1, ZkAmsMkheCollectiveEvidenceSetFooterV1,
+    ZkAmsMkheCollectiveEvidenceSetHeaderV1, ZkAmsMkheCollectiveEvidenceSetKindV1,
+    ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1, ZkAmsMkheSeekableEvaluatedKeyAccountingV1,
+    ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1, ZkAmsMkheTrustedCksContextV1,
+    ZkAmsMkheTrustedSourceContextV1, ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
+    ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
+    ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
+    automorphism_switch_zk_ams_mkhe_collective_streaming_v1,
+    verify_zk_ams_mkhe_evaluated_key_evidence_set_v1,
     zk_ams_mkhe_compact_key_switch_ring_multiplications_v1,
     zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
+    zk_ams_mkhe_streaming_collective_automorphism_accounting_v1,
+};
+#[cfg(test)]
+pub use collective_eval_keys::{
+    automorphism_switch_zk_ams_mkhe_collective_v1, relinearize_zk_ams_mkhe_collective_v1,
 };
 pub use collective_keys::{
     ZkAmsMkheCollectiveEvaluatedKeyEntryV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
     ZkAmsMkheCollectiveEvaluatedKeyPurposeV1, ZkAmsMkheEvaluatedKeySorafsPointerV1,
 };
+pub use cpk_ceremony::{
+    ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1,
+    ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_WIRE_BYTES_V1, ZkAmsMkheAdmittedCpkPartyV1,
+    ZkAmsMkheCpkCeremonyResidencyEvidenceV1, ZkAmsMkheCpkCeremonyV1, ZkAmsMkheCpkPartyInputV1,
+    ZkAmsMkheCpkRuntimeV1, ZkAmsMkheFinalizedCpkCeremonyV1,
+    zk_ams_mkhe_cpk_ceremony_residency_evidence_v1,
+};
 pub use decryption::{
     ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1,
     ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1,
     ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
-    ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheDecryptedPlaintextV1,
-    ZkAmsMkheDecryptionAbortReasonV1, ZkAmsMkheDecryptionProofV1, ZkAmsMkheDecryptionProofViewV1,
-    ZkAmsMkheDecryptionResourceEvidenceV1, ZkAmsMkheDecryptionSplitTransportV1,
-    ZkAmsMkheDecryptionStatementV1, ZkAmsMkheDecryptionStreamingBlockerV1,
-    ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
-    ZkAmsMkheDecryptionTransportComponentKindV1, ZkAmsMkheDecryptionTransportManifestV1,
-    ZkAmsMkheDecryptionTransportPointerV1, ZkAmsMkheFullRosterDecryptionResultV1,
-    ZkAmsMkheIdentifiableDecryptionAbortV1, ZkAmsMkheStagedDecryptionShareV1,
-    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
-    prove_zk_ams_mkhe_decryption_share_staged_v1, prove_zk_ams_mkhe_decryption_share_v1,
-    reconstruct_zk_ams_mkhe_decryption_share_v1, split_zk_ams_mkhe_decryption_share_v1,
+    ZkAmsMkheDecryptedPlaintextV1, ZkAmsMkheDecryptionAbortReasonV1,
+    ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionResourceEvidenceV1,
+    ZkAmsMkheDecryptionStreamingBlockerV1, ZkAmsMkheDecryptionStreamingResidencyEvidenceV1,
+    ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkheDecryptionTransportComponentKindV1,
+    ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheDecryptionTransportPointerV1,
+    ZkAmsMkheFullRosterDecryptionResultV1, ZkAmsMkheIdentifiableDecryptionAbortV1,
+    ZkAmsMkheStagedDecryptionShareV1, ZkAmsMkheStreamingDecryptionStatementV1,
+    ZkAmsMkheStreamingFullRosterDecryptionResultV1, prove_zk_ams_mkhe_decryption_share_staged_v1,
     verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
-    verify_combine_decode_zk_ams_mkhe_decryption_v1, verify_zk_ams_mkhe_decryption_share_v1,
     zk_ams_mkhe_decryption_resource_evidence_v1,
     zk_ams_mkhe_decryption_streaming_residency_evidence_v1,
 };
@@ -296,12 +321,12 @@ pub use phase23_encrypted::{
     ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23AccumulatorShapeV1,
     ZkAmsPhase23CommitmentPreimageLayoutV1, ZkAmsPhase23CrossTermCommitmentV1,
     ZkAmsPhase23EncryptedBindingV1, ZkAmsPhase23EncryptedImplementationV1, ZkAmsPhase23MapKindV1,
-    ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsPhase23PackedAccumulatorSetV1,
-    ZkAmsPhase23PublicAccumulatorV1, ZkAmsPhase23PublicFoldHistoryV1,
-    ZkAmsPhase23PublicFoldRecordV1, ZkAmsPhase23ReleaseMapsV1, ZkAmsPhase23SparseMapV1,
+    ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsPhase23PublicAccumulatorV1,
+    ZkAmsPhase23PublicFoldHistoryV1, ZkAmsPhase23PublicFoldRecordV1,
+    ZkAmsPhase23ReleaseMapManifestV1, ZkAmsPhase23SparseMapManifestV1, ZkAmsPhase23SparseMapV1,
     ZkAmsPhase23StrictPublicInstanceV1, zk_ams_phase23_encrypted_implementation_v1,
-    zk_ams_phase23_materialize_release_accumulators_v1, zk_ams_phase23_release_map_set_digest_v1,
-    zk_ams_phase23_release_maps_v1,
+    zk_ams_phase23_materialize_release_accumulator_chunks_v1,
+    zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
 };
 pub use phase23_ingress::{
     ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1,
@@ -313,6 +338,10 @@ pub use phase23_ingress::{
     ZkAmsPhase23PublicChallengeV1, ZkAmsPhase23VerifiedCommitSetV1,
     commit_zk_ams_phase23_freshness_v1, finalize_zk_ams_phase23_freshness_v1,
     open_zk_ams_phase23_freshness_reveal_v1,
+};
+pub use phase23_materialized_wire::{
+    read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1,
+    write_zk_ams_phase23_materialized_accumulators_canonical_v1,
 };
 pub use resource::ZkAmsMkheResourceCertificateV1;
 pub use security::{
@@ -331,7 +360,7 @@ pub use wire::{
     ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCksContributionWireV1,
     ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
     ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1, ZkAmsMkheRnsPolynomialWireV1,
-    ZkAmsMkheSeededRkgKeyWireV1, ZkAmsMkheWireBindingV1, zk_ams_mkhe_cks_statement_digest_v1,
+    ZkAmsMkheWireBindingV1, zk_ams_mkhe_cks_statement_digest_v1,
 };
 
 const MKHE_VERSION_V1: u8 = 1;
@@ -1056,6 +1085,7 @@ impl RnsPolynomial {
         self.binary(rhs, profile, mod_sub)
     }
 
+    #[cfg(test)]
     fn negate(&self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         let mut output = self.clone();
@@ -1072,6 +1102,7 @@ impl RnsPolynomial {
         Ok(output)
     }
 
+    #[cfg(test)]
     fn scale_gadget(&self, digit: usize, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         if digit >= profile.gadget_digits {
@@ -2515,6 +2546,7 @@ fn gadget_decompose(
         .collect()
 }
 
+#[cfg(test)]
 fn derive_rkg_common_a(
     profile: &BgvProfile,
     party_set: &PartySet,
@@ -4032,7 +4064,7 @@ mod tests {
         assert!(readiness.packing_gate);
         assert!(!readiness.phase23_gate);
         assert!(!readiness.receipt_capability_gate);
-        assert_eq!(readiness.receipt_capability_blocker_mask, 0xff);
+        assert_eq!(readiness.receipt_capability_blocker_mask, 0xf0);
         assert!(!readiness.release_kat_gate);
         assert!(!readiness.is_ready());
         assert_eq!(

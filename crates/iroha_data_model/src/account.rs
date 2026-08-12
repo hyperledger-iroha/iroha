@@ -1,6 +1,6 @@
 //! Structures, traits and impls related to `Account`s.
 use core::fmt;
-use std::{cell::RefCell, collections::BTreeMap, format, str::FromStr, string::String, vec::Vec};
+use std::{format, str::FromStr, string::String, vec::Vec};
 
 pub use admission::{
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
@@ -27,6 +27,8 @@ pub mod address;
 pub mod admission;
 pub mod controller;
 pub mod curve;
+#[cfg(feature = "json")]
+mod i105_json;
 pub mod recovery;
 pub mod rekey;
 pub use address::{AccountAddress, AccountAddressError, AccountAddressErrorCode};
@@ -40,41 +42,6 @@ use crate::{
     name::Name,
     nexus::UniversalAccountId,
 };
-
-const ACCOUNT_I105_CACHE_LIMIT: usize = 4096;
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AccountI105CacheKey {
-    discriminant: u16,
-    controller: Vec<u8>,
-}
-
-struct AccountI105Cache {
-    map: BTreeMap<AccountI105CacheKey, String>,
-}
-
-impl AccountI105Cache {
-    fn new() -> Self {
-        Self {
-            map: BTreeMap::new(),
-        }
-    }
-
-    fn get(&self, key: &AccountI105CacheKey) -> Option<String> {
-        self.map.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: AccountI105CacheKey, value: String) {
-        if self.map.len() >= ACCOUNT_I105_CACHE_LIMIT {
-            self.map.clear();
-        }
-        self.map.insert(key, value);
-    }
-}
-
-thread_local! {
-    static ACCOUNT_I105_CACHE: RefCell<AccountI105Cache> = RefCell::new(AccountI105Cache::new());
-}
 
 #[model]
 mod model {
@@ -187,10 +154,7 @@ impl norito::json::FastJsonWrite for AccountId {
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
-        let literal = self
-            .canonical_i105()
-            .expect("AccountId JSON serialization requires canonical I105 encoding");
-        norito::json::write_json_string_to(&literal, out)
+        i105_json::write_bounded(self, out)
     }
 }
 
@@ -200,10 +164,41 @@ impl norito::json::JsonDeserialize for AccountId {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
+        reserve_account_literal_json_decode(value.len())?;
         AccountId::parse_encoded(&value)
             .map(ParsedAccountId::into_account_id)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))
+            .map_err(|error| {
+                if error.reason() == address::AccountAddressErrorCode::DecodeResourceLimit.as_str()
+                {
+                    norito::json::Error::DecodeResourceLimit
+                } else {
+                    norito::json::Error::Message("invalid account identifier".to_owned())
+                }
+            })
     }
+}
+
+#[cfg(feature = "json")]
+pub(super) fn reserve_account_literal_json_decode(
+    raw_bytes: usize,
+) -> Result<(), norito::json::Error> {
+    // Source-derived raw-length upper bound for the legacy I105 parser. At its
+    // phase maxima it can retain: one digit buffer (1S), radix work plus output
+    // (3S), base32 checksum work (2S), canonical re-encode bytes/digits/output
+    // (5S), original/keyed/dedup member topology (4S), and the three payload
+    // families owned by address, AccountId, and sort keys (3S). Percent/base105
+    // decoding only shrinks, and a valid member carries at least a 32-byte key,
+    // which bounds its Vec/tuple topology by the four-S term. Rust Vec geometric
+    // growth is covered by the doubled radix/re-encode terms.
+    let components = [1_usize, 3, 2, 5, 4, 3];
+    let bytes = components.into_iter().try_fold(0_usize, |total, units| {
+        raw_bytes
+            .checked_mul(units)
+            .and_then(|component| total.checked_add(component))
+    });
+    let bytes = bytes.ok_or(norito::json::Error::DecodeResourceLimit)?;
+    norito::core::reserve_decode_allocation(bytes)
+        .map_err(norito::json::Error::from_decode_resource)
 }
 
 #[cfg(feature = "json")]
@@ -409,13 +404,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (controller, used) = norito::core::decode_field_canonical::<AccountController>(bytes)?;
         Ok((Self { controller }, used))
-    }
-}
-
-fn account_i105_cache_key(account: &AccountId, discriminant: u16) -> AccountI105CacheKey {
-    AccountI105CacheKey {
-        discriminant,
-        controller: account.controller.encode(),
     }
 }
 
@@ -645,18 +633,15 @@ impl AccountId {
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] when address encoding fails.
+    ///
+    /// The literal is derived for each call rather than retained in a process-wide
+    /// cache. Account controllers are externally supplied and can be large, so
+    /// caching both their encoded keys and rendered literals would turn a bounded
+    /// request into persistent memory growth.
     #[inline]
     pub fn canonical_i105(&self) -> Result<String, AccountAddressError> {
         let prefix = address::chain_discriminant();
-        let key = crate::account::account_i105_cache_key(self, prefix);
-        if let Some(cached) = ACCOUNT_I105_CACHE.with(|cache| cache.borrow().get(&key)) {
-            return Ok(cached);
-        }
-        let encoded = self
-            .to_account_address()?
-            .to_i105_for_discriminant(prefix)?;
-        ACCOUNT_I105_CACHE.with(|cache| cache.borrow_mut().insert(key, encoded.clone()));
-        Ok(encoded)
+        self.to_account_address()?.to_i105_for_discriminant(prefix)
     }
 
     /// Encode the account as canonical lowercase hexadecimal.
@@ -1310,14 +1295,14 @@ mod account_id_parsing_tests {
     }
 
     #[test]
-    fn canonical_i105_cache_is_chain_discriminant_scoped() {
+    fn canonical_i105_is_chain_discriminant_scoped() {
         let key_pair = checked_keypair(0xCD);
         let account = AccountId::new(key_pair.public_key().clone());
 
         let first = {
             let _guard = address::ChainDiscriminantGuard::enter(73);
             let encoded = account.canonical_i105().expect("encode i105");
-            assert_eq!(encoded, account.canonical_i105().expect("cached i105"));
+            assert_eq!(encoded, account.canonical_i105().expect("repeat i105"));
             encoded
         };
         let second = {
@@ -1327,7 +1312,7 @@ mod account_id_parsing_tests {
 
         assert_ne!(
             first, second,
-            "canonical I105 cache key must include chain discriminant"
+            "canonical I105 must include the active chain discriminant"
         );
     }
 }
@@ -1660,6 +1645,27 @@ mod json_tests {
         let decoded: AccountId =
             norito::json::from_json(&json).expect("deserialize large multisig account id");
         assert_eq!(decoded, id);
+
+        let limits = |bytes| {
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        };
+        let (_, usage) = norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+            norito::json::from_str::<AccountId>(&json)
+        });
+        let exact = usage.total_allocated_bytes();
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            norito::json::from_str::<AccountId>(&json)
+        });
+        assert_eq!(decoded.expect("exact large-multisig budget"), id);
+        assert_eq!(usage.total_allocated_bytes(), exact);
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
+            norito::json::from_str::<AccountId>(&json)
+        });
+        assert!(matches!(
+            decoded,
+            Err(norito::json::Error::DecodeResourceLimit)
+        ));
+        assert!(usage.total_allocated_bytes() <= exact - 1);
     }
 
     #[test]

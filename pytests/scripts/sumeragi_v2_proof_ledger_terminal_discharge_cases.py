@@ -1613,8 +1613,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "serve_restart_terminal_discharge_raw_context_gate_bug.cfg|"
             'RawContextGateSeparatesLifecycleAuthority"\n',
             "",
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             '  "serve-restart-terminal-replay-resign|'
@@ -1622,8 +1622,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg|"
             'TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal"\n',
             "",
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             '  "serve-live-prefence-prepared-decision-drain|'
@@ -1631,8 +1631,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg|"
             'PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable"\n',
             "",
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             '  "ordinary-ingress-carrier-rebase|'
@@ -1644,8 +1644,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             '  "ordinary-ingress-carrier-rebase|'
             "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla|"
             'ordinary_ingress_carrier_rebase_fixed.cfg"\n',
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             "|exact_response_claim_duplicate_bug.cfg|"
@@ -1747,6 +1747,7 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "all liveness-ownership cases passed",
             "exact mutation completion marker",
         ),
+        ('readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"', 'readonly TLA2TOOLS_JAR="${REPO_ROOT}/target/tla2tools.jar"', "authenticated external TLA2Tools path"),
     ),
 )
 def test_liveness_ownership_runner_rejects_status_property_and_marker_weakening(
@@ -1783,7 +1784,7 @@ def test_liveness_ownership_source_seal_rejects_skipped_ci_invocation(
     )
     ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
     invocation = (
-        "bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh\n"
+        "run_formal_script scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh\n"
     )
     source = ci_gate.read_text(encoding="utf-8")
     assert source.count(invocation) == 1

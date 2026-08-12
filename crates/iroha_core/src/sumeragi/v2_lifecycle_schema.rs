@@ -842,6 +842,11 @@ impl WaitToken {
 
 /// Stable terminal result retained as a tombstone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    variant_size_differences,
+    clippy::large_enum_variant,
+    reason = "scheduler tombstones remain Copy and allocation-free; boxing would change lifecycle state semantics"
+)]
 pub(crate) enum TerminalOutcome {
     Advanced,
     Completed(Option<LifecycleDigest>),

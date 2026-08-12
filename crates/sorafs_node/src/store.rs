@@ -3716,20 +3716,11 @@ impl StorageBackend {
 
         Ok(manifest_id)
     }
+}
 
-    /// Returns a clone of the stored manifest metadata, if present.
-    #[must_use]
-    pub fn manifest(&self, manifest_id: &str) -> Option<StoredManifest> {
-        self.state
-            .read()
-            .expect("storage state poisoned")
-            .manifests
-            .get(manifest_id)
-            .cloned()
-    }
+include!("store_manifest_lookup.rs");
 
-    include!("store_manifest_lookup.rs");
-
+impl StorageBackend {
     /// Run work while holding the manifest lifecycle read lease.
     ///
     /// The state read lock is retained until the lifecycle lease has been

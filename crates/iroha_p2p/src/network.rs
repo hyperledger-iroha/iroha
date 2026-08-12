@@ -4171,26 +4171,8 @@ impl NetworkActorAdmissionTicketTestFixture {
     }
 }
 
-/// Permanent reason that a recoverable actor-admission request was rejected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NetworkActorAdmissionRejection {
-    /// The payload is not allowed to cross the live outbound boundary.
-    OutboundDisallowed,
-    /// The topic is not part of the reliable semantic-progress corridor.
-    NotReliableProgress,
-    /// No durable retransmission source covers delivery gaps.
-    MissingReconstruction,
-    /// The exact encoded frame length could not be represented.
-    WireLength,
-    /// The exact encoded frame exceeds its configured topic cap.
-    FrameTooLarge,
-    /// The encrypted stream charge could not be represented.
-    StreamChargeOverflow,
-    /// The supplied ticket belongs to another request or actor handle.
-    InvalidTicket,
-    /// The authenticated reply connection tenure has been retired.
-    InactiveReplyRoute,
-}
+mod best_effort_admission;
+pub use best_effort_admission::{NetworkActorAdmissionRejection, NetworkPostAdmissionError};
 
 /// Recoverable result of semantic-progress admission into the network actor.
 #[derive(Debug)]

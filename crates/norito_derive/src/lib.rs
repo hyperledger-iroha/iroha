@@ -25,7 +25,7 @@ use syn::{
 };
 
 mod json_write_bounded;
-use json_write_bounded::{EnumAttr, VariantAttr};
+use json_write_bounded::{EnumAttr, VariantAttr, parse_helper_path};
 
 fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
     if meta.input.peek(syn::token::Paren) {
@@ -586,9 +586,10 @@ struct FieldAttr {
     default_fn: Option<syn::Path>,
     /// Optional predicate to skip serialization when it returns true.
     skip_serializing_if: Option<syn::Path>,
-    /// Optional helper module providing `serialize`/`deserialize` functions for the field.
+    /// Optional ordinary and checked custom JSON helpers for the field.
     with: Option<syn::Path>,
     bounded_with: Option<syn::Path>,
+    combined_json_helper: bool,
     /// Whether the field should be flattened into the surrounding struct payload.
     flatten: bool,
     /// Force packed-struct layout to emit an explicit size header for this field.
@@ -1029,36 +1030,19 @@ impl FieldAttr {
                         }
                         out.default = true;
                         if meta.input.peek(Token![=]) {
-                            let lit: syn::LitStr = meta.value()?.parse()?;
-                            out.default_fn =
-                                Some(syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                                    meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                                })?);
+                            out.default_fn = Some(parse_helper_path(&meta)?);
                         }
                     } else if meta.path.is_ident("skip_serializing_if") {
-                        let lit: syn::LitStr = meta.value()?.parse()?;
-                        let path = syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                        })?;
+                        let path = parse_helper_path(&meta)?;
                         if out.skip_serializing_if.replace(path).is_some() {
                             return Err(meta.error("duplicate `skip_serializing_if` attribute"));
                         }
                     } else if meta.path.is_ident("with") {
-                        let lit: syn::LitStr = meta.value()?.parse()?;
-                        let path = syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                        })?;
-                        if out.with.replace(path).is_some() {
-                            return Err(meta.error("duplicate `with` attribute"));
-                        }
+                        out.parse_with(&meta)?;
+                    } else if meta.path.is_ident("json") {
+                        out.parse_json_helper(&meta)?;
                     } else if meta.path.is_ident("bounded_with") {
-                        let lit: syn::LitStr = meta.value()?.parse()?;
-                        let path = syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                        })?;
-                        if out.bounded_with.replace(path).is_some() {
-                            return Err(meta.error("duplicate `bounded_with` attribute"));
-                        }
+                        out.parse_bounded_with(&meta)?;
                     } else if meta.path.is_ident("flatten") {
                         if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
                             return Err(meta.error("`flatten` does not take a value"));

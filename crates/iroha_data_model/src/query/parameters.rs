@@ -119,6 +119,17 @@ mod model {
             };
             norito::json::write_json_string(label, out);
         }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            let label = match self {
+                SortOrder::Asc => "Asc",
+                SortOrder::Desc => "Desc",
+            };
+            norito::json::write_json_string_to(label, out)
+        }
     }
 
     #[cfg(feature = "json")]
@@ -249,5 +260,20 @@ mod tests {
 
         let parsed: Sorting = json::from_value(value).expect("deserialize sorting");
         assert!(parsed.order.is_none());
+    }
+
+    #[test]
+    fn sort_order_json_has_exact_checked_bound() {
+        for value in [SortOrder::Asc, SortOrder::Desc] {
+            let legacy = json::to_json(&value).expect("serialize sort order");
+            assert_eq!(
+                json::to_json_bounded(&value, legacy.len()).expect("serialize at exact bound"),
+                legacy
+            );
+            assert_eq!(
+                json::to_json_bounded(&value, legacy.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            );
+        }
     }
 }

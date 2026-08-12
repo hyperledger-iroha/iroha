@@ -198,7 +198,7 @@ impl FastJsonWrite for PeerId {
         &self,
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
-        json::write_json_string_to(&self.public_key.to_string(), out)
+        norito::json::JsonSerialize::json_serialize_to(&self.public_key, out)
     }
 }
 
@@ -264,5 +264,21 @@ mod tests {
         let decoded: Peer = json::from_json(&json).expect("deserialize peer");
         assert_eq!(decoded.address(), &addr);
         assert_eq!(decoded.id().public_key, peer.id().public_key);
+    }
+
+    #[test]
+    fn peer_id_bounded_json_delegates_to_public_key_without_scratch() {
+        let literal =
+            "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+        let peer_id = PeerId::new(literal.parse::<PublicKey>().expect("valid key"));
+        let expected = format!("\"{literal}\"");
+        assert_eq!(
+            json::to_json_bounded(&peer_id, expected.len()).expect("exact checked PeerId JSON"),
+            expected
+        );
+        assert!(matches!(
+            json::to_json_bounded(&peer_id, expected.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        ));
     }
 }

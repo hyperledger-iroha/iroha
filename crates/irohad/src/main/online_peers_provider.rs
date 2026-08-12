@@ -1,4 +1,4 @@
-{
+let online_peers_provider = {
     let response_limit = config
         .network
         .max_total_connections
@@ -15,4 +15,4 @@
         network.online_peers_receiver(),
         response_limit,
     )
-}
+};

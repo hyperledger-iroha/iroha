@@ -86,12 +86,13 @@ impl ReferenceDataLoadBudget {
         Ok(())
     }
 
-    fn charge_retained_strings<'a>(
+    fn charge_retained_strings<S: AsRef<str>>(
         &mut self,
         kind: DatasetKind,
-        strings: impl IntoIterator<Item = &'a str>,
+        strings: impl IntoIterator<Item = S>,
     ) -> eyre::Result<()> {
         let string_bytes = strings.into_iter().try_fold(0usize, |total, value| {
+            let value = value.as_ref();
             if value.len() > REFERENCE_DATA_MAX_STRING_BYTES {
                 eyre::bail!(
                     "{} dataset string is {} bytes (maximum {})",

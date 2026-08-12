@@ -62,6 +62,15 @@ pub(super) struct SecretScalarTable {
     values: Vec<Scalar>,
 }
 
+/// One full multilinear table stored as independently allocated lower and
+/// upper halves. Consuming the first sum-check round binds into `lower` and
+/// drops `upper`, so the allocator can release half of the resident table
+/// instead of retaining a full-table `Vec` capacity after truncation.
+pub(super) struct SplitSecretScalarTable {
+    lower: SecretScalarTable,
+    upper: SecretScalarTable,
+}
+
 impl SecretScalarTable {
     #[cfg(test)]
     pub(super) fn new(values: Vec<Scalar>) -> Self {
@@ -122,6 +131,56 @@ impl SecretScalarTable {
     }
 }
 
+impl SplitSecretScalarTable {
+    #[cfg(test)]
+    pub(super) fn new(lower: Vec<Scalar>, upper: Vec<Scalar>) -> Self {
+        Self {
+            lower: SecretScalarTable::new(lower),
+            upper: SecretScalarTable::new(upper),
+        }
+    }
+
+    pub(super) fn try_zeroed(len: usize) -> Result<Self, SumcheckError> {
+        if len < 2 || !len.is_power_of_two() {
+            return Err(SumcheckError::WrongRoundCount);
+        }
+        let half = len / 2;
+        Ok(Self {
+            lower: SecretScalarTable::try_zeroed(half)?,
+            upper: SecretScalarTable::try_zeroed(half)?,
+        })
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.lower.len() + self.upper.len()
+    }
+
+    pub(super) fn as_slices(&self) -> (&[Scalar], &[Scalar]) {
+        (self.lower.as_slice(), self.upper.as_slice())
+    }
+
+    pub(super) fn as_mut_slices(&mut self) -> (&mut [Scalar], &mut [Scalar]) {
+        (self.lower.as_mut_slice(), self.upper.as_mut_slice())
+    }
+
+    fn bind_first(mut self, challenge: Scalar) -> Result<SecretScalarTable, SumcheckError> {
+        if self.lower.len() == 0 || self.lower.len() != self.upper.len() {
+            return Err(SumcheckError::WrongRoundCount);
+        }
+        for index in 0..self.lower.len() {
+            let mut lower_value = self.lower.as_slice()[index];
+            let mut upper_value = self.upper.as_slice()[index];
+            self.lower.as_mut_slice()[index] =
+                lower_value + challenge * (upper_value - lower_value);
+            self.upper.as_mut_slice()[index].clear_secret();
+            lower_value.clear_secret();
+            upper_value.clear_secret();
+        }
+        drop(self.upper);
+        Ok(self.lower)
+    }
+}
+
 impl Drop for SecretScalarTable {
     fn drop(&mut self) {
         #[cfg(test)]
@@ -157,6 +216,212 @@ fn secret_scalar_table_zeroized_drop_count() -> usize {
 
 /// Prove the cubic outer Spartan sum-check
 /// `sum_x eq(tau,x) * (A(x) * B(x) - D(x))`.
+///
+/// The first round consumes independently allocated lower/upper product
+/// halves and derives `eq(tau[1..], x)` in a depth-first scalar stream. Only
+/// after all three upper halves are erased and freed is the half-sized bound
+/// equality table allocated for the remaining rounds.
+pub(super) fn prove_cubic_with_split_first_owned(
+    initial_claim: Scalar,
+    tau: &[Scalar],
+    a: SplitSecretScalarTable,
+    b: SplitSecretScalarTable,
+    d: SplitSecretScalarTable,
+    transcript: &mut VegaTranscriptV1,
+) -> Result<(SumcheckProof, Vec<Scalar>, [Scalar; 3]), SumcheckError> {
+    let round_count = tau.len();
+    let expected = table_size(round_count)?;
+    if round_count == 0
+        || expected < 2
+        || a.len() != expected
+        || b.len() != expected
+        || d.len() != expected
+    {
+        return Err(SumcheckError::WrongRoundCount);
+    }
+    let (a_lower, a_upper) = a.as_slices();
+    let (b_lower, b_upper) = b.as_slices();
+    let (d_lower, d_upper) = d.as_slices();
+    let half = expected / 2;
+    if a_lower.len() != half
+        || a_upper.len() != half
+        || b_lower.len() != half
+        || b_upper.len() != half
+        || d_lower.len() != half
+        || d_upper.len() != half
+    {
+        return Err(SumcheckError::WrongRoundCount);
+    }
+
+    let tau_zero = tau[0];
+    let eq_zero_scale = Scalar::one() - tau_zero;
+    let eq_one_scale = tau_zero;
+    let mut evaluations = [Scalar::zero(); 4];
+    let mut visited = 0_usize;
+    visit_eq_evaluations(&tau[1..], Scalar::one(), &mut |index, q| {
+        let eq_zero = q * eq_zero_scale;
+        let delta_eq = q * (eq_one_scale - eq_zero_scale);
+        let a_zero = a_lower[index];
+        let b_zero = b_lower[index];
+        let d_zero = d_lower[index];
+        let delta_a = a_upper[index] - a_zero;
+        let delta_b = b_upper[index] - b_zero;
+        let delta_d = d_upper[index] - d_zero;
+        for (evaluation, point) in evaluations.iter_mut().zip([
+            Scalar::zero(),
+            Scalar::one(),
+            Scalar::from_u64(2),
+            Scalar::from_u64(3),
+        ]) {
+            *evaluation += (eq_zero + point * delta_eq)
+                * ((a_zero + point * delta_a) * (b_zero + point * delta_b)
+                    - d_zero
+                    - point * delta_d);
+        }
+        visited += 1;
+    });
+    if visited != half || evaluations[0] + evaluations[1] != initial_claim {
+        return Err(SumcheckError::InvalidClaim);
+    }
+    let coefficients = interpolate_cubic(evaluations)?;
+    let compressed =
+        CompressedUnivariate::new(vec![coefficients[0], coefficients[2], coefficients[3]], 3)?;
+    transcript.absorb_univariate(b"p", compressed.coefficients())?;
+    let first_challenge = transcript.squeeze(b"c")?;
+    let claim = evaluate_univariate(&coefficients, first_challenge)?;
+
+    let mut a = a.bind_first(first_challenge)?;
+    let mut b = b.bind_first(first_challenge)?;
+    let mut d = d.bind_first(first_challenge)?;
+    let mut eq = SecretScalarTable::try_eq_evals(&tau[1..])?;
+    let equality_scale =
+        (Scalar::one() - first_challenge) * eq_zero_scale + first_challenge * eq_one_scale;
+    for evaluation in eq.as_mut_slice() {
+        *evaluation *= equality_scale;
+    }
+
+    let mut rounds = Vec::with_capacity(round_count);
+    rounds.push(compressed);
+    let mut challenges = Vec::with_capacity(round_count);
+    challenges.push(first_challenge);
+    prove_cubic_remaining_rounds_owned(
+        claim,
+        round_count - 1,
+        &mut eq,
+        &mut a,
+        &mut b,
+        &mut d,
+        transcript,
+        &mut rounds,
+        &mut challenges,
+    )?;
+    if a.len() != 1 || b.len() != 1 || d.len() != 1 || eq.len() != 1 {
+        return Err(SumcheckError::WrongRoundCount);
+    }
+    Ok((
+        SumcheckProof::new(rounds),
+        challenges,
+        [a.as_slice()[0], b.as_slice()[0], d.as_slice()[0]],
+    ))
+}
+
+fn visit_eq_evaluations(point: &[Scalar], weight: Scalar, visit: &mut impl FnMut(usize, Scalar)) {
+    fn recurse(
+        point: &[Scalar],
+        depth: usize,
+        weight: Scalar,
+        index: &mut usize,
+        visit: &mut impl FnMut(usize, Scalar),
+    ) {
+        if depth == point.len() {
+            visit(*index, weight);
+            *index += 1;
+            return;
+        }
+        let coordinate = point[depth];
+        recurse(
+            point,
+            depth + 1,
+            weight * (Scalar::one() - coordinate),
+            index,
+            visit,
+        );
+        recurse(point, depth + 1, weight * coordinate, index, visit);
+    }
+
+    let mut index = 0;
+    recurse(point, 0, weight, &mut index, visit);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prove_cubic_remaining_rounds_owned(
+    mut claim: Scalar,
+    round_count: usize,
+    eq: &mut SecretScalarTable,
+    a: &mut SecretScalarTable,
+    b: &mut SecretScalarTable,
+    d: &mut SecretScalarTable,
+    transcript: &mut VegaTranscriptV1,
+    rounds: &mut Vec<CompressedUnivariate>,
+    challenges: &mut Vec<Scalar>,
+) -> Result<(), SumcheckError> {
+    for _ in 0..round_count {
+        let half = a.len() / 2;
+        if half == 0 || b.len() != a.len() || d.len() != a.len() || eq.len() != a.len() {
+            return Err(SumcheckError::WrongRoundCount);
+        }
+        let mut evaluation_zero = Scalar::zero();
+        let mut evaluation_one = Scalar::zero();
+        let mut evaluation_two = Scalar::zero();
+        let mut evaluation_three = Scalar::zero();
+        for index in 0..half {
+            let eq_zero = eq.as_slice()[index];
+            let a_zero = a.as_slice()[index];
+            let b_zero = b.as_slice()[index];
+            let d_zero = d.as_slice()[index];
+            let delta_eq = eq.as_slice()[half + index] - eq_zero;
+            let delta_a = a.as_slice()[half + index] - a_zero;
+            let delta_b = b.as_slice()[half + index] - b_zero;
+            let delta_d = d.as_slice()[half + index] - d_zero;
+
+            evaluation_zero += eq_zero * (a_zero * b_zero - d_zero);
+            evaluation_one +=
+                (eq_zero + delta_eq) * ((a_zero + delta_a) * (b_zero + delta_b) - d_zero - delta_d);
+            let two = Scalar::from_u64(2);
+            evaluation_two += (eq_zero + two * delta_eq)
+                * ((a_zero + two * delta_a) * (b_zero + two * delta_b) - d_zero - two * delta_d);
+            let three = Scalar::from_u64(3);
+            evaluation_three += (eq_zero + three * delta_eq)
+                * ((a_zero + three * delta_a) * (b_zero + three * delta_b)
+                    - d_zero
+                    - three * delta_d);
+        }
+        if evaluation_zero + evaluation_one != claim {
+            return Err(SumcheckError::InvalidClaim);
+        }
+        let coefficients = interpolate_cubic([
+            evaluation_zero,
+            evaluation_one,
+            evaluation_two,
+            evaluation_three,
+        ])?;
+        let compressed =
+            CompressedUnivariate::new(vec![coefficients[0], coefficients[2], coefficients[3]], 3)?;
+        transcript.absorb_univariate(b"p", compressed.coefficients())?;
+        let challenge = transcript.squeeze(b"c")?;
+        claim = evaluate_univariate(&coefficients, challenge)?;
+        challenges.push(challenge);
+        rounds.push(compressed);
+        eq.bind_top(challenge)?;
+        a.bind_top(challenge)?;
+        b.bind_top(challenge)?;
+        d.bind_top(challenge)?;
+    }
+    Ok(())
+}
+
+/// Compatibility prover for callers that already own a full equality table.
+#[cfg(test)]
 pub(super) fn prove_cubic_with_three_inputs_owned(
     initial_claim: Scalar,
     round_count: usize,
@@ -538,10 +803,26 @@ mod tests {
             &mut owned_transcript,
         )
         .expect("owned path");
+        let mut split_transcript = VegaTranscriptV1::new_neutron_nova();
+        let split = prove_cubic_with_split_first_owned(
+            cubic_claim,
+            &tau,
+            SplitSecretScalarTable::new(a[..2].to_vec(), a[2..].to_vec()),
+            SplitSecretScalarTable::new(b[..2].to_vec(), b[2..].to_vec()),
+            SplitSecretScalarTable::new(d[..2].to_vec(), d[2..].to_vec()),
+            &mut split_transcript,
+        )
+        .expect("split-first owned path");
         assert_eq!(owned, borrowed);
+        assert_eq!(split, borrowed);
+        let borrowed_after = borrowed_transcript.squeeze(b"after").expect("bounded");
         assert_eq!(
             owned_transcript.squeeze(b"after").expect("bounded"),
-            borrowed_transcript.squeeze(b"after").expect("bounded")
+            borrowed_after
+        );
+        assert_eq!(
+            split_transcript.squeeze(b"after").expect("bounded"),
+            borrowed_after
         );
 
         let quadratic_claim = a
@@ -615,11 +896,71 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert_eq!(secret_scalar_table_zeroized_drop_count(), before_unwind + 1);
+
+        let tau = [s(13), s(17)];
+        let d = [s(9), s(10), s(11), s(12)];
+        let cubic_claim = eq_evals(&tau)
+            .expect("small equality table")
+            .into_iter()
+            .zip(a)
+            .zip(b.into_iter().zip(d))
+            .fold(Scalar::zero(), |sum, ((eq, a), (b, d))| {
+                sum + eq * (a * b - d)
+            });
+        let before_split_success = secret_scalar_table_zeroized_drop_count();
+        prove_cubic_with_split_first_owned(
+            cubic_claim,
+            &tau,
+            SplitSecretScalarTable::new(a[..2].to_vec(), a[2..].to_vec()),
+            SplitSecretScalarTable::new(b[..2].to_vec(), b[2..].to_vec()),
+            SplitSecretScalarTable::new(d[..2].to_vec(), d[2..].to_vec()),
+            &mut VegaTranscriptV1::new_neutron_nova(),
+        )
+        .expect("valid split-first proof");
+        assert_eq!(
+            secret_scalar_table_zeroized_drop_count(),
+            before_split_success + 7
+        );
+
+        let before_split_error = secret_scalar_table_zeroized_drop_count();
+        assert_eq!(
+            prove_cubic_with_split_first_owned(
+                Scalar::zero(),
+                &tau,
+                SplitSecretScalarTable::new(a[..2].to_vec(), a[2..].to_vec()),
+                SplitSecretScalarTable::new(b[..2].to_vec(), b[2..].to_vec()),
+                SplitSecretScalarTable::new(d[..2].to_vec(), d[2..].to_vec()),
+                &mut VegaTranscriptV1::new_neutron_nova(),
+            ),
+            Err(SumcheckError::InvalidClaim)
+        );
+        assert_eq!(
+            secret_scalar_table_zeroized_drop_count(),
+            before_split_error + 6
+        );
+
+        let before_split_unwind = secret_scalar_table_zeroized_drop_count();
+        let split_unwind = std::panic::catch_unwind(|| {
+            let _owned = SplitSecretScalarTable::new(vec![s(13)], vec![s(17)]);
+            panic!("injected split-table-owner unwind");
+        });
+        assert!(split_unwind.is_err());
+        assert_eq!(
+            secret_scalar_table_zeroized_drop_count(),
+            before_split_unwind + 2
+        );
     }
 
     #[test]
     fn owned_sumcheck_corridor_has_no_borrowed_table_clone() {
         let source = include_str!("sumcheck.rs");
+        let split_first = source
+            .split("pub(super) fn prove_cubic_with_split_first_owned")
+            .nth(1)
+            .expect("split-first cubic prover")
+            .split("/// Compatibility prover")
+            .next()
+            .expect("split-first cubic boundary");
         let cubic = source
             .split("pub(super) fn prove_cubic_with_three_inputs_owned")
             .nth(1)
@@ -635,6 +976,10 @@ mod tests {
             .next()
             .expect("quadratic boundary");
         assert!(!cubic.contains(".to_vec()"));
+        assert!(!split_first.contains(".to_vec()"));
+        assert!(split_first.contains("visit_eq_evaluations(&tau[1..]"));
+        assert!(split_first.contains("a.bind_first(first_challenge)"));
+        assert!(split_first.contains("SecretScalarTable::try_eq_evals(&tau[1..])"));
         assert!(!quadratic.contains(".to_vec()"));
         assert!(source.contains("upper[index].clear_secret()"));
         assert!(source.contains("impl Drop for SecretScalarTable"));

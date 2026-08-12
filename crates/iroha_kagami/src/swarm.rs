@@ -2103,11 +2103,8 @@ fn project_prepared_runtime_config(
         captured_faucet_private_key = Some(captured);
     }
 
-    if let Some(path) = source
-        .torii
-        .tx_history
-        .as_ref()
-        .and_then(|history| history.mandatory_aliases_path.as_deref())
+    if let Some((path, maximum)) =
+        tx_history_mandatory_alias_source(source.torii.tx_history.as_ref())
     {
         let (file, captured) = capture_prepared_runtime_file(
             &mut table,
@@ -2117,7 +2114,7 @@ fn project_prepared_runtime_config(
             "mandatory_aliases.norito",
             "/config/runtime/tx-history-mandatory-aliases.norito",
             "transaction-history mandatory-alias policy",
-            16 * 1024 * 1024,
+            maximum,
             &["torii", "tx_history"],
             "mandatory_aliases_path",
         )?;
@@ -2558,6 +2555,20 @@ fn project_prepared_runtime_config(
         requires_sora_profile,
         projected_effective,
     ))
+}
+
+fn tx_history_mandatory_alias_source(
+    history: Option<&actual::ToriiTxHistory>,
+) -> Option<(&Path, u64)> {
+    history.and_then(|history| {
+        history.mandatory_aliases_path.as_deref().map(|path| {
+            (
+                path,
+                u64::try_from(history.mandatory_aliases_max_file_bytes)
+                    .expect("validated V1 alias-policy file limit fits u64"),
+            )
+        })
+    })
 }
 
 fn load_prepared_bundle(
@@ -3184,10 +3195,45 @@ mod tests {
 
     use super::{
         Args, load_peer_overrides, load_prepared_bundle, parse_peer_override_toml,
-        parse_prepared_peer_config, signed_genesis_consensus_metadata, validate_prepared_genesis,
+        parse_prepared_peer_config, read_runtime_file_bounded, signed_genesis_consensus_metadata,
+        tx_history_mandatory_alias_source, validate_prepared_genesis,
         validate_runtime_projection_policy,
     };
     use crate::{RunArgs, localnet::LocalnetOptions};
+
+    #[test]
+    fn prepared_tx_history_alias_source_uses_configured_limit() {
+        let path = PathBuf::from("aliases.json");
+        let history = iroha_config::parameters::actual::ToriiTxHistory {
+            mandatory_aliases_path: Some(path.clone()),
+            mandatory_aliases_max_file_bytes: 73,
+            allowed_asset_definition_id: None,
+            jwt: None,
+        };
+
+        assert_eq!(
+            tx_history_mandatory_alias_source(Some(&history)),
+            Some((path.as_path(), 73))
+        );
+        assert_eq!(tx_history_mandatory_alias_source(None), None);
+    }
+
+    #[test]
+    fn prepared_tx_history_alias_source_limit_is_enforced_at_exact_boundary() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("aliases.json");
+        fs::write(&path, b"{}").expect("write policy fixture");
+
+        assert_eq!(
+            read_runtime_file_bounded(&path, "transaction-history mandatory-alias policy", 2,)
+                .expect("exact policy cap"),
+            b"{}"
+        );
+        assert!(
+            read_runtime_file_bounded(&path, "transaction-history mandatory-alias policy", 1,)
+                .is_err()
+        );
+    }
 
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");

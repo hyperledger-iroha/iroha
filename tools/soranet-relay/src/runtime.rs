@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashSet,
-    fmt::Write as _,
+    fmt::{self, Write as _},
     fs,
     io::{self, Read as _, Write as _},
     net::SocketAddr,
@@ -60,7 +60,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
     streaming::SoranetAccessKind,
     to_bytes,
@@ -98,7 +98,10 @@ use crate::{
         spawn_padding_task,
     },
     compliance::{ComplianceLogger, ThrottleAudit},
-    config::{self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint},
+    config::{
+        self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint,
+        read_bounded_direct_regular_file,
+    },
     congestion::{CongestionController, CongestionError, CongestionLease},
     constant_rate::ConstantRateProfileSpec,
     dos::{DoSControls, ThrottleReason, TokenPolicyError},
@@ -110,7 +113,10 @@ use crate::{
     guard::{self, GuardDirectoryError},
     handshake::{ClientHello, MAX_CLIENT_HELLO_LEN},
     incentive_log::IncentiveLogger,
-    incentives::{EpochSummary, RelayPerformanceAccumulator},
+    incentives::{
+        BandwidthProofIngest, EpochSummary, INCENTIVE_MAX_ACTIVE_EPOCHS_V1, IncentiveCapacityError,
+        RelayPerformanceAccumulator,
+    },
     metrics::{Metrics, VpnRuntimeState, normalize_downgrade_reason},
     privacy::{
         PrivacyAggregator, PrivacyEventBuffer, ProxyPolicyEventBuffer, RejectReason, ThrottleScope,
@@ -253,6 +259,16 @@ const HANDSHAKE_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_PAYLOAD_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HANDSHAKE_FRAME_LEN: usize = MAX_CLIENT_HELLO_LEN;
 const _: () = assert!(MAX_HANDSHAKE_FRAME_LEN <= u16::MAX as usize);
+
+// First-release bounds for the TLS identity artifacts read during relay
+// startup. Sixteen certificates leave ample room for a complete issuer chain,
+// while the byte ceilings cover ordinary PEM expansion without allowing a
+// corrupt local path to define startup allocation.
+const TLS_CERTIFICATE_CHAIN_MAX_BYTES_V1: usize = 1024 * 1024;
+const TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1: usize = 16;
+const TLS_PRIVATE_KEY_MAX_BYTES_V1: usize = 64 * 1024;
+/// Maximum on-disk JSON size of one first-release VPN settlement spool record.
+pub const VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1: usize = 64 * 1024;
 const VPN_HELPER_TICKET_REPLAY_NAMESPACE: &[u8] =
     b"iroha.soranet.vpn.helper-ticket.consumptions.v1";
 const VPN_HELPER_TICKET_REPLAY_ID_DOMAIN: &[u8] = b"iroha.soranet.vpn.helper-ticket.replay-id.v1";
@@ -260,6 +276,8 @@ const VPN_HELPER_TICKET_REPLAY_ID_DOMAIN: &[u8] = b"iroha.soranet.vpn.helper-tic
 const INCENTIVE_EPOCH_WINDOW_SECS: u64 = 60 * 60;
 /// Maximum Norito-encoded bandwidth proof payload accepted over the QUIC measurement stream.
 const MAX_BANDWIDTH_PROOF_FRAME_LEN: usize = 4 * 1024;
+const BANDWIDTH_PROOF_DECODE_LIMITS_V1: DecodeLimits =
+    DecodeLimits::new(128, MAX_BANDWIDTH_PROOF_FRAME_LEN, 512, 64 * 1024, 16);
 /// GAR category recorded when a norito-stream request arrives without a configured route.
 const FALLBACK_NORITO_UNSUPPORTED_CATEGORY: &str = "stream.norito.unsupported";
 /// GAR category recorded when a kaigi-stream request arrives without a configured route.
@@ -625,110 +643,37 @@ fn current_epoch(window_secs: u64) -> u32 {
     epoch.min(u32::MAX as u64) as u32
 }
 
-fn render_incentive_prometheus(
-    relay_id: RelayId,
-    summaries: &[EpochSummary],
-    mode: RelayMode,
-) -> String {
-    if summaries.is_empty() {
-        return String::new();
-    }
-
-    let mut output = String::new();
-    let mode_label = mode.as_label();
-    let relay_hex = hex::encode(relay_id);
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_uptime_seconds_total Relay uptime observed within the incentive epoch."
-    );
-    let _ = writeln!(output, "# TYPE soranet_relay_uptime_seconds_total counter");
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_uptime_seconds_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {uptime}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            uptime = summary.uptime_seconds
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_scheduled_seconds_total Expected uptime window for the incentive epoch."
-    );
-    let _ = writeln!(
-        output,
-        "# TYPE soranet_relay_scheduled_seconds_total counter"
-    );
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_scheduled_seconds_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {scheduled}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            scheduled = summary.scheduled_uptime_seconds
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_bandwidth_verified_bytes_total Verified relay bandwidth contribution for the epoch."
-    );
-    let _ = writeln!(
-        output,
-        "# TYPE soranet_relay_bandwidth_verified_bytes_total counter"
-    );
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_bandwidth_verified_bytes_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {bytes}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            bytes = summary.verified_bandwidth_bytes
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_measurements_total Accepted blinded measurement proofs per epoch."
-    );
-    let _ = writeln!(output, "# TYPE soranet_relay_measurements_total counter");
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_measurements_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {count}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            count = summary.measurement_ids.len()
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_confidence_floor_per_mille Minimum measurement confidence per epoch."
-    );
-    let _ = writeln!(
-        output,
-        "# TYPE soranet_relay_confidence_floor_per_mille gauge"
-    );
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_confidence_floor_per_mille{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {confidence}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            confidence = u64::from(summary.confidence_floor_per_mille)
-        );
-    }
-
-    output
+struct IncentiveMetricsWriter {
+    output: String,
+    max_bytes: usize,
 }
+
+impl IncentiveMetricsWriter {
+    fn new(max_bytes: usize) -> Result<Self, fmt::Error> {
+        let mut output = String::new();
+        output
+            .try_reserve_exact(max_bytes)
+            .map_err(|_| fmt::Error)?;
+        Ok(Self { output, max_bytes })
+    }
+}
+
+impl fmt::Write for IncentiveMetricsWriter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let next = self
+            .output
+            .len()
+            .checked_add(value.len())
+            .ok_or(fmt::Error)?;
+        if next > self.max_bytes {
+            return Err(fmt::Error);
+        }
+        self.output.push_str(value);
+        Ok(())
+    }
+}
+
+include!("runtime/incentive_metrics.rs");
 
 #[derive(Copy, Clone, Debug)]
 enum SnapshotKind {
@@ -747,7 +692,7 @@ impl SnapshotKind {
 
 fn snapshot_from_summary(
     relay_id: RelayId,
-    summary: &EpochSummary,
+    summary: EpochSummary,
     kind: SnapshotKind,
 ) -> RelayEpochMetricsV1 {
     let mut metadata = Metadata::default();
@@ -773,7 +718,7 @@ fn snapshot_from_summary(
         compliance: RelayComplianceStatusV1::Clean,
         reward_score: 0,
         confidence_floor_per_mille: summary.confidence_floor_per_mille,
-        measurement_ids: summary.measurement_ids.clone(),
+        measurement_ids: summary.measurement_ids,
         metadata,
     }
 }
@@ -1046,6 +991,14 @@ fn spool_vpn_settlement_artifact(
         record.session_id_hex, artifact.voucher.body.sequence, generated_at_ms
     );
     let path = spool_dir.join(file_name);
+    let bytes = norito::json::to_vec_pretty(&record)
+        .map_err(|error| format!("failed to encode vpn settlement artifact JSON: {error}"))?;
+    if bytes.len().saturating_add(1) > VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1 {
+        return Err(format!(
+            "vpn settlement artifact is {} bytes; first-release limit is {VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1} bytes",
+            bytes.len().saturating_add(1)
+        ));
+    }
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1056,8 +1009,6 @@ fn spool_vpn_settlement_artifact(
                 path.display()
             )
         })?;
-    let bytes = norito::json::to_vec_pretty(&record)
-        .map_err(|error| format!("failed to encode vpn settlement artifact JSON: {error}"))?;
     file.write_all(&bytes).map_err(|error| {
         format!(
             "failed to write vpn settlement artifact `{}`: {error}",
@@ -1349,6 +1300,9 @@ fn verify_and_consume_ticket(
                 "ticket replay store at capacity".to_owned(),
             ));
         }
+        state.pending.try_reserve(1).map_err(|_| {
+            HandshakeError::ReplayStore("ticket replay pending-set allocation failed".to_owned())
+        })?;
         state.pending.insert(fingerprint);
     }
 
@@ -1761,6 +1715,9 @@ impl RelayRuntime {
             .as_logger(&hex::encode(relay_id))
             .map_err(RelayError::from)?
             .map(Arc::new);
+        let incentive_max_active_epochs = config.incentive_log_config().max_active_epochs;
+        let incentive_max_measurements_per_epoch =
+            config.incentive_log_config().max_measurements_per_epoch;
 
         let pow_config = config.pow_config().clone();
         let base_pow_params = pow_config.parameters()?;
@@ -1901,7 +1858,9 @@ impl RelayRuntime {
             .map(|bundle| Arc::new(bundle.clone()));
         let handshake_suites = Arc::new(resolve_handshake_suites(certificate_bundle.as_ref())?);
 
-        let registry = Arc::new(CircuitRegistry::default());
+        let registry = Arc::new(CircuitRegistry::with_max_entries(
+            config.congestion_config().max_active_circuits,
+        ));
         let lane_manager = Arc::new(ConstantRateLaneManager::new(
             profile_spec,
             Arc::clone(&registry),
@@ -1926,7 +1885,11 @@ impl RelayRuntime {
             dos,
             congestion: congestion_controller,
             compliance: compliance_logger,
-            performance: Arc::new(Mutex::new(RelayPerformanceAccumulator::new(relay_id))),
+            performance: Arc::new(Mutex::new(RelayPerformanceAccumulator::with_limits(
+                relay_id,
+                incentive_max_active_epochs,
+                incentive_max_measurements_per_epoch,
+            ))),
             epoch_window_secs: INCENTIVE_EPOCH_WINDOW_SECS,
             relay_id,
             exit_routing,
@@ -2159,6 +2122,45 @@ impl RelayRuntime {
         let mut reservation = match context.congestion.as_ref() {
             Some(controller) => match controller.reserve(remote, Instant::now()) {
                 Ok(res) => Some(res),
+                Err(CongestionError::GlobalCircuitCapacity { limit }) => {
+                    metrics.record_capacity_reject();
+                    let event_time = SystemTime::now();
+                    privacy.record_capacity_reject(event_time);
+                    privacy.record_throttle(event_time, ThrottleScope::Congestion);
+                    privacy.record_gar_category(event_time, "throttle.congestion");
+                    privacy_events.record_throttle(
+                        privacy_mode,
+                        event_time,
+                        SoranetPrivacyThrottleScopeV1::from(ThrottleScope::Congestion),
+                    );
+                    privacy_events.record_gar_category(
+                        privacy_mode,
+                        event_time,
+                        "throttle.congestion",
+                    );
+                    warn!(
+                        remote = %remote,
+                        mode = mode.as_label(),
+                        limit,
+                        "rejecting handshake: global active-circuit capacity reached"
+                    );
+                    let reason = format!("global circuit capacity reached (limit {limit})");
+                    if let Some(logger) = context.compliance.as_ref()
+                        && let Err(error) = logger.log_handshake_reject(
+                            remote,
+                            mode,
+                            descriptor_commit,
+                            &reason,
+                            None,
+                            None,
+                            &[],
+                        )
+                    {
+                        warn!(%error, "failed to write compliance log entry");
+                    }
+                    connection.close(0u32.into(), b"capacity exceeded");
+                    return;
+                }
                 Err(CongestionError::TooManyCircuits { limit }) => {
                     metrics.record_capacity_reject();
                     let event_time = SystemTime::now();
@@ -2533,6 +2535,55 @@ impl RelayRuntime {
                             warn!(%error, "failed to write compliance log entry");
                         }
                         connection.close(0u32.into(), b"constant-rate capacity exceeded");
+                        return;
+                    }
+                    Err(CircuitAdmissionError::CircuitCapacity { limit }) => {
+                        metrics.record_capacity_reject();
+                        let event_time = SystemTime::now();
+                        privacy.record_capacity_reject(event_time);
+                        privacy.record_throttle(event_time, ThrottleScope::Congestion);
+                        privacy.record_gar_category(event_time, "throttle.congestion");
+                        privacy_events.record_throttle(
+                            privacy_mode,
+                            event_time,
+                            SoranetPrivacyThrottleScopeV1::from(ThrottleScope::Congestion),
+                        );
+                        privacy_events.record_gar_category(
+                            privacy_mode,
+                            event_time,
+                            "throttle.congestion",
+                        );
+                        warn!(
+                            remote = %remote,
+                            mode = mode.as_label(),
+                            limit,
+                            "rejecting handshake: circuit registry capacity reached"
+                        );
+                        connection.close(0u32.into(), b"capacity exceeded");
+                        return;
+                    }
+                    Err(CircuitAdmissionError::MemoryCapacity) => {
+                        metrics.record_capacity_reject();
+                        let event_time = SystemTime::now();
+                        privacy.record_capacity_reject(event_time);
+                        privacy.record_throttle(event_time, ThrottleScope::Congestion);
+                        privacy.record_gar_category(event_time, "throttle.congestion");
+                        privacy_events.record_throttle(
+                            privacy_mode,
+                            event_time,
+                            SoranetPrivacyThrottleScopeV1::from(ThrottleScope::Congestion),
+                        );
+                        privacy_events.record_gar_category(
+                            privacy_mode,
+                            event_time,
+                            "throttle.congestion",
+                        );
+                        warn!(
+                            remote = %remote,
+                            mode = mode.as_label(),
+                            "rejecting handshake: circuit registry memory unavailable"
+                        );
+                        connection.close(0u32.into(), b"capacity exceeded");
                         return;
                     }
                 };
@@ -4149,7 +4200,11 @@ impl RelayRuntime {
         if frame_len > MAX_BANDWIDTH_PROOF_FRAME_LEN {
             return Err(IncentiveStreamError::FrameTooLarge { length: frame_len });
         }
-        let mut frame = vec![0u8; frame_len];
+        let mut frame = Vec::new();
+        frame
+            .try_reserve_exact(frame_len)
+            .map_err(|_| IncentiveStreamError::Allocation)?;
+        frame.resize(frame_len, 0);
         if !Self::read_exact_or_eof(stream, &mut frame).await? {
             return Err(IncentiveStreamError::UnexpectedEof {
                 expected: frame_len,
@@ -4203,7 +4258,9 @@ impl RelayRuntime {
         remote: SocketAddr,
     ) -> Result<(), IncentiveStreamError> {
         let mut cursor = frame;
-        let proof = RelayBandwidthProofV1::decode(&mut cursor)?;
+        let proof = norito::with_decode_limits_scope(BANDWIDTH_PROOF_DECODE_LIMITS_V1, || {
+            RelayBandwidthProofV1::decode(&mut cursor)
+        })?;
         if !cursor.is_empty() {
             return Err(IncentiveStreamError::TrailingBytes(cursor.len()));
         }
@@ -4214,27 +4271,33 @@ impl RelayRuntime {
             Accepted { summary: Option<EpochSummary> },
             Duplicate,
             ForeignRelay,
+            Capacity(IncentiveCapacityError),
         }
-        let outcome = if proof.relay_id != relay_id {
-            ProofOutcome::ForeignRelay
-        } else {
+        let outcome = {
             let mut guard = performance.lock().await;
-            if guard.ingest_bandwidth_proof(&proof) {
-                let summary = guard
-                    .summaries()
-                    .into_iter()
-                    .find(|snapshot| snapshot.epoch == proof.epoch);
-                ProofOutcome::Accepted { summary }
-            } else {
-                ProofOutcome::Duplicate
+            match guard.try_ingest_bandwidth_proof(&proof) {
+                Ok(BandwidthProofIngest::Accepted) => {
+                    let summary = match guard.summary(proof.epoch) {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            warn!(epoch = proof.epoch, %error, "failed to snapshot bounded incentive epoch");
+                            None
+                        }
+                    };
+                    ProofOutcome::Accepted { summary }
+                }
+                Ok(BandwidthProofIngest::Duplicate) => ProofOutcome::Duplicate,
+                Ok(BandwidthProofIngest::ForeignRelay) => ProofOutcome::ForeignRelay,
+                Err(error) => ProofOutcome::Capacity(error),
             }
         };
 
         if let Some(logger) = compliance.as_ref() {
-            let reason = match outcome {
+            let reason = match &outcome {
                 ProofOutcome::Accepted { .. } => None,
                 ProofOutcome::Duplicate => Some("duplicate_measurement"),
                 ProofOutcome::ForeignRelay => Some("foreign_relay"),
+                ProofOutcome::Capacity(_) => Some("incentive_capacity"),
             };
             if let Err(error) = logger.log_bandwidth_proof(
                 remote,
@@ -4248,7 +4311,7 @@ impl RelayRuntime {
                 proof.confidence.confidence_per_mille,
                 proof.issued_at_unix,
                 &verifier_label,
-                matches!(outcome, ProofOutcome::Accepted { .. }),
+                matches!(&outcome, ProofOutcome::Accepted { .. }),
                 reason,
             ) {
                 warn!(%error, "failed to write compliance log entry");
@@ -4266,7 +4329,7 @@ impl RelayRuntime {
 
                 if let (Some(summary), Some(logger)) = (summary, incentives) {
                     let metrics =
-                        snapshot_from_summary(relay_id, &summary, SnapshotKind::Measurement);
+                        snapshot_from_summary(relay_id, summary, SnapshotKind::Measurement);
                     if let Err(error) = logger.write_snapshot(&metrics) {
                         warn!(
                             epoch = proof.epoch,
@@ -4294,6 +4357,14 @@ impl RelayRuntime {
                     measurement = %measurement_hex,
                     relay = %relay_hex,
                     "ignored bandwidth proof (foreign relay)"
+                );
+            }
+            ProofOutcome::Capacity(error) => {
+                warn!(
+                    epoch = proof.epoch,
+                    measurement = %measurement_hex,
+                    %error,
+                    "ignored bandwidth proof at incentive memory capacity"
                 );
             }
         }
@@ -4326,21 +4397,25 @@ impl RelayRuntime {
 
             let epoch = current_epoch(epoch_window_secs);
             let mut guard = performance.lock().await;
-            guard.record_uptime(epoch, uptime_secs, epoch_window_secs);
+            if let Err(error) = guard.try_record_uptime(epoch, uptime_secs, epoch_window_secs) {
+                warn!(epoch, %error, "unable to retain incentive uptime sample");
+                continue;
+            }
 
             if let Some(logger) = incentives.as_ref() {
-                if let Some(summary) = guard
-                    .summaries()
-                    .into_iter()
-                    .find(|snapshot| snapshot.epoch == epoch)
-                {
-                    drop(guard);
-                    let metrics = snapshot_from_summary(relay_id, &summary, SnapshotKind::Uptime);
+                let summary = match guard.summary(epoch) {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        warn!(epoch, %error, "failed to snapshot bounded incentive uptime epoch");
+                        None
+                    }
+                };
+                drop(guard);
+                if let Some(summary) = summary {
+                    let metrics = snapshot_from_summary(relay_id, summary, SnapshotKind::Uptime);
                     if let Err(error) = logger.write_snapshot(&metrics) {
                         warn!(epoch, ?error, "failed to persist uptime snapshot");
                     }
-                } else {
-                    drop(guard);
                 }
             }
         }
@@ -4824,9 +4899,32 @@ impl RelayRuntime {
         let mut body = context.metrics.render_prometheus(mode, proxy_queue_depth);
         let incentive_summary = {
             let guard = context.performance.lock().await;
-            guard.summaries()
+            guard.try_summaries()
         };
-        let incentives = render_incentive_prometheus(relay_id, &incentive_summary, mode);
+        let incentive_summary = match incentive_summary {
+            Ok(summary) => summary,
+            Err(error) => {
+                warn!(%error, "unable to render bounded incentive metrics snapshot");
+                return Self::admin_http_response(
+                    "503 Service Unavailable",
+                    PLAIN_TEXT_CONTENT_TYPE,
+                    "metrics capacity unavailable\n",
+                    "",
+                );
+            }
+        };
+        let incentives = match render_incentive_prometheus(relay_id, &incentive_summary, mode) {
+            Ok(incentives) => incentives,
+            Err(_) => {
+                warn!("unable to render incentive metrics within its bounded response corridor");
+                return Self::admin_http_response(
+                    "503 Service Unavailable",
+                    PLAIN_TEXT_CONTENT_TYPE,
+                    "metrics capacity unavailable\n",
+                    "",
+                );
+            }
+        };
         let privacy_metrics = context.privacy.render_prometheus(mode, SystemTime::now());
         if !body.ends_with('\n') && !incentives.is_empty() {
             body.push('\n');
@@ -5026,11 +5124,23 @@ impl RelayRuntime {
     fn load_certificates(
         path: &std::path::Path,
     ) -> Result<Vec<CertificateDer<'static>>, RelayError> {
-        let data = std::fs::read(path)?;
+        let data = read_bounded_direct_regular_file(
+            path,
+            TLS_CERTIFICATE_CHAIN_MAX_BYTES_V1,
+            "relay TLS certificate chain",
+        )?;
         let mut certs = Vec::new();
         for entry in CertificateDer::pem_slice_iter(&data) {
-            let cert = entry.map_err(|error| RelayError::Tls(error.to_string()))?;
-            certs.push(cert.into_owned());
+            if certs.len() == TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1 {
+                return Err(RelayError::Tls(format!(
+                    "relay TLS certificate chain exceeds the first-release {TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1}-certificate limit"
+                )));
+            }
+            certs
+                .try_reserve_exact(1)
+                .map_err(|_| RelayError::Tls("failed to reserve bounded TLS chain".to_owned()))?;
+            let certificate = entry.map_err(|error| RelayError::Tls(error.to_string()))?;
+            certs.push(certificate);
         }
         if certs.is_empty() {
             return Err(RelayError::Tls(
@@ -5041,130 +5151,18 @@ impl RelayRuntime {
     }
 
     fn load_private_key(path: &std::path::Path) -> Result<PrivateKeyDer<'static>, RelayError> {
-        let data = std::fs::read(path)?;
+        let data = read_bounded_direct_regular_file(
+            path,
+            TLS_PRIVATE_KEY_MAX_BYTES_V1,
+            "relay TLS private key",
+        )?;
         let key = PrivateKeyDer::from_pem_slice(&data)
             .map_err(|error| RelayError::Tls(error.to_string()))?;
-        Ok(key.clone_key())
+        Ok(key)
     }
 }
 
-#[derive(Debug, Error)]
-enum ExitStreamError {
-    #[error("failed to read route open frame: {0}")]
-    Read(io::Error),
-    #[error(transparent)]
-    Decode(#[from] RouteOpenFrameError),
-    #[error("{stream} exit routing disabled in configuration")]
-    StreamDisabled { stream: &'static str },
-    #[error("{stream} channel {channel} not provisioned")]
-    RouteNotProvisioned {
-        stream: &'static str,
-        channel: String,
-    },
-    #[error(transparent)]
-    RouteLookup(#[from] RouteCatalogError),
-    #[error("{stream} channel {channel} requires authenticated viewers")]
-    RouteRequiresAuthentication {
-        stream: &'static str,
-        channel: String,
-    },
-    #[error("{stream} adapter connection timed out after {timeout:?}")]
-    AdapterTimeout {
-        stream: &'static str,
-        timeout: Duration,
-    },
-    #[error("{stream} adapter connection failed: {error}")]
-    AdapterConnect {
-        stream: &'static str,
-        #[source]
-        error: tungstenite::Error,
-    },
-    #[error("failed to encode {stream} handshake: {error}")]
-    HandshakeEncode {
-        stream: &'static str,
-        #[source]
-        error: norito::Error,
-    },
-    #[error("failed to send data to {stream} adapter: {error}")]
-    AdapterSend {
-        stream: &'static str,
-        #[source]
-        error: tungstenite::Error,
-    },
-    #[error("failed to receive data from {stream} adapter: {error}")]
-    AdapterReceive {
-        stream: &'static str,
-        #[source]
-        error: tungstenite::Error,
-    },
-    #[error("exit stream read error: {0}")]
-    RecvRead(io::Error),
-    #[error("exit stream write error: {0}")]
-    SendWrite(io::Error),
-    #[error("failed to finish exit stream: {0}")]
-    SendFinish(io::Error),
-}
-
-#[derive(Debug, Error)]
-enum IncentiveStreamError {
-    #[error("measurement frame length must be non-zero")]
-    EmptyFrame,
-    #[error(
-        "measurement frame length {length} exceeds maximum of {MAX_BANDWIDTH_PROOF_FRAME_LEN} bytes"
-    )]
-    FrameTooLarge { length: usize },
-    #[error("measurement frame ended prematurely (received {received} of {expected} bytes)")]
-    UnexpectedEof { expected: usize, received: usize },
-    #[error("failed to decode relay bandwidth proof: {0}")]
-    Decode(#[from] norito::codec::Error),
-    #[error("measurement frame contains {0} trailing bytes after decoding proof")]
-    TrailingBytes(usize),
-    #[error("measurement stream read error: {0}")]
-    Read(io::Error),
-}
-
-#[derive(Debug, Error)]
-enum HandshakeError {
-    #[error("timeout waiting for {0}")]
-    Timeout(&'static str),
-    #[error("connection error: {0}")]
-    Connection(#[from] quinn::ConnectionError),
-    #[error("read error: {0}")]
-    Read(quinn::ReadExactError),
-    #[error("write error: {0}")]
-    Write(quinn::WriteError),
-    #[error("failed to close handshake stream: {0}")]
-    Finish(ClosedStream),
-    #[error("handshake frame exceeded maximum length ({0} bytes)")]
-    FrameTooLarge(usize),
-    #[error("client hello parse failed: {0}")]
-    ClientHello(#[from] crate::handshake::ClientHelloError),
-    #[error("capability negotiation failed: {0}")]
-    Capability(#[from] CapabilityError),
-    #[error("invalid client handshake material: {0}")]
-    InvalidClient(&'static str),
-    #[error("handshake downgrade detected")]
-    Downgrade {
-        warnings: Vec<CapabilityWarning>,
-        telemetry: Option<Vec<u8>>,
-    },
-    #[error("noise handshake error: {0}")]
-    Noise(NoiseHandshakeError),
-    #[error("pow verification failed: {0}")]
-    Pow(#[from] pow::Error),
-    #[error("puzzle verification failed: {0}")]
-    Puzzle(#[from] puzzle::Error),
-    #[error("ticket replay store failed closed: {0}")]
-    ReplayStore(String),
-    #[error("missing admission challenge")]
-    MissingChallenge,
-    #[error("token decode failed: {0}")]
-    TokenDecode(TokenDecodeError),
-    #[error("token verification failed: {0}")]
-    Token(#[from] TokenPolicyError),
-    #[error("vpn helper ticket verification failed: {0}")]
-    HelperTicket(#[from] VpnHelperTicketError),
-}
+include!("runtime/stream_errors.rs");
 
 fn role_bits(mode: RelayMode) -> u8 {
     match mode {
@@ -5252,50 +5250,6 @@ fn append_grease_tlvs(
     Ok(base)
 }
 
-fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<String> {
-    let slug_source = warnings
-        .iter()
-        .find_map(|warning| {
-            let trimmed = warning.message.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        })
-        .unwrap_or("downgrade");
-    Some(normalize_downgrade_reason(slug_source))
-}
-
-fn record_handshake_suite_downgrade(metrics: &Metrics, suite: HandshakeSuite) {
-    if matches!(suite, HandshakeSuite::Nk3PqForwardSecure) {
-        metrics.record_downgrade("handshake_suite_nk3");
-    }
-}
-
-fn pow_failure_reason(error: &pow::Error) -> SoranetPowFailureReasonV1 {
-    match error {
-        pow::Error::UnsupportedVersion(_) => SoranetPowFailureReasonV1::UnsupportedVersion,
-        pow::Error::DifficultyMismatch { .. } => SoranetPowFailureReasonV1::DifficultyMismatch,
-        pow::Error::Expired(_, _) => SoranetPowFailureReasonV1::Expired,
-        pow::Error::FutureSkewExceeded(_) => SoranetPowFailureReasonV1::FutureSkewExceeded,
-        pow::Error::ExpiryTimestampOverflow(_) => SoranetPowFailureReasonV1::ClockError,
-        pow::Error::ExpiryWindowTooSmall(_) => SoranetPowFailureReasonV1::TtlTooShort,
-        pow::Error::InvalidSolution => SoranetPowFailureReasonV1::InvalidSolution,
-        pow::Error::RelayMismatch | pow::Error::TranscriptMismatch => {
-            SoranetPowFailureReasonV1::RelayMismatch
-        }
-        pow::Error::Replay => SoranetPowFailureReasonV1::Replay,
-        pow::Error::RevocationStore(_) => SoranetPowFailureReasonV1::StoreError,
-        pow::Error::InvalidSignature | pow::Error::Signing(_) => {
-            SoranetPowFailureReasonV1::SignatureInvalid
-        }
-        pow::Error::PostQuantum(_) => SoranetPowFailureReasonV1::PostQuantumError,
-        pow::Error::Clock(_) => SoranetPowFailureReasonV1::ClockError,
-        pow::Error::Malformed(_) | pow::Error::MalformedBinding(_) => {
-            SoranetPowFailureReasonV1::UnsupportedVersion
-        }
-    }
-}
+include!("runtime/handshake_diagnostics.rs");
 
 include!("runtime/tests.rs");

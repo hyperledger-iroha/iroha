@@ -19440,13 +19440,9 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let network_id = test_network_id(b"mixed-batch-network");
-        let contract_address = ContractAddress::derive(
-            &network_id,
-            &authority,
-            9,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("contract address");
+        let contract_address =
+            ContractAddress::derive(&network_id, &authority, 9, DataSpaceId::UNIVERSAL)
+                .expect("contract address");
         let expected_code_hash = Hash::new(b"js-host-mixed-batch-code");
         let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
             DomainId::try_new("mixed-batch", "universal").expect("domain id"),

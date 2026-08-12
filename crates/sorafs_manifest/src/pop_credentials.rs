@@ -927,12 +927,283 @@ impl PopMembershipWitnessV1 {
     }
 }
 
+mod borrowed_norito {
+    use norito::core::NoritoSerialize;
+
+    pub(super) struct Value<'a, T>(pub(super) &'a T);
+
+    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            T::schema_hash()
+        }
+
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    pub(super) struct Vec<'a, T>(Option<&'a std::vec::Vec<T>>);
+
+    impl<'a, T> Vec<'a, T> {
+        pub(super) fn borrowed(value: &'a std::vec::Vec<T>) -> Self {
+            Self(Some(value))
+        }
+
+        pub(super) fn empty() -> Self {
+            Self(None)
+        }
+    }
+
+    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            std::vec::Vec::<T>::schema_hash()
+        }
+
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            match self.0 {
+                Some(value) => value.serialize(writer),
+                None => std::vec::Vec::<T>::new().serialize(writer),
+            }
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            match self.0 {
+                Some(value) => value.encoded_len_hint(),
+                None => std::vec::Vec::<T>::new().encoded_len_hint(),
+            }
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            match self.0 {
+                Some(value) => value.encoded_len_exact(),
+                None => std::vec::Vec::<T>::new().encoded_len_exact(),
+            }
+        }
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct PopSignatureSigningViewWireV1<'a> {
+    algorithm: PopSignatureAlgorithmV1,
+    public_key: borrowed_norito::Vec<'a, u8>,
+    signature: borrowed_norito::Vec<'a, u8>,
+}
+
+struct PopSignatureSigningViewV1<'a>(PopSignatureSigningViewWireV1<'a>);
+
+impl<'a> PopSignatureSigningViewV1<'a> {
+    fn from_signature(signature: &'a PopSignatureV1) -> Self {
+        Self(PopSignatureSigningViewWireV1 {
+            algorithm: signature.algorithm,
+            public_key: borrowed_norito::Vec::borrowed(&signature.public_key),
+            signature: borrowed_norito::Vec::empty(),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for PopSignatureSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        PopSignatureV1::schema_hash()
+    }
+
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct PopCredentialSigningViewWireV1<'a> {
+    version: u8,
+    credential_id: [u8; 32],
+    holder_commitment: [u8; 32],
+    eligibility_class: PopEligibilityClassV1,
+    attributes: borrowed_norito::Vec<'a, PopCredentialAttributeV1>,
+    issuer_id: borrowed_norito::Value<'a, String>,
+    issued_at_epoch: u64,
+    expires_at_epoch: u64,
+    renewal_at_epoch: u64,
+    revocation_nonce: [u8; 32],
+    commitment_root: [u8; 32],
+    commitment_tree_version: u64,
+    revocation_list_version: u64,
+    issuer_signature: PopSignatureSigningViewV1<'a>,
+}
+
+struct PopCredentialSigningViewV1<'a>(PopCredentialSigningViewWireV1<'a>);
+
+impl<'a> PopCredentialSigningViewV1<'a> {
+    fn from_credential(credential: &'a PopCredentialV1) -> Self {
+        Self(PopCredentialSigningViewWireV1 {
+            version: credential.version,
+            credential_id: credential.credential_id,
+            holder_commitment: credential.holder_commitment,
+            eligibility_class: credential.eligibility_class,
+            attributes: borrowed_norito::Vec::borrowed(&credential.attributes),
+            issuer_id: borrowed_norito::Value(&credential.issuer_id),
+            issued_at_epoch: credential.issued_at_epoch,
+            expires_at_epoch: credential.expires_at_epoch,
+            renewal_at_epoch: credential.renewal_at_epoch,
+            revocation_nonce: credential.revocation_nonce,
+            commitment_root: credential.commitment_root,
+            commitment_tree_version: credential.commitment_tree_version,
+            revocation_list_version: credential.revocation_list_version,
+            issuer_signature: PopSignatureSigningViewV1::from_signature(
+                &credential.issuer_signature,
+            ),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for PopCredentialSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        PopCredentialV1::schema_hash()
+    }
+
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct PopCommitmentRootSigningViewWireV1<'a> {
+    version: u8,
+    root_digest: [u8; 32],
+    tree_size: u64,
+    tree_depth: u8,
+    tree_version: u64,
+    issuer_id: borrowed_norito::Value<'a, String>,
+    published_at_epoch: u64,
+    previous_root_digest: Option<[u8; 32]>,
+    governance_event_digest: [u8; 32],
+    publisher_signature: PopSignatureSigningViewV1<'a>,
+}
+
+struct PopCommitmentRootSigningViewV1<'a>(PopCommitmentRootSigningViewWireV1<'a>);
+
+impl<'a> PopCommitmentRootSigningViewV1<'a> {
+    fn from_root(root: &'a PopCommitmentRootV1) -> Self {
+        Self(PopCommitmentRootSigningViewWireV1 {
+            version: root.version,
+            root_digest: root.root_digest,
+            tree_size: root.tree_size,
+            tree_depth: root.tree_depth,
+            tree_version: root.tree_version,
+            issuer_id: borrowed_norito::Value(&root.issuer_id),
+            published_at_epoch: root.published_at_epoch,
+            previous_root_digest: root.previous_root_digest,
+            governance_event_digest: root.governance_event_digest,
+            publisher_signature: PopSignatureSigningViewV1::from_signature(
+                &root.publisher_signature,
+            ),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for PopCommitmentRootSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        PopCommitmentRootV1::schema_hash()
+    }
+
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct PopRevocationListSigningViewWireV1<'a> {
+    version: u8,
+    list_version: u64,
+    commitment_root: [u8; 32],
+    revocation_root: [u8; 32],
+    revocation_tree_depth: u8,
+    issuer_id: borrowed_norito::Value<'a, String>,
+    published_at_epoch: u64,
+    entries: borrowed_norito::Vec<'a, PopRevocationEntryV1>,
+    publisher_signature: PopSignatureSigningViewV1<'a>,
+}
+
+struct PopRevocationListSigningViewV1<'a>(PopRevocationListSigningViewWireV1<'a>);
+
+impl<'a> PopRevocationListSigningViewV1<'a> {
+    fn from_revocations(revocations: &'a PopRevocationListV1) -> Self {
+        Self(PopRevocationListSigningViewWireV1 {
+            version: revocations.version,
+            list_version: revocations.list_version,
+            commitment_root: revocations.commitment_root,
+            revocation_root: revocations.revocation_root,
+            revocation_tree_depth: revocations.revocation_tree_depth,
+            issuer_id: borrowed_norito::Value(&revocations.issuer_id),
+            published_at_epoch: revocations.published_at_epoch,
+            entries: borrowed_norito::Vec::borrowed(&revocations.entries),
+            publisher_signature: PopSignatureSigningViewV1::from_signature(
+                &revocations.publisher_signature,
+            ),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for PopRevocationListSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        PopRevocationListV1::schema_hash()
+    }
+
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
 /// Derive the canonical Ed25519 digest for a PoP credential signature.
 pub fn pop_credential_signature_digest_v1(
     credential: &PopCredentialV1,
 ) -> Result<[u8; 32], PopCredentialValidationError> {
-    let mut signable = credential.clone();
-    signable.issuer_signature.signature.clear();
+    preflight_credential_signature_source(credential)?;
+    let signable = PopCredentialSigningViewV1::from_credential(credential);
     pop_signature_digest(POP_CREDENTIAL_SIGNATURE_DOMAIN_V1, &signable)
 }
 
@@ -961,8 +1232,8 @@ pub fn sign_pop_credential_ed25519_v1(
 pub fn pop_commitment_root_signature_digest_v1(
     root: &PopCommitmentRootV1,
 ) -> Result<[u8; 32], PopCredentialValidationError> {
-    let mut signable = root.clone();
-    signable.publisher_signature.signature.clear();
+    preflight_root_signature_source(root)?;
+    let signable = PopCommitmentRootSigningViewV1::from_root(root);
     pop_signature_digest(POP_ROOT_SIGNATURE_DOMAIN_V1, &signable)
 }
 
@@ -991,8 +1262,8 @@ pub fn sign_pop_commitment_root_ed25519_v1(
 pub fn pop_revocation_list_signature_digest_v1(
     revocations: &PopRevocationListV1,
 ) -> Result<[u8; 32], PopCredentialValidationError> {
-    let mut signable = revocations.clone();
-    signable.publisher_signature.signature.clear();
+    preflight_revocation_signature_source(revocations)?;
+    let signable = PopRevocationListSigningViewV1::from_revocations(revocations);
     pop_signature_digest(POP_REVOCATION_SIGNATURE_DOMAIN_V1, &signable)
 }
 
@@ -1365,18 +1636,119 @@ pub enum PopCredentialValidationError {
     VerifierContextMismatch,
 }
 
+const POP_SIGNATURE_PREIMAGE_MAX_BYTES_V1: usize = 512 * 1024;
+
+fn preflight_signature_public_key(
+    signature: &PopSignatureV1,
+) -> Result<(), PopCredentialValidationError> {
+    if signature.public_key.len() != PUBLIC_KEY_LENGTH {
+        return Err(PopCredentialValidationError::InvalidPublicKeyLength {
+            length: signature.public_key.len(),
+        });
+    }
+    Ok(())
+}
+
+fn preflight_bounded_source(
+    resource: &'static str,
+    actual: usize,
+    maximum: usize,
+) -> Result<(), PopCredentialValidationError> {
+    if actual > maximum {
+        return Err(PopCredentialValidationError::ResourceLimitExceeded {
+            resource,
+            maximum,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+fn preflight_credential_signature_source(
+    credential: &PopCredentialV1,
+) -> Result<(), PopCredentialValidationError> {
+    preflight_bounded_source(
+        "credential attributes",
+        credential.attributes.len(),
+        POP_CREDENTIAL_ATTRIBUTES_MAX_V1,
+    )?;
+    preflight_bounded_source(
+        "issuer id bytes",
+        credential.issuer_id.len(),
+        POP_IDENTITY_TEXT_MAX_BYTES_V1,
+    )?;
+    for attribute in &credential.attributes {
+        preflight_bounded_source(
+            "credential attribute key bytes",
+            attribute.key.len(),
+            POP_ATTRIBUTE_KEY_MAX_BYTES_V1,
+        )?;
+    }
+    preflight_signature_public_key(&credential.issuer_signature)
+}
+
+fn preflight_root_signature_source(
+    root: &PopCommitmentRootV1,
+) -> Result<(), PopCredentialValidationError> {
+    preflight_bounded_source(
+        "issuer id bytes",
+        root.issuer_id.len(),
+        POP_IDENTITY_TEXT_MAX_BYTES_V1,
+    )?;
+    preflight_signature_public_key(&root.publisher_signature)
+}
+
+fn preflight_revocation_signature_source(
+    revocations: &PopRevocationListV1,
+) -> Result<(), PopCredentialValidationError> {
+    preflight_bounded_source(
+        "revocation entries",
+        revocations.entries.len(),
+        POP_REVOCATION_ENTRIES_MAX_V1,
+    )?;
+    preflight_bounded_source(
+        "issuer id bytes",
+        revocations.issuer_id.len(),
+        POP_IDENTITY_TEXT_MAX_BYTES_V1,
+    )?;
+    preflight_signature_public_key(&revocations.publisher_signature)
+}
+
 fn pop_signature_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     payload: &T,
 ) -> Result<[u8; 32], PopCredentialValidationError> {
-    let payload_bytes = norito::to_bytes(payload).map_err(|err| {
+    let encoded_len = norito::core::encoded_frame_len(payload).map_err(|err| {
         PopCredentialValidationError::SignaturePayloadEncoding {
             reason: err.to_string(),
         }
     })?;
+    preflight_bounded_source(
+        "signature preimage bytes",
+        encoded_len,
+        POP_SIGNATURE_PREIMAGE_MAX_BYTES_V1,
+    )?;
+
+    struct Blake3Writer<'a>(&'a mut Hasher);
+
+    impl std::io::Write for Blake3Writer<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     let mut hasher = Hasher::new();
     hasher.update(domain);
-    hasher.update(&payload_bytes);
+    norito::core::write_frame_to_writer(payload, &mut Blake3Writer(&mut hasher)).map_err(
+        |err| PopCredentialValidationError::SignaturePayloadEncoding {
+            reason: err.to_string(),
+        },
+    )?;
     Ok(*hasher.finalize().as_bytes())
 }
 
@@ -1630,6 +2002,37 @@ mod tests {
         }
     }
 
+    fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        norito::to_bytes(value).expect("encode explicit-layout PoP frame")
+    }
+
+    fn supported_layouts() -> [u8; 8] {
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+
+        [
+            0,
+            COMPACT_LEN,
+            PACKED_SEQ,
+            PACKED_SEQ | COMPACT_LEN,
+            PACKED_STRUCT,
+            PACKED_STRUCT | COMPACT_LEN,
+            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        ]
+    }
+
+    fn historical_signature_digest<T: norito::core::NoritoSerialize>(
+        domain: &[u8],
+        value: &T,
+    ) -> [u8; 32] {
+        let bytes = norito::to_bytes(value).expect("encode historical PoP signature preimage");
+        let mut hasher = Hasher::new();
+        hasher.update(domain);
+        hasher.update(&bytes);
+        *hasher.finalize().as_bytes()
+    }
+
     #[derive(Clone)]
     struct Fixture {
         credential: PopCredentialV1,
@@ -1815,6 +2218,96 @@ mod tests {
         norito_roundtrip(&enrollment());
         norito_roundtrip(&renewal());
         norito_roundtrip(&fixture.proof);
+    }
+
+    #[test]
+    fn borrowed_signature_preimages_preserve_historical_frames_and_digests() {
+        let fixture = fixture();
+
+        let mut owned_credential = fixture.credential.clone();
+        owned_credential.issuer_signature.signature.clear();
+        let borrowed_credential = PopCredentialSigningViewV1::from_credential(&fixture.credential);
+
+        let mut owned_root = fixture.root.clone();
+        owned_root.publisher_signature.signature.clear();
+        let borrowed_root = PopCommitmentRootSigningViewV1::from_root(&fixture.root);
+
+        let mut owned_revocations = fixture.revocations.clone();
+        owned_revocations.publisher_signature.signature.clear();
+        let borrowed_revocations =
+            PopRevocationListSigningViewV1::from_revocations(&fixture.revocations);
+
+        for flags in supported_layouts() {
+            assert_eq!(
+                encode_frame_with_flags(&borrowed_credential, flags),
+                encode_frame_with_flags(&owned_credential, flags),
+                "borrowed credential signing frame changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                encode_frame_with_flags(&borrowed_root, flags),
+                encode_frame_with_flags(&owned_root, flags),
+                "borrowed root signing frame changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                encode_frame_with_flags(&borrowed_revocations, flags),
+                encode_frame_with_flags(&owned_revocations, flags),
+                "borrowed revocation signing frame changed for flags 0x{flags:02x}"
+            );
+
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            assert_eq!(
+                pop_credential_signature_digest_v1(&fixture.credential)
+                    .expect("stream credential digest"),
+                historical_signature_digest(POP_CREDENTIAL_SIGNATURE_DOMAIN_V1, &owned_credential,),
+                "streamed credential digest changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                pop_commitment_root_signature_digest_v1(&fixture.root).expect("stream root digest"),
+                historical_signature_digest(POP_ROOT_SIGNATURE_DOMAIN_V1, &owned_root),
+                "streamed root digest changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                pop_revocation_list_signature_digest_v1(&fixture.revocations)
+                    .expect("stream revocation digest"),
+                historical_signature_digest(POP_REVOCATION_SIGNATURE_DOMAIN_V1, &owned_revocations,),
+                "streamed revocation digest changed for flags 0x{flags:02x}"
+            );
+        }
+    }
+
+    #[test]
+    fn signature_preimages_reject_unadmitted_source_cardinality() {
+        let mut credential = fixture().credential.clone();
+        credential.attributes.resize(
+            POP_CREDENTIAL_ATTRIBUTES_MAX_V1 + 1,
+            credential.attributes[0].clone(),
+        );
+        assert!(matches!(
+            pop_credential_signature_digest_v1(&credential),
+            Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "credential attributes",
+                maximum: POP_CREDENTIAL_ATTRIBUTES_MAX_V1,
+                ..
+            })
+        ));
+
+        let mut revocations = fixture().revocations.clone();
+        revocations.entries.resize(
+            POP_REVOCATION_ENTRIES_MAX_V1 + 1,
+            PopRevocationEntryV1 {
+                nonce: nonce(1),
+                revoked_at_epoch: 1,
+                reason: PopRevocationReasonV1::Expired,
+            },
+        );
+        assert!(matches!(
+            pop_revocation_list_signature_digest_v1(&revocations),
+            Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "revocation entries",
+                maximum: POP_REVOCATION_ENTRIES_MAX_V1,
+                ..
+            })
+        ));
     }
 
     #[test]

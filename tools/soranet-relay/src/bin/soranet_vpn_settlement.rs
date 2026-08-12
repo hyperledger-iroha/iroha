@@ -2,7 +2,6 @@
 
 use std::{
     error::Error,
-    fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,10 +12,14 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::NetworkId;
 use iroha_primitives::numeric::Quantity;
 use norito::{
+    DecodeLimits,
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
 use sha2::{Digest as _, Sha256};
+use soranet_relay::{
+    config::read_bounded_direct_regular_file, runtime::VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+};
 
 const HEADER_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_SIGNATURE: &str = "X-Iroha-Signature";
@@ -24,6 +27,36 @@ const HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_NONCE: &str = "X-Iroha-Nonce";
 #[cfg(test)]
 const DEFAULT_PATH: &str = "/v1/vpn/receipts";
+
+const VPN_SETTLEMENT_JSON_MAX_FIELD_BYTES_V1: usize = 32 * 1024;
+const VPN_SETTLEMENT_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 60 * 1024;
+const VPN_SETTLEMENT_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 32;
+const VPN_SETTLEMENT_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 64;
+const VPN_SETTLEMENT_JSON_MAX_ALLOCATED_BYTES_V1: usize = 256 * 1024;
+const VPN_SETTLEMENT_JSON_MAX_DEPTH_V1: usize = 4;
+
+const VPN_SETTLEMENT_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    VPN_SETTLEMENT_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+    VPN_SETTLEMENT_JSON_MAX_FIELD_BYTES_V1,
+    VPN_SETTLEMENT_JSON_MAX_TOTAL_ELEMENTS_V1,
+    VPN_SETTLEMENT_JSON_MAX_ALLOCATED_BYTES_V1,
+    VPN_SETTLEMENT_JSON_MAX_DEPTH_V1,
+);
+
+const fn vpn_settlement_json_preflight_limits_v1() -> json::JsonPreflightLimits {
+    json::JsonPreflightLimits::new(
+        VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+        VPN_SETTLEMENT_JSON_MAX_TOTAL_ELEMENTS_V1 + 1,
+        VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+        VPN_SETTLEMENT_JSON_MAX_FIELD_BYTES_V1,
+        VPN_SETTLEMENT_JSON_MAX_TOTAL_STRING_BYTES_V1,
+        VPN_SETTLEMENT_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+        0,
+        VPN_SETTLEMENT_JSON_MAX_TOTAL_ELEMENTS_V1,
+        VPN_SETTLEMENT_JSON_MAX_TOTAL_ELEMENTS_V1,
+        VPN_SETTLEMENT_JSON_MAX_DEPTH_V1,
+    )
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -144,8 +177,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 }
 
 fn read_artifact(path: &Path) -> Result<VpnSettlementSpoolRecord, Box<dyn Error>> {
-    let bytes = fs::read(path)?;
-    Ok(json::from_slice(&bytes)?)
+    let bytes = read_bounded_direct_regular_file(
+        path,
+        VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+        "VPN settlement spool record",
+    )?;
+    json::preflight_slice(&bytes, vpn_settlement_json_preflight_limits_v1())?;
+    Ok(norito::with_decode_limits_scope(
+        VPN_SETTLEMENT_JSON_DECODE_LIMITS_V1,
+        || json::from_slice(&bytes),
+    )?)
 }
 
 fn normalize_path(path: &str) -> Result<String, Box<dyn Error>> {
@@ -177,10 +218,11 @@ fn default_nonce(artifact: &VpnSettlementSpoolRecord, timestamp_ms: u64) -> Stri
 
 fn decode_seed(raw: &str) -> Result<[u8; 32], Box<dyn Error>> {
     let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
-    let decoded = hex::decode(normalized)?;
-    let seed: [u8; 32] = decoded
-        .try_into()
-        .map_err(|_| "private key seed must decode to 32 bytes")?;
+    if normalized.len() != 64 {
+        return Err("private key seed must contain exactly 64 hex characters".into());
+    }
+    let mut seed = [0_u8; 32];
+    hex::decode_to_slice(normalized, &mut seed)?;
     Ok(seed)
 }
 
@@ -305,6 +347,7 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -422,5 +465,53 @@ mod tests {
             normalize_path("v1/vpn/receipts").expect("normalized"),
             DEFAULT_PATH
         );
+    }
+
+    #[test]
+    fn seed_decode_rejects_length_before_hex_allocation() {
+        assert_eq!(
+            decode_seed(&"ab".repeat(32)).expect("valid seed"),
+            [0xab; 32]
+        );
+        let error = decode_seed(&"ab".repeat(33)).expect_err("max+1 seed must fail");
+        assert!(error.to_string().contains("exactly 64"), "{error}");
+    }
+
+    #[test]
+    fn settlement_artifact_reader_accepts_exact_file_limit() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("settlement.json");
+        let encoded = json::to_vec(&sample_record()).expect("encode sample record");
+        assert!(encoded.len() < VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1);
+        let mut exact = encoded;
+        exact.resize(VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1, b' ');
+        std::fs::write(&path, &exact).expect("write exact artifact");
+
+        let loaded = read_artifact(&path).expect("exact artifact must load");
+        assert_eq!(loaded.version, 1);
+
+        exact.push(b' ');
+        std::fs::write(&path, exact).expect("write oversized artifact");
+        let error = read_artifact(&path).expect_err("max+1 artifact must fail before decode");
+        assert!(error.to_string().contains("first-release limit"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn settlement_artifact_reader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().expect("temporary directory");
+        let target = directory.path().join("target.json");
+        let link = directory.path().join("settlement.json");
+        std::fs::write(
+            &target,
+            json::to_vec(&sample_record()).expect("encode sample record"),
+        )
+        .expect("write target");
+        symlink(&target, &link).expect("create symlink");
+
+        let error = read_artifact(&link).expect_err("symlink must fail before read");
+        assert!(error.to_string().contains("direct regular file"), "{error}");
     }
 }

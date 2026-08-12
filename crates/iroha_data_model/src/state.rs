@@ -41,13 +41,14 @@ macro_rules! impl_state_json_via_norito_bytes {
         $(
             impl JsonSerialize for $ty {
                 fn json_serialize(&self, out: &mut String) {
-                    let bytes = norito::encode_canonical(self)
-                        .expect("canonical Norito serialization must succeed");
-                    let encoded = base64::Engine::encode(
-                        &STANDARD,
-                        bytes,
-                    );
-                    JsonSerialize::json_serialize(&encoded, out);
+                    norito::json::write_canonical_base64_json(self, out);
+                }
+
+                fn json_serialize_to(
+                    &self,
+                    out: &mut dyn norito::json::JsonWriteSink,
+                ) -> Result<(), norito::json::BoundedJsonError> {
+                    norito::json::write_canonical_base64_json_to(self, out)
                 }
             }
 
@@ -272,6 +273,15 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain id"),
         );
         let canonical_json = norito::json::to_json(&key).expect("encode canonical state-key JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&key, canonical_json.len())
+                .expect("encode state key at exact JSON bound"),
+            canonical_json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&key, canonical_json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         {

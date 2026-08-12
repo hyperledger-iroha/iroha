@@ -228,16 +228,46 @@ mod candidate {
                 Some(owned_bytes.len())
             );
         }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn manual_trigger_json_families_have_closed_bounds() {
+            fn assert_bounded<T: json::JsonSerialize>(value: &T) {
+                let expected = json::to_json(value).expect("serialize ordinary JSON");
+                assert_eq!(
+                    json::to_json_bounded(value, expected.len()).expect("exact JSON bound"),
+                    expected
+                );
+                assert_eq!(
+                    json::to_json_bounded(value, expected.len() - 1),
+                    Err(json::BoundedJsonError::BodyTooLarge)
+                );
+            }
+
+            let trigger = trigger_fixture();
+            assert_bounded(&trigger);
+            assert_bounded(trigger.action());
+            assert_bounded(&Repeats::Indefinitely);
+            assert_bounded(&Repeats::Exactly(3));
+            assert_bounded(&crate::trigger::action::TimeTriggerRetryPolicy {
+                max_retries: NonZeroU32::new(2).expect("nonzero retries"),
+                retry_after_ms: NonZeroU64::new(5).expect("nonzero retry delay"),
+            });
+        }
     }
 }
 
 #[cfg(feature = "json")]
 impl JsonSerialize for Trigger {
     fn json_serialize(&self, out: &mut String) {
-        let bytes = norito::encode_canonical(self)
-            .expect("Trigger canonical Norito serialization must succeed");
-        let encoded = STANDARD.encode(bytes);
-        json::JsonSerialize::json_serialize(&encoded, out);
+        json::write_canonical_base64_json(self, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_canonical_base64_json_to(self, out)
     }
 }
 
@@ -950,6 +980,24 @@ pub mod action {
             }
             out.push('}');
         }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            out.begin_container()?;
+            out.push('{')?;
+            match self {
+                Repeats::Indefinitely => out.push_str("\"Indefinitely\":null")?,
+                Repeats::Exactly(count) => {
+                    out.push_str("\"Exactly\":")?;
+                    json::JsonSerialize::json_serialize_to(count, out)?;
+                }
+            }
+            out.push('}')?;
+            out.end_container();
+            Ok(())
+        }
     }
 
     #[cfg(feature = "json")]
@@ -981,10 +1029,14 @@ pub mod action {
     #[cfg(feature = "json")]
     impl JsonSerialize for Action {
         fn json_serialize(&self, out: &mut String) {
-            let bytes = norito::encode_canonical(self)
-                .expect("Action canonical Norito serialization must succeed");
-            let encoded = STANDARD.encode(bytes);
-            json::JsonSerialize::json_serialize(&encoded, out);
+            json::write_canonical_base64_json(self, out);
+        }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            json::write_canonical_base64_json_to(self, out)
         }
     }
 
@@ -1003,10 +1055,14 @@ pub mod action {
     #[cfg(feature = "json")]
     impl JsonSerialize for TimeTriggerRetryPolicy {
         fn json_serialize(&self, out: &mut String) {
-            let bytes = norito::encode_canonical(self)
-                .expect("TimeTriggerRetryPolicy canonical Norito serialization must succeed");
-            let encoded = STANDARD.encode(bytes);
-            json::JsonSerialize::json_serialize(&encoded, out);
+            json::write_canonical_base64_json(self, out);
+        }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            json::write_canonical_base64_json_to(self, out)
         }
     }
 
@@ -1037,9 +1093,7 @@ pub mod action {
 
         struct BorrowedValue<'a, T>(&'a T);
 
-        impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
-            for BorrowedValue<'_, T>
-        {
+        impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for BorrowedValue<'_, T> {
             fn schema_hash() -> [u8; 16] {
                 T::schema_hash()
             }

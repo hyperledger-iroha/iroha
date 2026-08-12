@@ -311,6 +311,7 @@ impl NoritoFieldAttrs {
         let mut default = false;
         let mut skip_serializing_if = false;
         let mut with = false;
+        let mut bounded_with = false;
         let mut flatten = false;
         let mut needs_size = false;
 
@@ -370,6 +371,15 @@ impl NoritoFieldAttrs {
                         return Err(meta.error("duplicate `with` attribute"));
                     }
                     with = true;
+                } else if meta.path.is_ident("bounded_with") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                        meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                    })?;
+                    if bounded_with {
+                        return Err(meta.error("duplicate `bounded_with` attribute"));
+                    }
+                    bounded_with = true;
                 } else if meta.path.is_ident("flatten") {
                     if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
                         return Err(meta.error("`flatten` does not take a value"));
@@ -997,6 +1007,31 @@ mod tests {
             field_error
                 .to_string()
                 .contains("unknown `norito` field attribute")
+        );
+    }
+
+    #[test]
+    fn bounded_field_helper_is_accepted_and_validated() {
+        let field: syn::Field = parse_quote! {
+            #[norito(
+                with = "helpers",
+                bounded_with = "helpers::serialize_bounded"
+            )]
+            value: u32
+        };
+        NoritoFieldAttrs::from_attributes(&field.attrs)
+            .expect("schema parsing must accept Norito's bounded writer helper");
+
+        let duplicate: syn::Field = parse_quote! {
+            #[norito(bounded_with = "helpers::first", bounded_with = "helpers::second")]
+            value: u32
+        };
+        let error = NoritoFieldAttrs::from_attributes(&duplicate.attrs)
+            .expect_err("duplicate bounded helper must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate `bounded_with` attribute")
         );
     }
 

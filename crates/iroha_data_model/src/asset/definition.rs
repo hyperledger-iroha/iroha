@@ -751,10 +751,9 @@ impl norito::json::FastJsonWrite for Mintable {
             Mintable::Infinitely => norito::json::write_json_string_to("Infinitely", out),
             Mintable::Once => norito::json::write_json_string_to("Once", out),
             Mintable::Not => norito::json::write_json_string_to("Not", out),
-            Mintable::Limited(tokens) => norito::json::write_json_string_to(
-                &format!("Limited({})", tokens.value()),
-                out,
-            ),
+            Mintable::Limited(tokens) => {
+                norito::json::write_json_string_to(&format!("Limited({})", tokens.value()), out)
+            }
         }
     }
 }

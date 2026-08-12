@@ -21,7 +21,7 @@ use tracing::{debug, warn};
 
 use crate::{
     capability::{ConstantRateCapability, KemId, NegotiatedCapabilities, SignatureId},
-    config::PaddingConfig,
+    config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, PaddingConfig},
     metrics::Metrics,
 };
 
@@ -29,6 +29,7 @@ use crate::{
 #[derive(Debug)]
 pub struct CircuitRegistry {
     next_id: AtomicU64,
+    max_entries: usize,
     inner: RwLock<CircuitRegistryInner>,
 }
 
@@ -85,18 +86,35 @@ pub enum CircuitAdmissionError {
     /// The relay reached the configured constant-rate neighbor cap.
     #[error("constant-rate neighbor cap {limit} reached")]
     ConstantRateNeighborCap { limit: u16 },
+    /// The relay reached the bounded circuit-registry entry corridor.
+    #[error("circuit registry capacity {limit} reached")]
+    CircuitCapacity { limit: usize },
+    /// The bounded registry could not reserve storage for another circuit.
+    #[error("circuit registry memory capacity is unavailable")]
+    MemoryCapacity,
 }
 
 impl Default for CircuitRegistry {
     fn default() -> Self {
         Self {
             next_id: AtomicU64::new(0),
+            max_entries: CONGESTION_MAX_ACTIVE_CIRCUITS_V1,
             inner: RwLock::new(CircuitRegistryInner::default()),
         }
     }
 }
 
 impl CircuitRegistry {
+    /// Creates a registry whose logical ceiling cannot exceed the protocol
+    /// first-release corridor.
+    pub(crate) fn with_max_entries(max_entries: usize) -> Self {
+        Self {
+            next_id: AtomicU64::new(0),
+            max_entries: max_entries.clamp(1, CONGESTION_MAX_ACTIVE_CIRCUITS_V1),
+            inner: RwLock::new(CircuitRegistryInner::default()),
+        }
+    }
+
     /// Registers a new circuit and returns its identifier.
     pub fn register(
         &self,
@@ -104,16 +122,32 @@ impl CircuitRegistry {
         negotiated: &NegotiatedCapabilities,
         constant_rate_neighbor_cap: Option<u16>,
     ) -> Result<RegisterCircuitOutcome, CircuitAdmissionError> {
+        let mut guard = self.inner.write().expect("circuit registry poisoned");
+        if guard.entries.len() >= self.max_entries {
+            return Err(CircuitAdmissionError::CircuitCapacity {
+                limit: self.max_entries,
+            });
+        }
+        let is_constant_rate = negotiated.constant_rate.is_some();
+        if let Some(cap) = constant_rate_neighbor_cap
+            .filter(|_| is_constant_rate)
+            .filter(|cap| guard.constant_rate_active >= u64::from(*cap))
+        {
+            return Err(CircuitAdmissionError::ConstantRateNeighborCap { limit: cap });
+        }
+        guard
+            .entries
+            .try_reserve(1)
+            .map_err(|_| CircuitAdmissionError::MemoryCapacity)?;
+        let mut signatures = Vec::new();
+        signatures
+            .try_reserve_exact(negotiated.signatures.len())
+            .map_err(|_| CircuitAdmissionError::MemoryCapacity)?;
+        signatures.extend(negotiated.signatures.iter().map(|sig| KemSignature {
+            id: sig.id,
+            required: sig.required,
+        }));
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let signatures = negotiated
-            .signatures
-            .iter()
-            .map(|sig| KemSignature {
-                id: sig.id,
-                required: sig.required,
-            })
-            .collect::<Vec<_>>();
-
         let state = CircuitState {
             remote,
             opened_at: Instant::now(),
@@ -122,14 +156,6 @@ impl CircuitRegistry {
             padding: negotiated.padding,
             constant_rate: negotiated.constant_rate,
         };
-        let is_constant_rate = state.constant_rate.is_some();
-        let mut guard = self.inner.write().expect("circuit registry poisoned");
-        if let Some(cap) = constant_rate_neighbor_cap
-            .filter(|_| is_constant_rate)
-            .filter(|cap| guard.constant_rate_active >= u64::from(*cap))
-        {
-            return Err(CircuitAdmissionError::ConstantRateNeighborCap { limit: cap });
-        }
         if is_constant_rate {
             guard.constant_rate_active = guard.constant_rate_active.saturating_add(1);
         }
@@ -416,6 +442,33 @@ mod tests {
             err,
             CircuitAdmissionError::ConstantRateNeighborCap { limit: 2 }
         );
+    }
+
+    #[test]
+    fn registry_rejects_before_exceeding_its_entry_corridor() {
+        let registry = CircuitRegistry::with_max_entries(2);
+        let negotiated = sample_negotiated();
+        for port in [4_433, 4_434] {
+            registry
+                .register(
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+                    &negotiated,
+                    None,
+                )
+                .expect("entry inside the exact corridor");
+        }
+        assert_eq!(registry.active_len(), 2);
+        assert_eq!(
+            registry
+                .register(
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4_435),
+                    &negotiated,
+                    None,
+                )
+                .expect_err("max + 1 must fail before insertion"),
+            CircuitAdmissionError::CircuitCapacity { limit: 2 }
+        );
+        assert_eq!(registry.active_len(), 2);
     }
 
     #[test]

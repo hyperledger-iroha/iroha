@@ -810,7 +810,10 @@ mod tests {
                 "Residual provenance: the caller still assembles the ciphertext-reference"
             )
         );
-        assert!(!production.contains("pub(in super::super)"));
+        assert!(!production.contains("pub(crate)") && !production.contains("pub fn "));
+        assert_eq!(production.matches("pub(in super::super)").count(), 6);
+        let sibling_structs = production.matches("pub(in super::super) struct ").count();
+        assert_eq!(sibling_structs, 2);
         for required in [
             "q_native_witness_polynomials_constructed: false",
             "q_native_fiat_shamir_relation_bound: false",
@@ -825,7 +828,7 @@ mod tests {
         }
 
         let constructor = production
-            .split("pub(super) fn new(")
+            .split("pub(in super::super) fn new(")
             .nth(1)
             .expect("stream constructor")
             .split(") -> Result<Self")
@@ -845,7 +848,7 @@ mod tests {
         }
 
         let absorb = production
-            .split("pub(super) fn absorb_next_opening_v1(")
+            .split("pub(in super::super) fn absorb_next_opening_v1(")
             .nth(1)
             .expect("stream absorb")
             .split('{')
@@ -862,7 +865,7 @@ mod tests {
         }
 
         let finish = production
-            .split("pub(super) fn finish_into_unverified_metadata_v1(")
+            .split("pub(in super::super) fn finish_into_unverified_metadata_v1(")
             .nth(1)
             .expect("stream finish")
             .split('{')
@@ -871,12 +874,11 @@ mod tests {
         assert!(finish.contains("self"));
         assert!(!finish.contains("&self"));
         assert!(finish.contains("Unverified"));
-        assert_eq!(production.matches("pub(super) fn ").count(), 3);
+        assert_eq!(production.matches("pub(in super::super) fn ").count(), 3);
 
-        assert!(
-            parent_source
-                .contains("pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());")
-        );
+        assert!(parent_source.contains(
+            "#[cfg(test)]\npub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());"
+        ));
         let permit_offset = parent_source
             .find("pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1")
             .expect("opaque opening-verifier permit");
@@ -899,6 +901,7 @@ mod tests {
         }
 
         assert!(!collective_source.contains("with_validated_proof_witness_v1"));
+        assert!(collective_source.contains("#[cfg(test)]\n    pub(super) fn verify_and_consume"));
         let unit_adapter = collective_source
             .split("pub(super) fn verify_and_consume_phase23_native_bgv_opening_v1(")
             .nth(1)
@@ -938,7 +941,9 @@ mod tests {
         assert!(!production.contains("verify_and_consume_phase23_native_bgv_opening_v1"));
 
         assert!(!parent_source.contains("VerifiedZkAmsPhase23NativeBgvOpeningV1"));
-        assert!(parent_source.contains("\nfn verify_zk_ams_phase23_native_bgv_opening_v1"));
+        assert!(
+            parent_source.contains("#[cfg(test)]\nfn verify_zk_ams_phase23_native_bgv_opening_v1")
+        );
         assert!(
             !parent_source.contains("pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1")
         );
@@ -964,13 +969,13 @@ mod tests {
             "#[cfg(test)]\npub(super) fn test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1"
         ));
         assert!(parent_source.contains(
-            "#[path = \"phase23_rns_link_q_relation_adapter.rs\"]\nmod q_relation_adapter;"
+            "#[cfg(test)]\n#[path = \"phase23_rns_link_q_relation_adapter.rs\"]\nmod q_relation_adapter;"
         ));
         assert!(parent_source.contains(
-            "pub(super) use q_relation_adapter::ZkAmsPhase23QNativeRelationAdapterSinkV1;"
+            "#[cfg(test)]\npub(super) use q_relation_adapter::ZkAmsPhase23QNativeRelationAdapterSinkV1;"
         ));
         assert!(parent_source.contains(
-            "#[path = \"phase23_rns_link_state_owned.rs\"]\nmod state_owned;\n#[cfg(test)]\npub(super) use state_owned::"
+            "#[cfg(test)]\n#[path = \"phase23_rns_link_state_owned.rs\"]\nmod state_owned;\n#[cfg(test)]\npub(super) use state_owned::"
         ));
         assert!(!parent_source.contains("pub(super) mod state_owned"));
         assert!(

@@ -78,7 +78,7 @@ mod model {
         /// Proof protocol namespace.
         pub kind: crate::sorafs::proof_ledger::ProofOutcomeKindV1,
         /// Protocol-scoped challenge or request identity.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub identity_digest: [u8; 32],
     }
 

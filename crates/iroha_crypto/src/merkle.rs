@@ -439,19 +439,30 @@ impl<T> JsonSerialize for MerkleTree<T> {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         let Ok((hash_scheme, leaves)) = self.serialized_view() else {
-            return json::write_raw_json_to(r#"{"hash_scheme":0,"leaves":[]}"#, out);
+            out.begin_container()?;
+            out.push_str("{\"hash_scheme\":0,\"leaves\":")?;
+            out.begin_container()?;
+            out.push_str("[]")?;
+            out.end_container();
+            out.push('}')?;
+            out.end_container();
+            return Ok(());
         };
         out.begin_container()?;
         out.push_str("{\"hash_scheme\":")?;
         hash_scheme.json_serialize_to(out)?;
-        out.push_str(",\"leaves\":[")?;
+        out.push_str(",\"leaves\":")?;
+        out.begin_container()?;
+        out.push('[')?;
         for (index, leaf) in leaves.enumerate() {
             if index != 0 {
                 out.push(',')?;
             }
             leaf.json_serialize_to(out)?;
         }
-        out.push_str("]}")?;
+        out.push(']')?;
+        out.end_container();
+        out.push('}')?;
         out.end_container();
         Ok(())
     }
@@ -3088,6 +3099,14 @@ mod tests {
     fn merkle_tree_json_carries_only_scheme_and_leaves() {
         let tree: MerkleTree<()> = test_hashes(3).into_iter().collect();
         let json = norito::json::to_json(&tree).expect("serialize leaf-only tree JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&tree, json.len()).expect("bounded tree JSON"),
+            json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&tree, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         assert!(json.contains("\"hash_scheme\":1"));
         assert!(json.contains("\"leaves\""));
         assert!(
@@ -3106,6 +3125,15 @@ mod tests {
             error
                 .to_string()
                 .contains("unsupported merkle tree hash scheme")
+        );
+
+        let invalid = raw_application_tree::<()>(vec![None]);
+        let fallback = norito::json::to_json(&invalid).expect("serialize invalid tree fallback");
+        assert_eq!(fallback, r#"{"hash_scheme":0,"leaves":[]}"#);
+        assert_eq!(
+            norito::json::to_json_bounded(&invalid, fallback.len())
+                .expect("bounded invalid tree fallback"),
+            fallback
         );
     }
 

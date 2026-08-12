@@ -37,7 +37,7 @@ pub struct ContentFileEntry {
     /// Length of the file payload in bytes.
     pub length: u64,
     /// Blake2b-256 hash of the file payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub file_hash: [u8; 32],
 }
 
@@ -101,7 +101,7 @@ pub struct ContentBundleManifest {
     /// Stable identifier of the tar archive (BLAKE2b-256).
     pub bundle_id: ContentBundleId,
     /// Deterministic hash of the file index (Norito encoding of [`ContentFileEntry`] list).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub index_hash: [u8; 32],
     /// Dataspace the bundle is scoped to.
     pub dataspace: DataSpaceId,
@@ -157,12 +157,12 @@ pub struct ContentBundleRecord {
     /// Ordered list of chunk hashes (BLAKE3-256).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::vec")
+        norito(json = "crate::json_helpers::fixed_bytes::vec")
     )]
     pub chunk_hashes: Vec<[u8; 32]>,
     /// Merkle-style root derived from the ordered chunk hashes.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub chunk_root: [u8; 32],
     /// Erasure layout used when chunking the tarball.
     #[norito(default)]
@@ -171,7 +171,7 @@ pub struct ContentBundleRecord {
     #[norito(default)]
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::base64_vec::option")
+        norito(json = "crate::json_helpers::base64_vec::option")
     )]
     pub pdp_commitment: Option<Vec<u8>>,
     /// File index entries (offsets relative to the tar archive start).
@@ -245,7 +245,7 @@ pub struct ContentDaReceipt {
     /// File path inside the bundle.
     pub path: String,
     /// Blake2b-256 hash of the served file payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub file_hash: [u8; 32],
     /// Bytes returned to the caller (range-aware).
     pub served_bytes: u64,
@@ -260,7 +260,7 @@ pub struct ContentDaReceipt {
     #[norito(default)]
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::base64_vec::option")
+        norito(json = "crate::json_helpers::base64_vec::option")
     )]
     pub pdp_commitment: Option<Vec<u8>>,
     /// Unix timestamp when the receipt was produced.

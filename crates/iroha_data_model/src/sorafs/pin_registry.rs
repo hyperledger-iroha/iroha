@@ -276,7 +276,7 @@ fn validate_manifest_root_cid_bytes(
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ManifestDigest(
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );
 
 impl ManifestDigest {
@@ -403,7 +403,7 @@ pub struct ManifestAliasBinding {
     /// Alias namespace (e.g., `sora`).
     pub namespace: String,
     /// Alias proof payload encoded as Norito.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Vec<u8>,
 }
 
@@ -594,10 +594,10 @@ pub struct PinManifestRecord {
     /// Chunker profile handle used to produce the CAR commitment.
     pub chunker: ChunkerProfileHandle,
     /// SHA3-256 digest of the ordered chunk metadata emitted during build.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub chunk_digest_sha3_256: [u8; 32],
     /// Merkle root of the canonical Proof-of-Retrievability tree.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub por_root: [u8; 32],
     /// Total payload length covered by the manifest.
     pub content_length: u64,
@@ -622,7 +622,7 @@ pub struct PinManifestRecord {
     /// Optional digest of the `manifest_signatures.json` envelope attached during approval.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub council_envelope_digest: Option<[u8; 32]>,
     /// Public pin fee payment metadata, present only after on-chain fee collection.
@@ -640,7 +640,7 @@ pub struct PinManifestFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same immutable state view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -860,7 +860,7 @@ impl ManifestAliasRecord {
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReplicationOrderId(
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );
 
 impl ReplicationOrderId {
@@ -882,21 +882,21 @@ impl ReplicationOrderId {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ProviderIngestCompletionSignerPolicyV1 {
     /// Stable governance identity for this provider-owner signing policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_id: [u8; 32],
     /// Monotonic policy revision beginning at one.
     pub revision: u64,
     /// Digest of the preceding tuple's governed leaf policy, absent only at revision one.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_digest: Option<[u8; 32]>,
     /// Digest of the exact governed signer, key, and validity leaf policy.
     ///
     /// The canonical chain identity is the complete tuple of policy id, revision,
     /// predecessor digest, and this leaf-policy digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
 }
 
@@ -972,7 +972,7 @@ pub struct ProviderIngestFinalizedAnchorV1 {
     /// One-based committed block height.
     pub height: u64,
     /// Exact committed block hash at `height`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -1058,7 +1058,7 @@ pub struct ReplicationOrderRecord {
     /// Deadline epoch for completing ingestion.
     pub deadline_epoch: u64,
     /// Canonical Norito payload describing the replication order.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_order: Vec<u8>,
     /// Monotonic revision of the canonical provider assignment set.
     pub assignment_revision: u64,

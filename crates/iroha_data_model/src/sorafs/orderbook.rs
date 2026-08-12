@@ -132,11 +132,11 @@ pub struct OrderbookAdmissionPolicyV1 {
     /// Digest of the immediately preceding policy, absent only for revision one.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Non-zero governance market identifier, immutable after first activation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub market_id: [u8; 32],
     /// Exact account authorized to execute bounded matching and maintenance.
     ///
@@ -246,11 +246,23 @@ impl OrderbookAdmissionPolicyV1 {
     ///
     /// Returns a Norito encoding error if canonical serialization fails.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1);
-        hasher.update(&encoded);
+        norito::core::write_canonical_to_writer(self, &mut Blake3Writer(&mut hasher))?;
         Ok(*hasher.finalize().as_bytes())
+    }
+}
+
+struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+
+impl std::io::Write for Blake3Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -336,7 +348,7 @@ pub struct OrderbookAdmissionPolicyRecord {
     /// Policy body.
     pub policy: OrderbookAdmissionPolicyV1,
     /// Canonical digest of `policy`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Block timestamp at which the policy was activated.
     pub activated_at_unix: u64,
@@ -392,15 +404,15 @@ pub struct OrderbookBidEscrowBindingV1 {
 )]
 pub struct OrderbookOrderRecord {
     /// Canonical order identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub order_id: [u8; 32],
     /// Canonical owner account.
     pub owner: AccountId,
     /// Exact canonical `sorafs_manifest::orderbook::OrderRequestV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_order: Vec<u8>,
     /// Policy digest against which the order was admitted.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub admitted_policy_digest: [u8; 32],
     /// Block timestamp assigned at admission.
     pub admitted_at_unix: u64,
@@ -419,7 +431,7 @@ pub struct OrderbookOrderRecord {
     /// Exact canonical cancellation payload, present only after cancellation.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::base64_vec::option")
+        norito(json = "crate::json_helpers::base64_vec::option")
     )]
     pub canonical_cancel: Option<Vec<u8>>,
     /// Block timestamp assigned when cancellation was committed.
@@ -427,7 +439,7 @@ pub struct OrderbookOrderRecord {
     /// Active policy digest against which cancellation was admitted.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub cancelled_policy_digest: Option<[u8; 32]>,
 }
@@ -440,17 +452,17 @@ pub struct OrderbookOrderRecord {
 )]
 pub struct OrderbookCancellationRecord {
     /// Cancelled order identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub order_id: [u8; 32],
     /// Canonical owner of the cancelled order.
     pub owner: AccountId,
     /// Exact canonical signed cancellation payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_cancel: Vec<u8>,
     /// Block timestamp assigned to cancellation admission.
     pub cancelled_at_unix: u64,
     /// Policy digest active at cancellation admission.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub cancelled_policy_digest: [u8; 32],
 }
 
@@ -475,19 +487,19 @@ pub struct OrderbookOwnerNonceRecord {
 )]
 pub struct OrderbookSettlementReceiptRecord {
     /// Canonical receipt identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub receipt_id: [u8; 32],
     /// Settlement channel identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub channel_id: [u8; 32],
     /// Trade identifier carried by the receipt.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trade_id: [u8; 32],
     /// Exact canonical `sorafs_manifest::orderbook::SettlementReceiptV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_receipt: Vec<u8>,
     /// Active policy digest against which the receipt was admitted.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub admitted_policy_digest: [u8; 32],
     /// Block timestamp assigned at admission.
     pub admitted_at_unix: u64,
@@ -506,21 +518,21 @@ pub struct OrderbookSettlementReceiptRecord {
 )]
 pub struct OrderbookTradeRecord {
     /// Canonical trade identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trade_id: [u8; 32],
     /// Maker order identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub maker_order_id: [u8; 32],
     /// Taker order identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub taker_order_id: [u8; 32],
     /// Deterministic sequence in the authoritative trade log.
     pub trade_sequence: u64,
     /// Exact canonical `sorafs_manifest::orderbook::TradeEventV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_trade: Vec<u8>,
     /// Settlement channel derived from this trade.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub channel_id: [u8; 32],
     /// Book revision committed by the matching transition.
     pub book_revision: u64,
@@ -555,10 +567,10 @@ pub enum OrderbookSettlementChannelStatusV1 {
 )]
 pub struct OrderbookSettlementChannelRecord {
     /// Settlement channel identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub channel_id: [u8; 32],
     /// Trade funded by this channel.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trade_id: [u8; 32],
     /// Buyer whose admitted bid funded custody.
     pub buyer: AccountId,
@@ -598,7 +610,7 @@ pub struct OrderbookSettlementChannelRecord {
 )]
 pub struct OrderbookSettlementRangeRecord {
     /// Receipt identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub receipt_id: [u8; 32],
     /// Inclusive byte-range start.
     pub start: u64,
@@ -616,10 +628,10 @@ pub struct OrderbookSettlementRangeRecord {
 )]
 pub struct OrderbookSettlementIndexRecord {
     /// Settlement channel identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub channel_id: [u8; 32],
     /// Trade identifier shared by every indexed receipt.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trade_id: [u8; 32],
     /// Non-overlapping ranges sorted by `(start, end, receipt_id)`.
     pub ranges: Vec<OrderbookSettlementRangeRecord>,
@@ -679,7 +691,7 @@ pub struct OrderbookFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same state view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -699,7 +711,7 @@ pub struct OrderbookOrderPageV1 {
     /// Exclusive cursor for the next page, present only when `has_more` is true.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub next_after_order_id: Option<[u8; 32]>,
 }
@@ -720,7 +732,7 @@ pub struct OrderbookSettlementReceiptPageV1 {
     /// Exclusive cursor for the next page, present only when `has_more` is true.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub next_after_receipt_id: Option<[u8; 32]>,
 }
@@ -741,7 +753,7 @@ pub struct OrderbookTradePageV1 {
     /// Exclusive cursor for the next page, present only when `has_more` is true.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub next_after_trade_id: Option<[u8; 32]>,
 }
@@ -762,7 +774,7 @@ pub struct OrderbookSettlementChannelPageV1 {
     /// Exclusive cursor for the next page, present only when `has_more` is true.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub next_after_channel_id: Option<[u8; 32]>,
 }
@@ -779,7 +791,7 @@ pub struct OrderbookFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Finalized block hash resolved only after the block commits.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Orderbook-event index within the committing block.
     pub event_index: u32,
@@ -797,7 +809,7 @@ pub struct OrderbookFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash resolved from finalized state.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Orderbook-event index within the committing block.
     pub event_index: u32,
@@ -907,6 +919,11 @@ mod tests {
         let policy = policy();
         policy.validate().expect("valid policy");
         let first = policy.digest().expect("digest policy");
+        let canonical = norito::encode_canonical(&policy).expect("historical policy bytes");
+        let mut historical = blake3::Hasher::new();
+        historical.update(ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1);
+        historical.update(&canonical);
+        assert_eq!(first, *historical.finalize().as_bytes());
         assert_eq!(first, policy.digest().expect("repeat digest"));
         assert_canonical_norito_round_trip(&policy);
 

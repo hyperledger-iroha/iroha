@@ -32,7 +32,7 @@ pub enum PrivacyActivationStatementLimitsError {
 )]
 pub struct PrivacyProofBytesV1 {
     /// Exact native proof encoding.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub bytes: Vec<u8>,
 }
 

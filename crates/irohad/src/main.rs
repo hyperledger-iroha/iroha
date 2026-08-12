@@ -632,9 +632,7 @@ mod handshake_payload_tests {
             Some(1),
             Some([2; 32]),
         );
-
         let handshake = confidential_handshake_policy_digest(digest);
-
         assert_eq!(handshake.vk_set_hash, None);
         assert_eq!(handshake.poseidon_params_id, None);
         assert_eq!(handshake.pedersen_params_id, None);
@@ -5080,8 +5078,8 @@ mod network_relay_tests {
             },
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
+            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -6172,9 +6170,10 @@ mod network_relay_tests {
     }
 
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::prehashed([0x41; 32]),
+            deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
@@ -10664,6 +10663,7 @@ impl Iroha {
         ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
+        include!("main/online_peers_provider.rs");
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             NetworkId::from_genesis_hash(config.genesis.expected_hash),
@@ -10675,7 +10675,7 @@ impl Iroha {
             kura.clone(),
             state.clone(),
             receipt_signer,
-            include!("main/online_peers_provider.rs"),
+            online_peers_provider,
             Some(sumeragi.clone()),
             runtime_deps,
         );
@@ -14238,8 +14238,7 @@ fn run_main(
 
     // Ensure the instruction registry is initialized **before** we attempt to
     // read and decode the genesis block. Without this call, decoding the
-    // embedded `InstructionBox` values would panic with "instruction registry
-    // is not initialized".
+    // embedded `InstructionBox` values would panic with "instruction registry is not initialized".
     init_genesis_instruction_registry();
     init_query_registry();
 
@@ -17448,8 +17447,8 @@ mod tests {
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
+            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
@@ -17463,9 +17462,10 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request =
-                iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV5 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+                iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V6,
                     request_id: Hash::new(b"torii-proxy-request"),
+                    deadline_unix_ms: 1_900_000_000_000,
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: Vec::new(),

@@ -7,8 +7,6 @@
 //! - Map to an internal validated form; mapping to typed predicates is left for
 //!   endpoint-specific adapters.
 
-use std::collections::BTreeSet;
-
 use norito::{
     Error as NoritoError,
     codec::{Decode, Encode},
@@ -250,6 +248,26 @@ fn parse_filter_expr(
     filter_expr_from_value(val)
 }
 
+fn admitted_filter_vec<T>(capacity: usize) -> Result<Vec<T>, norito::json::Error> {
+    let requested = capacity
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or(norito::json::Error::DecodeResourceLimit)?;
+    norito::core::reserve_decode_allocation(requested)
+        .map_err(norito::json::Error::from_decode_resource)?;
+    if requested == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<T>(capacity)
+        .map_err(|_| norito::json::Error::AllocationFailed)?;
+    // SAFETY: the complete exact layout was admitted before allocation. Null
+    // is rejected before ownership, and the returned vector starts empty so
+    // only later successful pushes create initialized elements for `Drop`.
+    let allocation = unsafe { std::alloc::alloc(layout) };
+    let allocation = core::ptr::NonNull::new(allocation)
+        .ok_or(norito::json::Error::AllocationFailed)?;
+    Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr().cast::<T>(), 0, capacity) })
+}
+
 fn parse_filter_expr_option(
     parser: &mut norito::json::Parser<'_>,
 ) -> Result<Option<FilterExpr>, norito::json::Error> {
@@ -336,7 +354,7 @@ fn filter_expr_from_value_inner(
                         if values.len() > FILTER_EXPR_MAX_NODES.saturating_sub(budget.nodes) {
                             return Err(filter_expr_error("filter expression exceeds node limit"));
                         }
-                        let mut out = Vec::with_capacity(values.len());
+                        let mut out = admitted_filter_vec(values.len())?;
                         for value in values {
                             out.push(filter_expr_from_value_inner(value, depth + 1, budget)?);
                         }
@@ -349,7 +367,7 @@ fn filter_expr_from_value_inner(
                         if values.len() > FILTER_EXPR_MAX_NODES.saturating_sub(budget.nodes) {
                             return Err(filter_expr_error("filter expression exceeds node limit"));
                         }
-                        let mut out = Vec::with_capacity(values.len());
+                        let mut out = admitted_filter_vec(values.len())?;
                         for value in values {
                             out.push(filter_expr_from_value_inner(value, depth + 1, budget)?);
                         }
@@ -361,6 +379,8 @@ fn filter_expr_from_value_inner(
                     Value::Array(mut values) if values.len() == 1 => {
                         let inner =
                             filter_expr_from_value_inner(values.remove(0), depth + 1, budget)?;
+                        norito::core::reserve_decode_box_allocation::<FilterExpr>()
+                            .map_err(norito::json::Error::from_decode_resource)?;
                         Ok(FilterExpr::Not(Box::new(inner)))
                     }
                     _ => Err(filter_expr_error(
@@ -470,16 +490,10 @@ fn parse_membership_args(args: Value) -> Result<(FieldPath, Vec<Value>), norito:
 }
 
 fn membership_values_are_unique(values: &[Value]) -> bool {
-    let mut seen = BTreeSet::new();
-    for value in values {
-        let Ok(canonical) = json::to_json(value) else {
-            return false;
-        };
-        if !seen.insert(canonical) {
-            return false;
-        }
-    }
-    true
+    values
+        .iter()
+        .enumerate()
+        .all(|(index, value)| !values[index + 1..].contains(value))
 }
 
 fn filter_expr_error(msg: &'static str) -> norito::json::Error {
@@ -759,6 +773,38 @@ mod tests {
             Value::Array(vec![Value::String("timestamp_ms".into()), oversized]),
         );
         assert!(json::from_value::<FilterExpr>(Value::Object(membership)).is_err());
+    }
+
+    #[test]
+    fn filter_expr_destination_is_charged_before_exact_allocation() {
+        const ENTRIES: usize = 17;
+        let bytes = ENTRIES * core::mem::size_of::<u64>();
+        let limits = |allocated| {
+            norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                allocated,
+                usize::MAX,
+            )
+        };
+        let (values, usage) =
+            norito::core::with_decode_limits_measured(limits(bytes), || {
+                admitted_filter_vec::<u64>(ENTRIES)
+            });
+        let values = values.expect("exact filter destination budget");
+        assert_eq!(values.capacity(), ENTRIES);
+        assert_eq!(usage.total_allocated_bytes(), bytes);
+
+        let (rejected, usage) =
+            norito::core::with_decode_limits_measured(limits(bytes - 1), || {
+                admitted_filter_vec::<u64>(ENTRIES)
+            });
+        assert!(matches!(
+            rejected,
+            Err(norito::json::Error::DecodeResourceLimit)
+        ));
+        assert_eq!(usage.total_allocated_bytes(), 0);
     }
 
     #[test]

@@ -477,6 +477,7 @@ mod tests {
         let path = spool_vpn_settlement_artifact(spool_dir.path(), &artifact)
             .expect("spool settlement artifact");
         let encoded = std::fs::read(&path).expect("read settlement artifact");
+        assert!(encoded.len() <= VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1);
         let record: VpnSettlementSpoolRecord =
             norito::json::from_slice(&encoded).expect("settlement artifact json");
         assert_eq!(record.version, 1);
@@ -1341,6 +1342,47 @@ mod tests {
     }
 
     #[test]
+    fn relay_tls_file_loaders_enforce_first_release_bounds() {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let directory = tempdir().expect("temporary directory");
+        let certificate_path = directory.path().join("relay-chain.pem");
+        let private_key_path = directory.path().join("relay-key.pem");
+
+        let certificate_pem = format!("{}\n", cert.pem());
+        std::fs::write(
+            &certificate_path,
+            certificate_pem.repeat(TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1),
+        )
+        .expect("write exact certificate chain");
+        let certificates = RelayRuntime::load_certificates(&certificate_path)
+            .expect("exact certificate chain must load");
+        assert_eq!(certificates.len(), TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1);
+
+        std::fs::write(
+            &certificate_path,
+            certificate_pem.repeat(TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1 + 1),
+        )
+        .expect("write oversized certificate chain");
+        let error = RelayRuntime::load_certificates(&certificate_path)
+            .expect_err("max+1 certificates must fail");
+        assert!(error.to_string().contains("certificate limit"), "{error}");
+
+        std::fs::write(&private_key_path, signing_key.serialize_pem()).expect("write private key");
+        RelayRuntime::load_private_key(&private_key_path).expect("valid private key must load");
+
+        std::fs::write(
+            &private_key_path,
+            vec![0_u8; TLS_PRIVATE_KEY_MAX_BYTES_V1 + 1],
+        )
+        .expect("write oversized private key");
+        let error = RelayRuntime::load_private_key(&private_key_path)
+            .expect_err("max+1 private key must fail before parse");
+        assert!(error.to_string().contains("first-release limit"), "{error}");
+    }
+
+    #[test]
     fn vpn_helper_binding_commits_to_authenticated_transport_trust() {
         let relay_id = [0x11; 32];
         let descriptor_commit = [0x22; 32];
@@ -2012,7 +2054,8 @@ mod tests {
             measurement_ids: vec![[0x99; 32]],
         };
 
-        let metrics = render_incentive_prometheus(TEST_RELAY_ID, &[summary], RelayMode::Entry);
+        let metrics = render_incentive_prometheus(TEST_RELAY_ID, &[summary], RelayMode::Entry)
+            .expect("bounded incentive metrics");
         let relay_hex = hex::encode(TEST_RELAY_ID);
         assert!(
             metrics.contains(&format!("relay=\"{relay_hex}\"")),
@@ -2022,6 +2065,24 @@ mod tests {
             metrics.contains("soranet_relay_bandwidth_verified_bytes_total"),
             "bandwidth metric missing: {metrics}"
         );
+    }
+
+    #[test]
+    fn incentive_metrics_reject_epoch_count_max_plus_one() {
+        let summary = EpochSummary {
+            epoch: 3,
+            uptime_seconds: u64::MAX,
+            scheduled_uptime_seconds: u64::MAX,
+            verified_bandwidth_bytes: u128::MAX,
+            confidence_floor_per_mille: 1_000,
+            measurement_ids: Vec::new(),
+        };
+        let exact = vec![summary.clone(); INCENTIVE_MAX_ACTIVE_EPOCHS_V1];
+        render_incentive_prometheus(TEST_RELAY_ID, &exact, RelayMode::Entry)
+            .expect("exact epoch corridor");
+
+        let overflow = vec![summary; INCENTIVE_MAX_ACTIVE_EPOCHS_V1 + 1];
+        assert!(render_incentive_prometheus(TEST_RELAY_ID, &overflow, RelayMode::Entry).is_err());
     }
 
     #[test]

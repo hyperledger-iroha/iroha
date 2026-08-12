@@ -1,11 +1,11 @@
-/// Generates Norito-encoded fixtures for Kotlin SDK parity tests.
-///
-/// Each subcommand outputs the wire payload hex on the first line,
-/// followed by input parameters the Kotlin encoder needs.
-///
-/// When the Rust data model changes, this binary produces different
-/// bytes, causing the Kotlin parity tests to fail until the
-/// corresponding encoder is updated.
+//! Generates Norito-encoded fixtures for Kotlin SDK parity tests.
+//!
+//! Each subcommand outputs the wire payload hex on the first line,
+//! followed by input parameters the Kotlin encoder needs.
+//!
+//! When the Rust data model changes, this binary produces different
+//! bytes, causing the Kotlin parity tests to fail until the
+//! corresponding encoder is updated.
 use std::env;
 
 use iroha_crypto::{Hash, PublicKey, default_bfv_programmed_hidden_program, sha256};

@@ -20,7 +20,7 @@ isi! {
     /// Settle a `SoraNet` VPN lease with a relay receipt and client voucher.
     pub struct SettleVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub lease_id: [u8; 32],
         /// Relay receipt describing final session counters.
         pub relay_receipt: crate::soranet::vpn::VpnSessionReceiptV1,
@@ -49,7 +49,7 @@ isi! {
     /// Refund an expired `SoraNet` VPN lease after the relay settlement grace window.
     pub struct RefundExpiredVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub lease_id: [u8; 32],
     }
 }

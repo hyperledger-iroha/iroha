@@ -1249,82 +1249,48 @@ pub mod error {
     }
 
     #[cfg(feature = "json")]
+    impl BlockRejectionReason {
+        fn json_label(self) -> &'static str {
+            match self {
+                Self::ConsensusBlockRejection => "ConsensusBlockRejection",
+                Self::ContainsCommittedTransactions => "ContainsCommittedTransactions",
+                Self::EmptyBlock => "EmptyBlock",
+                Self::PrevBlockHashMismatch => "PrevBlockHashMismatch",
+                Self::PrevBlockHeightMismatch => "PrevBlockHeightMismatch",
+                Self::MerkleRootMismatch => "MerkleRootMismatch",
+                Self::TransactionValidationFailed => "TransactionValidationFailed",
+                Self::TopologyMismatch => "TopologyMismatch",
+                Self::InsufficientBlockSignatures => "InsufficientBlockSignatures",
+                Self::UnknownBlockSignatory => "UnknownBlockSignatory",
+                Self::InactiveConsensusKey => "InactiveConsensusKey",
+                Self::InvalidBlockSignature => "InvalidBlockSignature",
+                Self::ProxyTailSignatureMissing => "ProxyTailSignatureMissing",
+                Self::LeaderSignatureMissing => "LeaderSignatureMissing",
+                Self::OtherSignatureError => "OtherSignatureError",
+                Self::InvalidGenesis => "InvalidGenesis",
+                Self::BlockInThePast => "BlockInThePast",
+                Self::BlockInTheFuture => "BlockInTheFuture",
+                Self::TransactionInTheFuture => "TransactionInTheFuture",
+                Self::ConfidentialFeatureDigestMismatch => "ConfidentialFeatureDigestMismatch",
+                Self::DaProofPolicyMismatch => "DaProofPolicyMismatch",
+                Self::DaShardCursorViolation => "DaShardCursorViolation",
+                Self::NposEffectsMismatch => "NposEffectsMismatch",
+                Self::SccpCommitmentRootMismatch => "SccpCommitmentRootMismatch",
+            }
+        }
+    }
+
+    #[cfg(feature = "json")]
     impl norito::json::FastJsonWrite for BlockRejectionReason {
         fn write_json(&self, out: &mut String) {
-            match self {
-                BlockRejectionReason::ConsensusBlockRejection => {
-                    norito::json::write_json_string("ConsensusBlockRejection", out);
-                }
-                BlockRejectionReason::ContainsCommittedTransactions => {
-                    norito::json::write_json_string("ContainsCommittedTransactions", out);
-                }
-                BlockRejectionReason::EmptyBlock => {
-                    norito::json::write_json_string("EmptyBlock", out);
-                }
-                BlockRejectionReason::PrevBlockHashMismatch => {
-                    norito::json::write_json_string("PrevBlockHashMismatch", out);
-                }
-                BlockRejectionReason::PrevBlockHeightMismatch => {
-                    norito::json::write_json_string("PrevBlockHeightMismatch", out);
-                }
-                BlockRejectionReason::MerkleRootMismatch => {
-                    norito::json::write_json_string("MerkleRootMismatch", out);
-                }
-                BlockRejectionReason::TransactionValidationFailed => {
-                    norito::json::write_json_string("TransactionValidationFailed", out);
-                }
-                BlockRejectionReason::TopologyMismatch => {
-                    norito::json::write_json_string("TopologyMismatch", out);
-                }
-                BlockRejectionReason::InsufficientBlockSignatures => {
-                    norito::json::write_json_string("InsufficientBlockSignatures", out);
-                }
-                BlockRejectionReason::UnknownBlockSignatory => {
-                    norito::json::write_json_string("UnknownBlockSignatory", out);
-                }
-                BlockRejectionReason::InactiveConsensusKey => {
-                    norito::json::write_json_string("InactiveConsensusKey", out);
-                }
-                BlockRejectionReason::InvalidBlockSignature => {
-                    norito::json::write_json_string("InvalidBlockSignature", out);
-                }
-                BlockRejectionReason::ProxyTailSignatureMissing => {
-                    norito::json::write_json_string("ProxyTailSignatureMissing", out);
-                }
-                BlockRejectionReason::LeaderSignatureMissing => {
-                    norito::json::write_json_string("LeaderSignatureMissing", out);
-                }
-                BlockRejectionReason::OtherSignatureError => {
-                    norito::json::write_json_string("OtherSignatureError", out);
-                }
-                BlockRejectionReason::InvalidGenesis => {
-                    norito::json::write_json_string("InvalidGenesis", out);
-                }
-                BlockRejectionReason::BlockInThePast => {
-                    norito::json::write_json_string("BlockInThePast", out);
-                }
-                BlockRejectionReason::BlockInTheFuture => {
-                    norito::json::write_json_string("BlockInTheFuture", out);
-                }
-                BlockRejectionReason::TransactionInTheFuture => {
-                    norito::json::write_json_string("TransactionInTheFuture", out);
-                }
-                BlockRejectionReason::ConfidentialFeatureDigestMismatch => {
-                    norito::json::write_json_string("ConfidentialFeatureDigestMismatch", out);
-                }
-                BlockRejectionReason::DaProofPolicyMismatch => {
-                    norito::json::write_json_string("DaProofPolicyMismatch", out);
-                }
-                BlockRejectionReason::DaShardCursorViolation => {
-                    norito::json::write_json_string("DaShardCursorViolation", out);
-                }
-                BlockRejectionReason::NposEffectsMismatch => {
-                    norito::json::write_json_string("NposEffectsMismatch", out);
-                }
-                BlockRejectionReason::SccpCommitmentRootMismatch => {
-                    norito::json::write_json_string("SccpCommitmentRootMismatch", out);
-                }
-            }
+            norito::json::write_json_string(self.json_label(), out);
+        }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            norito::json::write_json_string_to(self.json_label(), out)
         }
     }
 
@@ -1711,15 +1677,9 @@ pub fn decode_versioned_signed_block(
     if bytes.is_empty() {
         return Err(VersionError::NotVersioned);
     }
-
-    let deframed = deframe_versioned_signed_block_bytes(bytes)
+    let (version, framed_payload) = borrow_framed_signed_block_payload(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
-
-    decode_framed_versioned_signed_block_inner(
-        deframed.bytes.as_ref(),
-        deframed.bare_versioned.as_ref(),
-        bytes,
-    )
+    decode_framed_versioned_signed_block_inner(version, framed_payload, bytes)
 }
 
 /// Decode a Norito-framed [`SignedBlock`] payload, validating the header before
@@ -1738,15 +1698,17 @@ pub fn decode_framed_signed_block(
     if bytes.len() <= 1 {
         return Err(VersionError::NotVersioned);
     }
-
-    let deframed = deframe_versioned_signed_block_bytes(bytes)
+    let (version, framed_payload) = borrow_framed_signed_block_payload(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
+    decode_framed_versioned_signed_block_inner(version, framed_payload, bytes)
+}
 
-    decode_framed_versioned_signed_block_inner(
-        deframed.bytes.as_ref(),
-        deframed.bare_versioned.as_ref(),
-        bytes,
-    )
+fn borrow_framed_signed_block_payload(bytes: &[u8]) -> Result<(u8, &[u8]), NoritoFrameError> {
+    let (&version, framed_payload) = bytes
+        .split_first()
+        .ok_or(NoritoFrameError::LengthMismatch)?;
+    validate_signed_block_header(framed_payload)?;
+    Ok((version, framed_payload))
 }
 
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
@@ -1762,15 +1724,11 @@ fn decode_versioned_signed_block_inner(
 }
 
 fn decode_framed_versioned_signed_block_inner(
-    framed_versioned: &[u8],
-    bare_versioned: &[u8],
+    version: u8,
+    framed_payload: &[u8],
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
     use iroha_version::{RawVersioned, UnsupportedVersion, error::Error as VersionError};
-
-    let Some((&version, _payload)) = bare_versioned.split_first() else {
-        return Err(VersionError::NotVersioned);
-    };
 
     if !SignedBlock::supported_versions().contains(&version) {
         return Err(VersionError::UnsupportedVersion(Box::new(
@@ -1778,9 +1736,6 @@ fn decode_framed_versioned_signed_block_inner(
         )));
     }
 
-    let framed_payload = framed_versioned
-        .get(1..)
-        .ok_or(VersionError::NotVersioned)?;
     let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
     view.decode::<SignedBlock>().map_err(VersionError::from)
 }
@@ -1848,6 +1803,22 @@ mod tests {
         ))
     }
 
+    #[cfg(feature = "json")]
+    #[test]
+    fn block_rejection_reason_json_has_closed_output_bound() {
+        let reason = error::BlockRejectionReason::SccpCommitmentRootMismatch;
+        let expected = norito::json::to_json(&reason).expect("serialize block rejection JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&reason, expected.len())
+                .expect("serialize block rejection at exact JSON bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&reason, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
     fn test_pin_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
         let key_pair = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519)
             .expect("valid deterministic block pin-intent key");
@@ -1864,11 +1835,8 @@ mod tests {
         };
         authorization.signatures.push(DaIngestSignatureV1 {
             signer: key_pair.public_key().clone(),
-            signature: Signature::try_new(
-                key_pair.private_key(),
-                &authorization.signing_digest(),
-            )
-            .expect("sign deterministic block pin-intent authorization"),
+            signature: Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
+                .expect("sign deterministic block pin-intent authorization"),
         });
         authorization
     }
@@ -2166,6 +2134,7 @@ mod tests {
         assert_eq!(explicit_iter.len(), 1);
         assert_eq!(explicit_iter.next_back(), Some(entrypoint.clone()));
         assert_eq!(explicit_iter.len(), 0);
+        drop(explicit_iter);
         let (entrypoint_hash, borrowed_tx) = block
             .external_signed_transaction_at(0)
             .expect("explicit signed entrypoint must be directly addressable");
@@ -2949,6 +2918,21 @@ mod tests {
         let decoded_versioned =
             SignedBlock::decode_all_versioned(versioned.as_ref()).expect("decode versioned block");
         assert_eq!(decoded_versioned, block);
+    }
+
+    #[test]
+    fn framed_decode_borrows_payload_from_original_wire() {
+        let wire_version = SignedBlock::supported_versions().start;
+        let mut framed = vec![wire_version];
+        let _ = norito::codec::take_last_encode_flags();
+        write_signed_block_header(&[], &mut framed).expect("write empty canonical frame header");
+
+        let (version, payload) = borrow_framed_signed_block_payload(&framed)
+            .expect("canonical frame header must be borrowable");
+
+        assert_eq!(version, wire_version);
+        assert_eq!(payload.as_ptr(), framed[1..].as_ptr());
+        assert_eq!(payload.len(), framed.len() - 1);
     }
 
     #[test]

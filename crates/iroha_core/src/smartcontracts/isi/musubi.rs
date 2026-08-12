@@ -22,7 +22,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-use norito::codec::Encode;
 
 use super::prelude::*;
 use crate::{

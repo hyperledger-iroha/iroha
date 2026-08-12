@@ -709,6 +709,11 @@ mod unix {
     }
 
     pub fn write_private_file_atomic(path: &Path, raw: &[u8]) -> Result<()> {
+        if raw.is_empty() || raw.len() > MAX_PRIVATE_FILE_BYTES as usize {
+            return Err(eyre!(
+                "private file payload must be within 1..={MAX_PRIVATE_FILE_BYTES} bytes"
+            ));
+        }
         let parent = path
             .parent()
             .ok_or_else(|| eyre!("private output path has no parent"))?;
@@ -791,8 +796,21 @@ mod unix {
                 path.display()
             ));
         }
-        let mut raw = Vec::with_capacity(usize::try_from(before.size()).unwrap_or(0));
-        file.read_to_end(&mut raw).wrap_err("read private file")?;
+        let expected_len = usize::try_from(before.size())
+            .map_err(|_| eyre!("private file length cannot be represented on this platform"))?;
+        let mut raw = Vec::new();
+        raw.try_reserve_exact(expected_len)
+            .wrap_err("reserve private file buffer")?;
+        (&mut file)
+            .take(MAX_PRIVATE_FILE_BYTES + 1)
+            .read_to_end(&mut raw)
+            .wrap_err("read private file")?;
+        if raw.len() > MAX_PRIVATE_FILE_BYTES as usize {
+            raw.zeroize();
+            return Err(eyre!(
+                "private file grew beyond the {MAX_PRIVATE_FILE_BYTES}-byte limit while being read"
+            ));
+        }
         let after = file.metadata().wrap_err("reinspect private file")?;
         if !same_file(&before, &after) || raw.len() as u64 != before.size() {
             raw.zeroize();
@@ -823,6 +841,33 @@ mod unix {
             set_mode(guard.path(), PRIVATE_DIRECTORY_MODE);
             let root = fs::canonicalize(guard.path()).expect("canonicalize private root");
             (guard, root)
+        }
+
+        #[test]
+        fn private_file_roundtrip_accepts_exact_size_limit() {
+            let (_root_guard, root) = private_root();
+            let path = root.join("exact-limit.secret");
+            let raw = vec![0xA5; MAX_PRIVATE_FILE_BYTES as usize];
+
+            write_private_file_atomic(&path, &raw).expect("write exact-limit private file");
+            let read = read_private_file(&path).expect("read exact-limit private file");
+
+            assert_eq!(read.len(), MAX_PRIVATE_FILE_BYTES as usize);
+            assert_eq!(read.first(), Some(&0xA5));
+            assert_eq!(read.last(), Some(&0xA5));
+        }
+
+        #[test]
+        fn private_file_writer_rejects_size_limit_plus_one_before_creation() {
+            let (_root_guard, root) = private_root();
+            let path = root.join("oversized.secret");
+            let raw = vec![0xA5; MAX_PRIVATE_FILE_BYTES as usize + 1];
+
+            let error = write_private_file_atomic(&path, &raw)
+                .expect_err("limit plus one must be rejected");
+
+            assert!(error.to_string().contains("within 1..=1048576 bytes"));
+            assert!(!path.exists(), "rejection must happen before publication");
         }
 
         #[test]

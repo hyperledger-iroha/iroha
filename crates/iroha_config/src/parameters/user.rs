@@ -54,6 +54,8 @@ use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 use thiserror::Error;
 
+mod app_routed_read_config;
+
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -908,7 +910,6 @@ mod chain_id_config_tests {
         let valid = ChainIdInConfig::from_env_str(Cow::Borrowed("iroha.mainnet:v1-alpha_2"))
             .expect("canonical chain id");
         assert_eq!(valid.0.as_str(), "iroha.mainnet:v1-alpha_2");
-
         for invalid in [
             Cow::Borrowed(""),
             Cow::Borrowed("-leading"),
@@ -1149,14 +1150,12 @@ impl Root {
         let reader = reader.rewrite_toml_sources(|sources| {
             const COMMANDS: &[&str] = &["torii", "kagemusha_commands"];
             const COMMANDS_ENABLED: &[&str] = &["torii", "kagemusha_commands", "enabled"];
-
             if let Some((_, Some(false))) = effective_bool_source(sources, COMMANDS_ENABLED) {
                 for source in sources.iter_mut() {
                     remove_path(source.table_mut(), COMMANDS);
                 }
             }
         });
-
         reader.read_and_complete::<Self>()
     }
 
@@ -1164,12 +1163,10 @@ impl Root {
         if !matches!(snapshot.store_dir.origin(), ParameterOrigin::Default { .. }) {
             return;
         }
-
         let derived_store_dir = kura.store_dir.resolve_relative_path().join("snapshot");
         if derived_store_dir == snapshot.store_dir.resolve_relative_path() {
             return;
         }
-
         snapshot.store_dir = WithOrigin::new(
             derived_store_dir,
             ParameterOrigin::custom(
@@ -1203,7 +1200,6 @@ impl Root {
                     continue;
                 }
             }
-
             let pop_bytes =
                 match hex::decode(entry.pop_hex.trim_start_matches("0x")) {
                     Ok(bytes) => bytes,
@@ -1214,7 +1210,6 @@ impl Root {
                         continue;
                     }
                 };
-
             if let Err(err) = iroha_crypto::bls_normal_pop_verify(pk, &pop_bytes) {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -1223,7 +1218,6 @@ impl Root {
                 );
                 continue;
             }
-
             if pops.insert(pk.clone(), pop_bytes).is_some() {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig)
@@ -1257,7 +1251,6 @@ impl Root {
                 )),
             );
         }
-
         let extras: Vec<_> = trusted
             .pops
             .keys()
@@ -1283,7 +1276,6 @@ impl Root {
         let mut emitter = Emitter::new();
         let _account_address_scope =
             AccountAddressParseScope::enter(*self.chain_discriminant.value());
-
         let private_key = resolve_private_key_source(
             self.private_key,
             self.private_key_file,
@@ -1358,7 +1350,6 @@ impl Root {
             }
             emitter.emit(report);
         }
-
         let (network, block_sync, transaction_gossiper) = self.network.parse();
         let peer = Peer::new(network.address.value().clone(), peer_public_key);
         let trusted_peers = self.trusted_peers.map(|x| {
@@ -1372,11 +1363,8 @@ impl Root {
             Self::validate_trusted_peer_pops(&trusted, &mut emitter);
             trusted
         });
-
         let genesis = self.genesis.parse(&mut emitter);
-
         let kura = self.kura.parse(&mut emitter);
-
         let logger = self.logger;
         let queue = self.queue;
         let mut snapshot = self.snapshot;
@@ -1393,7 +1381,6 @@ impl Root {
         };
         let telemetry_redaction = self.telemetry_redaction.parse(&mut emitter);
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
-
         let sumeragi = self.sumeragi.parse(&mut emitter);
         if let Some(sumeragi) = sumeragi.as_ref() {
             let lane_profile = network.lane_profile;
@@ -14262,20 +14249,14 @@ pub struct Torii {
     /// Maximum concurrent heavy query executions admitted by Torii.
     #[config(default = "defaults::torii::QUERY_HEAVY_MAX_INFLIGHT")]
     pub query_heavy_max_inflight: NonZeroUsize,
-    /// Aggregate bytes reserved for signed-query ingress and cross-dataspace fanout.
-    /// Torii reserves one quarter for four complete pre-body slots and uses the
-    /// remainder for complete fanout working sets. Each ingress slot covers five
-    /// simultaneously live variable representations: the decoded signed query,
-    /// its canonical frame, a nested routing-scope decode, that scope's canonical
-    /// frame, and serializer scratch. The admitted request and response frames are
-    /// smaller derived shares after fixed route metadata and overlapping execution
-    /// phases; neither equals `max_content_len`.
+    /// Aggregate bytes for signed-query ingress and cross-dataspace fanout.
     #[config(default = "defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES")]
     pub query_fanout_max_retained_bytes: Bytes<u64>,
+    /// Absolute deadline for reading one admitted App API routed-read body.
+    #[config(default = "app_routed_read_config::default_body_timeout()")]
+    pub app_api_routed_read_body_read_timeout_ms: DurationMs,
     /// Maximum time a query waits for execution capacity before Torii rejects it.
-    #[config(
-        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS))"
-    )]
+    #[config(default = "app_routed_read_config::default_query_timeout()")]
     pub query_queue_timeout_ms: DurationMs,
     /// Capacity of the broadcast channel used for Torii events/SSE/webhooks.
     #[config(default = "default_events_buffer_capacity()")]
@@ -15251,6 +15232,17 @@ impl Torii {
             self.operator_signatures.max_clock_skew_secs,
             self.operator_signatures.nonce_ttl_secs,
         );
+        if self
+            .operator_signatures
+            .body_read_timeout_ms
+            .get()
+            .is_zero()
+        {
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_signatures.body_read_timeout_ms must be at least 1 ms",
+            );
+        }
         validate_explicit_trust_cidrs(
             emitter,
             "torii.transport.trusted_proxy_cidrs",
@@ -15378,6 +15370,7 @@ impl Torii {
                 ),
             );
         }
+        app_routed_read_config::validate(self, emitter);
         if usize::try_from(max_content_len).is_err() {
             emit_torii_config_error(
                 emitter,
@@ -15411,7 +15404,6 @@ impl Torii {
                 true,
             );
         }
-
         let default_list_limit = std::num::NonZeroU32::new(self.app_api_default_list_limit.max(1))
             .unwrap_or(nonzero!(1_u32));
         let max_list_limit = std::num::NonZeroU32::new(
@@ -15462,6 +15454,7 @@ impl Torii {
             query_max_inflight: self.query_max_inflight,
             query_heavy_max_inflight: self.query_heavy_max_inflight,
             query_fanout_max_retained_bytes: self.query_fanout_max_retained_bytes,
+            app_api_routed_read_body_read_timeout: app_routed_read_config::body_timeout(self),
             query_queue_timeout: self.query_queue_timeout_ms.get(),
             tx_rate_per_authority_per_sec: self
                 .tx_rate_per_authority_per_sec
@@ -15608,7 +15601,7 @@ impl Torii {
                 .zk_ivm_prove_job_max_retained_bytes_per_owner,
             connect: self.connect.parse(),
             iso_bridge: self.iso_bridge.parse(),
-            transaction_ingress: self.transaction_ingress.parse(),
+            transaction_ingress: self.transaction_ingress.parse(emitter),
             da_ingest: self.da_ingest.parse(),
             sorafs_discovery,
             sorafs_storage,
@@ -15687,32 +15680,7 @@ mod torii_receipt_signer_tests {
     }
 }
 
-/// Transaction-history visibility/auth configuration for Torii app API endpoints.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiTxHistory {
-    /// Optional dataspace-keyed mandatory-alias policy file.
-    pub mandatory_aliases_path: Option<PathBuf>,
-    /// Optional asset-definition restriction applied to visible-history endpoints.
-    pub allowed_asset_definition_id: Option<String>,
-    /// Optional JWT bearer verification configuration.
-    pub jwt: Option<ToriiTxHistoryJwt>,
-}
-
-impl ToriiTxHistory {
-    fn parse(self) -> actual::ToriiTxHistory {
-        let allowed_asset_definition_id = self.allowed_asset_definition_id.map(|value| {
-            parse_asset_definition_selector_literal(
-                "torii.tx_history.allowed_asset_definition_id",
-                &value,
-            )
-        });
-        actual::ToriiTxHistory {
-            mandatory_aliases_path: self.mandatory_aliases_path,
-            allowed_asset_definition_id,
-            jwt: self.jwt.map(ToriiTxHistoryJwt::parse),
-        }
-    }
-}
+include!("user/torii_tx_history.rs");
 
 /// Retail recipient lookup route configuration for Torii app API.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -15829,98 +15797,6 @@ mod torii_recipient_lookup_tests {
     }
 }
 
-/// JWT bearer verification inputs for transaction-history endpoints.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiTxHistoryJwt {
-    /// Expected JWT algorithm label (for example `RS256` or `HS256`).
-    pub algorithm: String,
-    /// Shared-secret material used for HMAC JWT algorithms.
-    pub secret: Option<String>,
-    /// PEM-encoded public key used for asymmetric JWT algorithms.
-    pub public_key_pem: Option<String>,
-    /// Optional issuer constraint.
-    pub issuer: Option<String>,
-    /// Optional audience constraint.
-    pub audience: Option<String>,
-}
-
-impl ToriiTxHistoryJwt {
-    fn parse(self) -> actual::ToriiTxHistoryJwt {
-        let algorithm = self.algorithm.trim().to_ascii_uppercase();
-        if algorithm.is_empty() {
-            panic!("torii.tx_history.jwt.algorithm must not be empty");
-        }
-        match algorithm.as_str() {
-            "HS256" | "HS384" | "HS512" => {
-                let secret = self.secret.filter(|value| !value.trim().is_empty());
-                if secret.is_none() {
-                    panic!("torii.tx_history.jwt.secret must be set for HMAC JWT algorithms");
-                }
-                actual::ToriiTxHistoryJwt {
-                    algorithm,
-                    secret,
-                    public_key_pem: None,
-                    issuer: self.issuer.filter(|value| !value.trim().is_empty()),
-                    audience: self.audience.filter(|value| !value.trim().is_empty()),
-                }
-            }
-            "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" | "ES256" | "ES384"
-            | "EDDSA" => {
-                let public_key_pem = self.public_key_pem.filter(|value| !value.trim().is_empty());
-                if public_key_pem.is_none() {
-                    panic!(
-                        "torii.tx_history.jwt.public_key_pem must be set for asymmetric JWT algorithms"
-                    );
-                }
-                actual::ToriiTxHistoryJwt {
-                    algorithm,
-                    secret: None,
-                    public_key_pem,
-                    issuer: self.issuer.filter(|value| !value.trim().is_empty()),
-                    audience: self.audience.filter(|value| !value.trim().is_empty()),
-                }
-            }
-            other => panic!(
-                "invalid torii.tx_history.jwt.algorithm `{other}`; expected HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA"
-            ),
-        }
-    }
-}
-
-#[cfg(test)]
-mod torii_tx_history_tests {
-    use super::*;
-
-    #[test]
-    fn torii_tx_history_parse_accepts_asset_alias_selector() {
-        let parsed = ToriiTxHistory {
-            mandatory_aliases_path: None,
-            allowed_asset_definition_id: Some("xor#universal".to_owned()),
-            jwt: None,
-        }
-        .parse();
-
-        assert_eq!(
-            parsed.allowed_asset_definition_id.as_deref(),
-            Some("xor#universal")
-        );
-    }
-
-    #[test]
-    fn torii_tx_history_parse_rejects_invalid_asset_selector() {
-        let panic = std::panic::catch_unwind(|| {
-            ToriiTxHistory {
-                mandatory_aliases_path: None,
-                allowed_asset_definition_id: Some("not a selector".to_owned()),
-                jwt: None,
-            }
-            .parse();
-        });
-
-        assert!(panic.is_err(), "expected invalid selector to panic");
-    }
-}
-
 /// Operator request-signature authentication configuration for Torii operator endpoints.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiOperatorSignatures {
@@ -15930,6 +15806,9 @@ pub struct ToriiOperatorSignatures {
     /// Allow the node identity key (from `[common]`) to authenticate operator endpoints.
     #[config(default = "defaults::torii::operator_signatures::ALLOW_NODE_KEY")]
     pub allow_node_key: bool,
+    /// Absolute deadline for collecting one request body before signature verification.
+    #[config(default = "defaults::torii::operator_signatures::BODY_READ_TIMEOUT.into()")]
+    pub body_read_timeout_ms: DurationMs,
     /// Additional allow-listed operator public keys.
     #[config(default = "defaults::torii::operator_signatures::allowed_public_keys()")]
     pub allowed_public_keys: Vec<PublicKey>,
@@ -15950,6 +15829,7 @@ impl ToriiOperatorSignatures {
         actual::ToriiOperatorSignatures {
             enabled: self.enabled,
             allow_node_key: self.allow_node_key,
+            body_read_timeout: self.body_read_timeout_ms.get(),
             allowed_public_keys: self.allowed_public_keys,
             max_clock_skew: Duration::from_secs(self.max_clock_skew_secs),
             nonce_ttl: Duration::from_secs(self.nonce_ttl_secs),
@@ -18530,6 +18410,12 @@ pub struct TransactionIngress {
     /// Maximum number of signed transactions in one HTTP batch.
     #[config(default = "defaults::torii::TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS")]
     pub max_batch_transactions: NonZeroUsize,
+    /// Maximum number of verified-source compiler working sets admitted concurrently.
+    #[config(default = "defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES")]
+    pub verified_source_max_concurrent_compiles: NonZeroUsize,
+    /// Absolute deadline for reading one admitted verified-source request body.
+    #[config(default = "defaults::torii::VERIFIED_SOURCE_BODY_READ_TIMEOUT.into()")]
+    pub verified_source_body_read_timeout_ms: DurationMs,
 }
 
 impl Default for TransactionIngress {
@@ -18538,15 +18424,39 @@ impl Default for TransactionIngress {
             max_concurrent_compute_jobs:
                 defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS,
             max_batch_transactions: defaults::torii::TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS,
+            verified_source_max_concurrent_compiles:
+                defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES,
+            verified_source_body_read_timeout_ms:
+                defaults::torii::VERIFIED_SOURCE_BODY_READ_TIMEOUT.into(),
         }
     }
 }
 
 impl TransactionIngress {
-    fn parse(self) -> actual::TransactionIngress {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::TransactionIngress {
+        if self.verified_source_max_concurrent_compiles.get()
+            > defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES_V1
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.transaction_ingress.verified_source_max_concurrent_compiles must be within 1..={} for the first-release compiler memory envelope",
+                    defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES_V1
+                ),
+            );
+        }
+        if self.verified_source_body_read_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.transaction_ingress.verified_source_body_read_timeout_ms must be at least 1 ms"
+                    .to_owned(),
+            );
+        }
         actual::TransactionIngress {
             max_concurrent_compute_jobs: self.max_concurrent_compute_jobs,
             max_batch_transactions: self.max_batch_transactions,
+            verified_source_max_concurrent_compiles: self.verified_source_max_concurrent_compiles,
+            verified_source_body_read_timeout: self.verified_source_body_read_timeout_ms.get(),
         }
     }
 }
@@ -25098,239 +25008,8 @@ mod sorafs_moderation_orchestrator_tests {
 mod sorafs_provider_ingest_runtime_config_tests;
 
 #[cfg(test)]
-mod sorafs_evidence_viewer_config_tests {
-    use super::*;
-
-    fn checkpoint_path() -> PathBuf {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from(r"C:\iroha\sorafs\evidence-viewer.to")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            PathBuf::from("/var/lib/iroha/sorafs/evidence-viewer.to")
-        }
-    }
-
-    fn receipt_public_key_hex() -> String {
-        let key = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("test keypair");
-        hex::encode(key.public_key().to_bytes().1)
-    }
-
-    fn archive_public_key_hex() -> String {
-        let key = KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519).expect("test keypair");
-        hex::encode(key.public_key().to_bytes().1)
-    }
-
-    fn transparency_publisher_public_key_hex() -> String {
-        let key = KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).expect("test keypair");
-        hex::encode(key.public_key().to_bytes().1)
-    }
-
-    fn valid_config() -> SorafsEvidenceViewerConfig {
-        SorafsEvidenceViewerConfig {
-            enabled: true,
-            checkpoint_path: checkpoint_path(),
-            checkpoint_store_handle: Some("sealed.evidence-viewer.checkpoints.primary".to_owned()),
-            checkpoint_store_revision: Some(15),
-            checkpoint_store_policy_digest_hex: Some("a5".repeat(32)),
-            webauthn_rp_id: Some("review.example".to_owned()),
-            webauthn_allowed_origins: vec!["https://review.example".to_owned()],
-            webauthn_handle: Some("webauthn.evidence.primary".to_owned()),
-            webauthn_revision: Some(11),
-            webauthn_policy_digest_hex: Some("a1".repeat(32)),
-            grant_handle: Some("kms.evidence.grants.primary".to_owned()),
-            grant_revision: Some(12),
-            grant_policy_digest_hex: Some("a2".repeat(32)),
-            erasure_handle: Some("kms.evidence.erasure.primary".to_owned()),
-            erasure_revision: Some(13),
-            erasure_policy_digest_hex: Some("a3".repeat(32)),
-            compaction_archive_handle: Some("object-lock.evidence.compaction.primary".to_owned()),
-            compaction_archive_id_hex: Some("a6".repeat(32)),
-            compaction_archive_revision: Some(16),
-            compaction_archive_policy_digest_hex: Some("a7".repeat(32)),
-            compaction_archive_public_key_hex: Some(archive_public_key_hex()),
-            receipt_signer_handle: Some("software://sorafs/evidence-viewer/primary".to_owned()),
-            receipt_signer_revision: Some(14),
-            receipt_signer_policy_digest_hex: Some("a4".repeat(32)),
-            receipt_signer_public_key_hex: Some(receipt_public_key_hex()),
-            transparency_publisher_handle: Some(
-                "transparency.evidence.publisher.primary".to_owned(),
-            ),
-            transparency_publisher_revision: Some(17),
-            transparency_publisher_policy_digest_hex: Some("a8".repeat(32)),
-            transparency_publisher_public_key_hex: Some(transparency_publisher_public_key_hex()),
-            ..SorafsEvidenceViewerConfig::default()
-        }
-    }
-
-    #[test]
-    fn enabled_policy_binds_exact_runtime_qualifications() {
-        let mut emitter = Emitter::new();
-        let parsed = valid_config()
-            .parse(true, &mut emitter)
-            .expect("enabled evidence-viewer policy");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(
-            parsed.checkpoint_store_handle,
-            "sealed.evidence-viewer.checkpoints.primary"
-        );
-        assert_eq!(parsed.checkpoint_store_revision, 15);
-        assert_eq!(parsed.checkpoint_store_policy_digest, [0xA5; 32]);
-        assert_eq!(parsed.webauthn_revision, 11);
-        assert_eq!(parsed.webauthn_policy_digest, [0xA1; 32]);
-        assert_eq!(parsed.grant_revision, 12);
-        assert_eq!(parsed.grant_policy_digest, [0xA2; 32]);
-        assert_eq!(parsed.erasure_revision, 13);
-        assert_eq!(parsed.erasure_policy_digest, [0xA3; 32]);
-        assert_eq!(
-            parsed.compaction_archive_handle,
-            "object-lock.evidence.compaction.primary"
-        );
-        assert_eq!(parsed.compaction_archive_id, [0xA6; 32]);
-        assert_eq!(parsed.compaction_archive_revision, 16);
-        assert_eq!(parsed.compaction_archive_policy_digest, [0xA7; 32]);
-        assert_eq!(parsed.compaction_interval, Duration::from_secs(60));
-        assert_eq!(parsed.compaction_max_records, 256);
-        assert_eq!(parsed.receipt_signer_revision, 14);
-        assert_eq!(parsed.receipt_signer_policy_digest, [0xA4; 32]);
-        assert_eq!(
-            parsed.transparency_publisher_handle,
-            "transparency.evidence.publisher.primary"
-        );
-        assert_eq!(parsed.transparency_publisher_revision, 17);
-        assert_eq!(parsed.transparency_publisher_policy_digest, [0xA8; 32]);
-        assert_eq!(
-            hex::encode(parsed.transparency_publisher_public_key),
-            transparency_publisher_public_key_hex()
-        );
-    }
-
-    #[test]
-    fn enabled_policy_rejects_noncanonical_webauthn_rp_ids_and_origins() {
-        for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
-            let mut config = valid_config();
-            config.webauthn_rp_id = Some(rp_id.to_owned());
-            let mut emitter = Emitter::new();
-            assert!(
-                config.parse(true, &mut emitter).is_none(),
-                "{rp_id:?} must fail closed"
-            );
-            assert!(emitter.into_result().is_err());
-        }
-
-        for origin in [
-            "http://review.example",
-            "https://operator:secret@review.example",
-            "https://review.example/path",
-            "https://review.example?challenge=1",
-            "https://review.example#fragment",
-            "https://review.example:443",
-            "https://foreign.example",
-        ] {
-            let mut config = valid_config();
-            config.webauthn_allowed_origins = vec![origin.to_owned()];
-            let mut emitter = Emitter::new();
-            let _ = config.parse(true, &mut emitter);
-            assert!(
-                emitter.into_result().is_err(),
-                "{origin:?} must fail closed"
-            );
-        }
-
-        let mut canonical = valid_config();
-        canonical.webauthn_allowed_origins = vec!["https://login.review.example:8443".to_owned()];
-        let mut emitter = Emitter::new();
-        assert!(canonical.parse(true, &mut emitter).is_some());
-        assert!(emitter.into_result().is_ok());
-    }
-
-    #[test]
-    fn enabled_policy_rejects_missing_stale_or_noncanonical_qualifications() {
-        let mut missing = valid_config();
-        missing.checkpoint_store_handle = None;
-        let mut emitter = Emitter::new();
-        assert!(missing.parse(true, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-
-        let mut config = valid_config();
-        config.webauthn_revision = Some(0);
-        config.grant_policy_digest_hex = Some("A2".repeat(32));
-        config.erasure_policy_digest_hex = Some("00".repeat(32));
-        config.compaction_archive_id_hex = Some("00".repeat(32));
-        config.compaction_archive_revision = Some(0);
-        config.compaction_archive_policy_digest_hex = Some("A7".repeat(32));
-        config.compaction_interval_ms = 999;
-        config.compaction_max_records = 1_025;
-        config.receipt_signer_revision = None;
-        config.checkpoint_store_handle = Some("sealed.evidence-viewer.test".to_owned());
-        config.checkpoint_store_revision = Some(0);
-        config.checkpoint_store_policy_digest_hex = Some("A5".repeat(32));
-
-        let mut emitter = Emitter::new();
-        assert!(config.parse(true, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn transparency_publisher_binding_is_required_and_canonical() {
-        let mutations: [fn(&mut SorafsEvidenceViewerConfig); 11] = [
-            |config| config.transparency_publisher_handle = None,
-            |config| config.transparency_publisher_revision = None,
-            |config| config.transparency_publisher_revision = Some(0),
-            |config| config.transparency_publisher_policy_digest_hex = None,
-            |config| config.transparency_publisher_policy_digest_hex = Some("A8".repeat(32)),
-            |config| config.transparency_publisher_policy_digest_hex = Some("00".repeat(32)),
-            |config| config.transparency_publisher_public_key_hex = None,
-            |config| config.transparency_publisher_public_key_hex = Some("AA".repeat(32)),
-            |config| config.transparency_publisher_public_key_hex = Some("00".repeat(32)),
-            |config| config.transparency_publisher_public_key_hex = Some("ff".repeat(32)),
-            |config| {
-                config.transparency_publisher_handle =
-                    Some("transparency.evidence.publisher.test".to_owned());
-            },
-        ];
-        for mutate in mutations {
-            let mut config = valid_config();
-            mutate(&mut config);
-            let mut emitter = Emitter::new();
-            assert!(config.parse(true, &mut emitter).is_none());
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn disabled_policy_requires_no_checkpoint_store_and_rejects_stray_binding() {
-        let mut emitter = Emitter::new();
-        assert!(
-            SorafsEvidenceViewerConfig::default()
-                .parse(true, &mut emitter)
-                .is_none()
-        );
-        assert!(emitter.into_result().is_ok());
-
-        let mut config = SorafsEvidenceViewerConfig::default();
-        config.checkpoint_store_handle =
-            Some("sealed.evidence-viewer.checkpoints.primary".to_owned());
-        let mut emitter = Emitter::new();
-        assert!(config.parse(true, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-
-        let mut config = SorafsEvidenceViewerConfig::default();
-        config.compaction_archive_handle =
-            Some("object-lock.evidence.compaction.primary".to_owned());
-        let mut emitter = Emitter::new();
-        assert!(config.parse(true, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-
-        let mut config = SorafsEvidenceViewerConfig::default();
-        config.transparency_publisher_handle =
-            Some("transparency.evidence.publisher.primary".to_owned());
-        let mut emitter = Emitter::new();
-        assert!(config.parse(true, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-}
+#[path = "user/sorafs_evidence_viewer_config_tests.rs"]
+mod sorafs_evidence_viewer_config_tests;
 
 #[cfg(test)]
 mod sorafs_hedging_billing_runtime_config_tests {
@@ -33606,6 +33285,9 @@ policy_digest_hex = "{policy_digest_hex}"
 
     include!("user/zk_prover_report_retention_tests.rs");
     include!("user/query_fanout_memory_tests.rs");
+    include!("user/app_routed_read_body_timeout_tests.rs");
+    include!("user/operator_signature_body_timeout_tests.rs");
+    include!("user/verified_source_ingress_tests.rs");
     include!("user/iso_bridge_store_memory_tests.rs");
 
     #[test]

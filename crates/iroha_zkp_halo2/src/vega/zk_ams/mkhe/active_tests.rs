@@ -734,6 +734,7 @@ fn linear_statement_fixture(
                     },
                 ],
             }],
+            streaming_collective_public_key: None,
         },
         secret,
         error,
@@ -813,6 +814,249 @@ fn linear_proof_reconstructs_commitment_instead_of_accepting_a_digest_claim() {
         linear_commitment_challenge_seed(&profile, context, &statement, &reconstructed).unwrap(),
         proof.challenge_seed
     );
+}
+
+#[test]
+fn active_secret_table_owners_zeroize_on_drop_and_unwind() {
+    reset_active_secret_table_zeroized_drop_count_v1();
+    let profile = linear_test_profile();
+    {
+        let _rns = ZeroizingActiveRnsV1(
+            super::super::RnsPolynomial::from_unsigned(&profile, &[1, 2, 3, 4, 5, 6, 7, 8])
+                .unwrap(),
+        );
+        let _signed = ZeroizingActiveI64V1(vec![1, -2, 3, -4]);
+    }
+    assert_eq!(active_secret_table_zeroized_drop_count_v1(), 2);
+
+    let unwind = std::panic::catch_unwind(|| {
+        let _rns = ZeroizingActiveRnsV1(
+            super::super::RnsPolynomial::from_unsigned(&profile, &[8, 7, 6, 5, 4, 3, 2, 1])
+                .unwrap(),
+        );
+        let _signed = ZeroizingActiveI64V1(vec![-4, 3, -2, 1]);
+        panic!("exercise active secret-table unwind owners");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(active_secret_table_zeroized_drop_count_v1(), 4);
+
+    let source = include_str!("active.rs");
+    let owners = source
+        .split("struct ZeroizingActiveRnsV1")
+        .nth(1)
+        .expect("zeroizing active RNS owner")
+        .split("trait LinearRelationRnsV1")
+        .next()
+        .expect("zeroizing owner boundary");
+    assert!(!owners.contains("#[derive(Clone"));
+    assert!(!owners.contains("impl core::fmt::Debug"));
+    assert!(owners.matches("impl Drop for ZeroizingActive").count() == 2);
+}
+
+#[test]
+fn in_place_linear_application_matches_the_owned_reference_algebra() {
+    let profile = linear_test_profile();
+    let (statement, secret, error) = linear_statement_fixture(&profile);
+    let witnesses = [
+        secret.as_rns(&profile).unwrap(),
+        error.as_rns(&profile).unwrap(),
+    ];
+    let expected = statement
+        .outputs
+        .iter()
+        .map(|output| {
+            let mut value = super::super::RnsPolynomial::zero(&profile);
+            for term in &output.terms {
+                let witness = witnesses[term.witness_index]
+                    .automorphism(term.witness_automorphism_exponent, &profile)
+                    .unwrap();
+                value = value
+                    .add(&term.multiplier.mul(&witness, &profile).unwrap(), &profile)
+                    .unwrap();
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        apply_linear_relation(&profile, &statement, &witnesses).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn streaming_collective_relation_matches_owned_algebra_digest_and_transcript() {
+    let profile = linear_test_profile();
+    let public_a =
+        super::super::RnsPolynomial::from_unsigned(&profile, &[3, 5, 7, 11, 13, 17, 19, 23])
+            .unwrap();
+    let secret = super::super::SecretPolynomial {
+        coefficients: vec![-1, 0, 1, 1, 0, -1, 1, 0],
+    };
+    let error = super::super::SecretPolynomial {
+        coefficients: vec![2, -1, 0, 1, -2, 2, 0, -1],
+    };
+    let plaintext = scaled_identity(&profile, None).unwrap();
+    let target = public_a
+        .mul(&secret.as_rns(&profile).unwrap(), &profile)
+        .unwrap()
+        .negate(&profile)
+        .unwrap()
+        .add(
+            &plaintext
+                .mul(&error.as_rns(&profile).unwrap(), &profile)
+                .unwrap(),
+            &profile,
+        )
+        .unwrap();
+    let owned = LinearRelationStatementV1 {
+        witness_bounds: vec![1, 2],
+        witness_challenge_automorphism_exponents: vec![1, 1],
+        outputs: vec![LinearRelationOutputV1 {
+            target: target.clone(),
+            challenge_automorphism_exponent: 1,
+            terms: vec![
+                LinearRelationTermV1 {
+                    witness_index: 0,
+                    multiplier: public_a.negate(&profile).unwrap(),
+                    witness_automorphism_exponent: 1,
+                },
+                LinearRelationTermV1 {
+                    witness_index: 1,
+                    multiplier: plaintext,
+                    witness_automorphism_exponent: 1,
+                },
+            ],
+        }],
+        streaming_collective_public_key: None,
+    };
+    let streaming = LinearRelationStatementV1 {
+        witness_bounds: vec![1, 2],
+        witness_challenge_automorphism_exponents: vec![1, 1],
+        outputs: Vec::new(),
+        streaming_collective_public_key: Some(StreamingCollectivePublicKeyRelationV1 {
+            public_a: std::sync::Arc::new(public_a.coefficients.clone()),
+            party_public_b: std::sync::Arc::new(target.coefficients.clone()),
+        }),
+    };
+    assert_eq!(
+        streaming.digest(&profile).unwrap(),
+        owned.digest(&profile).unwrap()
+    );
+    let witness_slices = [
+        secret.coefficients.as_slice(),
+        error.coefficients.as_slice(),
+    ];
+    assert_eq!(
+        apply_linear_relation_from_signed_v1(&profile, &streaming, &witness_slices).unwrap(),
+        vec![target]
+    );
+
+    let context = linear_context(&profile, ZkAmsMkheActiveRoundV1::CollectivePublicKey);
+    let owned_proof = prove_linear_relation_v1(
+        &profile,
+        context,
+        &owned,
+        &[&secret, &error],
+        &mut KatRandom::new(b"streaming-cpk-transcript-parity"),
+    )
+    .unwrap();
+    let streaming_proof = prove_linear_relation_v1(
+        &profile,
+        context,
+        &streaming,
+        &[&secret, &error],
+        &mut KatRandom::new(b"streaming-cpk-transcript-parity"),
+    )
+    .unwrap();
+    assert_eq!(streaming_proof, owned_proof);
+}
+
+#[test]
+fn active_linear_source_drops_owned_tables_between_phases() {
+    let source = include_str!("active.rs");
+    let prove = source
+        .split("fn prove_linear_relation_v1")
+        .nth(1)
+        .expect("linear prover")
+        .split("fn verify_linear_relation_proof")
+        .next()
+        .expect("linear prover body");
+    for release in [
+        "drop(applied_witness)",
+        "drop(witness_slices)",
+        "drop(commitments)",
+        "drop(mask_slices)",
+        "drop(masks)",
+    ] {
+        assert!(prove.contains(release), "missing release: {release}");
+    }
+    assert!(!prove.contains("output.target.clone()"));
+    assert!(prove.contains("try_reserve_exact(profile.ring_degree)"));
+    assert!(source.contains("zeroizing_active_rns_from_signed_v1"));
+
+    let apply = source
+        .split("fn apply_linear_relation")
+        .nth(1)
+        .expect("linear application")
+        .split("fn linear_response_parameters")
+        .next()
+        .expect("linear application body");
+    assert!(apply.contains("term.witness_automorphism_exponent == 1"));
+    assert!(apply.contains("combine_rns_in_place"));
+    assert!(apply.contains("try_zero_active_rns_v1"));
+    assert!(!apply.contains("value = value.add"));
+
+    let collective = source
+        .split("fn collective_public_key_relation")
+        .nth(1)
+        .expect("collective relation")
+        .split("fn rkg_round_one_relation")
+        .next()
+        .expect("collective relation boundary");
+    assert!(collective.contains("streaming_collective_public_key"));
+    assert!(collective.contains("shared_residues()"));
+    assert!(!collective.contains("release_wire_polynomial"));
+    assert!(!collective.contains("scaled_identity"));
+    assert!(!collective.contains("RnsPolynomial::zero"));
+
+    let identity = source
+        .split("fn scaled_identity")
+        .nth(1)
+        .expect("scaled identity helper")
+        .split("fn combine_rns_in_place")
+        .next()
+        .expect("scaled identity boundary");
+    assert!(identity.contains("try_zero_active_rns_v1(profile)?"));
+    assert!(!identity.contains("vec!["));
+}
+
+#[test]
+fn legacy_dense_rkg_and_galois_relations_are_test_only() {
+    let source = include_str!("active.rs");
+    for declaration in [
+        "pub struct ZkAmsMkheActiveRkgRoundOneStatementV1",
+        "pub struct ZkAmsMkheActiveRkgRoundOneWitnessV1",
+        "pub struct ZkAmsMkheActiveRkgRoundTwoStatementV1",
+        "pub struct ZkAmsMkheActiveRkgRoundTwoWitnessV1",
+        "pub(super) struct ZkAmsMkheActiveGaloisSourceStatementV1",
+        "pub(super) struct ZkAmsMkheActiveGaloisSourceWitnessV1",
+        "pub fn prove_zk_ams_mkhe_active_rkg_round_one_v1",
+        "pub fn verify_zk_ams_mkhe_active_rkg_round_one_v1",
+        "pub fn prove_zk_ams_mkhe_active_rkg_round_two_v1",
+        "pub fn verify_zk_ams_mkhe_active_rkg_round_two_v1",
+        "pub(super) fn prove_zk_ams_mkhe_active_galois_source_v1",
+        "pub(super) fn verify_zk_ams_mkhe_active_galois_source_v1",
+    ] {
+        let declaration_offset = source.find(declaration).expect("legacy declaration");
+        let prefix = &source[..declaration_offset];
+        let attribute_offset = prefix.rfind("#[cfg(test)]").expect("test-only attribute");
+        assert!(
+            prefix[attribute_offset..]
+                .lines()
+                .all(|line| !line.trim_start().starts_with("pub ") && !line.contains("fn ")),
+            "{declaration} must be immediately governed by the nearest test-only attribute"
+        );
+    }
 }
 
 #[test]
@@ -1224,7 +1468,7 @@ fn sparse_challenge_is_canonical_and_negacyclic_multiplication_matches_rns() {
         )
         .unwrap();
     assert_eq!(
-        super::super::RnsPolynomial::from_signed(&profile, &signed).unwrap(),
+        super::super::RnsPolynomial::from_signed(&profile, signed.as_slice()).unwrap(),
         expected
     );
 }
@@ -1452,6 +1696,7 @@ fn statement_rejects_target_multiplier_and_witness_dimension_mismatches() {
                 witness_bounds: vec![1, 2],
                 witness_challenge_automorphism_exponents: vec![1, 1],
                 outputs: vec![],
+                streaming_collective_public_key: None,
             },
             &[&secret, &error],
             &mut KatRandom::new(b"dimension-mismatch-random"),
@@ -1485,11 +1730,8 @@ fn tiny_galois_relation_fixture(
     let public_a =
         super::super::RnsPolynomial::from_unsigned(profile, &[3, 5, 7, 11, 13, 17, 19, 23])
             .unwrap();
-    let plaintext = ring_one(profile)
-        .unwrap()
-        .scale_plaintext_modulus(profile)
-        .unwrap();
-    let gadget = ring_one(profile).unwrap().scale_gadget(0, profile).unwrap();
+    let plaintext = scaled_identity(profile, None).unwrap();
+    let gadget = scaled_identity(profile, Some(0)).unwrap();
     let public_b = public_a
         .mul(&secret.as_rns(profile).unwrap(), profile)
         .unwrap()
@@ -1588,6 +1830,7 @@ fn tiny_galois_relation_fixture(
                     ],
                 },
             ],
+            streaming_collective_public_key: None,
         },
         vec![secret, public_error, ephemeral, error_zero, error_one],
     )

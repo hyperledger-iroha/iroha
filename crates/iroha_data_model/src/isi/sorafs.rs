@@ -33,7 +33,7 @@ isi! {
     )]
     pub struct RegisterPinManifest {
         /// Canonical Norito-encoded `sorafs_manifest::ManifestV1` payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub manifest_payload: Vec<u8>,
         /// Optional alias binding approved with the manifest.
         pub alias: Option<ManifestAliasBinding>,
@@ -52,13 +52,13 @@ pub struct ApprovePinManifest {
         /// Optional governance envelope (`manifest_signatures.json`) attached to the approval.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::base64_vec::option")
+            norito(json = "crate::json_helpers::base64_vec::option")
         )]
         pub council_envelope: Option<Vec<u8>>,
         /// Optional digest of the council envelope (`manifest_signatures.json`).
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
+            norito(json = "crate::json_helpers::fixed_bytes::option")
         )]
         pub council_envelope_digest: Option<[u8; 32]>,
     }
@@ -135,7 +135,7 @@ pub struct IssueReplicationOrder {
     /// Deterministic identifier assigned to the replication order.
     pub order_id: ReplicationOrderId,
         /// Canonical Norito-encoded replication order payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub order_payload: Vec<u8>,
         /// Epoch (inclusive) when the order is issued.
         pub issued_epoch: u64,
@@ -438,7 +438,7 @@ isi! {
     /// Commit a bounded batch of private `PoP` credentials and public roots atomically.
     pub struct CommitSorafsPopCredentialBatch {
         /// Exact canonical Norito `PopCredentialCommitmentBatchV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub batch_payload: Vec<u8>,
     }
 }
@@ -449,10 +449,10 @@ isi! {
     /// Publish a strict signed extension of the active `PoP` revocation list.
     pub struct PublishSorafsPopRevocationList {
         /// Exact canonical Norito `sorafs_manifest::PopRevocationListV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub revocation_list_payload: Vec<u8>,
         /// Exact active issuer-policy digest expected by the publisher.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub issuer_policy_digest: [u8; 32],
     }
 }
@@ -473,10 +473,10 @@ isi! {
     /// Submit a signed canonical order to the authoritative `SoraFS` orderbook ledger.
     pub struct SubmitSorafsOrderbookOrder {
         /// Exact canonical Norito `sorafs_manifest::orderbook::OrderRequestV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub order_payload: Vec<u8>,
         /// Active governance policy digest expected by the submitter.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -487,10 +487,10 @@ isi! {
     /// Commit a signed owner cancellation to the authoritative `SoraFS` orderbook ledger.
     pub struct CancelSorafsOrderbookOrder {
         /// Exact canonical Norito `sorafs_manifest::orderbook::OrderCancelV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub cancel_payload: Vec<u8>,
         /// Active governance policy digest expected by the submitter.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -501,7 +501,7 @@ isi! {
     /// Execute one bounded deterministic price-time matching transition.
     pub struct MatchSorafsOrderbook {
         /// Exact active governance policy digest expected by the matcher.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Exact authoritative book revision on which the match was computed.
         pub expected_book_revision: u64,
@@ -516,7 +516,7 @@ isi! {
     /// Retire expired orders and channels in one bounded authoritative transition.
     pub struct MaintainSorafsOrderbook {
         /// Exact active governance policy digest expected by the caller.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Exact authoritative book revision expected by the caller.
         pub expected_book_revision: u64,
@@ -531,10 +531,10 @@ isi! {
     /// Settle a funded channel lock and record its signed receipt in the authoritative ledger.
     pub struct RecordSorafsOrderbookSettlementReceipt {
         /// Exact canonical Norito `sorafs_manifest::orderbook::SettlementReceiptV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub receipt_payload: Vec<u8>,
         /// Active governance policy digest expected by the recorder.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -557,7 +557,7 @@ isi! {
         /// Provider underwriting terms.
         pub terms: ReserveProviderTermsV1,
         /// Exact active reserve policy digest expected by governance.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -568,7 +568,7 @@ isi! {
     /// Submit a provider-authenticated reserve top-up or withdrawal request.
     pub struct RequestSorafsReserveMovement {
         /// Globally unique request identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub movement_id: [u8; 32],
         /// Provider reserve partition.
         pub provider_id: ProviderId,
@@ -579,7 +579,7 @@ isi! {
         /// Provider account revision expected by the request.
         pub expected_provider_revision: u64,
         /// Exact active reserve policy digest expected by the request.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -590,12 +590,12 @@ isi! {
     /// Decide and atomically apply or reject a pending reserve movement.
     pub struct DecideSorafsReserveMovement {
         /// Pending movement identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub movement_id: [u8; 32],
         /// Provider account revision expected by the decision.
         pub expected_provider_revision: u64,
         /// Exact active reserve policy digest expected by the decision service.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Whether governance approves the movement.
         pub approve: bool,
@@ -616,7 +616,7 @@ isi! {
         /// Number of billing periods, bounded by native execution.
         pub billing_periods: u16,
         /// Exact active reserve policy digest expected by governance.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -633,7 +633,7 @@ isi! {
         /// Deterministic days past due.
         pub days_past_due: u16,
         /// Exact active reserve policy digest expected by governance.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -650,7 +650,7 @@ isi! {
         /// Exact non-zero draw amount.
         pub amount: XorQuantity,
         /// Exact active reserve policy digest expected by governance.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -667,7 +667,7 @@ isi! {
         /// Exact non-zero repayment amount.
         pub amount: XorQuantity,
         /// Exact active reserve policy digest expected by the provider.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -678,7 +678,7 @@ isi! {
     /// Submit a bounded provider-authenticated reserve lifecycle appeal.
     pub struct SubmitSorafsReserveAppeal {
         /// Globally unique appeal identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub appeal_id: [u8; 32],
         /// Appealing provider.
         pub provider_id: ProviderId,
@@ -691,11 +691,11 @@ isi! {
         /// Optional external evidence digest.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
+            norito(json = "crate::json_helpers::fixed_bytes::option")
         )]
         pub evidence_digest: Option<[u8; 32]>,
         /// Exact active reserve policy digest expected by the provider.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
     }
 }
@@ -706,12 +706,12 @@ isi! {
     /// Attach a terminal governance decision to a pending reserve appeal.
     pub struct DecideSorafsReserveAppeal {
         /// Pending appeal identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub appeal_id: [u8; 32],
         /// Provider account revision expected by the decision.
         pub expected_provider_revision: u64,
         /// Exact active reserve policy digest expected by the decision service.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Whether governance accepts and applies the requested stage.
         pub accept: bool,
@@ -790,7 +790,7 @@ pub struct SorafsRepairCompleteV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
     /// Digest of external completion verification evidence.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
@@ -816,7 +816,7 @@ pub struct SorafsRepairFailV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
     /// Digest of the failure reason or external evidence.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub failure_digest: [u8; 32],
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
@@ -842,7 +842,7 @@ pub struct SorafsRepairEscalateV1 {
     /// Exact current lease generation.
     pub lease_generation: u64,
     /// Exact canonical `sorafs_manifest::repair::RepairSlashProposalV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub slash_proposal_payload: Vec<u8>,
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
@@ -899,10 +899,10 @@ isi! {
     /// Admit one exact canonical repair report under a subsystem exactly-once identity.
     pub struct SubmitSorafsRepairTask {
         /// Non-zero source identity. `PoTR` uses the signed receipt digest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub source_identity: [u8; 32],
         /// Exact canonical `sorafs_manifest::repair::RepairReportV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub report_payload: Vec<u8>,
     }
 }
@@ -931,7 +931,7 @@ isi! {
         /// Exact task revision observed by the submitter.
         pub expected_revision: u64,
         /// Digest of external appeal evidence.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub evidence_digest: [u8; 32],
         /// Bounded payload-free appeal reason.
         pub reason: String,
@@ -961,7 +961,7 @@ impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
 #[norito(deny_unknown_fields)]
 pub struct SorafsPdpProofOutcomeSubmissionV1 {
     /// Exact canonical `sorafs_manifest::PdpGovernanceArchiveV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub archive_payload: Vec<u8>,
 }
 
@@ -984,10 +984,10 @@ pub struct SorafsPdpProofOutcomeSubmissionV1 {
 #[norito(deny_unknown_fields)]
 pub struct SorafsPotrProofOutcomeSubmissionV1 {
     /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub receipt_payload: Vec<u8>,
     /// Council-verified admission envelope captured during receipt validation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub admission_envelope_digest: [u8; 32],
 }
 
@@ -1085,12 +1085,12 @@ isi! {
         /// Existing authoritative capacity-dispute identity.
         pub dispute_id: CapacityDisputeId,
         /// Exact active reputation recorder-policy digest expected by the decision.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub expected_authority_policy_digest: [u8; 32],
         /// Governance outcome applied exactly once.
         pub outcome: CapacityDisputeOutcome,
         /// Digest of the canonical decision evidence or signed envelope.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub decision_digest: [u8; 32],
         /// Optional bounded canonical governance rationale.
         pub rationale: Option<String>,
@@ -1127,7 +1127,7 @@ isi! {
         /// Ballot round identifier.
         pub round_id: String,
         /// Exact canonical Norito `PopMembershipProofV1` bytes; never persisted.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub membership_proof_payload: Vec<u8>,
     }
 }
@@ -1142,14 +1142,14 @@ isi! {
         /// Ballot round identifier.
         pub round_id: String,
         /// Exact pinned `PoP` snapshot digest expected by the operator.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub pop_snapshot_digest: [u8; 32],
         /// Exact latest committed parent hash expected to seed the draw.
         ///
         /// Native execution requires this anchor to match consensus state after
         /// registration closes, preventing applicants or candidates from
         /// precomputing and selectively entering a favorable draw.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub randomness_anchor: [u8; 32],
         /// Proposed primary roster; execution recomputes and rejects biased input.
         pub proposed_jurors: Vec<AccountId>,
@@ -1168,7 +1168,7 @@ isi! {
         /// Ballot round identifier.
         pub round_id: String,
         /// Exact sortition digest expected by the juror.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub sortition_digest: [u8; 32],
     }
 }
@@ -1183,7 +1183,7 @@ isi! {
         /// Ballot round identifier.
         pub round_id: String,
         /// Exact sortition digest expected by the operator.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub sortition_digest: [u8; 32],
     }
 }
@@ -1194,7 +1194,7 @@ isi! {
     /// Submit one canonical juror commitment to an authoritative moderation case.
     pub struct SubmitSorafsModerationCommit {
         /// Exact canonical Norito `SoraFsModerationBallotCommitV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub commit_payload: Vec<u8>,
     }
 }
@@ -1215,7 +1215,7 @@ isi! {
         /// Optional canonical juror target.
         pub target_juror: Option<AccountId>,
         /// Digest of external evidence; raw evidence is not placed on-chain.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub evidence_digest: [u8; 32],
         /// Bounded payload-free reason label.
         pub reason: String,
@@ -1244,7 +1244,7 @@ isi! {
     /// Submit one canonical juror reveal to an authoritative moderation case.
     pub struct SubmitSorafsModerationReveal {
         /// Exact canonical Norito `SoraFsModerationBallotRevealV1` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub reveal_payload: Vec<u8>,
     }
 }

@@ -426,480 +426,12 @@ fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> Instruct
         })
 }
 
-/// Attach stable wire identifiers for instructions that expose one explicitly.
+/// Attach stable wire identifiers without rebuilding any typed codec adapter.
+///
+/// Every concrete codec path is minted exactly once by [`ALL_REGISTRARS`].
+/// This pass only replaces lookup metadata on the existing entries.
 fn with_stable_ids(registry: InstructionRegistry) -> InstructionRegistry {
-    let registry = with_core_stable_ids(registry);
-    let registry = with_soracloud_stable_ids(registry);
-    let registry = with_consensus_stable_ids(registry);
-    let registry = with_identity_stable_ids(registry);
-    let registry = with_runtime_upgrade_stable_ids(registry);
     wire_ids::apply(registry)
-}
-
-fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
-    // Provide a stable wire id for a commonly used instruction as a starting point.
-    // Others continue to use their Rust `type_name` as the wire id.
-    registry = registry.register_with_id_slice::<Log>(Log::WIRE_ID);
-    registry = registry.register_with_id_slice::<SetParameter>(SetParameter::WIRE_ID);
-    registry = registry.register_with_id_slice::<ExecuteTrigger>(ExecuteTrigger::WIRE_ID);
-    registry = registry.register_with_id_slice::<RegisterBox>(RegisterBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<UnregisterBox>(UnregisterBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<MintBox>(MintBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<BurnBox>(BurnBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<TransferBox>(TransferBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<TransferAssetBatch>(TransferAssetBatch::WIRE_ID);
-    registry =
-        registry.register_with_id_slice::<rwa::RwaInstructionBox>(rwa::RwaInstructionBox::WIRE_ID);
-    registry = registry
-        .register_with_id_slice::<repo::RepoInstructionBox>(repo::RepoInstructionBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<settlement::SettlementInstructionBox>(
-        settlement::SettlementInstructionBox::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<zk::ScheduleConfidentialPolicyTransition>(
-        "zk::ScheduleConfidentialPolicyTransition",
-    );
-    registry = registry.register_with_id_slice::<zk::CancelConfidentialPolicyTransition>(
-        "zk::CancelConfidentialPolicyTransition",
-    );
-    registry = with_privacy_stable_ids(registry);
-    registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
-        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
-    );
-    macro_rules! register_musubi_v1 {
-        ($registry:ident; $($instruction:ident),+ $(,)?) => {
-            $(
-                $registry = $registry.register_with_id_slice::<musubi::$instruction>(
-                    musubi::$instruction::WIRE_ID,
-                );
-            )+
-        };
-    }
-    register_musubi_v1!(
-        registry;
-        RegisterMusubiNamespaceBindingV1,
-        RegisterMusubiArchiveV1,
-        RegisterMusubiProviderBundleAttestationV1,
-        AddMusubiArchiveLocationV1,
-        RetireMusubiArchiveLocationV1,
-        PublishMusubiReleaseV1,
-        SetMusubiReleaseYankV1,
-        SetMusubiPackageMetadataV1,
-        InviteMusubiPackageMaintainerV1,
-        AcceptMusubiPackageMaintainerV1,
-        RevokeMusubiPackageMaintainerInvitationV1,
-        SetMusubiPackageMaintainerRoleV1,
-        RemoveMusubiPackageMaintainerV1,
-        RegisterMusubiAliasV1,
-        RecoverMusubiPackageV1,
-        RetargetMusubiAliasV1,
-        SetMusubiArtifactTakedownV1,
-        SetMusubiRegistryPolicyV1,
-        AssertMusubiReleaseDigestV1,
-    );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
-        "iroha.staking.activate_public_lane_validator",
-    );
-    registry = registry
-        .register_with_id_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
-            "iroha.staking.rebind_public_lane_validator_peer",
-        );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ExitPublicLaneValidator>(
-        "iroha.staking.exit_public_lane_validator",
-    );
-    registry = registry.register_with_id_slice::<Upgrade>(Upgrade::WIRE_ID);
-    registry = registry.register_with_id_slice::<CustomInstruction>(CustomInstruction::WIRE_ID);
-    registry = registry.register_with_id_slice::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
-    registry
-}
-
-fn with_privacy_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
-    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
-        privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>(
-            privacy::SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
-        );
-    registry = registry
-        .register_with_id_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>(
-            privacy::SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
-        );
-    registry = registry.register_with_id_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>(
-        privacy::TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::PublishPrivacyRootV1>(
-        privacy::PublishPrivacyRootV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyOrchardPoolV1>(
-        privacy::BootstrapPrivacyOrchardPoolV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyProofManagedPoolV1>(
-        privacy::BootstrapPrivacyProofManagedPoolV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyPgcAccountsV1>(
-        privacy::BootstrapPrivacyPgcAccountsV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyZkAmsRegistryV1>(
-        privacy::BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkAcePolicyV1>(
-        privacy::RegisterPrivacyZkAcePolicyV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkAcePolicyV1>(
-        privacy::RotatePrivacyZkAcePolicyV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkAcePolicyV1>(
-        privacy::RevokePrivacyZkAcePolicyV1::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>(
-            privacy::RegisterPrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
-        );
-    registry = registry
-        .register_with_id_slice::<privacy::RotatePrivacyBootleLanternIssuerPolicyV1>(
-            privacy::RotatePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
-        );
-    registry = registry
-        .register_with_id_slice::<privacy::RevokePrivacyBootleLanternIssuerPolicyV1>(
-            privacy::RevokePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
-        );
-    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyVegaIssuerV1>(
-        privacy::RegisterPrivacyVegaIssuerV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RotatePrivacyVegaIssuerV1>(
-        privacy::RotatePrivacyVegaIssuerV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RevokePrivacyVegaIssuerV1>(
-        privacy::RevokePrivacyVegaIssuerV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>(
-        privacy::RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkX509TrustAnchorV1>(
-        privacy::RotatePrivacyZkX509TrustAnchorV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509TrustAnchorV1>(
-        privacy::RevokePrivacyZkX509TrustAnchorV1::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<privacy::RegisterPrivacyZkX509CertificatePolicyV1>(
-            privacy::RegisterPrivacyZkX509CertificatePolicyV1::WIRE_ID,
-        );
-    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkX509CertificatePolicyV1>(
-        privacy::RotatePrivacyZkX509CertificatePolicyV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>(
-        privacy::RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkX509CrlV1>(
-        privacy::RegisterPrivacyZkX509CrlV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkX509CrlV1>(
-        privacy::RotatePrivacyZkX509CrlV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509CrlV1>(
-        privacy::RevokePrivacyZkX509CrlV1::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
-        privacy::SubmitPrivacyProofV1::WIRE_ID,
-    );
-    registry
-}
-
-#[allow(clippy::too_many_lines)]
-fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
-    registry = registry.register_with_id_slice::<soracloud::DeploySoracloudService>(
-        "soracloud::DeploySoracloudService",
-    );
-    registry = registry.register_with_id_slice::<soracloud::UpgradeSoracloudService>(
-        "soracloud::UpgradeSoracloudService",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RollbackSoracloudService>(
-        "soracloud::RollbackSoracloudService",
-    );
-    registry = registry.register_with_id_slice::<soracloud::MutateSoracloudState>(
-        "soracloud::MutateSoracloudState",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RegisterSoracloudFhePolicy>(
-        "soracloud::RegisterSoracloudFhePolicy",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RotateSoracloudFhePolicy>(
-        "soracloud::RotateSoracloudFhePolicy",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RevokeSoracloudFhePolicy>(
-        "soracloud::RevokeSoracloudFhePolicy",
-    );
-    registry = registry
-        .register_with_id_slice::<soracloud::RunSoracloudFheJob>("soracloud::RunSoracloudFheJob");
-    registry = registry.register_with_id_slice::<soracloud::RecordSoracloudDecryptionRequest>(
-        "soracloud::RecordSoracloudDecryptionRequest",
-    );
-    registry = registry.register_with_id_slice::<soracloud::JoinSoracloudHfSharedLease>(
-        "soracloud::JoinSoracloudHfSharedLease",
-    );
-    registry = registry.register_with_id_slice::<soracloud::LeaveSoracloudHfSharedLease>(
-        "soracloud::LeaveSoracloudHfSharedLease",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RenewSoracloudHfSharedLease>(
-        "soracloud::RenewSoracloudHfSharedLease",
-    );
-    registry = registry.register_with_id_slice::<soracloud::AdvertiseSoracloudModelHost>(
-        "soracloud::AdvertiseSoracloudModelHost",
-    );
-    registry = registry.register_with_id_slice::<soracloud::HeartbeatSoracloudModelHost>(
-        "soracloud::HeartbeatSoracloudModelHost",
-    );
-    registry = registry.register_with_id_slice::<soracloud::WithdrawSoracloudModelHost>(
-        "soracloud::WithdrawSoracloudModelHost",
-    );
-    registry = registry.register_with_id_slice::<soracloud::AdvertiseSoracloudInrouHost>(
-        "soracloud::AdvertiseSoracloudInrouHost",
-    );
-    registry = registry.register_with_id_slice::<soracloud::WithdrawSoracloudInrouHost>(
-        "soracloud::WithdrawSoracloudInrouHost",
-    );
-    registry = registry.register_with_id_slice::<soracloud::ReconcileSoracloudInrouPlacements>(
-        "soracloud::ReconcileSoracloudInrouPlacements",
-    );
-    registry = registry.register_with_id_slice::<soracloud::DeploySoracloudAgentApartment>(
-        "soracloud::DeploySoracloudAgentApartment",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RenewSoracloudAgentLease>(
-        "soracloud::RenewSoracloudAgentLease",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RestartSoracloudAgentApartment>(
-        "soracloud::RestartSoracloudAgentApartment",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RevokeSoracloudAgentPolicy>(
-        "soracloud::RevokeSoracloudAgentPolicy",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RequestSoracloudAgentWalletSpend>(
-        "soracloud::RequestSoracloudAgentWalletSpend",
-    );
-    registry = registry.register_with_id_slice::<soracloud::ApproveSoracloudAgentWalletSpend>(
-        "soracloud::ApproveSoracloudAgentWalletSpend",
-    );
-    registry = registry.register_with_id_slice::<soracloud::EnqueueSoracloudAgentMessage>(
-        "soracloud::EnqueueSoracloudAgentMessage",
-    );
-    registry = registry.register_with_id_slice::<soracloud::AcknowledgeSoracloudAgentMessage>(
-        "soracloud::AcknowledgeSoracloudAgentMessage",
-    );
-    registry = registry.register_with_id_slice::<soracloud::AllowSoracloudAgentAutonomyArtifact>(
-        "soracloud::AllowSoracloudAgentAutonomyArtifact",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RunSoracloudAgentAutonomy>(
-        "soracloud::RunSoracloudAgentAutonomy",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RecordSoracloudAgentAutonomyExecution>(
-        "soracloud::RecordSoracloudAgentAutonomyExecution",
-    );
-    registry = registry.register_with_id_slice::<soracloud::StartSoracloudTrainingJob>(
-        "soracloud::StartSoracloudTrainingJob",
-    );
-    registry = registry.register_with_id_slice::<soracloud::CheckpointSoracloudTrainingJob>(
-        "soracloud::CheckpointSoracloudTrainingJob",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RetrySoracloudTrainingJob>(
-        "soracloud::RetrySoracloudTrainingJob",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RegisterSoracloudModelArtifact>(
-        "soracloud::RegisterSoracloudModelArtifact",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RegisterSoracloudModelWeight>(
-        "soracloud::RegisterSoracloudModelWeight",
-    );
-    registry = registry.register_with_id_slice::<soracloud::PromoteSoracloudModelWeight>(
-        "soracloud::PromoteSoracloudModelWeight",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RollbackSoracloudModelWeight>(
-        "soracloud::RollbackSoracloudModelWeight",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RegisterSoracloudUploadedModelBundle>(
-        "soracloud::RegisterSoracloudUploadedModelBundle",
-    );
-    registry = registry.register_with_id_slice::<soracloud::FinalizeSoracloudUploadedModelBundle>(
-        "soracloud::FinalizeSoracloudUploadedModelBundle",
-    );
-    registry = registry.register_with_id_slice::<soracloud::AdvanceSoracloudRollout>(
-        "soracloud::AdvanceSoracloudRollout",
-    );
-    registry = registry.register_with_id_slice::<soracloud::SetSoracloudRuntimeState>(
-        "soracloud::SetSoracloudRuntimeState",
-    );
-    registry = registry.register_with_id_slice::<soracloud::SetSoracloudInrouReplicaRuntimeState>(
-        "soracloud::SetSoracloudInrouReplicaRuntimeState",
-    );
-    registry = registry
-        .register_with_id_slice::<soracloud::ClearSoracloudInrouReplicaRuntimeState>(
-            "soracloud::ClearSoracloudInrouReplicaRuntimeState",
-        );
-    registry = registry.register_with_id_slice::<soracloud::ReportSoracloudServiceLeaseUsage>(
-        "soracloud::ReportSoracloudServiceLeaseUsage",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RecordSoracloudMailboxMessage>(
-        "soracloud::RecordSoracloudMailboxMessage",
-    );
-    registry = registry.register_with_id_slice::<soracloud::RecordSoracloudRuntimeReceipt>(
-        "soracloud::RecordSoracloudRuntimeReceipt",
-    );
-    registry = registry
-        .register_with_id_slice::<soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>(
-            "soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt",
-        );
-    registry
-}
-
-fn with_consensus_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
-    registry = registry.register_with_id_slice::<consensus_keys::RegisterConsensusKey>(
-        "consensus::RegisterConsensusKey",
-    );
-    registry = registry.register_with_id_slice::<consensus_keys::RotateConsensusKey>(
-        "consensus::RotateConsensusKey",
-    );
-    registry = registry.register_with_id_slice::<consensus_keys::DisableConsensusKey>(
-        "consensus::DisableConsensusKey",
-    );
-    registry = registry.register_with_id_slice::<endorsement::RegisterDomainCommittee>(
-        "nexus::RegisterDomainCommittee",
-    );
-    registry = registry.register_with_id_slice::<endorsement::SetDomainEndorsementPolicy>(
-        "nexus::SetDomainEndorsementPolicy",
-    );
-    registry = registry.register_with_id_slice::<endorsement::SubmitDomainEndorsement>(
-        "nexus::SubmitDomainEndorsement",
-    );
-    registry = registry
-        .register_with_id_slice::<alias_setup::EnsureAlias>(alias_setup::EnsureAlias::WIRE_ID);
-    registry = registry.register_with_id_slice::<alias_setup::RenewAliasLease>(
-        alias_setup::RenewAliasLease::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<alias_setup::ConfigureAliasAutoRenew>(
-        alias_setup::ConfigureAliasAutoRenew::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<alias_setup::RebindAccountAlias>(
-        alias_setup::RebindAccountAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<alias_setup::CompareAndSetPrimaryAccountAlias>(
-        alias_setup::CompareAndSetPrimaryAccountAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<account_recovery::ReplaceAccountController>(
-        account_recovery::ReplaceAccountController::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<account_recovery::SetAccountRecoveryPolicy>(
-        account_recovery::SetAccountRecoveryPolicy::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<account_recovery::ClearAccountRecoveryPolicy>(
-        account_recovery::ClearAccountRecoveryPolicy::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<account_recovery::ProposeAccountRecovery>(
-        account_recovery::ProposeAccountRecovery::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<account_recovery::ApproveAccountRecovery>(
-        account_recovery::ApproveAccountRecovery::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<account_recovery::CancelAccountRecovery>(
-        account_recovery::CancelAccountRecovery::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<account_recovery::FinalizeAccountRecovery>(
-        account_recovery::FinalizeAccountRecovery::WIRE_ID,
-    );
-    registry
-}
-
-fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
-    registry = registry.register_with_id_slice::<ram_lfe::RegisterRamLfeProgramPolicy>(
-        "identity::RegisterRamLfeProgramPolicy",
-    );
-    registry = registry.register_with_id_slice::<ram_lfe::ActivateRamLfeProgramPolicy>(
-        "identity::ActivateRamLfeProgramPolicy",
-    );
-    registry = registry.register_with_id_slice::<ram_lfe::DeactivateRamLfeProgramPolicy>(
-        "identity::DeactivateRamLfeProgramPolicy",
-    );
-    registry = registry.register_with_id_slice::<identifier::RegisterIdentifierPolicy>(
-        "identity::RegisterIdentifierPolicy",
-    );
-    registry = registry.register_with_id_slice::<identifier::ActivateIdentifierPolicy>(
-        "identity::ActivateIdentifierPolicy",
-    );
-    registry =
-        registry.register_with_id_slice::<identifier::ClaimIdentifier>("identity::ClaimIdentifier");
-    registry = registry
-        .register_with_id_slice::<identifier::RevokeIdentifier>("identity::RevokeIdentifier");
-    registry = registry.register_with_id_slice::<asset_alias::SetAssetDefinitionAlias>(
-        asset_alias::SetAssetDefinitionAlias::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<asset_transfer_control::SetAssetTransferAvailability>(
-            asset_transfer_control::SetAssetTransferAvailability::WIRE_ID,
-        );
-    registry = registry
-        .register_with_id_slice::<asset_transfer_control::SetAssetTransferBlacklist>(
-            asset_transfer_control::SetAssetTransferBlacklist::WIRE_ID,
-        );
-    registry = registry.register_with_id_slice::<asset_transfer_control::SetAssetTransferControl>(
-        asset_transfer_control::SetAssetTransferControl::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<asset_transfer_control::SetAssetHoldingLimit>(
-        asset_transfer_control::SetAssetHoldingLimit::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<contract_alias::SetContractAlias>(
-        contract_alias::SetContractAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<nexus::SetLaneRelayEmergencyValidators>(
-        "nexus::SetLaneRelayEmergencyValidators",
-    );
-    registry = registry.register_with_id_slice::<nexus::RegisterVerifiedLaneRelay>(
-        "nexus::RegisterVerifiedLaneRelay",
-    );
-    registry = registry.register_with_id_slice::<nexus::RegisterVerifiedFeeSponsorVaultAllocation>(
-        "nexus::RegisterVerifiedFeeSponsorVaultAllocation",
-    );
-    registry = registry
-        .register_with_id_slice::<nexus::CreateFeeSponsorProgram>("nexus::CreateFeeSponsorProgram");
-    registry = registry.register_with_id_slice::<nexus::StageFeeSponsorProgramRevision>(
-        "nexus::StageFeeSponsorProgramRevision",
-    );
-    registry = registry.register_with_id_slice::<nexus::ActivateFeeSponsorProgramRevision>(
-        "nexus::ActivateFeeSponsorProgramRevision",
-    );
-    registry = registry
-        .register_with_id_slice::<nexus::PauseFeeSponsorProgram>("nexus::PauseFeeSponsorProgram");
-    registry = registry.register_with_id_slice::<nexus::BeginCloseFeeSponsorProgram>(
-        "nexus::BeginCloseFeeSponsorProgram",
-    );
-    registry = registry
-        .register_with_id_slice::<nexus::CloseFeeSponsorProgram>("nexus::CloseFeeSponsorProgram");
-    registry = registry.register_with_id_slice::<nexus::EnrollFeeSponsorBeneficiary>(
-        "nexus::EnrollFeeSponsorBeneficiary",
-    );
-    registry = registry.register_with_id_slice::<nexus::UnenrollFeeSponsorBeneficiary>(
-        "nexus::UnenrollFeeSponsorBeneficiary",
-    );
-    registry = registry
-        .register_with_id_slice::<nexus::FundFeeSponsorProgram>("nexus::FundFeeSponsorProgram");
-    registry = registry.register_with_id_slice::<nexus::WithdrawFeeSponsorProgram>(
-        "nexus::WithdrawFeeSponsorProgram",
-    );
-    registry
-}
-
-fn with_runtime_upgrade_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
-    registry = registry.register_with_id_slice::<runtime_upgrade::ProposeRuntimeUpgrade>(
-        runtime_upgrade::ProposeRuntimeUpgrade::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<runtime_upgrade::ActivateRuntimeUpgrade>(
-        runtime_upgrade::ActivateRuntimeUpgrade::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<runtime_upgrade::CancelRuntimeUpgrade>(
-        runtime_upgrade::CancelRuntimeUpgrade::WIRE_ID,
-    );
-    registry
 }
 
 #[cfg(test)]
@@ -1140,14 +672,112 @@ mod tests {
     }
 
     #[test]
+    fn stable_wire_id_remapping_preserves_every_codec_byte_path() {
+        let typed = apply_registrars(ALL_REGISTRARS.iter().copied());
+        let remapped = with_stable_ids(typed.clone());
+
+        for inventory in wire_ids::ALL {
+            let type_name = (inventory.type_name)();
+            let before = typed
+                .entry_for_type_name(type_name)
+                .expect("typed registrar entry");
+            let after = remapped
+                .entry_for_type_name(type_name)
+                .expect("wire-id-remapped entry");
+
+            assert_eq!(after.type_name, before.type_name, "{type_name}");
+            assert!(std::ptr::fn_addr_eq(after.ctor, before.ctor), "{type_name}");
+            assert!(
+                std::ptr::fn_addr_eq(after.frame, before.frame),
+                "{type_name}"
+            );
+            assert!(
+                std::ptr::fn_addr_eq(after.frame_len, before.frame_len),
+                "{type_name}"
+            );
+            assert_eq!(after.wire_id, inventory.wire_id, "{type_name}");
+        }
+    }
+
+    #[test]
+    fn instruction_vtable_frame_matches_canonical_concrete_bytes() {
+        let concrete = Log::new(Level::INFO, "vtable frame parity".to_owned());
+        let boxed = InstructionBox::from(concrete.clone());
+        let inner = super::super::peel_instruction_box(&*boxed);
+        let expected = norito::encode_canonical(&concrete).expect("canonical concrete frame");
+        let mut actual = Vec::new();
+
+        inner
+            .dyn_write_frame(&mut actual)
+            .expect("stream canonical trait-object frame");
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            inner
+                .dyn_frame_len()
+                .expect("exact trait-object frame length"),
+            expected.len()
+        );
+    }
+
+    #[test]
+    fn source_has_one_bounded_typed_codec_registration_inventory() {
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 347;
+        #[cfg(feature = "governance")]
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 347;
+        #[cfg(not(feature = "governance"))]
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 328;
+
+        let source = include_str!("registry.rs");
+        let production = source
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production registry source");
+        let inventory_and_tail = production
+            .split_once("const ALL_REGISTRARS: &[Registrar] = &[")
+            .expect("typed registrar inventory");
+        let (inventory, tail) = inventory_and_tail
+            .1
+            .split_once("\n];")
+            .expect("typed registrar inventory boundary");
+
+        assert_eq!(
+            inventory.matches("::<").count(),
+            EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS,
+            "typed codec registrations changed; update the canonical inventory and this bound together"
+        );
+        assert_eq!(
+            EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
+            wire_ids::ALL.len(),
+            "typed codec and wire-ID inventories must remain one-to-one"
+        );
+        assert_eq!(
+            EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS,
+            ALL_REGISTRARS.len(),
+            "enabled typed codec registrations exceeded their pinned bound"
+        );
+        for forbidden in [
+            "register::<",
+            "register_slice::<",
+            "register_with_id::<",
+            "register_with_id_slice::<",
+        ] {
+            assert!(
+                !tail.contains(forbidden),
+                "typed codec registration escaped the sole bounded inventory: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
     fn instruction_wire_ids_match_v1_golden_inventory_hash() {
         use sha2::{Digest, Sha256};
 
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "68123bb16922f819106520b25bc0e3df75196a2e271f99f37edc7171bf736839";
+            "6b62eae4361bed47f9b3d76ee2c4d34c5c1c9e6f0239db424d9c8c72c14e423e";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "8420134d76274e6ed35c8d0960d2da7f20738fb83fbdf24f86bebd6a5d93e5a9";
+            "10a06c47bd6e3c28f02a826be08c26b721057427e93f602b0efebf0622253a53";
 
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
@@ -1177,7 +807,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                17,
+                19,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(

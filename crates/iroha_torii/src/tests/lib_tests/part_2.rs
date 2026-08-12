@@ -2857,7 +2857,7 @@ async fn alias_lookup_by_account_rejects_malformed_json_body() {
 }
 
 #[tokio::test]
-async fn alias_lookup_by_account_rejects_cross_dataspace_sources_before_execution() {
+async fn alias_lookup_by_account_merges_cross_dataspace_aliases_and_recomputes_total() {
     let authority_keypair = checked_torii_test_ed25519_keypair(
         0xa7,
         "derive alias lookup fanout authority fixture key",
@@ -2898,22 +2898,36 @@ async fn alias_lookup_by_account_rejects_cross_dataspace_sources_before_executio
         axum::body::Bytes::from(body),
     )
     .await
-    .expect("handler should return a fixed multi-route rejection")
+    .expect("handler should succeed")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
             .headers()
-            .get("x-iroha-reject-code")
+            .get("x-iroha-fanout-routes-attempted")
             .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
+        Some("3")
+    );
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let dto: routing::AliasLookupByAccountResponseDto =
+        norito::json::from_slice(&body).expect("json decode");
+    assert_eq!(dto.account_id, authority.to_string());
+    assert_eq!(dto.total, 2);
+    assert_eq!(dto.source.as_deref(), Some("fanout"));
+    assert!(
+        dto.items
+            .iter()
+            .any(|item| item.alias == "merchant@universal"),
+        "merged response should include the universal alias"
     );
     assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede either alias source"
+        dto.items
+            .iter()
+            .any(|item| item.alias == "merchant@restricted"),
+        "merged response should include the restricted alias"
     );
 }

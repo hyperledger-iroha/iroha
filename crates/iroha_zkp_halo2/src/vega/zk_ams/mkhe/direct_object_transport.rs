@@ -81,6 +81,14 @@ pub enum ZkAmsMkheDirectObjectKindV1 {
     DecryptionSharePolynomial = 11,
     /// Exact canonical native `ZADP` decryption-relation proof.
     DecryptionRelationProof = 12,
+    /// One canonical limb of common collective-public-key `a`.
+    CollectivePublicA = 13,
+    /// One canonical limb of aggregate collective-public-key `b = sum_i b_i`.
+    CollectivePublicB = 14,
+    /// One canonical limb of a collective ciphertext's constant component.
+    CollectiveCiphertextC0 = 15,
+    /// One canonical limb of a collective ciphertext's linear component.
+    CollectiveCiphertextC1 = 16,
 }
 
 impl ZkAmsMkheDirectObjectKindV1 {
@@ -94,7 +102,11 @@ impl ZkAmsMkheDirectObjectKindV1 {
             | Self::AggregateH0
             | Self::AggregateH1
             | Self::CpkPartyB
-            | Self::DecryptionSharePolynomial => DIRECT_RNS_POLYNOMIAL_MAX_BYTES_V1,
+            | Self::DecryptionSharePolynomial
+            | Self::CollectivePublicA
+            | Self::CollectivePublicB
+            | Self::CollectiveCiphertextC0
+            | Self::CollectiveCiphertextC1 => DIRECT_RNS_POLYNOMIAL_MAX_BYTES_V1,
             Self::ProofEnvelope | Self::CpkRelationProof | Self::DecryptionRelationProof => {
                 DIRECT_RELATION_PROOF_MAX_BYTES_V1
             }
@@ -119,6 +131,10 @@ impl TryFrom<u8> for ZkAmsMkheDirectObjectKindV1 {
             10 => Ok(Self::CpkRelationProof),
             11 => Ok(Self::DecryptionSharePolynomial),
             12 => Ok(Self::DecryptionRelationProof),
+            13 => Ok(Self::CollectivePublicA),
+            14 => Ok(Self::CollectivePublicB),
+            15 => Ok(Self::CollectiveCiphertextC0),
+            16 => Ok(Self::CollectiveCiphertextC1),
             _ => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
         }
     }
@@ -2314,6 +2330,10 @@ mod tests {
             ZkAmsMkheDirectObjectKindV1::CpkRelationProof,
             ZkAmsMkheDirectObjectKindV1::DecryptionSharePolynomial,
             ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
+            ZkAmsMkheDirectObjectKindV1::CollectivePublicA,
+            ZkAmsMkheDirectObjectKindV1::CollectivePublicB,
+            ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC0,
+            ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC1,
         ] {
             let pointer =
                 ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &payload(257)).unwrap();

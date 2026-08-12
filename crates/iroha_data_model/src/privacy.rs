@@ -524,7 +524,7 @@ macro_rules! define_privacy_digest {
         )]
         pub struct $name(
             /// The exact 32-byte digest value.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
             pub [u8; 32],
         );
 
@@ -823,7 +823,7 @@ macro_rules! define_ristretto255_encoding {
         )]
         pub struct $name(
             /// Exact canonical compressed Ristretto255 encoding.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
             pub [u8; 32],
         );
 

@@ -7,7 +7,7 @@ isi! {
         /// Expected bundle identifier (BLAKE3 of the tar archive).
         pub bundle_id: ContentBundleId,
         /// Raw tar archive bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub tarball: Vec<u8>,
         /// Optional block height after which the bundle expires.
         pub expires_at_height: Option<u64>,

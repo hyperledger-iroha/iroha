@@ -3,11 +3,12 @@
 use std::{any::TypeId, collections::BTreeSet, io::Cursor};
 
 use iroha_data_model::{
-    prelude::{Pagination, QueryParams, SelectorTuple},
+    prelude::{Pagination, SelectorTuple},
     query::{
         QueryOutput, QueryOutputBatchBox,
         dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
         error::QueryExecutionFail as Error,
+        parameters::QueryParams,
     },
 };
 use norito::core::NoritoSerialize;

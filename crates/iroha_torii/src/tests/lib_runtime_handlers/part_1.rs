@@ -1938,6 +1938,23 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let torii_proxy_http_ingress_envelope =
         ToriiProxyHttpIngressEnvelope::from_max_content_bytes(proxy_frame_bytes)
             .expect("default proxy HTTP memory envelope fits");
+    let query_fanout_inflight = QueryWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
+        .expect("default query memory pool fits weighted semaphore geometry");
+    let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
+        usize::try_from(query_fanout_inflight.capacity_bytes())
+            .expect("default weighted query pool capacity fits usize"),
+    );
+    let ordinary_query_policy = OrdinaryQueryServerPolicy::new(
+        routing::AppQueryLimits::default(),
+        query_memory.ingress,
+        QueryFanoutMemoryEnvelope::for_body_admission(query_fanout_working_set_bytes)
+            .expect("default query memory pool admits ordinary response geometry"),
+    )
+    .expect("default query memory pool admits ordinary query limits");
+    assert!(
+        query_fanout_inflight.can_reserve_parts(ordinary_query_policy.start_reservation_parts()),
+        "default query memory pool admits one stored ordinary query"
+    );
 
     Arc::new(AppState {
         events,
@@ -1949,19 +1966,28 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             .unwrap_or(usize::MAX),
         torii_proxy_max_response_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
-        query_fanout_working_set_bytes: query_memory.fanout_working_set_bytes,
+        query_fanout_working_set_bytes,
         query_ingress_envelope: query_memory.ingress,
         torii_proxy_http_ingress_envelope,
         torii_proxy_memory_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
         query_ingress_inflight: Arc::new(tokio::sync::Semaphore::new(
             query_memory.ingress_slots.get(),
         )),
-        query_fanout_inflight: Arc::new(tokio::sync::Semaphore::new(
-            query_memory.fanout_slots.get(),
-        )),
+        query_fanout_inflight,
+        #[cfg(feature = "app_api")]
+        app_api_routed_read_body_read_timeout: Duration::from_millis(
+            defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
+        ),
+        ordinary_query_policy,
         transaction_ingress_compute_inflight: Arc::new(tokio::sync::Semaphore::new(
             defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS.get(),
         )),
+        #[cfg(feature = "app_api")]
+        verified_source_compile_inflight: Arc::new(tokio::sync::Semaphore::new(
+            defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES.get(),
+        )),
+        #[cfg(feature = "app_api")]
+        verified_source_body_read_timeout: defaults::torii::VERIFIED_SOURCE_BODY_READ_TIMEOUT,
         transaction_batch_max_transactions:
             defaults::torii::TRANSACTION_INGRESS_MAX_BATCH_TRANSACTIONS.get(),
         transaction_batch_max_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())

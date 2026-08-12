@@ -33643,31 +33643,13 @@ impl State {
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Vec<AccountId> {
         let block_height = self.lane_authority_height();
-        Self::authoritative_lane_validator_accounts_from_sources(
-            &self.world.view(),
-            lane_id,
-            validator_mode,
-            manifest_registry,
-            nexus,
-            block_height,
-        )
-    }
-
-    fn authoritative_lane_validator_accounts_from_sources(
-        world: &impl WorldReadOnly,
-        lane_id: LaneId,
-        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
-        manifest_registry: &LaneManifestRegistry,
-        nexus: &iroha_config::parameters::actual::Nexus,
-        block_height: u64,
-    ) -> Vec<AccountId> {
         let Some(inputs) =
             Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
         else {
             return Vec::new();
         };
         Self::authoritative_lane_validator_accounts_with_inputs(
-            world,
+            &self.world.view(),
             lane_id,
             manifest_registry,
             &inputs,

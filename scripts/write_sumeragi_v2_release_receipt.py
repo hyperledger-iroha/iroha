@@ -51,6 +51,7 @@ canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manif
 _RELEASE_RECEIPT_COMPONENT_FILES = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
     "write_sumeragi_v2_release_receipt_corridor_log.py",
+    "write_sumeragi_v2_release_receipt_publish_helpers.py",
 )
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -7686,36 +7687,6 @@ def _existing_receipt_contract(output: Path, data: bytes) -> PathContract:
         expected_size=len(data),
     )
 
-
-def _complete_write(descriptor: int, data: bytes) -> None:
-    view = memoryview(data)
-    while view:
-        try:
-            written = os.write(descriptor, view)
-        except InterruptedError:
-            continue
-        if written <= 0:
-            raise ReceiptError("terminal receipt write made no progress")
-        view = view[written:]
-
-
-def _owned_unlink_name(
-    directory_fd: int, name: str, device: int, inode: int
-) -> bool:
-    try:
-        metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    except (FileNotFoundError, OSError):
-        return False
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or (metadata.st_dev, metadata.st_ino) != (device, inode)
-    ):
-        return False
-    try:
-        os.unlink(name, dir_fd=directory_fd)
-    except OSError:
-        return False
-    return True
 
 
 def _publish_terminal_receipt(

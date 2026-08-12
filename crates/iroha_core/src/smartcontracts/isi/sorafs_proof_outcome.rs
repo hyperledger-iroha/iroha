@@ -194,18 +194,29 @@ fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionE
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
+    decode_state_measured(bytes, label).map(|(value, _)| value)
+}
+
+fn decode_state_measured<T>(
+    bytes: &[u8],
+    label: &str,
+) -> Result<(T, usize), InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
     if bytes.is_empty() || bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
             "{label} length {} is outside 1..={STATE_MAX_BYTES}",
             bytes.len()
         )));
     }
-    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
-        bytes.len(),
-        STATE_LIMITS,
-    )
-    .map_err(InstructionExecutionError::Query)?;
-    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+    let limits =
+        crate::smartcontracts::isi::query::singular_query_decode_limits(bytes.len(), STATE_LIMITS)
+            .map_err(InstructionExecutionError::Query)?;
+    let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+        decode_from_bytes_with_limits::<T>(bytes, limits)
+    });
+    let value = value.map_err(|error| {
         if crate::smartcontracts::isi::query::singular_query_limits_active()
             && error.is_decode_resource_limit()
         {
@@ -214,11 +225,55 @@ where
             corrupt_state(format!("failed to decode {label}: {error}"))
         }
     })?;
-    if encode_state(&value, label)? != bytes {
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            corrupt_state(format!("{label} is not exact canonical Norito"))
+        } else {
+            corrupt_state(format!("failed to encode {label}: {error}"))
+        }
+    })?;
+    Ok((value, usage.total_allocated_bytes()))
+}
+
+fn decode_state_for_current<T>(
+    bytes: &[u8],
+    label: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.is_empty() || bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
-            "{label} is not exact canonical Norito"
+            "{label} length {} is outside 1..={STATE_MAX_BYTES}",
+            bytes.len()
         )));
     }
+    let limits = current
+        .decode_limits(bytes.len(), STATE_LIMITS)
+        .map_err(InstructionExecutionError::Query)?;
+    let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+        decode_from_bytes_with_limits::<T>(bytes, limits)
+    });
+    let value = value.map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            corrupt_state(format!("{label} is not exact canonical Norito"))
+        } else {
+            corrupt_state(format!("failed to encode {label}: {error}"))
+        }
+    })?;
+    current
+        .add_nested(usage.total_allocated_bytes())
+        .map_err(InstructionExecutionError::Query)?;
     Ok(value)
 }
 
@@ -237,17 +292,25 @@ where
             bytes.len()
         )));
     }
+    let limits =
+        crate::smartcontracts::isi::query::singular_query_decode_limits(bytes.len(), limits)
+            .map_err(InstructionExecutionError::Query)?;
     let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
-        invalid_parameter(format!("failed to decode canonical {label}: {error}"))
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            invalid_parameter(format!("failed to decode canonical {label}: {error}"))
+        }
     })?;
-    let canonical = norito::to_bytes(&value).map_err(|error| {
-        invalid_parameter(format!("failed to encode canonical {label}: {error}"))
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            invalid_parameter(format!("{label} is not exact canonical Norito"))
+        } else {
+            invalid_parameter(format!("failed to encode canonical {label}: {error}"))
+        }
     })?;
-    if canonical != bytes {
-        return Err(invalid_parameter(format!(
-            "{label} is not exact canonical Norito"
-        )));
-    }
     Ok(value)
 }
 
@@ -337,16 +400,30 @@ fn validate_mldsa_public_key(bytes: &[u8], label: &str) -> Result<(), Instructio
 fn policy_digest(
     policy: &ProofOutcomeSignerPolicyV1,
 ) -> Result<[u8; 32], InstructionExecutionError> {
-    let bytes = norito::to_bytes(policy)
+    let encoded_len = norito::core::encoded_frame_len(policy)
         .map_err(|error| invalid_parameter(format!("failed to encode signer policy: {error}")))?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(POLICY_DIGEST_DOMAIN_V1);
     hasher.update(
-        &u64::try_from(bytes.len())
-            .expect("slice length fits u64")
+        &u64::try_from(encoded_len)
+            .map_err(|_| invalid_parameter("signer policy length does not fit u64"))?
             .to_le_bytes(),
     );
-    hasher.update(&bytes);
+    struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+
+    impl std::io::Write for Blake3Writer<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    norito::core::write_frame_to_writer(policy, &mut Blake3Writer(&mut hasher))
+        .map_err(|error| invalid_parameter(format!("failed to encode signer policy: {error}")))?;
     Ok(*hasher.finalize().as_bytes())
 }
 
@@ -574,6 +651,13 @@ fn verify_pdp_attestation(
 }
 
 fn validate_outcome_record(record: &ProofOutcomeRecordV1) -> Result<(), InstructionExecutionError> {
+    validate_outcome_record_with_current(record, None)
+}
+
+fn validate_outcome_record_with_current(
+    record: &ProofOutcomeRecordV1,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<(), InstructionExecutionError> {
     if record.version != PROOF_OUTCOME_RECORD_VERSION_V1
         || record.identity_digest == [0; 32]
         || record.outcome_digest == [0; 32]
@@ -635,10 +719,17 @@ fn validate_outcome_record(record: &ProofOutcomeRecordV1) -> Result<(), Instruct
                     "stored PoTR outcome key or receipt metadata is invalid",
                 ));
             }
-            let receipt: PotrReceiptV1 = decode_state(
-                &projection.canonical_signed_receipt,
-                "stored canonical PoTR receipt",
-            )?;
+            let receipt: PotrReceiptV1 = match current.as_deref_mut() {
+                Some(current) => decode_state_for_current(
+                    &projection.canonical_signed_receipt,
+                    "stored canonical PoTR receipt",
+                    current,
+                )?,
+                None => decode_state(
+                    &projection.canonical_signed_receipt,
+                    "stored canonical PoTR receipt",
+                )?,
+            };
             receipt.validate().map_err(|error| {
                 corrupt_state(format!("stored PoTR receipt is invalid: {error}"))
             })?;
@@ -694,8 +785,21 @@ fn read_outcome(
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
-    let record: ProofOutcomeRecordV1 = decode_state(bytes, "proof-outcome record")?;
-    validate_outcome_record(&record)?;
+    let record: ProofOutcomeRecordV1 =
+        if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            let (record, allocation_bytes) = decode_state_measured(bytes, "proof-outcome record")?;
+            let mut current =
+                crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+                    allocation_bytes,
+                )
+                .map_err(InstructionExecutionError::Query)?;
+            validate_outcome_record_with_current(&record, Some(&mut current))?;
+            record
+        } else {
+            let record = decode_state(bytes, "proof-outcome record")?;
+            validate_outcome_record(&record)?;
+            record
+        };
     if record.kind() != kind
         || record.identity_digest != identity_digest
         || outcome_key(record.kind(), record.identity_digest) != key
@@ -781,7 +885,15 @@ fn validate_persisted_event(
     event: &ProofOutcomePersistedEventV1,
     expected_sequence: u64,
 ) -> Result<(), InstructionExecutionError> {
-    validate_outcome_record(&event.outcome)?;
+    validate_persisted_event_with_current(event, expected_sequence, None)
+}
+
+fn validate_persisted_event_with_current(
+    event: &ProofOutcomePersistedEventV1,
+    expected_sequence: u64,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<(), InstructionExecutionError> {
+    validate_outcome_record_with_current(&event.outcome, current)?;
     if event.sequence == 0
         || event.sequence != expected_sequence
         || event.target_block_height == 0
@@ -846,8 +958,22 @@ fn read_persisted_event(
     let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
         return Ok(None);
     };
-    let event: ProofOutcomePersistedEventV1 = decode_state(bytes, "proof-outcome committed event")?;
-    validate_persisted_event(&event, sequence)?;
+    let event: ProofOutcomePersistedEventV1 =
+        if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            let (event, allocation_bytes) =
+                decode_state_measured(bytes, "proof-outcome committed event")?;
+            let mut current =
+                crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+                    allocation_bytes,
+                )
+                .map_err(InstructionExecutionError::Query)?;
+            validate_persisted_event_with_current(&event, sequence, Some(&mut current))?;
+            event
+        } else {
+            let event = decode_state(bytes, "proof-outcome committed event")?;
+            validate_persisted_event(&event, sequence)?;
+            event
+        };
     Ok(Some(event))
 }
 
@@ -856,21 +982,33 @@ fn validate_event_outcome_binding(
     event: &ProofOutcomePersistedEventV1,
 ) -> Result<usize, InstructionExecutionError> {
     let key = outcome_key(event.outcome.kind(), event.outcome.identity_digest);
-    let state_bytes = world.smart_contract_state().get(&key).map_or(0, Vec::len);
-    let outcome = read_outcome(world, event.outcome.kind(), event.outcome.identity_digest)?
-        .ok_or_else(|| {
-            corrupt_state(format!(
-                "proof-outcome event sequence {} references a missing outcome",
-                event.sequence
-            ))
-        })?;
-    if outcome != event.outcome {
+    let state_bytes = world.smart_contract_state().get(&key).ok_or_else(|| {
+        corrupt_state(format!(
+            "proof-outcome event sequence {} references a missing outcome",
+            event.sequence
+        ))
+    })?;
+    if state_bytes.is_empty() || state_bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
-            "proof-outcome event sequence {} disagrees with authoritative state",
+            "proof-outcome event sequence {} references an outcome whose length is outside 1..={STATE_MAX_BYTES}",
             event.sequence
         )));
     }
-    Ok(state_bytes)
+    let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(STATE_MAX_BYTES);
+    if state_bytes.len() > maximum {
+        return Err(InstructionExecutionError::Query(
+            QueryExecutionFail::CapacityLimit,
+        ));
+    }
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    norito::verify_exact_frame(&event.outcome, state_bytes).map_err(|_| {
+        corrupt_state(format!(
+            "proof-outcome event sequence {} disagrees with authoritative state",
+            event.sequence
+        ))
+    })?;
+    Ok(state_bytes.len())
 }
 
 fn read_event_journal_head(
@@ -1235,7 +1373,7 @@ pub fn read_sorafs_proof_outcome_signer_policy_in_finalized_view(
 
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
-    event: &ProofOutcomePersistedEventV1,
+    event: ProofOutcomePersistedEventV1,
 ) -> Result<ProofOutcomeFinalizedEventV1, QueryExecutionFail> {
     let hash_index = event
         .target_block_height
@@ -1262,22 +1400,13 @@ fn resolve_committed_event(
             event.sequence
         )));
     }
-    crate::smartcontracts::isi::query::own_singular_query_struct::<ProofOutcomeFinalizedEventV1, 5>(
-        [
-            &event.sequence,
-            &event.target_block_height,
-            &block_hash,
-            &event.event_index,
-            &event.outcome,
-        ],
-        || ProofOutcomeFinalizedEventV1 {
-            sequence: event.sequence,
-            block_height: event.target_block_height,
-            block_hash,
-            event_index: event.event_index,
-            outcome: event.outcome.clone(),
-        },
-    )
+    Ok(ProofOutcomeFinalizedEventV1 {
+        sequence: event.sequence,
+        block_height: event.target_block_height,
+        block_hash,
+        event_index: event.event_index,
+        outcome: event.outcome,
+    })
 }
 
 fn charge_state_bytes(total: &mut usize, amount: usize) -> Result<(), QueryExecutionFail> {
@@ -1301,9 +1430,7 @@ fn ensure_page_budget<T: norito::core::NoritoSerialize>(
         PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1,
     );
     let length = norito::core::encoded_frame_len(value).map_err(|error| {
-        QueryExecutionFail::Conversion(format!(
-            "failed to size proof-outcome event page: {error}"
-        ))
+        QueryExecutionFail::Conversion(format!("failed to size proof-outcome event page: {error}"))
     })?;
     if length > maximum {
         return Err(QueryExecutionFail::Conversion(format!(
@@ -1311,6 +1438,65 @@ fn ensure_page_budget<T: norito::core::NoritoSerialize>(
         )));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ProofOutcomeQueryEventPosition {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+}
+
+impl From<&ProofOutcomePersistedEventV1> for ProofOutcomeQueryEventPosition {
+    fn from(event: &ProofOutcomePersistedEventV1) -> Self {
+        Self {
+            sequence: event.sequence,
+            target_block_height: event.target_block_height,
+            event_index: event.event_index,
+        }
+    }
+}
+
+fn validate_query_event_successor(
+    previous: Option<ProofOutcomeQueryEventPosition>,
+    current: &ProofOutcomePersistedEventV1,
+) -> Result<(), QueryExecutionFail> {
+    let Some(previous) = previous else {
+        return (current.sequence == 1 && current.event_index == 0)
+            .then_some(())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "proof-outcome event journal does not begin at sequence one and block index zero"
+                        .to_owned(),
+                )
+            });
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "proof-outcome event journal sequence is not contiguous".to_owned(),
+        ));
+    }
+    match previous
+        .target_block_height
+        .cmp(&current.target_block_height)
+    {
+        core::cmp::Ordering::Less if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        _ => Err(QueryExecutionFail::Conversion(
+            "proof-outcome event journal block height/index ordering is invalid".to_owned(),
+        )),
+    }
 }
 
 fn query_event_page(
@@ -1367,7 +1553,7 @@ fn query_event_page(
                 )
             })?,
     )?;
-    resolve_committed_event(state_ro, &terminal)?;
+    resolve_committed_event(state_ro, terminal)?;
 
     let mut previous = match query.after {
         Some(after) => {
@@ -1378,23 +1564,7 @@ fn query_event_page(
                 .smart_contract_state()
                 .get(&event_key(after.sequence))
                 .map_or(0, Vec::len);
-            let event = read_persisted_event(world, after.sequence)
-                .map_err(query_failure)?
-                .ok_or(QueryExecutionFail::Expired)?;
-            let binding_bytes =
-                validate_event_outcome_binding(world, &event).map_err(query_failure)?;
-            charge_state_bytes(
-                &mut state_read_bytes,
-                event_bytes.checked_add(binding_bytes).ok_or_else(|| {
-                    QueryExecutionFail::Conversion(
-                        "proof-outcome cursor read-byte counter overflow".to_owned(),
-                    )
-                })?,
-            )?;
-            if resolve_committed_event(state_ro, &event)?.cursor() != after {
-                return Err(QueryExecutionFail::Expired);
-            }
-            let predecessor = if after.sequence == 1 {
+            let predecessor_record = if after.sequence == 1 {
                 None
             } else {
                 let sequence = after.sequence - 1;
@@ -1413,8 +1583,29 @@ fn query_event_page(
                         })?,
                 )
             };
-            validate_event_successor(predecessor.as_ref(), &event).map_err(query_failure)?;
-            Some(event)
+            let predecessor = predecessor_record
+                .as_ref()
+                .map(ProofOutcomeQueryEventPosition::from);
+            drop(predecessor_record);
+            let event = read_persisted_event(world, after.sequence)
+                .map_err(query_failure)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            let binding_bytes =
+                validate_event_outcome_binding(world, &event).map_err(query_failure)?;
+            charge_state_bytes(
+                &mut state_read_bytes,
+                event_bytes.checked_add(binding_bytes).ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "proof-outcome cursor read-byte counter overflow".to_owned(),
+                    )
+                })?,
+            )?;
+            validate_query_event_successor(predecessor, &event)?;
+            let position = ProofOutcomeQueryEventPosition::from(&event);
+            if resolve_committed_event(state_ro, event)?.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            Some(position)
         }
         None => None,
     };
@@ -1455,7 +1646,7 @@ fn query_event_page(
                     "proof-outcome event journal is missing sequence {current_sequence}"
                 ))
             })?;
-        validate_event_successor(previous.as_ref(), &event).map_err(query_failure)?;
+        validate_query_event_successor(previous, &event)?;
         let binding_bytes = validate_event_outcome_binding(world, &event).map_err(query_failure)?;
         charge_state_bytes(
             &mut state_read_bytes,
@@ -1467,7 +1658,8 @@ fn query_event_page(
                     )
                 })?,
         )?;
-        let resolved = resolve_committed_event(state_ro, &event)?;
+        let position = ProofOutcomeQueryEventPosition::from(&event);
+        let resolved = resolve_committed_event(state_ro, event)?;
         let resolved_bytes = norito::core::encoded_frame_len(&resolved).map_err(|error| {
             QueryExecutionFail::Conversion(format!(
                 "failed to size committed proof-outcome event: {error}"
@@ -1489,7 +1681,7 @@ fn query_event_page(
             break;
         }
         encoded_event_bytes = next_bytes;
-        previous = Some(event);
+        previous = Some(position);
         events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
@@ -1504,7 +1696,7 @@ fn query_event_page(
     });
     let page = ProofOutcomeFinalizedEventPageV1 {
         finalized_cursor,
-        events: events.into_vec(),
+        events: events.into_vec()?,
         has_more,
         next_after,
     };
@@ -2158,6 +2350,16 @@ mod tests {
 
         let first = signer_policy(1, None, &pdp_key_v1, &potr_key_v1, &gateway_key_v1);
         let first_digest = policy_digest(&first).expect("digest first signer policy");
+        let historical_bytes = norito::to_bytes(&first).expect("historical signer-policy frame");
+        let mut historical = blake3::Hasher::new();
+        historical.update(POLICY_DIGEST_DOMAIN_V1);
+        historical.update(
+            &u64::try_from(historical_bytes.len())
+                .expect("test frame length fits u64")
+                .to_le_bytes(),
+        );
+        historical.update(&historical_bytes);
+        assert_eq!(first_digest, *historical.finalize().as_bytes());
         assert_instruction_error_contains(
             transact(&mut state, 2, NOW, |state_transaction| {
                 SetSorafsProofOutcomeSignerPolicy::new(first.clone())
@@ -2425,7 +2627,48 @@ mod tests {
         .expect("commit proof outcome before corruption");
         query_events(&state, None, None, 1).expect("healthy journal is queryable");
 
+        let committed_event = read_persisted_event(state.view().world(), 1)
+            .expect("read committed event")
+            .expect("committed event exists");
+        let committed_outcome_key = outcome_key(
+            committed_event.outcome.kind(),
+            committed_event.outcome.identity_digest,
+        );
+        let canonical_outcome = state
+            .view()
+            .world()
+            .smart_contract_state()
+            .get(&committed_outcome_key)
+            .expect("authoritative outcome exists")
+            .clone();
+        let mut mismatched_outcome = committed_event.outcome.clone();
+        mismatched_outcome.submitted_by = account(&manager);
+        let mismatched_outcome = encode_state(&mismatched_outcome, "mismatched outcome fixture")
+            .expect("encode valid mismatched outcome fixture");
         transact(&mut state, 4, NOW + 2, |state_transaction| {
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(committed_outcome_key.clone(), mismatched_outcome);
+            Ok(())
+        })
+        .expect("commit mismatched authoritative outcome fixture");
+        assert!(matches!(
+            query_events(&state, None, None, 1),
+            Err(QueryExecutionFail::Conversion(message))
+                if message.contains("disagrees with authoritative state")
+        ));
+
+        transact(&mut state, 5, NOW + 3, |state_transaction| {
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(committed_outcome_key, canonical_outcome);
+            Ok(())
+        })
+        .expect("restore canonical authoritative outcome fixture");
+
+        transact(&mut state, 6, NOW + 4, |state_transaction| {
             state_transaction
                 .world
                 .smart_contract_state

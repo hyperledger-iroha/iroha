@@ -16,10 +16,7 @@ use iroha_config::parameters::{
     defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
 use iroha_config_base::WithOrigin;
-use iroha_data_model::{
-    block::consensus_v2::ConsensusMode,
-    prelude::PeerId,
-};
+use iroha_data_model::{block::consensus_v2::ConsensusMode, prelude::PeerId};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
     ConfidentialFeatureDigest, ConfidentialHandshakeCaps, ConsensusConfigCaps,

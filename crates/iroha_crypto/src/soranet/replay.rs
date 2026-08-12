@@ -4,25 +4,33 @@
 //! are never evicted to make room, every accepted insertion is persisted before
 //! it returns, and a process-lifetime sidecar lock prevents concurrent writers
 //! from forking the ledger history. Snapshots use canonical, checksum-protected
-//! Norito frames and persist a monotonic wall-clock high-water mark.
+//! Norito frames and persist a monotonic wall-clock high-water mark. Loading
+//! admits only a stable direct regular file under capacity-derived byte and
+//! decoder-allocation limits.
 
-use std::{
-    collections::{HashMap, HashSet},
-    ffi::OsString,
-    fs,
-    io::{self, Read as _, Write as _},
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, fs, io, path::PathBuf};
 
-use norito::{NoritoDeserialize, NoritoSerialize, decode_canonical, encode_canonical};
+#[cfg(test)]
+use norito::encode_canonical;
+use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_canonical_with_limits};
 use thiserror::Error;
 
-use super::replay_lock::ExclusiveLedgerLock;
+use super::{
+    replay_lock::ExclusiveLedgerLock,
+    snapshot_file::{
+        BoundedWriter, create_temporary_direct_regular_file, persist_temporary_snapshot,
+        read_optional_bounded_regular_file,
+    },
+};
 
 const SNAPSHOT_VERSION_V1: u8 = 1;
 const NAMESPACE_DOMAIN_V1: &[u8] = b"iroha.soranet.replay-ledger.namespace.v1";
 const SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
 const SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
+const SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
+
+/// First-release hard ceiling for every persistent replay ledger.
+pub const REPLAY_LEDGER_MAX_ENTRIES_V1: usize = 65_536;
 
 /// Resource bounds for a durable replay ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,11 +46,17 @@ impl ReplayLedgerLimits {
     ///
     /// # Errors
     ///
-    /// Returns [`ReplayLedgerError`] when either bound is zero or when the
-    /// capacity cannot be converted into a bounded snapshot size.
+    /// Returns [`ReplayLedgerError`] when either bound is zero, capacity exceeds
+    /// the first-release ceiling, or the snapshot envelope cannot be represented.
     pub fn new(max_entries: usize, max_ttl_ms: u64) -> Result<Self, ReplayLedgerError> {
         if max_entries == 0 {
             return Err(ReplayLedgerError::CapacityZero);
+        }
+        if max_entries > REPLAY_LEDGER_MAX_ENTRIES_V1 {
+            return Err(ReplayLedgerError::CapacityTooLarge {
+                requested: max_entries,
+                limit: REPLAY_LEDGER_MAX_ENTRIES_V1,
+            });
         }
         if max_ttl_ms == 0 {
             return Err(ReplayLedgerError::TtlZero);
@@ -62,6 +76,17 @@ impl ReplayLedgerLimits {
             .checked_mul(SNAPSHOT_ENTRY_LIMIT_BYTES)
             .and_then(|bytes| bytes.checked_add(SNAPSHOT_BASE_LIMIT_BYTES))
             .expect("validated replay-ledger capacity")
+    }
+
+    fn decode_limits(self) -> DecodeLimits {
+        let max_snapshot_bytes = self.max_snapshot_bytes();
+        DecodeLimits::new(
+            REPLAY_LEDGER_MAX_ENTRIES_V1,
+            max_snapshot_bytes,
+            REPLAY_LEDGER_MAX_ENTRIES_V1.saturating_add(8),
+            max_snapshot_bytes.saturating_mul(2),
+            SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1,
+        )
     }
 }
 
@@ -86,12 +111,26 @@ pub enum ReplayLedgerError {
     /// Ledger capacity cannot be zero.
     #[error("replay ledger capacity must be greater than zero")]
     CapacityZero,
+    /// Ledger capacity exceeds the first-release hard ceiling.
+    #[error("replay ledger capacity {requested} exceeds first-release limit {limit}")]
+    CapacityTooLarge {
+        /// Requested entry count.
+        requested: usize,
+        /// First-release entry ceiling.
+        limit: usize,
+    },
     /// Credential lifetime bound cannot be zero.
     #[error("replay ledger max_ttl_ms must be greater than zero")]
     TtlZero,
     /// Capacity cannot be represented as a bounded snapshot size.
     #[error("replay ledger capacity is too large for this platform")]
     CapacityOverflow,
+    /// A bounded in-memory collection could not reserve its configured capacity.
+    #[error("replay ledger allocation failed while reserving {entries} entries")]
+    Allocation {
+        /// Number of entries requested from the allocator.
+        entries: usize,
+    },
     /// The namespace must be explicit so ledgers cannot be substituted.
     #[error("replay ledger namespace must not be empty")]
     NamespaceEmpty,
@@ -223,6 +262,9 @@ impl PersistentReplayLedger {
             return Ok(ReplayInsertStatus::Capacity);
         }
         self.prune_expired_in_memory(effective_now_ms);
+        self.records
+            .try_reserve(1)
+            .map_err(|_| ReplayLedgerError::Allocation { entries: 1 })?;
         let replaced = self.records.insert(id, expires_at_ms);
         debug_assert!(replaced.is_none());
         self.persist()?;
@@ -269,46 +311,20 @@ impl PersistentReplayLedger {
         {
             fs::create_dir_all(parent).map_err(|error| io_error(&error))?;
         }
-        let mut file = match fs::File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return self.persist(),
-            Err(error) => return Err(io_error(&error)),
-        };
-        let metadata = file.metadata().map_err(|error| io_error(&error))?;
-        if !metadata.is_file() {
-            return Err(ReplayLedgerError::Snapshot(
-                "snapshot path is not a regular file".to_owned(),
-            ));
-        }
         let max_snapshot_bytes = self.limits.max_snapshot_bytes();
-        let max_snapshot_bytes_u64 =
-            u64::try_from(max_snapshot_bytes).map_err(|_| ReplayLedgerError::CapacityOverflow)?;
-        if metadata.len() > max_snapshot_bytes_u64 {
-            let snapshot_bytes = metadata.len();
-            return Err(ReplayLedgerError::Snapshot(format!(
-                "snapshot is {snapshot_bytes} bytes; limit is {max_snapshot_bytes} bytes"
-            )));
-        }
-        let read_limit = max_snapshot_bytes_u64
-            .checked_add(1)
-            .ok_or(ReplayLedgerError::CapacityOverflow)?;
-        let mut bytes =
-            Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(max_snapshot_bytes));
-        (&mut file)
-            .take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|error| io_error(&error))?;
+        let Some(bytes) =
+            read_optional_bounded_regular_file(path, max_snapshot_bytes, "replay ledger snapshot")
+                .map_err(|error| ReplayLedgerError::Snapshot(error.to_string()))?
+        else {
+            return self.persist();
+        };
         if bytes.is_empty() {
             return Err(ReplayLedgerError::Snapshot("snapshot is empty".to_owned()));
         }
-        if bytes.len() > max_snapshot_bytes {
-            let snapshot_bytes = bytes.len();
-            return Err(ReplayLedgerError::Snapshot(format!(
-                "snapshot is {snapshot_bytes} bytes; limit is {max_snapshot_bytes} bytes"
-            )));
-        }
-        let snapshot: ReplayLedgerSnapshotV1 = decode_canonical(&bytes)
-            .map_err(|error| ReplayLedgerError::Snapshot(error.to_string()))?;
+        let snapshot: ReplayLedgerSnapshotV1 =
+            decode_canonical_with_limits(&bytes, self.limits.decode_limits())
+                .map_err(|error| ReplayLedgerError::Snapshot(error.to_string()))?;
+        drop(bytes);
         if snapshot.version != SNAPSHOT_VERSION_V1 {
             let version = snapshot.version;
             return Err(ReplayLedgerError::Snapshot(format!(
@@ -329,11 +345,20 @@ impl PersistentReplayLedger {
                 "snapshot entries are not in strict canonical order".to_owned(),
             ));
         }
+        if snapshot.entries.len() > self.limits.max_entries {
+            return Err(ReplayLedgerError::Snapshot(
+                "snapshot exceeds configured capacity".to_owned(),
+            ));
+        }
         self.high_watermark_ms = self.high_watermark_ms.max(snapshot.high_watermark_ms);
         let effective_now_ms = self.observe_now(now_ms);
-        let mut seen = HashSet::with_capacity(snapshot.entries.len());
+        self.records
+            .try_reserve(snapshot.entries.len())
+            .map_err(|_| ReplayLedgerError::Allocation {
+                entries: snapshot.entries.len(),
+            })?;
         for entry in snapshot.entries {
-            if !seen.insert(entry.id) {
+            if self.records.insert(entry.id, entry.expires_at_ms).is_some() {
                 return Err(ReplayLedgerError::Snapshot(
                     "snapshot contains a duplicate identifier".to_owned(),
                 ));
@@ -347,14 +372,8 @@ impl PersistentReplayLedger {
                     "active record expiry exceeds max_ttl_ms {max_ttl_ms}"
                 )));
             }
-            let replaced = self.records.insert(entry.id, entry.expires_at_ms);
-            debug_assert!(replaced.is_none());
-            if self.records.len() > self.limits.max_entries {
-                return Err(ReplayLedgerError::Snapshot(
-                    "snapshot exceeds configured capacity".to_owned(),
-                ));
-            }
         }
+        self.prune_expired_in_memory(effective_now_ms);
         self.persist()
     }
 
@@ -382,14 +401,18 @@ impl PersistentReplayLedger {
         {
             fs::create_dir_all(parent).map_err(|error| io_error(&error))?;
         }
-        let mut entries: Vec<_> = self
-            .records
-            .iter()
-            .map(|(id, expires_at_ms)| ReplayLedgerSnapshotEntryV1 {
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(self.records.len()).map_err(|_| {
+            ReplayLedgerError::Allocation {
+                entries: self.records.len(),
+            }
+        })?;
+        entries.extend(self.records.iter().map(|(id, expires_at_ms)| {
+            ReplayLedgerSnapshotEntryV1 {
                 id: *id,
                 expires_at_ms: *expires_at_ms,
-            })
-            .collect();
+            }
+        }));
         entries.sort_by(replay_entry_order);
         let snapshot = ReplayLedgerSnapshotV1 {
             version: SNAPSHOT_VERSION_V1,
@@ -397,22 +420,22 @@ impl PersistentReplayLedger {
             high_watermark_ms: self.high_watermark_ms,
             entries,
         };
-        let encoded = encode_canonical(&snapshot)
+        let temporary =
+            create_temporary_direct_regular_file(path, "temporary replay ledger snapshot")
+                .map_err(|error| io_error(&error))?;
+        let mut bounded = BoundedWriter::new(
+            temporary,
+            self.limits.max_snapshot_bytes(),
+            "replay ledger snapshot",
+        );
+        norito::core::write_canonical_to_writer(&snapshot, &mut bounded)
             .map_err(|error| ReplayLedgerError::Encode(error.to_string()))?;
-        if encoded.len() > self.limits.max_snapshot_bytes() {
-            let encoded_bytes = encoded.len();
-            let max_snapshot_bytes = self.limits.max_snapshot_bytes();
-            return Err(ReplayLedgerError::Snapshot(format!(
-                "encoded snapshot is {encoded_bytes} bytes; limit is {max_snapshot_bytes} bytes"
-            )));
-        }
-        let temporary_path = temporary_path(path);
-        let mut temporary = fs::File::create(&temporary_path).map_err(|error| io_error(&error))?;
+        let temporary = bounded.into_inner();
         temporary
-            .write_all(&encoded)
-            .and_then(|()| temporary.sync_all())
+            .as_file()
+            .sync_all()
             .map_err(|error| io_error(&error))?;
-        fs::rename(&temporary_path, path).map_err(|error| io_error(&error))?;
+        persist_temporary_snapshot(temporary, path).map_err(|error| io_error(&error))?;
         #[cfg(unix)]
         if let Some(parent) = path
             .parent()
@@ -448,12 +471,6 @@ fn replay_entry_order(
         .then_with(|| left.id.cmp(&right.id))
 }
 
-fn temporary_path(path: &Path) -> PathBuf {
-    let mut temporary = OsString::from(path.as_os_str());
-    temporary.push(".tmp");
-    PathBuf::from(temporary)
-}
-
 fn io_error(error: &io::Error) -> ReplayLedgerError {
     ReplayLedgerError::Io(error.to_string())
 }
@@ -471,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn limits_and_namespace_reject_zero_or_overflowing_bounds() {
+    fn limits_and_namespace_reject_zero_or_excessive_bounds() {
         assert_eq!(
             ReplayLedgerLimits::new(0, 1).expect_err("zero capacity"),
             ReplayLedgerError::CapacityZero
@@ -481,8 +498,20 @@ mod tests {
             ReplayLedgerError::TtlZero
         );
         assert_eq!(
-            ReplayLedgerLimits::new(usize::MAX, 1).expect_err("overflowing capacity"),
-            ReplayLedgerError::CapacityOverflow
+            ReplayLedgerLimits::new(REPLAY_LEDGER_MAX_ENTRIES_V1, 1)
+                .expect("exact first-release capacity"),
+            ReplayLedgerLimits {
+                max_entries: REPLAY_LEDGER_MAX_ENTRIES_V1,
+                max_ttl_ms: 1,
+            }
+        );
+        assert_eq!(
+            ReplayLedgerLimits::new(REPLAY_LEDGER_MAX_ENTRIES_V1 + 1, 1)
+                .expect_err("capacity above first-release limit"),
+            ReplayLedgerError::CapacityTooLarge {
+                requested: REPLAY_LEDGER_MAX_ENTRIES_V1 + 1,
+                limit: REPLAY_LEDGER_MAX_ENTRIES_V1,
+            }
         );
         assert_eq!(
             PersistentReplayLedger::in_memory(b"", limits(1)).expect_err("empty namespace"),

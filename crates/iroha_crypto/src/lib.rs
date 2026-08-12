@@ -180,6 +180,27 @@ fn is_all_zero_material(bytes: &[u8]) -> bool {
     !bytes.is_empty() && bytes.iter().all(|&byte| byte == 0)
 }
 
+#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+std::thread_local! {
+    static PUBLIC_KEY_VALIDATION_CALLS: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+fn record_public_key_validation_call() {
+    PUBLIC_KEY_VALIDATION_CALLS.with(|calls| calls.set(calls.get() + 1));
+}
+
+#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+fn reset_public_key_validation_call_count() {
+    PUBLIC_KEY_VALIDATION_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+fn public_key_validation_call_count() -> usize {
+    PUBLIC_KEY_VALIDATION_CALLS.with(core::cell::Cell::get)
+}
+
 // ML-DSA-65 wire widths are stable protocol constants. Keep them available
 // when the native PQC backend is disabled (for example in browser WASM) so
 // parsers preserve the same framing and algorithm discriminant.
@@ -195,6 +216,35 @@ const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
 /// feature-independent so admission and transport geometry cannot vary with
 /// compiled algorithms.
 pub const MAX_PUBLIC_KEY_PAYLOAD_BYTES: usize = 2 + (u16::MAX as usize / 8) + 65;
+
+fn reserve_public_key_validation_for_decode(
+    algorithm: Algorithm,
+    payload_bytes: usize,
+) -> Result<(), norito::core::Error> {
+    // Source-derived peak heap held by validation: ML-DSA retains one payload
+    // copy; BLS can hold parsed/canonical/identity payloads; SM2 holds the
+    // borrowed-input copy, two distid strings, and one SEC1 encoding; GOST's
+    // on-curve check can simultaneously retain at most twelve payload-width
+    // coordinate/intermediate buffers. Ed25519 and Secp256k1 use fixed values.
+    let units = match algorithm {
+        Algorithm::Ed25519 | Algorithm::Secp256k1 => 0,
+        Algorithm::MlDsa => 1,
+        #[cfg(feature = "bls")]
+        Algorithm::BlsNormal | Algorithm::BlsSmall => 2,
+        #[cfg(feature = "gost")]
+        Algorithm::Gost3410_2012_256ParamSetA
+        | Algorithm::Gost3410_2012_256ParamSetB
+        | Algorithm::Gost3410_2012_256ParamSetC
+        | Algorithm::Gost3410_2012_512ParamSetA
+        | Algorithm::Gost3410_2012_512ParamSetB => 12,
+        #[cfg(feature = "sm")]
+        Algorithm::Sm2 => 2,
+    };
+    let bytes = payload_bytes
+        .checked_mul(units)
+        .ok_or(norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
+    norito::core::reserve_decode_allocation(bytes)
+}
 
 /// Key pair generation option. Passed to a specific algorithm.
 #[derive(Debug)]
@@ -678,6 +728,19 @@ impl PublicKeyFull {
             }
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => sm::decode_sm2_public_key_payload(payload).map(PublicKeyFull::Sm2),
+        }
+    }
+
+    fn from_bytes_uncached_for_decode(
+        algorithm: Algorithm,
+        payload: &[u8],
+    ) -> Result<Self, ParseError> {
+        match algorithm {
+            Algorithm::Ed25519 => {
+                ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(payload)
+                    .map(Self::Ed25519)
+            }
+            _ => Self::from_bytes(algorithm, payload),
         }
     }
 
@@ -1694,9 +1757,8 @@ pub fn pqc_verify_aggregate(
 }
 
 impl PublicKeyCompact {
-    fn new(algorithm: Algorithm, payload: &[u8]) -> Self {
-        // Use stable discriminants matching `Algorithm::try_from(u8)` below.
-        let algorithm: u8 = match algorithm {
+    fn algorithm_tag(algorithm: Algorithm) -> u8 {
+        match algorithm {
             Algorithm::Ed25519 => 0,
             Algorithm::Secp256k1 => 1,
             Algorithm::MlDsa => 4,
@@ -1716,13 +1778,101 @@ impl PublicKeyCompact {
             Algorithm::BlsSmall => 3,
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => 10,
-        };
+        }
+    }
+
+    fn new(algorithm: Algorithm, payload: &[u8]) -> Self {
+        // Use stable discriminants matching `Algorithm::try_from(u8)` below.
+        let algorithm = Self::algorithm_tag(algorithm);
         let mut bytes = Vec::with_capacity(1 + payload.len());
         bytes.push(algorithm);
         bytes.extend_from_slice(payload);
         Self {
             algorithm_and_payload: ConstVec::new(bytes),
         }
+    }
+
+    fn try_new_for_decode(
+        algorithm: Algorithm,
+        payload: &[u8],
+    ) -> Result<Self, norito::core::Error> {
+        let allocation_bytes = payload
+            .len()
+            .checked_add(1)
+            .ok_or(norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
+        norito::core::reserve_decode_allocation(allocation_bytes)?;
+        let layout = std::alloc::Layout::array::<u8>(allocation_bytes)
+            .map_err(|_| norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
+        // SAFETY: `layout` is non-zero and valid for `allocation_bytes` bytes.
+        let allocation = unsafe { std::alloc::alloc(layout) };
+        let allocation =
+            core::ptr::NonNull::new(allocation).ok_or(norito::core::Error::AllocationFailed {
+                bytes: u64::try_from(allocation_bytes).unwrap_or(u64::MAX),
+            })?;
+        // SAFETY: the exact allocation owns `allocation_bytes`; write its tag
+        // and copy the disjoint payload tail before creating the boxed slice.
+        unsafe {
+            allocation.as_ptr().write(Self::algorithm_tag(algorithm));
+            core::ptr::copy_nonoverlapping(
+                payload.as_ptr(),
+                allocation.as_ptr().add(1),
+                payload.len(),
+            );
+            let slice = core::ptr::slice_from_raw_parts_mut(allocation.as_ptr(), allocation_bytes);
+            Ok(Self {
+                algorithm_and_payload: ConstVec::new(Box::from_raw(slice)),
+            })
+        }
+    }
+
+    fn try_new_from_canonical_hex_for_decode(
+        algorithm: Algorithm,
+        payload_hex: &str,
+    ) -> Result<Self, norito::core::Error> {
+        let payload_bytes = payload_hex.len() / 2;
+        reserve_public_key_validation_for_decode(algorithm, payload_bytes)?;
+        let allocation_bytes = payload_bytes
+            .checked_add(1)
+            .ok_or(norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
+        norito::core::reserve_decode_allocation(allocation_bytes)?;
+        let layout = std::alloc::Layout::array::<u8>(allocation_bytes)
+            .map_err(|_| norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
+        // SAFETY: the exact destination and validation high-water were both
+        // admitted before this allocation; null is rejected before ownership.
+        let allocation = unsafe { std::alloc::alloc(layout) };
+        let allocation =
+            core::ptr::NonNull::new(allocation).ok_or(norito::core::Error::AllocationFailed {
+                bytes: u64::try_from(allocation_bytes).unwrap_or(u64::MAX),
+            })?;
+        // SAFETY: every payload pair is canonical and initializes one disjoint
+        // byte; on failure the raw allocation is reclaimed with its exact layout.
+        unsafe { allocation.as_ptr().write(Self::algorithm_tag(algorithm)) };
+        for (index, pair) in payload_hex.as_bytes().chunks_exact(2).enumerate() {
+            let Some(byte) = multihash::decode_public_key_payload_byte(pair) else {
+                // SAFETY: `allocation` still has the exact `layout` above.
+                unsafe { std::alloc::dealloc(allocation.as_ptr(), layout) };
+                return Err(norito::core::Error::Message(
+                    "invalid public key".to_owned(),
+                ));
+            };
+            // SAFETY: `index < payload_bytes`, so the tag-offset slot is valid.
+            unsafe { allocation.as_ptr().add(index + 1).write(byte) };
+        }
+        // SAFETY: all `allocation_bytes` bytes are initialized and uniquely owned.
+        let compact = unsafe {
+            let slice = core::ptr::slice_from_raw_parts_mut(allocation.as_ptr(), allocation_bytes);
+            Self {
+                algorithm_and_payload: ConstVec::new(Box::from_raw(slice)),
+            }
+        };
+        PublicKeyFull::from_bytes_uncached_for_decode(
+            algorithm,
+            compact
+                .try_payload()
+                .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?,
+        )
+        .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        Ok(compact)
     }
 
     fn try_algorithm(&self) -> Result<Algorithm, ParseError> {
@@ -1741,8 +1891,14 @@ impl PublicKeyCompact {
     }
 
     fn validated_full(&self) -> Result<PublicKeyFull, ParseError> {
+        #[cfg(all(test, not(feature = "ffi_import"), feature = "pqc"))]
+        record_public_key_validation_call();
         let algorithm = self.try_algorithm()?;
-        PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
+        if norito::core::decode_limits_active() {
+            PublicKeyFull::from_bytes_uncached_for_decode(algorithm, self.try_payload()?)
+        } else {
+            PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
+        }
     }
 }
 
@@ -1804,8 +1960,9 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
         let tag = payload[0];
         let algorithm = Algorithm::try_from(tag)
             .map_err(|()| norito::core::Error::invalid_tag("PublicKeyCompact::algorithm", tag))?;
-        PublicKeyFull::from_bytes(algorithm, &payload[1..])
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        reserve_public_key_validation_for_decode(algorithm, payload.len() - 1)?;
+        PublicKeyFull::from_bytes_uncached_for_decode(algorithm, &payload[1..])
+            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
         Ok(Self {
             algorithm_and_payload: payload,
         })
@@ -1828,8 +1985,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PublicKeyCompact {
         let tag = payload[0];
         let algorithm = Algorithm::try_from(tag)
             .map_err(|()| norito::core::Error::invalid_tag("PublicKeyCompact::algorithm", tag))?;
-        PublicKeyFull::from_bytes(algorithm, &payload[1..])
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        reserve_public_key_validation_for_decode(algorithm, payload.len() - 1)?;
+        PublicKeyFull::from_bytes_uncached_for_decode(algorithm, &payload[1..])
+            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
         Ok((
             Self {
                 algorithm_and_payload: payload,
@@ -1890,6 +2048,28 @@ impl PublicKey {
         // Validate that `payload` is valid before constructing the key.
         let inner = PublicKeyFull::from_bytes(algorithm, payload)?;
         Ok(Self::new(inner))
+    }
+
+    /// Validate and retain a public key without consulting process-local parse caches.
+    ///
+    /// This decode-only constructor charges and fallibly creates the compact
+    /// key's exact retained allocation under any active Norito decode scope.
+    /// Ordinary callers should continue to use [`Self::from_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a decode-resource error when the active budget or allocator
+    /// rejects the compact destination, and a fixed parse error otherwise.
+    #[doc(hidden)]
+    pub fn from_bytes_uncached_for_decode(
+        algorithm: Algorithm,
+        payload: &[u8],
+    ) -> Result<Self, norito::core::Error> {
+        reserve_public_key_validation_for_decode(algorithm, payload.len())?;
+        let validated = PublicKeyFull::from_bytes_uncached_for_decode(algorithm, payload)
+            .map_err(|_| norito::core::Error::Message("invalid public key".to_owned()))?;
+        drop(validated);
+        PublicKeyCompact::try_new_for_decode(algorithm, payload).map(Self)
     }
 
     /// Derive a public key from private-key material.
@@ -1968,6 +2148,11 @@ impl PublicKey {
 
     #[cfg(not(feature = "ffi_import"))]
     fn validated_full(&self) -> Result<PublicKeyFull, ParseError> {
+        #[cfg(all(test, feature = "pqc"))]
+        record_public_key_validation_call();
+        if norito::core::decode_limits_active() {
+            return self.0.validated_full();
+        }
         signature::public_key_full_cached(self).map_err(|err| match err {
             Error::Parse(err) => err,
             err => ParseError(err.to_string()),
@@ -2154,9 +2339,24 @@ impl norito::json::JsonSerialize for PublicKey {
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
-        // Public-key payloads have a protocol-level maximum, so normalization
-        // uses bounded scalar scratch independent of the enclosing response.
-        norito::json::write_json_string_to(&self.normalize_lossy(), out)
+        let algorithm = self
+            .0
+            .try_algorithm()
+            .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
+        let payload = self
+            .0
+            .try_payload()
+            .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
+        if payload.len() > MAX_PUBLIC_KEY_PAYLOAD_BYTES {
+            return Err(norito::json::BoundedJsonError::Unsupported);
+        }
+        out.push('"')?;
+        write_lower_varint_hex(multihash::public_key_digest_function(algorithm), out)?;
+        write_lower_varint_hex(payload.len() as u64, out)?;
+        for byte in payload {
+            write_hex_byte(*byte, b"0123456789ABCDEF", out)?;
+        }
+        out.push('"')
     }
 }
 
@@ -2166,10 +2366,49 @@ impl norito::json::JsonDeserialize for PublicKey {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value: String = norito::json::JsonDeserialize::json_deserialize(parser)?;
-        value
-            .parse()
-            .map_err(|err: ParseError| norito::json::Error::Message(err.to_string()))
+        let decoded = multihash::decode_public_key_str_borrowed(&value)
+            .ok_or_else(|| norito::json::Error::Message("invalid public key".to_owned()))?;
+        PublicKeyCompact::try_new_from_canonical_hex_for_decode(
+            decoded.algorithm,
+            decoded.payload_hex,
+        )
+        .map(Self)
+        .map_err(|error| {
+            if error.is_decode_resource_limit() {
+                norito::json::Error::from_decode_resource(error)
+            } else {
+                norito::json::Error::Message("invalid public key".to_owned())
+            }
+        })
     }
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn write_lower_varint_hex(
+    mut value: u64,
+    out: &mut dyn norito::json::JsonWriteSink,
+) -> Result<(), norito::json::BoundedJsonError> {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        write_hex_byte(byte, b"0123456789abcdef", out)?;
+        if value == 0 {
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn write_hex_byte(
+    byte: u8,
+    alphabet: &[u8; 16],
+    out: &mut dyn norito::json::JsonWriteSink,
+) -> Result<(), norito::json::BoundedJsonError> {
+    out.push(char::from(alphabet[usize::from(byte >> 4)]))?;
+    out.push(char::from(alphabet[usize::from(byte & 0x0f)]))
 }
 
 #[cfg(not(feature = "ffi_import"))]

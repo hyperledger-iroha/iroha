@@ -18,6 +18,11 @@ use iroha_crypto::{Hash, HashOf, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+mod streaming;
+use streaming::canonical_frame_len;
+#[cfg(feature = "json")]
+use streaming::musubi_json_len_bounded;
+
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -390,9 +395,14 @@ fn validate_musubi_account_id_canonical_bytes_v1(encoded: &[u8]) -> Result<(), P
 ///
 /// Returns an error when canonical Norito encoding fails or exceeds the fixed V1 bound.
 pub fn validate_musubi_account_id_v1(account_id: &AccountId) -> Result<(), ParseError> {
-    let encoded = norito::encode_canonical(account_id)
+    let encoded_len = canonical_frame_len(account_id)
         .map_err(|_| ParseError::new("Musubi account identity has no canonical Norito encoding"))?;
-    validate_musubi_account_id_canonical_bytes_v1(&encoded)
+    if encoded_len == 0 || encoded_len > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 {
+        return Err(ParseError::new(
+            "Musubi account identity exceeds its canonical byte bound",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_musubi_approval_signature_v1<T>(
@@ -461,20 +471,68 @@ fn domain_hash(domain: &[u8], encoded: &[u8]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+
+impl io::Write for Blake3Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn domain_hash_value<T: norito::core::NoritoSerialize>(domain: &[u8], value: &T) -> [u8; 32] {
+    let encoded_len = norito::codec::encode_adaptive_into(value, &mut io::sink())
+        .expect("Musubi canonical hash preflight must serialize");
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(
+        &u64::try_from(domain.len())
+            .expect("Musubi hash domain length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(domain);
+    hasher.update(
+        &u64::try_from(encoded_len)
+            .expect("Musubi encoded payload length fits u64")
+            .to_le_bytes(),
+    );
+    let written = norito::codec::encode_adaptive_into(value, &mut Blake3Writer(&mut hasher))
+        .expect("Musubi canonical hash payload must serialize");
+    assert_eq!(
+        written, encoded_len,
+        "Musubi canonical hash length changed between passes"
+    );
+    *hasher.finalize().as_bytes()
+}
+
 fn domain_signing_hash<T: Encode>(domain: &[u8], payload: &T) -> HashOf<T> {
-    let encoded = payload.encode();
+    let encoded_len = norito::codec::encode_adaptive_into(payload, &mut io::sink())
+        .expect("Musubi signing-hash preflight must serialize");
     let domain_len = u64::try_from(domain.len())
         .expect("Musubi signature domain length fits u64")
         .to_le_bytes();
-    let encoded_len = u64::try_from(encoded.len())
+    let encoded_len_bytes = u64::try_from(encoded_len)
         .expect("Musubi signed payload length fits u64")
         .to_le_bytes();
-    HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
-        &domain_len,
-        domain,
-        &encoded_len,
-        &encoded,
-    ]))
+    let hash = Hash::new_from_writer(|writer| {
+        io::Write::write_all(writer, &domain_len)?;
+        io::Write::write_all(writer, domain)?;
+        io::Write::write_all(writer, &encoded_len_bytes)?;
+        let mut writer = writer;
+        let written = norito::codec::encode_adaptive_into(payload, &mut writer)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if written != encoded_len {
+            return Err(io::Error::other(
+                "Musubi signing-hash length changed between passes",
+            ));
+        }
+        Ok(())
+    })
+    .expect("Musubi signing hash writer is infallible");
+    HashOf::from_untyped_unchecked(hash)
 }
 
 fn validate_ascii_kebab(raw: &str, maximum: usize, label: &'static str) -> Result<(), ParseError> {
@@ -657,9 +715,9 @@ impl MusubiNamespaceBindingV1 {
     /// Domain-separated digest of the immutable binding.
     #[must_use]
     pub fn digest(&self) -> MusubiNamespaceBindingDigestV1 {
-        MusubiNamespaceBindingDigestV1(domain_hash(
+        MusubiNamespaceBindingDigestV1(domain_hash_value(
             MUSUBI_NAMESPACE_BINDING_DIGEST_DOMAIN_V1,
-            &self.encode(),
+            self,
         ))
     }
 }
@@ -1367,7 +1425,7 @@ macro_rules! digest_type {
         #[repr(transparent)]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
         pub struct $name(
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
             pub  [u8; 32],
         );
 
@@ -1520,7 +1578,7 @@ impl MusubiArchiveCommitmentV1 {
     /// Compute the domain-separated `ArchiveId` from canonical Norito bytes.
     #[must_use]
     pub fn archive_id(&self) -> ArchiveId {
-        ArchiveId(domain_hash(MUSUBI_ARCHIVE_ID_DOMAIN_V1, &self.encode()))
+        ArchiveId(domain_hash_value(MUSUBI_ARCHIVE_ID_DOMAIN_V1, self))
     }
 }
 
@@ -1962,7 +2020,7 @@ pub struct MusubiArchiveAvailabilityV1 {
     /// Finalized anchor height.
     pub finalized_height: u64,
     /// Finalized block hash.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finalized_block_hash: [u8; 32],
     /// Universal resolver-index revision.
     pub index_revision: u64,
@@ -2094,7 +2152,7 @@ pub struct MusubiAbiBindingV1 {
     /// Must equal [`MUSUBI_IVM_ABI_VERSION_V1`].
     pub abi_version: u16,
     /// Canonical IVM ABI hash.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub abi_hash: [u8; 32],
 }
 
@@ -2336,7 +2394,7 @@ pub struct MusubiRegistrySnapshotV1 {
     /// Finalized block height.
     pub finalized_height: u64,
     /// Finalized block hash.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finalized_block_hash: [u8; 32],
     /// Resolver sparse-index revision.
     pub index_revision: u64,
@@ -2563,9 +2621,9 @@ impl MusubiVerificationLockV1 {
     /// Compute the normalized lock digest.
     #[must_use]
     pub fn digest(&self) -> MusubiVerificationLockDigestV1 {
-        MusubiVerificationLockDigestV1(domain_hash(
+        MusubiVerificationLockDigestV1(domain_hash_value(
             MUSUBI_VERIFICATION_LOCK_DIGEST_DOMAIN_V1,
-            &self.encode(),
+            self,
         ))
     }
 }
@@ -2719,33 +2777,15 @@ impl MusubiSemanticReleaseManifestV1 {
     /// Returns an error if a nested release field is invalid, collections exceed V1 bounds or are
     /// noncanonical, a required digest is zero, or the release depends on its own package.
     pub fn validate(&self) -> Result<(), ParseError> {
-        self.release.validate()?;
-        self.abi.validate()?;
-        self.metadata.validate()?;
-        if self.dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1
-            || self.exports.len() > MUSUBI_MAX_EXPORTS_V1
-            || self.dependencies.windows(2).any(|pair| pair[0] >= pair[1])
-            || self
-                .dependencies
-                .windows(2)
-                .any(|pair| pair[0].alias >= pair[1].alias)
-            || self.exports.windows(2).any(|pair| pair[0] >= pair[1])
-            || self.interface_digest.is_zero()
-            || self.verification_lock_digest.is_zero()
-        {
-            return Err(ParseError::new(
-                "Musubi semantic release manifest is invalid or noncanonical",
-            ));
-        }
-        for dependency in &self.dependencies {
-            dependency.validate()?;
-            if dependency.package == self.release.package {
-                return Err(ParseError::new(
-                    "Musubi release cannot depend on its own package",
-                ));
-            }
-        }
-        Ok(())
+        streaming::validate_semantic_release_fields(
+            &self.release,
+            &self.abi,
+            &self.dependencies,
+            &self.exports,
+            self.interface_digest,
+            &self.metadata,
+            self.verification_lock_digest,
+        )
     }
 
     /// Validate this semantic release against its complete normalized verification lock.
@@ -2763,44 +2803,24 @@ impl MusubiSemanticReleaseManifestV1 {
         &self,
         verification_lock: &MusubiVerificationLockV1,
     ) -> Result<(), ParseError> {
-        self.validate()?;
-        verification_lock.validate()?;
-        if verification_lock.root != self.release
-            || verification_lock.digest() != self.verification_lock_digest
-        {
-            return Err(ParseError::new(
-                "Musubi semantic release and verification lock do not bind the same root",
-            ));
-        }
-        if self.dependencies.len() != verification_lock.root_dependencies.len() {
-            return Err(ParseError::new(
-                "Musubi semantic release and verification lock dependency counts differ",
-            ));
-        }
-        for (requirement, exact) in self
-            .dependencies
-            .iter()
-            .zip(&verification_lock.root_dependencies)
-        {
-            if exact.kind != MusubiDependencyKindV1::Normal
-                || exact.alias != requirement.alias
-                || exact.package != requirement.package
-                || exact.requirement != requirement.requirement
-            {
-                return Err(ParseError::new(
-                    "Musubi semantic release does not exactly bind a verification-lock dependency",
-                ));
-            }
-        }
-        Ok(())
+        streaming::validate_semantic_release_lock(
+            &self.release,
+            &self.abi,
+            &self.dependencies,
+            &self.exports,
+            self.interface_digest,
+            &self.metadata,
+            self.verification_lock_digest,
+            verification_lock,
+        )
     }
 
     /// Domain-separated digest used inside bundles, staging receipts, and provider attestations.
     #[must_use]
     pub fn semantic_digest(&self) -> MusubiSemanticReleaseDigestV1 {
-        MusubiSemanticReleaseDigestV1(domain_hash(
+        MusubiSemanticReleaseDigestV1(domain_hash_value(
             MUSUBI_SEMANTIC_RELEASE_DIGEST_DOMAIN_V1,
-            &self.encode(),
+            self,
         ))
     }
 }
@@ -2858,7 +2878,7 @@ impl MusubiReleaseManifestV1 {
     /// Compute the archive-independent bundle/receipt/provider-attestation digest.
     #[must_use]
     pub fn semantic_digest(&self) -> MusubiSemanticReleaseDigestV1 {
-        self.semantic_manifest().semantic_digest()
+        streaming::semantic_release_digest(self)
     }
 
     /// Explicit alias for [`Self::semantic_digest`].
@@ -2873,7 +2893,15 @@ impl MusubiReleaseManifestV1 {
     ///
     /// Returns an error if the semantic manifest is invalid or the archive identity is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
-        self.semantic_manifest().validate()?;
+        streaming::validate_semantic_release_fields(
+            &self.release,
+            &self.abi,
+            &self.dependencies,
+            &self.exports,
+            self.interface_digest,
+            &self.metadata,
+            self.verification_lock_digest,
+        )?;
         if self.archive_id.is_zero() {
             return Err(ParseError::new(
                 "Musubi registry release manifest has an invalid archive identity",
@@ -2882,10 +2910,26 @@ impl MusubiReleaseManifestV1 {
         Ok(())
     }
 
+    fn validate_verification_lock(
+        &self,
+        verification_lock: &MusubiVerificationLockV1,
+    ) -> Result<(), ParseError> {
+        streaming::validate_semantic_release_lock(
+            &self.release,
+            &self.abi,
+            &self.dependencies,
+            &self.exports,
+            self.interface_digest,
+            &self.metadata,
+            self.verification_lock_digest,
+            verification_lock,
+        )
+    }
+
     /// Domain-separated immutable release digest.
     #[must_use]
     pub fn release_digest(&self) -> MusubiReleaseDigestV1 {
-        MusubiReleaseDigestV1(domain_hash(MUSUBI_RELEASE_DIGEST_DOMAIN_V1, &self.encode()))
+        MusubiReleaseDigestV1(domain_hash_value(MUSUBI_RELEASE_DIGEST_DOMAIN_V1, self))
     }
 }
 
@@ -2911,7 +2955,6 @@ impl MusubiPublicationV1 {
         self.manifest.validate()?;
         self.resolution.validate()?;
         self.manifest
-            .semantic_manifest()
             .validate_verification_lock(&self.resolution.lock)
     }
 }
@@ -2938,7 +2981,7 @@ pub struct MusubiSeedIngressReceiptBindingV1 {
     /// Length of the exact CAR request body received by ingress.
     pub car_body_length: u64,
     /// Unpredictable operation nonce preventing receipt replay across attempts.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub nonce: [u8; 32],
 }
 
@@ -3275,11 +3318,11 @@ impl MusubiProviderBundleVerificationAttestationV1 {
     /// Returns an error if canonical encoding fails or is oversized, the payload is invalid,
     /// approvals are empty or noncanonical, or an approval signature length is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
-        let canonical = norito::encode_canonical(self).map_err(|_| {
+        let canonical_len = canonical_frame_len(self).map_err(|_| {
             ParseError::new("Musubi provider bundle attestation has no canonical Norito encoding")
         })?;
-        if canonical.is_empty()
-            || canonical.len() > MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1
+        if canonical_len == 0
+            || canonical_len > MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1
         {
             return Err(ParseError::new(
                 "Musubi provider bundle attestation exceeds its canonical byte bound",
@@ -3315,9 +3358,9 @@ impl MusubiProviderBundleVerificationAttestationV1 {
     /// Compute the domain-separated digest of the complete canonical attestation.
     #[must_use]
     pub fn digest(&self) -> MusubiProviderBundleAttestationDigestV1 {
-        MusubiProviderBundleAttestationDigestV1(domain_hash(
+        MusubiProviderBundleAttestationDigestV1(domain_hash_value(
             MUSUBI_PROVIDER_BUNDLE_ATTESTATION_DIGEST_DOMAIN_V1,
-            &self.encode(),
+            self,
         ))
     }
 
@@ -4277,6 +4320,7 @@ pub struct MusubiReleaseYankV1 {
     /// Required reason for the transition.
     pub reason: MusubiReasonV1,
     /// Account applying the transition.
+    #[cfg_attr(feature = "json", norito(json = "streaming::account_i105_json"))]
     pub changed_by: AccountId,
     /// Finalized transition height.
     pub changed_at_height: u64,
@@ -4704,7 +4748,7 @@ impl MusubiAliasHistoryEntryV1 {
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiGovernanceDecisionV1 {
     /// Unique enacted decision identifier for replay protection.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub decision_id: [u8; 32],
     /// Digest of the exact action payload.
     pub action_digest: MusubiGovernanceActionDigestV1,
@@ -4914,57 +4958,14 @@ impl MusubiParliamentActionV1 {
     /// Domain-separated digest used by the enacted decision.
     #[must_use]
     pub fn action_digest(&self) -> MusubiGovernanceActionDigestV1 {
-        MusubiGovernanceActionDigestV1(domain_hash(
+        MusubiGovernanceActionDigestV1(domain_hash_value(
             b"iroha.musubi.parliament-action.v1",
-            &self.encode(),
+            self,
         ))
     }
 }
 
-/// Admission mode for new archives, releases, and aliases.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
-)]
-pub enum MusubiRegistryAdmissionModeV1 {
-    /// Reject new archives, releases, and aliases.
-    Closed,
-    /// Admit only allowlisted stable dataspaces.
-    Allowlisted,
-    /// Public admission subject to normal ownership and payment checks.
-    Open,
-}
-
-/// Versioned first-release Musubi registry policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-pub struct MusubiRegistryPolicyV1 {
-    /// Must equal one.
-    pub version: u8,
-    /// Compare-and-set policy revision.
-    pub revision: u64,
-    /// Admission mode.
-    pub mode: MusubiRegistryAdmissionModeV1,
-    /// Sorted stable dataspaces used only by allowlisted mode.
-    pub allowlisted_dataspaces: Vec<DataSpaceId>,
-    /// Prospective alias prices.
-    pub alias_pricing: MusubiAliasPricingPolicyV1,
-}
-
-impl Default for MusubiRegistryPolicyV1 {
-    fn default() -> Self {
-        Self {
-            version: MUSUBI_REGISTRY_VERSION_V1,
-            revision: 1,
-            mode: MusubiRegistryAdmissionModeV1::Open,
-            allowlisted_dataspaces: Vec::new(),
-            alias_pricing: MusubiAliasPricingPolicyV1::GENESIS,
-        }
-    }
-}
+include!("musubi/registry_policy_types.rs");
 
 include!("musubi/registry_policy_impl.rs");
 

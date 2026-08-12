@@ -21,6 +21,8 @@
 //! Provides thin wrappers over Torii app endpoints for ZK features. These are
 //! intended for operator/testing convenience and are not consensus-critical.
 
+use std::{fs::File, path::Path};
+
 use eyre::{Context, Result};
 // For base64 Engine trait (decode)
 use base64::Engine as _;
@@ -30,6 +32,82 @@ use iroha_crypto::Hash as CryptoHash;
 use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
 
 use crate::{CliOutputFormat, Run, RunContext, json_utils, quote_and_sign_transaction};
+
+// Proof/attachment tooling shares the first-release CLI's 64 MiB local-input
+// corridor. Backend-specific VK inputs use the stricter 8 MiB protocol cap.
+// JSON and Norito decoders additionally receive explicit graph/allocation
+// limits so a short hostile frame cannot request a much larger heap.
+const ZK_CLI_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;
+const ZK_CLI_VK_MAX_BYTES_V1: usize = iroha_core::zk::HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES;
+const ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
+const ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1;
+const ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
+const ZK_CLI_MAX_NESTING_DEPTH_V1: usize = 64;
+
+// Binary `Vec<u8>` fields account their byte length as sequence elements, so
+// the binary limit must admit one complete proof-sized byte field. JSON arrays
+// use the much smaller graph limit below.
+const ZK_CLI_BINARY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    ZK_CLI_INPUT_MAX_BYTES_V1,
+    ZK_CLI_INPUT_MAX_BYTES_V1,
+    ZK_CLI_INPUT_MAX_BYTES_V1,
+    ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1,
+    ZK_CLI_MAX_NESTING_DEPTH_V1,
+);
+
+const ZK_CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+    ZK_CLI_INPUT_MAX_BYTES_V1,
+    ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1,
+    ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1,
+    ZK_CLI_MAX_NESTING_DEPTH_V1,
+);
+
+fn read_zk_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
+    let mut file =
+        File::open(path).wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
+    let before = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect {label} {}", path.display()))?;
+    if !before.is_file() {
+        eyre::bail!("{label} must be a regular file: {}", path.display());
+    }
+    if before.len() > max_bytes as u64 {
+        eyre::bail!(
+            "{label} {} exceeds the first-release limit of {} bytes",
+            path.display(),
+            max_bytes
+        );
+    }
+    let bytes = super::read_cli_input_bounded(&mut file, max_bytes, label)
+        .wrap_err_with(|| format!("failed to read {label} {}", path.display()))?;
+    let after = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to reinspect {label} {}", path.display()))?;
+    if before.len() != after.len() || after.len() != bytes.len() as u64 {
+        eyre::bail!("{label} changed while reading: {}", path.display());
+    }
+    Ok(bytes)
+}
+
+fn decode_zk_json_file<T>(path: &Path, label: &str) -> Result<T>
+where
+    T: norito::json::JsonDeserialize,
+{
+    let bytes = read_zk_file_bounded(path, ZK_CLI_INPUT_MAX_BYTES_V1, label)?;
+    norito::json::preflight_slice(
+        &bytes,
+        norito::json::JsonPreflightLimits::from_decode_limits(
+            ZK_CLI_INPUT_MAX_BYTES_V1,
+            ZK_CLI_JSON_DECODE_LIMITS_V1,
+        ),
+    )
+    .map_err(|error| eyre::eyre!("{label} JSON exceeds its lexical resource bounds: {error}"))?;
+    norito::with_decode_limits_scope(ZK_CLI_JSON_DECODE_LIMITS_V1, || {
+        norito::json::from_slice(&bytes)
+    })
+    .map_err(|error| eyre::eyre!("failed to decode {label} JSON: {error}"))
+}
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -120,14 +198,13 @@ impl Run for VerifyBatchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         if let Some(p) = self.norito {
-            let body = std::fs::read(&p)?;
+            let body = read_zk_file_bounded(&p, ZK_CLI_INPUT_MAX_BYTES_V1, "ZK verify batch")?;
             let value = client.post_zk_verify_batch_norito(&body)?;
             context.print_data(&value)?;
             return Ok(());
         }
         if let Some(p) = self.json {
-            let s = std::fs::read_to_string(&p)?;
-            let v: norito::json::Value = norito::json::from_str(&s)?;
+            let v: norito::json::Value = decode_zk_json_file(&p, "ZK verify batch")?;
             let value = client.post_zk_verify_batch_json(&v)?;
             context.print_data(&value)?;
             return Ok(());
@@ -149,9 +226,11 @@ pub struct SchemaHashArgs {
 impl Run for SchemaHashArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bytes = if let Some(path) = self.norito {
-            let raw = std::fs::read(&path)?;
-            let env: Halo2Envelope = norito::decode_from_bytes(&raw)
-                .map_err(|e| eyre::eyre!("failed to decode Norito envelope: {e}"))?;
+            let raw =
+                read_zk_file_bounded(&path, ZK_CLI_INPUT_MAX_BYTES_V1, "ZK OpenVerify envelope")?;
+            let env: Halo2Envelope =
+                norito::decode_from_bytes_with_limits(&raw, ZK_CLI_BINARY_DECODE_LIMITS_V1)
+                    .map_err(|e| eyre::eyre!("failed to decode Norito envelope: {e}"))?;
             env.public.encode_bytes()
         } else if let Some(hex) = self.public_inputs_hex {
             parse_hex_string(&hex)?
@@ -892,8 +971,7 @@ pub struct IvmDeriveArgs {
 impl Run for IvmDeriveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let s = std::fs::read_to_string(&self.json)?;
-        let req: norito::json::Value = norito::json::from_str(&s)?;
+        let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM derive request")?;
         let value = client.post_zk_ivm_derive_json(&req)?;
         context.print_data(&value)?;
         Ok(())
@@ -919,8 +997,7 @@ pub struct IvmProveArgs {
 impl Run for IvmProveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let s = std::fs::read_to_string(&self.json)?;
-        let req: norito::json::Value = norito::json::from_str(&s)?;
+        let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM prove request")?;
         let created = client.post_zk_ivm_prove_json(&req)?;
         if !self.wait {
             context.print_data(&created)?;
@@ -1007,7 +1084,8 @@ pub struct IvmDerivePkArgs {
 
 impl Run for IvmDerivePkArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let vk_bytes = std::fs::read(&self.vk)?;
+        let vk_bytes =
+            read_zk_file_bounded(&self.vk, ZK_CLI_VK_MAX_BYTES_V1, "Halo2 IPA verifying key")?;
         let vk_box = iroha::data_model::proof::VerifyingKeyBox::new(self.backend, vk_bytes);
         let pk = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box)
             .map_err(|err| {
@@ -1096,7 +1174,7 @@ pub struct AttachmentUploadArgs {
 impl Run for AttachmentUploadArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let body = std::fs::read(&self.file)?;
+        let body = read_zk_file_bounded(&self.file, ZK_CLI_INPUT_MAX_BYTES_V1, "ZK attachment")?;
         let value = client.post_zk_attachment(&body, &self.content_type)?;
         context.print_data(&value)?;
         Ok(())
@@ -1781,6 +1859,49 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn zk_file_reader_accepts_exact_limit_and_rejects_sparse_overflow() {
+        let directory = tempfile::tempdir().expect("create ZK input directory");
+        let exact = directory.path().join("exact.bin");
+        std::fs::write(&exact, [0xA5; 32]).expect("write exact ZK input");
+        assert_eq!(
+            read_zk_file_bounded(&exact, 32, "fixture").expect("read exact ZK input"),
+            vec![0xA5; 32]
+        );
+
+        let oversized = directory.path().join("oversized.bin");
+        let file = File::create(&oversized).expect("create sparse ZK input");
+        file.set_len(33).expect("extend sparse ZK input");
+        let error = read_zk_file_bounded(&oversized, 32, "fixture")
+            .expect_err("first over-limit ZK input must fail before reading");
+        assert!(error.to_string().contains("first-release limit"));
+    }
+
+    #[test]
+    fn zk_json_depth_bound_rejects_first_overflow() {
+        let directory = tempfile::tempdir().expect("create ZK JSON directory");
+        let exact = directory.path().join("exact.json");
+        let exact_body = format!(
+            "{}0{}",
+            "[".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1 - 1),
+            "]".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1 - 1)
+        );
+        std::fs::write(&exact, exact_body).expect("write exact-depth JSON");
+        let _: norito::json::Value =
+            decode_zk_json_file(&exact, "fixture").expect("exact JSON depth is admitted");
+
+        let over = directory.path().join("over.json");
+        let over_body = format!(
+            "{}0{}",
+            "[".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1),
+            "]".repeat(ZK_CLI_MAX_NESTING_DEPTH_V1)
+        );
+        std::fs::write(&over, over_body).expect("write over-depth JSON");
+        let error = decode_zk_json_file::<norito::json::Value>(&over, "fixture")
+            .expect_err("first over-limit JSON depth must fail");
+        assert!(error.to_string().contains("lexical resource bounds"));
+    }
 }
 
 // --------------- Register ZK Asset ---------------
@@ -2079,10 +2200,7 @@ fn build_vk_record(
 }
 
 fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
-    let raw = std::fs::read_to_string(path)
-        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
-    let payload: VkSubmissionJson =
-        norito::json::from_str(&raw).wrap_err("failed to parse VK submission JSON")?;
+    let payload: VkSubmissionJson = decode_zk_json_file(path, "verifying-key submission")?;
     let backend =
         ensure_verifier_backend_registry_label_v1(&payload.backend, "verifying key backend")?;
     let id =

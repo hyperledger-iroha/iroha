@@ -14,4 +14,5 @@ pub mod puzzle;
 pub mod record;
 pub mod replay;
 mod replay_lock;
+mod snapshot_file;
 pub mod token;

@@ -176,6 +176,85 @@
         );
     }
 
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn verified_source_admission_precedes_body_polling_and_transfers_one_slot() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.verified_source_compile_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+            state.verified_source_body_read_timeout = Duration::from_millis(30);
+        }
+        let router = Router::<SharedAppState>::new()
+            .route(
+                "/verified-source",
+                post(
+                    |Extension(admission): Extension<VerifiedSourceCompileAdmission>,
+                     _body: Bytes| async move {
+                        let _permit = admission.take().expect("compiler admission handoff");
+                        StatusCode::NO_CONTENT
+                    },
+                ),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                verified_source_body_admission_middleware,
+            ))
+            .with_state::<()>(app.clone());
+
+        let stalled =
+            futures_util::stream::pending::<std::result::Result<Bytes, std::convert::Infallible>>();
+        let first_router = router.clone();
+        let first = tokio::spawn(async move {
+            first_router
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri("/verified-source")
+                        .body(Body::from_stream(stalled))
+                        .expect("stalled request"),
+                )
+                .await
+                .expect("first response")
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while app.verified_source_compile_inflight.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first request must own compiler capacity before polling its body");
+
+        let rejected = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/verified-source")
+                    .body(Body::from(Bytes::from_static(b"second")))
+                    .expect("second request"),
+            )
+            .await
+            .expect("second response");
+        assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        assert_eq!(
+            first.await.expect("first task").status(),
+            StatusCode::REQUEST_TIMEOUT
+        );
+        let accepted = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/verified-source")
+                    .body(Body::from(Bytes::from_static(b"third")))
+                    .expect("third request"),
+            )
+            .await
+            .expect("third response");
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+    }
+
     #[tokio::test]
     async fn proof_body_absolute_deadline_rejects_continuous_trickle() {
         let trickle = futures_util::stream::unfold((), |_| async {

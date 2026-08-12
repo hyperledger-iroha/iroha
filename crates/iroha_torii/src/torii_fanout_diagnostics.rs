@@ -46,22 +46,6 @@ impl ToriiFanoutDiagnostics {
     }
 }
 
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
-struct ToriiFanoutJsonPayloads {
-    payloads: Vec<Value>,
-    diagnostics: ToriiFanoutDiagnostics,
-    budget: ToriiRoutedReadMemoryBudget,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
-struct ToriiFanoutRoutedJsonPayloads {
-    payloads: Vec<(RoutingDecision, Value)>,
-    diagnostics: ToriiFanoutDiagnostics,
-    budget: ToriiRoutedReadMemoryBudget,
-}
-
 fn torii_alias_routes_denied_warning_header() -> HeaderValue {
     HeaderValue::from_static(r#"199 - "one or more alias routes were denied""#)
 }

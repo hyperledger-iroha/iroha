@@ -601,7 +601,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "fetch-store-transition-test".into(),
+            network_id: crate::sumeragi::synthetic_network_id("fetch-store-transition-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 1,

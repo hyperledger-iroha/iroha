@@ -25,6 +25,19 @@ pub struct MusubiResolverReleaseRowV1 {
 }
 
 impl MusubiResolverReleaseRowV1 {
+    /// Return the exact canonical JSON length without allocating an output or account literal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if canonical JSON encoding fails or exceeds `maximum` bytes.
+    #[cfg(feature = "json")]
+    pub fn canonical_json_len_bounded(
+        &self,
+        maximum: usize,
+    ) -> Result<usize, norito::json::BoundedJsonError> {
+        streaming::musubi_resolver_row_json_len_bounded(self, maximum)
+    }
+
     /// Validate compact resolver commitments and canonical dependency order.
     ///
     /// # Errors
@@ -874,13 +887,18 @@ impl MusubiResolverIndexPageV1 {
         )?;
         #[cfg(feature = "json")]
         {
-            let encoded = norito::json::to_json(self).map_err(|_| {
-                ParseError::new("Musubi resolver page cannot be encoded as canonical JSON")
-            })?;
-            if encoded.len() > MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1 {
-                return Err(ParseError::new(
-                    "Musubi resolver page exceeds the public JSON response ceiling",
-                ));
+            match musubi_json_len_bounded(self, MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1) {
+                Ok(_) => {}
+                Err(norito::json::BoundedJsonError::BodyTooLarge) => {
+                    return Err(ParseError::new(
+                        "Musubi resolver page exceeds the public JSON response ceiling",
+                    ));
+                }
+                Err(_) => {
+                    return Err(ParseError::new(
+                        "Musubi resolver page cannot be encoded as canonical JSON",
+                    ));
+                }
             }
         }
         Ok(())
@@ -1356,7 +1374,7 @@ pub struct MusubiSearchSnapshotV1 {
     /// Finalized height through which the search projection has been applied.
     pub finalized_height: u64,
     /// Finalized block hash at `finalized_height`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finalized_block_hash: [u8; 32],
     /// Process-local projection revision, changed on every visible rebuild/update.
     pub projection_revision: u64,

@@ -12,9 +12,10 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
             .clone(),
     );
     let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(3));
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"signed-query-complete-rejection"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: Vec::new(),
@@ -78,9 +79,10 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
  {
     let route = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(5));
     let request_id = Hash::new(b"torii-proxy-no-candidates");
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: request_id.clone(),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: Vec::new(),
@@ -143,9 +145,10 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
             .clone(),
     );
     let route = RoutingDecision::new(LaneId::new(6), DataSpaceId::new(7));
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"torii-proxy-last-retryable"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: Vec::new(),
@@ -950,7 +953,7 @@ async fn queue_plan_synced_p2p_missing_network_is_pre_dispatch() {
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
-async fn queue_plan_synced_p2p_post_dispatch_channel_loss_is_indeterminate() {
+async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending() {
     let (mut app, request) =
         incoming_proxy_submit_fixture(0xc3, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
     Arc::get_mut(&mut app)
@@ -962,33 +965,130 @@ async fn queue_plan_synced_p2p_post_dispatch_channel_loss_is_indeterminate() {
             .clone(),
     );
     let pending_key = (request.request_id.clone(), peer_id.clone());
-    let after_network_post =
-        super::register_torii_proxy_after_network_post_observer(pending_key.clone());
-    let app_for_close = app.clone();
-    let close_task = tokio::spawn(async move {
-        after_network_post.notified().await;
-        assert!(
-            app_for_close
-                .torii_proxy_pending
-                .lock()
-                .await
-                .remove(&pending_key)
-                .is_some(),
-            "the pending response channel must exist immediately after network.post"
-        );
-    });
 
     let error = super::execute_torii_proxy_request_via_peer(&app, peer_id, Arc::new(request))
         .await
-        .expect_err("lost response channel after network post must be indeterminate");
-    close_task
-        .await
-        .expect("pending-channel closer must finish");
+        .expect_err("closed P2P actor must reject exact admission before dispatch");
     assert!(matches!(
         error,
-        ToriiProxyAttemptError::DispatchedWithoutResponse(_)
+        ToriiProxyAttemptError::DefinitelyNotDispatched(_)
     ));
-    assert!(error.may_have_reached_authority());
+    assert!(!error.may_have_reached_authority());
+    assert!(
+        !app.torii_proxy_pending
+            .lock()
+            .await
+            .contains_key(&pending_key),
+        "failed exact admission must remove the response waiter"
+    );
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
+    let app = mk_app_state_for_tests();
+    let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
+    let busy_peer_key = checked_torii_test_ed25519_keypair(
+        0xc5,
+        "derive backpressured busy-rejection peer fixture key",
+    );
+    let busy_peer = Peer::new(
+        "127.0.0.1:23001".parse().expect("valid busy peer address"),
+        busy_peer_key.public_key().clone(),
+    );
+
+    let capacity_rejection_completed_inline: () =
+        super::reject_incoming_torii_proxy_request_capacity(
+            &network,
+            &busy_peer,
+            Hash::new(b"backpressured-busy-rejection"),
+            super::torii_proxy_test_deadline_unix_ms(),
+        );
+    let () = capacity_rejection_completed_inline;
+
+    let responder_key = checked_torii_test_ed25519_keypair(
+        0xc6,
+        "derive response-pump liveness responder fixture key",
+    );
+    let responder_peer_id = PeerId::from(responder_key.public_key().clone());
+    let request_id = Hash::new(b"response-after-backpressured-busy-rejection");
+    let expected = ToriiProxyHttpResponseV1 {
+        status_code: StatusCode::OK.as_u16(),
+        headers: Vec::new(),
+        body: b"response-pump-remains-live".to_vec(),
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.torii_proxy_pending.lock().await.insert(
+        (request_id, responder_peer_id.clone()),
+        PendingToriiProxyRequest {
+            sender: tx,
+            max_body_bytes: 1024,
+            strict_queue_plan_synced: false,
+        },
+    );
+    super::process_incoming_torii_proxy_response(
+        &app,
+        responder_peer_id,
+        ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id,
+            response: expected.clone(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(100), rx)
+            .await
+            .expect("response pump must not remain blocked behind busy-rejection admission")
+            .expect("pending response receiver must stay open"),
+        expected
+    );
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn backpressured_response_admission_obeys_local_egress_deadline() {
+    let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
+    let target = PeerId::from(
+        checked_torii_test_ed25519_keypair(0xc7, "derive local egress-deadline target fixture key")
+            .public_key()
+            .clone(),
+    );
+    let request_id = Hash::new(b"backpressured-response-local-egress-deadline");
+    let local_deadline = tokio::time::Instant::now() + Duration::from_millis(20);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        super::post_torii_proxy_control_until_deadline(
+            &network,
+            iroha_p2p::Post {
+                peer_id: target,
+                priority: iroha_p2p::Priority::High,
+                data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(
+                    ToriiProxyResponseV1 {
+                        schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                        request_id,
+                        response: ToriiProxyHttpResponseV1 {
+                            status_code: StatusCode::OK.as_u16(),
+                            headers: Vec::new(),
+                            body: Vec::new(),
+                        },
+                    },
+                )),
+            },
+            super::torii_proxy_test_deadline_unix_ms(),
+            local_deadline,
+        ),
+    )
+    .await
+    .expect("local egress deadline must stop backpressured response admission");
+
+    assert!(
+        result
+            .expect_err("a permanently backpressured actor cannot accept the response")
+            .contains("local admission deadline"),
+        "the local monotonic owner, not the wider skew-tolerant wire horizon, must terminate admission"
+    );
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -1179,9 +1279,10 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
     );
     let route = RoutingDecision::new(LaneId::new(8), DataSpaceId::new(9));
     let request_id = Hash::new(b"torii-proxy-all-transport-errors");
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: request_id.clone(),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: Vec::new(),

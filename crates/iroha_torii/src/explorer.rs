@@ -280,7 +280,13 @@ pub(crate) fn paginate<T>(
 #[inline]
 #[must_use]
 pub(crate) const fn normalize_history_per_page(per_page: u64) -> u64 {
-    per_page.clamp(1, EXPLORER_HISTORY_MAX_PER_PAGE)
+    if per_page == 0 {
+        1
+    } else if per_page > EXPLORER_HISTORY_MAX_PER_PAGE {
+        EXPLORER_HISTORY_MAX_PER_PAGE
+    } else {
+        per_page
+    }
 }
 
 pub(crate) fn metadata_to_json(metadata: &Metadata) -> Value {

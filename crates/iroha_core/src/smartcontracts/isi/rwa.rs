@@ -1541,13 +1541,12 @@ pub mod query {
             let Some(raw) = predicate.json_payload() else {
                 return view;
             };
-            let Ok(value) = norito::json::from_str(raw) else {
+            let Some(parsed) =
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution(raw)
+            else {
                 return view;
             };
-
-            if let Some(parsed) = Self::parse_predicate_value(value) {
-                view.ingest_predicate(parsed);
-            }
+            view.ingest_predicate(parsed);
 
             view
         }
@@ -1788,7 +1787,7 @@ pub mod query {
 
     fn rwa_json_value<'a>(cache: &'a mut Option<Value>, rwa: &Rwa) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = norito::json::to_value(rwa).ok();
+            *cache = super::query::ordinary_predicate_json_value(rwa);
         }
         cache.as_ref()
     }
@@ -1927,8 +1926,7 @@ pub mod query {
             let predicate_view = RwaPredicateView::from_predicate(&filter);
             let predicate_json = filter
                 .json_payload()
-                .and_then(|raw| norito::json::from_str(raw).ok())
-                .and_then(RwaPredicateView::parse_predicate_value);
+                .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
 
             let iter: Box<dyn Iterator<Item = Rwa> + '_> =
                 if let Some(candidate_ids) = predicate_view.indexed_candidate_ids(world) {

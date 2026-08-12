@@ -1,5 +1,7 @@
 #![allow(unexpected_cfgs)]
 
+//! Runs the privileged Sora VPN helper and its authenticated control protocol.
+
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
@@ -82,6 +84,31 @@ const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const CONNECT_PAYLOAD_FRAME_MAGIC: &[u8; 8] = b"SVPNCP1\0";
 const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST1\0";
+// The first-release worker protocol is local-only, but the hidden subcommands can still be
+// invoked with an arbitrary pipe. One MiB leaves room for the complete route policy while
+// preventing a privileged helper from buffering an unbounded stdin stream.
+const MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1: usize = 1024 * 1024;
+const MAX_CONNECT_PAYLOAD_FIELD_BYTES_V1: usize = 64 * 1024;
+const MAX_CONNECT_PAYLOAD_SEQUENCE_ELEMENTS_V1: usize = 4_096;
+const MAX_CONNECT_PAYLOAD_TOTAL_ELEMENTS_V1: usize = 4 * 4_096;
+const MAX_CONNECT_PAYLOAD_DECODE_ALLOCATION_BYTES_V1: usize = 4 * 1024 * 1024;
+const MAX_CONNECT_PAYLOAD_DECODE_DEPTH_V1: usize = 8;
+// Persisted state can additionally contain one captured pre-VPN route for every excluded route.
+// Bound it independently so a corrupt state file cannot turn startup/status into an OOM path.
+const MAX_STATE_FRAME_BYTES_V1: usize = 8 * 1024 * 1024;
+const MAX_STATE_FIELD_BYTES_V1: usize = 64 * 1024;
+const MAX_STATE_SEQUENCE_ELEMENTS_V1: usize = 4_096;
+const MAX_STATE_TOTAL_ELEMENTS_V1: usize = 8 * 1024 * 1024;
+const MAX_STATE_DECODE_ALLOCATION_BYTES_V1: usize = 16 * 1024 * 1024;
+const MAX_STATE_DECODE_DEPTH_V1: usize = 16;
+const MAX_RESOLV_CONF_BYTES_V1: usize = 1024 * 1024;
+const MAX_SESSION_ID_BYTES_V1: usize = 256;
+const MAX_RELAY_ENDPOINT_BYTES_V1: usize = 2_048;
+const MAX_EXIT_CLASS_BYTES_V1: usize = 64;
+const MAX_TLS_SERVER_NAME_BYTES_V1: usize = 253;
+const MAX_HELPER_TICKET_HEX_BYTES_V1: usize = 64 * 1024;
+const MAX_NETWORK_POLICY_ENTRIES_V1: usize = 4_096;
+const MAX_NETWORK_POLICY_ENTRY_BYTES_V1: usize = 256;
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 2] = ["-o", "route"];
 const DEFAULT_USAGE_VOUCHER_INTERVAL_MS: u64 = 1_000;
@@ -453,7 +480,7 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
     persist_state(&state)?;
 
     let current_exe = env::current_exe()?;
-    let payload_frame = encode_connect_payload_frame(&payload);
+    let payload_frame = encode_connect_payload_frame(&payload)?;
     let mut child = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
         .stdin(Stdio::piped())
@@ -1992,7 +2019,12 @@ fn apply_dns(
     }
 
     let backup_path = resolv_conf_backup_path();
-    let backup_bytes = fs::read("/etc/resolv.conf").unwrap_or_default();
+    let backup_bytes = read_stable_regular_file_bounded(
+        Path::new("/etc/resolv.conf"),
+        MAX_RESOLV_CONF_BYTES_V1,
+        "resolver configuration",
+    )
+    .unwrap_or_default();
     if let Some(parent) = backup_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -2020,7 +2052,11 @@ fn cleanup_dns(backend: &DnsBackendState) -> Result<(), ControllerError> {
         }
         DnsBackendState::ResolvConf { backup_path } => {
             let backup = PathBuf::from(backup_path);
-            let bytes = fs::read(&backup)?;
+            let bytes = read_stable_regular_file_bounded(
+                &backup,
+                MAX_RESOLV_CONF_BYTES_V1,
+                "resolver configuration backup",
+            )?;
             write_private_file(Path::new("/etc/resolv.conf"), &bytes)?;
             let _ = fs::remove_file(backup);
         }
@@ -2217,9 +2253,89 @@ fn current_state() -> State {
     state
 }
 
+fn read_bounded<R: io::Read>(
+    reader: &mut R,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>, ControllerError> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8 * 1024];
+    while bytes.len() < max_bytes {
+        let remaining = max_bytes - bytes.len();
+        let read_len = remaining.min(chunk.len());
+        let count = loop {
+            match reader.read(&mut chunk[..read_len]) {
+                Ok(count) => break count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            }
+        };
+        if count == 0 {
+            return Ok(bytes);
+        }
+        bytes.try_reserve_exact(count).map_err(|error| {
+            ControllerError::InvalidPayload(format!(
+                "failed to reserve storage while reading {label}: {error}"
+            ))
+        })?;
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+
+    let mut growth_probe = [0_u8; 1];
+    let extra = loop {
+        match reader.read(&mut growth_probe) {
+            Ok(count) => break count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    if extra != 0 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} exceeds the v1 limit of {max_bytes} bytes"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn read_stable_regular_file_bounded(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>, ControllerError> {
+    let mut file = fs::File::open(path)?;
+    let before = file.metadata()?;
+    if !before.file_type().is_file() {
+        return Err(ControllerError::State(format!(
+            "{label} {} is not a regular file",
+            path.display()
+        )));
+    }
+    if before.len() > max_bytes as u64 {
+        return Err(ControllerError::State(format!(
+            "{label} {} exceeds the v1 limit of {max_bytes} bytes",
+            path.display()
+        )));
+    }
+    let bytes = read_bounded(&mut file, max_bytes, label).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to read {label} {}: {error}",
+            path.display()
+        ))
+    })?;
+    let after = file.metadata()?;
+    if before.len() != after.len() || after.len() != bytes.len() as u64 {
+        return Err(ControllerError::State(format!(
+            "{label} {} changed while it was being read",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
 fn load_state() -> State {
     let path = state_path();
-    let Ok(bytes) = fs::read(path) else {
+    let Ok(bytes) = read_stable_regular_file_bounded(&path, MAX_STATE_FRAME_BYTES_V1, "state file")
+    else {
         return State::default();
     };
     decode_state_frame(&bytes).unwrap_or_default()
@@ -2230,7 +2346,7 @@ fn persist_state(state: &State) -> Result<(), ControllerError> {
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent)?;
     }
-    let bytes = encode_state_frame(state);
+    let bytes = encode_state_frame(state)?;
     write_private_file(path.as_path(), &bytes)?;
     Ok(())
 }
@@ -2242,52 +2358,101 @@ fn print_state(state: &State) -> Result<(), ControllerError> {
     Ok(())
 }
 
-fn encode_state_frame(state: &State) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(STATE_FILE_FRAME_MAGIC.len() + 256);
+fn encode_state_frame(state: &State) -> Result<Vec<u8>, ControllerError> {
+    let payload_len = state.encoded_len();
+    let frame_len = STATE_FILE_FRAME_MAGIC
+        .len()
+        .checked_add(payload_len)
+        .ok_or_else(|| ControllerError::State("state frame length overflow".to_owned()))?;
+    if frame_len > MAX_STATE_FRAME_BYTES_V1 {
+        return Err(ControllerError::State(format!(
+            "state frame exceeds the v1 limit of {MAX_STATE_FRAME_BYTES_V1} bytes"
+        )));
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(frame_len).map_err(|error| {
+        ControllerError::State(format!("failed to reserve state frame storage: {error}"))
+    })?;
     bytes.extend_from_slice(STATE_FILE_FRAME_MAGIC);
-    bytes.extend_from_slice(&state.encode());
-    bytes
+    state.encode_to(&mut bytes);
+    debug_assert_eq!(bytes.len(), frame_len);
+    Ok(bytes)
 }
 
 fn decode_state_frame(bytes: &[u8]) -> Result<State, ControllerError> {
+    if bytes.len() > MAX_STATE_FRAME_BYTES_V1 {
+        return Err(ControllerError::State(format!(
+            "state frame exceeds the v1 limit of {MAX_STATE_FRAME_BYTES_V1} bytes"
+        )));
+    }
     if !bytes.starts_with(STATE_FILE_FRAME_MAGIC) {
         return Err(ControllerError::State(
             "state file is not a v1 Norito state frame".to_owned(),
         ));
     }
-    let mut payload = &bytes[STATE_FILE_FRAME_MAGIC.len()..];
-    let state = State::decode(&mut payload)
-        .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")))?;
-    if !payload.is_empty() {
-        return Err(ControllerError::State(
-            "state file has trailing bytes after Norito payload".to_owned(),
-        ));
-    }
-    Ok(state)
+    let limits = norito::DecodeLimits::new(
+        MAX_STATE_SEQUENCE_ELEMENTS_V1,
+        MAX_STATE_FIELD_BYTES_V1,
+        MAX_STATE_TOTAL_ELEMENTS_V1,
+        MAX_STATE_DECODE_ALLOCATION_BYTES_V1,
+        MAX_STATE_DECODE_DEPTH_V1,
+    );
+    norito::codec::decode_exact_from_slice_with_limits(
+        &bytes[STATE_FILE_FRAME_MAGIC.len()..],
+        limits,
+    )
+    .map_err(|error| ControllerError::State(format!("failed to decode state: {error}")))
 }
 
-fn encode_connect_payload_frame(payload: &ConnectPayload) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(CONNECT_PAYLOAD_FRAME_MAGIC.len() + 512);
+fn encode_connect_payload_frame(payload: &ConnectPayload) -> Result<Vec<u8>, ControllerError> {
+    validate_connect_payload_ref(payload)?;
+    let payload_len = payload.encoded_len();
+    let frame_len = CONNECT_PAYLOAD_FRAME_MAGIC
+        .len()
+        .checked_add(payload_len)
+        .ok_or_else(|| {
+            ControllerError::InvalidPayload("connect frame length overflow".to_owned())
+        })?;
+    if frame_len > MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "connect frame exceeds the v1 limit of {MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1} bytes"
+        )));
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(frame_len).map_err(|error| {
+        ControllerError::InvalidPayload(format!("failed to reserve connect frame storage: {error}"))
+    })?;
     bytes.extend_from_slice(CONNECT_PAYLOAD_FRAME_MAGIC);
-    bytes.extend_from_slice(&payload.encode());
-    bytes
+    payload.encode_to(&mut bytes);
+    debug_assert_eq!(bytes.len(), frame_len);
+    Ok(bytes)
 }
 
 fn decode_connect_payload_frame(bytes: &[u8]) -> Result<ConnectPayload, ControllerError> {
+    if bytes.len() > MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "connect frame exceeds the v1 limit of {MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1} bytes"
+        )));
+    }
     if !bytes.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC) {
         return Err(ControllerError::InvalidPayload(
             "worker stdin is not a v1 Norito connect-payload frame".to_owned(),
         ));
     }
-    let mut payload = &bytes[CONNECT_PAYLOAD_FRAME_MAGIC.len()..];
-    let decoded = ConnectPayload::decode(&mut payload).map_err(|error| {
+    let limits = norito::DecodeLimits::new(
+        MAX_CONNECT_PAYLOAD_SEQUENCE_ELEMENTS_V1,
+        MAX_CONNECT_PAYLOAD_FIELD_BYTES_V1,
+        MAX_CONNECT_PAYLOAD_TOTAL_ELEMENTS_V1,
+        MAX_CONNECT_PAYLOAD_DECODE_ALLOCATION_BYTES_V1,
+        MAX_CONNECT_PAYLOAD_DECODE_DEPTH_V1,
+    );
+    let decoded = norito::codec::decode_exact_from_slice_with_limits(
+        &bytes[CONNECT_PAYLOAD_FRAME_MAGIC.len()..],
+        limits,
+    )
+    .map_err(|error| {
         ControllerError::InvalidPayload(format!("failed to decode connect payload: {error}"))
     })?;
-    if !payload.is_empty() {
-        return Err(ControllerError::InvalidPayload(
-            "connect-payload frame has trailing bytes".to_owned(),
-        ));
-    }
     validate_connect_payload(decoded)
 }
 
@@ -2639,6 +2804,43 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
 }
 
 fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, ControllerError> {
+    validate_connect_payload_ref(&payload)?;
+    Ok(payload)
+}
+
+fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), ControllerError> {
+    validate_text_field(
+        payload.session_id.as_str(),
+        "sessionId",
+        MAX_SESSION_ID_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.relay_endpoint.as_str(),
+        "relayEndpoint",
+        MAX_RELAY_ENDPOINT_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.exit_class.as_str(),
+        "exitClass",
+        MAX_EXIT_CLASS_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.helper_ticket_hex.as_str(),
+        "helperTicketHex",
+        MAX_HELPER_TICKET_HEX_BYTES_V1,
+    )?;
+    validate_text_field(
+        payload.tls_server_name.as_str(),
+        "tlsServerName",
+        MAX_TLS_SERVER_NAME_BYTES_V1,
+    )?;
+    if let Some(seed) = payload.metering_private_key_seed_hex.as_deref() {
+        validate_text_field(seed, "meteringPrivateKeySeedHex", 64)?;
+    }
+    validate_network_policy_entries(&payload.route_pushes, "routePushes")?;
+    validate_network_policy_entries(&payload.excluded_routes, "excludedRoutes")?;
+    validate_network_policy_entries(&payload.dns_servers, "dnsServers")?;
+    validate_network_policy_entries(&payload.tunnel_addresses, "tunnelAddresses")?;
     if payload.session_id.trim().is_empty() {
         return Err(ControllerError::InvalidPayload(
             "sessionId must not be empty".to_owned(),
@@ -2701,12 +2903,41 @@ fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, C
             "mtuBytes must be greater than zero".to_owned(),
         ));
     }
-    Ok(payload)
+    Ok(())
+}
+
+fn validate_text_field(value: &str, label: &str, max_bytes: usize) -> Result<(), ControllerError> {
+    if value.len() > max_bytes {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} exceeds the v1 limit of {max_bytes} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_network_policy_entries(entries: &[String], label: &str) -> Result<(), ControllerError> {
+    if entries.len() > MAX_NETWORK_POLICY_ENTRIES_V1 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} exceeds the v1 limit of {MAX_NETWORK_POLICY_ENTRIES_V1} entries"
+        )));
+    }
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.len() > MAX_NETWORK_POLICY_ENTRY_BYTES_V1 {
+            return Err(ControllerError::InvalidPayload(format!(
+                "{label}[{index}] exceeds the v1 limit of {MAX_NETWORK_POLICY_ENTRY_BYTES_V1} bytes"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn read_connect_payload_from_stdin() -> Result<ConnectPayload, ControllerError> {
-    let mut raw_payload = Vec::new();
-    io::stdin().read_to_end(&mut raw_payload)?;
+    let mut stdin = io::stdin().lock();
+    let raw_payload = read_bounded(
+        &mut stdin,
+        MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
+        "worker stdin connect frame",
+    )?;
     decode_connect_payload_frame(&raw_payload)
 }
 
@@ -3099,7 +3330,7 @@ mod tests {
     #[test]
     fn connect_payload_worker_frame_roundtrips_as_norito() {
         let payload = test_connect_payload("session-1");
-        let frame = encode_connect_payload_frame(&payload);
+        let frame = encode_connect_payload_frame(&payload).expect("encode frame");
 
         assert!(frame.starts_with(CONNECT_PAYLOAD_FRAME_MAGIC));
         assert_eq!(
@@ -3118,10 +3349,54 @@ mod tests {
             bytes_out: 9,
             ..State::default()
         };
-        let frame = encode_state_frame(&state);
+        let frame = encode_state_frame(&state).expect("encode state");
 
         assert!(frame.starts_with(STATE_FILE_FRAME_MAGIC));
         assert_eq!(decode_state_frame(&frame).expect("decode state"), state);
+    }
+
+    #[test]
+    fn bounded_reader_accepts_exact_connect_frame_limit() {
+        let input = vec![0xA5; MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1];
+        let mut reader = input.as_slice();
+
+        let read = read_bounded(
+            &mut reader,
+            MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
+            "test connect frame",
+        )
+        .expect("exact limit is accepted");
+
+        assert_eq!(read.len(), MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1);
+        assert_eq!(read.first(), Some(&0xA5));
+        assert_eq!(read.last(), Some(&0xA5));
+    }
+
+    #[test]
+    fn bounded_reader_rejects_connect_frame_limit_plus_one() {
+        let input = vec![0xA5; MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1 + 1];
+        let mut reader = input.as_slice();
+
+        let error = read_bounded(
+            &mut reader,
+            MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
+            "test connect frame",
+        )
+        .expect_err("limit plus one must be rejected");
+
+        assert!(error.to_string().contains("exceeds the v1 limit"));
+    }
+
+    #[test]
+    fn connect_payload_rejects_network_policy_count_before_encoding() {
+        let mut payload = test_connect_payload("session-1");
+        payload.route_pushes = vec!["10.0.0.0/8".to_owned(); MAX_NETWORK_POLICY_ENTRIES_V1 + 1];
+
+        let error = encode_connect_payload_frame(&payload)
+            .expect_err("producer must enforce the route-count limit");
+
+        assert!(error.to_string().contains("routePushes"));
+        assert!(error.to_string().contains("4096 entries"));
     }
 
     #[test]

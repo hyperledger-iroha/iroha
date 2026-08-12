@@ -205,8 +205,6 @@ fn quic_datagram_buffers_default_to_one_mib() {
 fn minimal_config_snapshot() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("config should be valid");
-
-    // Snapshot updated to include new Sumeragi fields and other defaults
     expect![[r#"
         Root {
             common: Common {
@@ -606,6 +604,7 @@ fn minimal_config_snapshot() {
                 query_fanout_max_retained_bytes: Bytes(
                     64000000,
                 ),
+                app_api_routed_read_body_read_timeout: 10s,
                 query_queue_timeout: 25ms,
                 tx_rate_per_authority_per_sec: Some(
                     10000,
@@ -697,6 +696,7 @@ fn minimal_config_snapshot() {
                 operator_signatures: ToriiOperatorSignatures {
                     enabled: true,
                     allow_node_key: true,
+                    body_read_timeout: 10s,
                     allowed_public_keys: [],
                     max_clock_skew: 60s,
                     nonce_ttl: 300s,
@@ -812,6 +812,8 @@ fn minimal_config_snapshot() {
                 transaction_ingress: TransactionIngress {
                     max_concurrent_compute_jobs: 4,
                     max_batch_transactions: 512,
+                    verified_source_max_concurrent_compiles: 1,
+                    verified_source_body_read_timeout: 10s,
                 },
                 da_ingest: DaIngest {
                     replay_cache_capacity: 4096,
@@ -5188,32 +5190,7 @@ include!("fixtures/trusted_proxy_defaults_test.rs");
 
 include!("fixtures/torii_internal_api_trust_defaults_test.rs");
 
-#[test]
-fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {
-    const MAX_CERTIFIED_BODY_RESPONSE_BYTES: usize = 16_811_581;
-
-    assert_eq!(
-        defaults::network::MAX_FRAME_BYTES.get(),
-        17 * 1024 * 1024 + defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES
-    );
-    assert_eq!(
-        defaults::network::MAX_FRAME_BYTES_CONSENSUS,
-        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
-    );
-    assert_eq!(
-        defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
-        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
-    );
-    assert!(
-        defaults::network::MAX_FRAME_BYTES.get() > MAX_CERTIFIED_BODY_RESPONSE_BYTES,
-        "the encrypted frame cap must retain room for the P2P wrapper and AEAD overhead"
-    );
-    assert_eq!(
-        defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
-        2 * 1024 * 1024,
-        "consensus-safety proposals and timeout certificates use the control topic"
-    );
-}
+include!("fixtures/network_frame_defaults_test.rs");
 
 include!("fixtures/sumeragi_v2_default_profile_test.rs");
 

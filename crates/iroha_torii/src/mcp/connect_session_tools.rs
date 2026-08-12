@@ -61,7 +61,7 @@ pub(super) fn build_connect_session_create_body(arguments: &Map) -> Result<Value
     Ok(Value::Object(payload))
 }
 
-fn required_string<'a>(arguments: &'a Map, field: &str) -> Result<&'a str, String> {
+pub(super) fn required_string<'a>(arguments: &'a Map, field: &str) -> Result<&'a str, String> {
     let value = arguments
         .get(field)
         .and_then(Value::as_str)
@@ -74,7 +74,11 @@ fn required_string<'a>(arguments: &'a Map, field: &str) -> Result<&'a str, Strin
     Ok(value)
 }
 
-fn decode_canonical(arguments: &Map, field: &str, expected_len: usize) -> Result<Vec<u8>, String> {
+pub(super) fn decode_canonical(
+    arguments: &Map,
+    field: &str,
+    expected_len: usize,
+) -> Result<Vec<u8>, String> {
     let literal = required_string(arguments, field)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(literal)

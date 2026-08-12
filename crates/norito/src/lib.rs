@@ -624,11 +624,11 @@ pub mod codec {
         }
 
         #[test]
-        fn seq_encodes_with_len_hints() {
+        fn seq_encoding_does_not_trust_len_hints() {
             HINT_CALLS.store(0, Ordering::Relaxed);
             let items = vec![Hinted(1), Hinted(2), Hinted(3)];
-            let _ = items.encode();
-            assert!(HINT_CALLS.load(Ordering::Relaxed) > 0);
+            assert_eq!(items.encode().last(), Some(&3));
+            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 0);
         }
 
         #[test]
@@ -1045,6 +1045,8 @@ pub mod json {
 
     use url::Url;
 
+    mod exact_string;
+
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };
@@ -1366,10 +1368,20 @@ pub mod json {
     }
 
     mod bounded;
+    mod canonical_base64;
+    mod validated;
     pub use bounded::{
-        BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, write_json_string_to,
-        write_json_unbounded,
+        BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, to_json_bounded_boxed,
+        write_json_string_to, write_json_unbounded,
     };
+    #[doc(hidden)]
+    pub use canonical_base64::{
+        write_bare_norito_base64_json, write_bare_norito_base64_json_to, write_base64_json,
+        write_base64_json_to, write_canonical_base64_json, write_canonical_base64_json_to,
+        write_with_unbounded_sink,
+    };
+    #[doc(hidden)]
+    pub use validated::write_validated_json_to;
 
     /// Stream bytes as one uppercase-hex JSON string through a checked sink.
     #[doc(hidden)]
@@ -2559,38 +2571,15 @@ pub mod json {
             .ok_or(Error::DecodeResourceLimit)?;
         crate::core::reserve_decode_allocation(requested_bytes)
             .map_err(Error::from_decode_resource)?;
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(entries)
-            .map_err(|_| Error::AllocationFailed)?;
-        let allocated_bytes = values
-            .capacity()
-            .checked_mul(core::mem::size_of::<T>())
-            .ok_or(Error::DecodeResourceLimit)?;
-        if let Some(extra_bytes) = allocated_bytes.checked_sub(requested_bytes)
-            && extra_bytes != 0
-        {
-            crate::core::reserve_decode_allocation(extra_bytes)
-                .map_err(Error::from_decode_resource)?;
-        }
-        Ok(values)
+        exact_string::allocate(entries)
     }
 
     fn try_decode_string_copy(value: &str) -> Result<String, Error> {
         crate::core::reserve_decode_allocation(value.len()).map_err(Error::from_decode_resource)?;
-        let mut decoded = String::new();
-        decoded
-            .try_reserve_exact(value.len())
-            .map_err(|_| Error::AllocationFailed)?;
-        let allocated_bytes = decoded.capacity();
-        if let Some(extra_bytes) = allocated_bytes.checked_sub(value.len())
-            && extra_bytes != 0
-        {
-            crate::core::reserve_decode_allocation(extra_bytes)
-                .map_err(Error::from_decode_resource)?;
-        }
-        decoded.push_str(value);
-        Ok(decoded)
+        let mut decoded = exact_string::allocate(value.len())?;
+        decoded.extend_from_slice(value.as_bytes());
+        // SAFETY: `value` is UTF-8 and was copied without modification.
+        Ok(unsafe { String::from_utf8_unchecked(decoded) })
     }
 
     mod value_drop;
@@ -4457,12 +4446,10 @@ pub mod json {
                         .map_err(|_| self.err_at(start, "invalid utf8"))?;
                     crate::core::reserve_decode_allocation(st.len())
                         .map_err(Error::from_decode_resource)?;
-                    let mut value = String::new();
-                    value
-                        .try_reserve_exact(st.len())
-                        .map_err(|_| Error::AllocationFailed)?;
-                    value.push_str(st);
-                    return Ok(value);
+                    let mut value = exact_string::allocate(st.len())?;
+                    value.extend_from_slice(st.as_bytes());
+                    // SAFETY: `st` was validated as UTF-8 and copied exactly.
+                    return Ok(unsafe { String::from_utf8_unchecked(value) });
                 }
                 if b == b'\\' || b < 0x20 {
                     break;
@@ -4477,9 +4464,7 @@ pub mod json {
             };
             crate::core::reserve_decode_allocation(decoded_bytes)
                 .map_err(Error::from_decode_resource)?;
-            let mut out: Vec<u8> = Vec::new();
-            out.try_reserve_exact(decoded_bytes)
-                .map_err(|_| Error::AllocationFailed)?;
+            let mut out = exact_string::allocate(decoded_bytes)?;
             loop {
                 let b = self.bump().ok_or_else(|| {
                     let (byte, line, col) = self.pos_meta(self.i);
@@ -4908,6 +4893,20 @@ pub mod json {
                 };
             }
             let (byte, line, col) = self.pos_meta(error.offset());
+            if error.syntax_kind() == Some(preflight::JsonPreflightSyntax::UnexpectedToken) {
+                let found = self
+                    .s
+                    .get(error.offset())
+                    .map_or(UnexpectedToken::Eof, |byte| {
+                        UnexpectedToken::Char(char::from(*byte))
+                    });
+                return Error::UnexpectedCharacter {
+                    found,
+                    byte,
+                    line,
+                    col,
+                };
+            }
             Error::WithPos {
                 msg: error.syntax_kind().map_or(
                     "JSON lexical counter overflow",
@@ -10189,6 +10188,89 @@ where
     decode_canonical_with_limits(bytes, canonical_decode_limits(bytes.len()))
 }
 
+/// Allocation-free writer that verifies a streamed frame against one exact
+/// byte slice.
+///
+/// Mismatches are sticky while writes continue to report full consumption, so
+/// a later serializer error cannot hide bytes that already diverged. Callers
+/// must separately require [`Self::is_complete`] after a successful stream.
+struct ExactSliceWriter<'a> {
+    expected: &'a [u8],
+    offset: usize,
+    mismatched: bool,
+}
+
+impl<'a> ExactSliceWriter<'a> {
+    const fn new(expected: &'a [u8]) -> Self {
+        Self {
+            expected,
+            offset: 0,
+            mismatched: false,
+        }
+    }
+
+    const fn mismatched(&self) -> bool {
+        self.mismatched
+    }
+
+    const fn is_complete(&self) -> bool {
+        !self.mismatched && self.offset == self.expected.len()
+    }
+}
+
+impl Write for ExactSliceWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let Some(end) = self.offset.checked_add(bytes.len()) else {
+            self.mismatched = true;
+            return Ok(bytes.len());
+        };
+        let Some(expected) = self.expected.get(self.offset..end) else {
+            self.mismatched = true;
+            self.offset = self.expected.len();
+            return Ok(bytes.len());
+        };
+        if expected != bytes {
+            self.mismatched = true;
+        }
+        self.offset = end;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Verify that `value` encodes to exactly `expected` under the active layout.
+///
+/// The comparison streams the complete header, alignment padding, and payload
+/// directly over `expected`; it does not allocate a second frame-sized buffer.
+/// This preserves the ambient layout behavior of [`core::to_bytes`]. Callers
+/// that require the fixed canonical V1 layout should use
+/// [`decode_canonical_with_limits`] instead.
+///
+/// # Errors
+///
+/// Returns [`Error::NonCanonicalEncoding`] when any byte differs, the streamed
+/// frame overruns `expected`, or `expected` has an unconsumed suffix. Serializer
+/// and framing errors are returned unchanged when no mismatch was observed.
+#[doc(hidden)]
+pub fn verify_exact_frame<T>(value: &T, expected: &[u8]) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+{
+    let mut exact = ExactSliceWriter::new(expected);
+    let encode_result = core::write_frame_to_writer(value, &mut exact);
+    if exact.mismatched() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    encode_result?;
+    if !exact.is_complete() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    Ok(())
+}
+
 /// Decode one exact canonical V1 frame under default and schema-specific limits.
 ///
 /// Nested Norito limit scopes compose by taking the stricter value in every
@@ -10228,8 +10310,13 @@ where
             }
             Err(error) => return Err(error),
         };
-        let canonical = encode_canonical(&value)?;
-        if canonical.as_slice() != bytes {
+        let mut exact = ExactSliceWriter::new(bytes);
+        let canonical_result = core::write_canonical_to_writer(&value, &mut exact);
+        if exact.mismatched() {
+            return Err(Error::NonCanonicalEncoding);
+        }
+        canonical_result?;
+        if !exact.is_complete() {
             return Err(Error::NonCanonicalEncoding);
         }
         Ok(value)
@@ -11840,91 +11927,4 @@ where
 include!("stream_map_iterator.rs");
 
 #[cfg(test)]
-mod archive_slice_tests {
-    use super::{ArchiveSlice, core};
-
-    #[test]
-    fn misaligned_slice_is_realigned() {
-        let align = core::archived_payload_align::<[u64; 2]>();
-        assert!(align > 1);
-
-        let backing = vec![0u8; align * 2 + 1];
-        let misaligned = &backing[1..1 + align * 2];
-        let slice = ArchiveSlice::new(misaligned, align).expect("allocate slice");
-
-        assert_eq!(slice.as_slice(), misaligned);
-        assert_eq!(slice.as_slice().as_ptr() as usize % align, 0);
-        assert!(slice.layout.is_some());
-    }
-
-    #[test]
-    fn unit_alignment_is_noop() {
-        let data = vec![1u8, 2, 3];
-        let slice = ArchiveSlice::new(&data, 1).expect("allocate slice");
-
-        assert_eq!(slice.as_slice(), &data[..]);
-        assert!(slice.layout.is_none());
-        assert_eq!(slice.ptr as *const u8, data.as_ptr());
-    }
-}
-
-#[cfg(test)]
-mod guarded_try_tests {
-    use super::{Error, guarded_try_deserialize};
-
-    #[test]
-    fn panic_is_mapped_to_decode_error() {
-        let result = guarded_try_deserialize::<(), _>(|| -> Result<(), Error> {
-            panic!("forced panic for decode guard test");
-        });
-
-        assert!(matches!(result, Err(Error::DecodePanic { .. })));
-    }
-}
-
-#[cfg(test)]
-mod stream_map_iter_tests {
-    use super::{Error, StreamMapIter, core};
-    use std::{collections::HashMap, io::Cursor};
-
-    fn frame_hashmap_payload(payload: &[u8], flags: u8) -> Vec<u8> {
-        core::frame_bare_with_header_flags::<HashMap<u8, u8>>(payload, flags)
-            .expect("frame payload")
-    }
-
-    #[test]
-    fn stream_map_nonpacked_rejects_key_len_overflow() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&9u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-
-        let bytes = frame_hashmap_payload(&payload, 0);
-        let mut iter = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes)).expect("iter");
-        let item = iter.next().expect("item");
-        assert!(matches!(item, Err(Error::LengthMismatch)));
-    }
-
-    #[test]
-    fn stream_map_finish_empty_ok() {
-        let payload = 0u64.to_le_bytes().to_vec();
-        let bytes = frame_hashmap_payload(&payload, 0);
-        let iter = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes)).expect("iter");
-        iter.finish().expect("finish");
-    }
-
-    #[test]
-    fn stream_map_packed_rejects_nonzero_first_offset() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-        payload.push(0u8);
-
-        let bytes = frame_hashmap_payload(&payload, core::header_flags::PACKED_SEQ);
-        let result = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes));
-        assert!(matches!(result, Err(Error::LengthMismatch)));
-    }
-}
+include!("lib_tail_tests.rs");

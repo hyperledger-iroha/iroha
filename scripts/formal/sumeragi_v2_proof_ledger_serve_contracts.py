@@ -1785,6 +1785,181 @@ _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
         "d02a7f409972d645e46479269a11297493023132831fd299f487b0b202df6294"
     ),
 }
+_CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES = {
+    "outer_ingress_cursor": """
+self.next_turn = match turn {
+    OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
+    OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
+    OuterIngressTurn::Ingress => {
+        self.cycles_remaining -= 1;
+        OuterIngressTurn::Completion
+    }
+};
+Some(turn)
+""",
+    "route_shadow": """
+let routes_before = queued.inbound.reply_routes.clone();
+let routes_candidate = inbound.reply_routes.clone();
+let prior_evidence = queued
+    .inbound
+    .ingress_ownership
+    .as_ref()
+    .expect("every queued semantic owner retains ingress evidence");
+let action = match fair_v2_ingress_route_action(
+    &prior_evidence.attempts,
+    routes_candidate.as_ref(),
+) {
+    Ok(action) => action,
+    Err(_) => {
+        return Err(FairV2IngressPushError::rejected(
+            inbound,
+            FairV2IngressRejectReason::RouteOwnershipInvalid,
+        ));
+    }
+};
+let routes_after = match (&routes_before, &routes_candidate) {
+    (Some(retained), Some(candidate)) => {
+        let mut merged = retained.clone();
+        let Ok(receipt) = merged.merge_with_receipt(candidate) else {
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::RouteOwnershipInvalid,
+            ));
+        };
+        let Some(receipt_output) = receipt.into_output(retained, candidate) else {
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::RouteOwnershipInvalid,
+            ));
+        };
+        Some(receipt_output)
+    }
+    (None, Some(candidate)) => Some(candidate.clone()),
+    (Some(retained), None) => Some(retained.clone()),
+    (None, None) => None,
+};
+let Some(route_capacity) = fair_v2_ingress_route_capacity(
+    routes_before.as_ref(),
+    routes_candidate.as_ref(),
+    routes_after.as_ref(),
+) else {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::RouteOwnershipInvalid,
+    ));
+};
+let attempts_before = prior_evidence.attempts.clone();
+let candidate_attempts =
+    fair_v2_ingress_attempts_for_routes(&attempts_before, routes_candidate.as_ref());
+let Some(attempts_after) = fair_v2_ingress_merge_attempt_cursors(
+    &attempts_before,
+    &candidate_attempts,
+    routes_after.as_ref(),
+) else {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::AttemptCursorInvalid,
+    ));
+};
+let attempts_before_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_before);
+let attempts_after_hash = fair_v2_ingress_attempt_cursor_hash(&attempts_after);
+""",
+    "route_atomic_commit": """
+if !occurrence.validate_exact() {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+    ));
+}
+let Some(evidence) = prior_evidence.merged(occurrence) else {
+    return Err(FairV2IngressPushError::rejected(
+        inbound,
+        FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+    ));
+};
+let ownership_snapshot = Arc::new(evidence.clone());
+let lane = state
+    .lanes
+    .get_mut(&owner_source)
+    .expect("globally indexed fair-ingress owner lane remains present");
+let queued = lane
+    .entries
+    .iter_mut()
+    .find(|entry| entry.wire_key.as_ref() == Some(key))
+    .expect("global pending wire key has one queued owner");
+let queued_inbound = Arc::make_mut(&mut queued.inbound);
+queued_inbound.reply_routes = routes_after;
+queued_inbound.ingress_ownership = Some(evidence);
+queued.ownership_snapshot = ownership_snapshot;
+return Ok(FairV2IngressPushDisposition::Coalesced);
+""",
+    "queue_gate": """
+let has_live_control_predecessor = lane
+    .entries
+    .iter()
+    .take(index)
+    .any(|prior| fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound));
+""",
+    "queue_gate_verdict": """
+if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
+    FairV2IngressQueueGateVerdict::Blocked
+} else if dependency_bypass {
+    FairV2IngressQueueGateVerdict::Dependency
+} else {
+    FairV2IngressQueueGateVerdict::Strict
+}
+""",
+    "scheduler_blockers": """
+let ordinary_candidate =
+    if timers_enabled && fifo_ready && !self.driver.deferred_work_is_serviceable() {
+        self.ingress
+            .ordinary_candidate_owner_and_fence_state(|queued| {
+                (
+                    self.driver
+                        .command_is_blocked_by_deferred_fence(queued.tag, &queued.command)
+                        || self.fence_retry_blocked_fifo_owners.iter().any(|owner| {
+                            owner.matches_queued(queue_source_identity, queued)
+                        }),
+                    self.driver
+                        .command_matches_deferred_authenticated_owner(&queued.command),
+                )
+            })?
+    } else {
+        None
+    };
+let deferred_owner_blocks_fifo =
+    ordinary_candidate
+        .as_ref()
+        .is_some_and(|(candidate, blocked, deferred_alias)| {
+            self.deferred_lifecycle_ownership.values().any(|target| {
+                let post_cut = candidate.is_post_physical_cut(target.physical_cut);
+                (*blocked && !post_cut) || (*deferred_alias && post_cut)
+            })
+        });
+let older_signer_blocks_fifo =
+    ordinary_candidate
+        .as_ref()
+        .is_some_and(|(candidate, _, _)| {
+            self.driver.signature_fence_is_active()
+                && self.external_lifecycle_owners.iter().any(|owner| {
+                    owner.lifecycle_ordinal() < candidate.lifecycle_ordinal()
+                        || owner
+                            .causal_origin()
+                            .root_ingress_physical_ownership
+                            .is_some_and(|root| {
+                                candidate.is_post_physical_cut(root.physical_cut)
+                            })
+                })
+        });
+if ordinary_candidate.is_some() && (deferred_owner_blocks_fifo || older_signer_blocks_fifo)
+{
+    fifo_ready = false;
+    completion_ready = false;
+    progress_ready = false;
+    normal_ready = false;
+}
+""",
+}
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
     "semantic_ingress_capacity": (
         "329002c5d70440e4b06c7d6b7953abefffad11e097f8a6f2be43df02a07d5701"
@@ -1801,7 +1976,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {
         "5132c93697d0b4ed29e1b10cd1ca0fb3e2022ac5735afa7c26efb949b6065b65"
     ),
     "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote": (
-        "fe36421732ae85439ae7bcdc1a3c3162470a49525736ea4feeef003f2744a027"
+        "b4daaad31d1dff26abf5581a80142973caa2f2ce108475debfda12f62ee3947e"
     ),
     "full_normal_deferred_lane_cannot_drop_absolute_timeout": (
         "8d18abf6d0df4d314eb57f9f95d5f6c02eac0d0f320b0a0f5dd3747508da2a62"

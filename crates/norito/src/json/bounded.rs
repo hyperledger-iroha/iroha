@@ -1,6 +1,10 @@
 //! Count-first, allocation-bounded JSON serialization.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    alloc::{Layout, alloc},
+    collections::{BTreeMap, BTreeSet},
+    mem::MaybeUninit,
+};
 
 use super::{JsonSerialize, MAX_JSON_VALUE_NESTING_DEPTH, Value, native};
 
@@ -145,6 +149,7 @@ impl JsonWriteSink for CountingJsonSink {
     }
 }
 
+#[cfg(test)]
 struct ExactJsonSink<'a> {
     output: &'a mut String,
     length: usize,
@@ -152,6 +157,7 @@ struct ExactJsonSink<'a> {
     depth: usize,
 }
 
+#[cfg(test)]
 impl<'a> ExactJsonSink<'a> {
     fn new(output: &'a mut String, expected: usize) -> Self {
         Self {
@@ -175,6 +181,7 @@ impl<'a> ExactJsonSink<'a> {
     }
 }
 
+#[cfg(test)]
 impl JsonWriteSink for ExactJsonSink<'_> {
     fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
         self.admit(value.len_utf8())?;
@@ -206,15 +213,138 @@ impl JsonWriteSink for ExactJsonSink<'_> {
     }
 }
 
+struct ExactBoxedJsonSink<'a> {
+    output: &'a mut [MaybeUninit<u8>],
+    length: usize,
+    depth: usize,
+}
+
+impl<'a> ExactBoxedJsonSink<'a> {
+    fn new(output: &'a mut [MaybeUninit<u8>]) -> Self {
+        Self {
+            output,
+            length: 0,
+            depth: 0,
+        }
+    }
+
+    fn admit(&mut self, additional: usize) -> Result<std::ops::Range<usize>, BoundedJsonError> {
+        let start = self.length;
+        let end = start
+            .checked_add(additional)
+            .ok_or(BoundedJsonError::LengthMismatch)?;
+        if end > self.output.len() {
+            return Err(BoundedJsonError::LengthMismatch);
+        }
+        self.length = end;
+        Ok(start..end)
+    }
+}
+
+impl JsonWriteSink for ExactBoxedJsonSink<'_> {
+    fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
+        let mut bytes = [0_u8; 4];
+        self.push_str(value.encode_utf8(&mut bytes))
+    }
+
+    fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
+        let range = self.admit(value.len())?;
+        for (slot, byte) in self.output[range].iter_mut().zip(value.bytes()) {
+            slot.write(byte);
+        }
+        Ok(())
+    }
+
+    fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
+        let next = self
+            .depth
+            .checked_add(1)
+            .ok_or(BoundedJsonError::LengthMismatch)?;
+        if next >= MAX_JSON_VALUE_NESTING_DEPTH {
+            return Err(BoundedJsonError::LengthMismatch);
+        }
+        self.depth = next;
+        Ok(())
+    }
+
+    fn end_container(&mut self) {
+        debug_assert!(self.depth > 0);
+        self.depth = self.depth.saturating_sub(1);
+    }
+}
+
+fn allocate_exact_json_destination(
+    length: usize,
+) -> Result<Box<[MaybeUninit<u8>]>, BoundedJsonError> {
+    if length == 0 {
+        return Ok(Vec::new().into_boxed_slice());
+    }
+    let layout =
+        Layout::array::<MaybeUninit<u8>>(length).map_err(|_| BoundedJsonError::AllocationFailed)?;
+    // SAFETY: `layout` is non-zero and came from `Layout::array`. A null
+    // result is handled before the pointer is converted into an owning box.
+    let allocation = unsafe { alloc(layout) }.cast::<MaybeUninit<u8>>();
+    if allocation.is_null() {
+        return Err(BoundedJsonError::AllocationFailed);
+    }
+    let slice = std::ptr::slice_from_raw_parts_mut(allocation, length);
+    // SAFETY: `allocation` owns exactly `layout`; a boxed slice of `length`
+    // `MaybeUninit<u8>` values has that same layout and safely owns raw storage.
+    Ok(unsafe { Box::from_raw(slice) })
+}
+
+fn to_json_bounded_boxed_with_allocator<T, A>(
+    value: &T,
+    max_bytes: usize,
+    allocate_destination: A,
+) -> Result<Box<[u8]>, BoundedJsonError>
+where
+    T: JsonSerialize + ?Sized,
+    A: FnOnce(usize) -> Result<Box<[MaybeUninit<u8>]>, BoundedJsonError>,
+{
+    let mut counter = CountingJsonSink::new(max_bytes);
+    value.json_serialize_to(&mut counter)?;
+    let expected = counter.length;
+
+    crate::core::reserve_decode_allocation(expected)
+        .map_err(|_| BoundedJsonError::AllocationFailed)?;
+    record_destination_allocation_attempt();
+    let mut output = allocate_destination(expected)?;
+    if output.len() != expected {
+        return Err(BoundedJsonError::LengthMismatch);
+    }
+
+    let actual = {
+        let mut sink = ExactBoxedJsonSink::new(&mut output);
+        value
+            .json_serialize_to(&mut sink)
+            .map_err(|_| BoundedJsonError::LengthMismatch)?;
+        sink.length
+    };
+    if actual != expected {
+        return Err(BoundedJsonError::LengthMismatch);
+    }
+
+    // SAFETY: a successful exact second pass initialized every element in the
+    // slice. `MaybeUninit<u8>` and `u8` have identical layouts, and ownership
+    // transfers without reallocating the destination.
+    let output = unsafe { Box::from_raw(Box::into_raw(output) as *mut [u8]) };
+    if std::str::from_utf8(&output).is_err() {
+        return Err(BoundedJsonError::LengthMismatch);
+    }
+    Ok(output)
+}
+
 /// Serialize `value` only when its compact JSON body fits in `max_bytes`.
 ///
 /// The first pass executes the checked serializer against an allocation-free
-/// counter. Only an admitted length is reserved, after which the same checked
-/// serializer runs again against a sink that rejects every overrun before it
-/// appends. Stateful serializers which produce a shorter second pass are
-/// rejected by the final equality check. When serialization runs inside an
-/// active decode scope, the admitted destination and any allocator-reported
-/// excess capacity are charged to that scope.
+/// counter. Only an admitted exact-layout destination is allocated, after
+/// which the same checked serializer runs again against a sink that rejects
+/// every overrun before it appends. The completed box is transferred into a
+/// `String` without copying or reallocating. Stateful serializers which
+/// produce a shorter second pass are rejected by the final equality check.
+/// When serialization runs inside an active decode scope, the admitted
+/// destination is charged before allocation.
 ///
 /// This is an output-only bound: it neither parses nor validates JSON input,
 /// and it cannot police allocations inside user-provided serializers or field
@@ -226,35 +356,21 @@ pub fn to_json_bounded<T: JsonSerialize + ?Sized>(
     value: &T,
     max_bytes: usize,
 ) -> Result<String, BoundedJsonError> {
-    let mut counter = CountingJsonSink::new(max_bytes);
-    value.json_serialize_to(&mut counter)?;
-    let expected = counter.length;
+    let output = to_json_bounded_boxed(value, max_bytes)?;
+    String::from_utf8(output.into_vec()).map_err(|_| BoundedJsonError::LengthMismatch)
+}
 
-    crate::core::reserve_decode_allocation(expected)
-        .map_err(|_| BoundedJsonError::AllocationFailed)?;
-    record_destination_allocation_attempt();
-    let mut output = String::new();
-    output
-        .try_reserve_exact(expected)
-        .map_err(|_| BoundedJsonError::AllocationFailed)?;
-    if let Some(extra) = output.capacity().checked_sub(expected)
-        && extra != 0
-    {
-        crate::core::reserve_decode_allocation(extra)
-            .map_err(|_| BoundedJsonError::AllocationFailed)?;
-    }
-
-    let actual = {
-        let mut sink = ExactJsonSink::new(&mut output, expected);
-        value
-            .json_serialize_to(&mut sink)
-            .map_err(|_| BoundedJsonError::LengthMismatch)?;
-        sink.length
-    };
-    if actual != expected || output.len() != expected {
-        return Err(BoundedJsonError::LengthMismatch);
-    }
-    Ok(output)
+/// Serialize `value` into one exact-layout boxed UTF-8 destination.
+///
+/// This performs the same allocation-free count and checked second pass as
+/// [`to_json_bounded`], but allocates the admitted byte layout directly. The
+/// returned box therefore has no allocator-dependent spare capacity and can be
+/// transferred into a response body without copying or reallocating it.
+pub fn to_json_bounded_boxed<T: JsonSerialize + ?Sized>(
+    value: &T,
+    max_bytes: usize,
+) -> Result<Box<[u8]>, BoundedJsonError> {
+    to_json_bounded_boxed_with_allocator(value, max_bytes, allocate_exact_json_destination)
 }
 
 #[cfg(test)]
@@ -818,6 +934,8 @@ mod tests {
         let ordinary = super::super::to_json(&payload).expect("ordinary JSON");
         let bounded = to_json_bounded(&payload, ordinary.len()).expect("exact cap");
         assert_eq!(bounded, ordinary);
+        let boxed = to_json_bounded_boxed(&payload, ordinary.len()).expect("exact boxed cap");
+        assert_eq!(&*boxed, ordinary.as_bytes());
         assert_eq!(
             bounded,
             r#"{"label":"quote=\" slash=\\ newline=\n cent=¢","values":[7,null,18446744073709551615],"by_name":{"alpha":1,"beta":2}}"#
@@ -978,11 +1096,58 @@ mod tests {
             to_json_bounded(&payload, exact - 1),
             Err(BoundedJsonError::BodyTooLarge)
         );
+        assert_eq!(
+            to_json_bounded_boxed(&payload, exact - 1),
+            Err(BoundedJsonError::BodyTooLarge)
+        );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
 
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
-        assert!(to_json_bounded(&payload, exact).is_ok());
+        let string = to_json_bounded(&payload, exact).expect("exact String cap");
+        assert_eq!(string.len(), exact);
+        assert_eq!(string.capacity(), exact);
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 1));
+
+        DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
+        let boxed = to_json_bounded_boxed(&payload, exact).expect("exact boxed cap");
+        assert_eq!(boxed.len(), exact);
+        DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 1));
+    }
+
+    struct EmptyChecked;
+
+    impl JsonSerialize for EmptyChecked {
+        fn json_serialize(&self, _output: &mut String) {}
+
+        fn json_serialize_to(
+            &self,
+            _output: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn boxed_destination_supports_an_exact_zero_length() {
+        let output = to_json_bounded_boxed(&EmptyChecked, 0).expect("zero-byte destination");
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn boxed_destination_allocation_failure_is_recoverable() {
+        let payload = fixture();
+        let exact = super::super::to_json(&payload)
+            .expect("ordinary JSON")
+            .len();
+        let attempted = Cell::new(None);
+        assert_eq!(
+            to_json_bounded_boxed_with_allocator(&payload, exact, |length| {
+                attempted.set(Some(length));
+                Err(BoundedJsonError::AllocationFailed)
+            }),
+            Err(BoundedJsonError::AllocationFailed)
+        );
+        assert_eq!(attempted.get(), Some(exact));
     }
 
     #[test]
@@ -1005,6 +1170,36 @@ mod tests {
             Err(BoundedJsonError::AllocationFailed)
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
+    }
+
+    #[test]
+    fn active_decode_budget_accounts_for_exact_boxed_destination() {
+        let payload = fixture();
+        let exact = super::super::to_json(&payload)
+            .expect("ordinary JSON")
+            .len();
+        let too_small = crate::core::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            exact - 1,
+            usize::MAX,
+        );
+        assert_eq!(
+            crate::core::with_decode_limits_scope(too_small, || {
+                to_json_bounded_boxed(&payload, exact)
+            }),
+            Err(BoundedJsonError::AllocationFailed)
+        );
+
+        let exact_limit =
+            crate::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, exact, usize::MAX);
+        assert!(
+            crate::core::with_decode_limits_scope(exact_limit, || {
+                to_json_bounded_boxed(&payload, exact)
+            })
+            .is_ok()
+        );
     }
 
     struct UnsupportedManual;
@@ -1065,6 +1260,16 @@ mod tests {
             Err(BoundedJsonError::LengthMismatch)
         );
 
+        let boxed_value = Stateful {
+            calls: Cell::new(0),
+            first: "0",
+            second: hostile,
+        };
+        assert_eq!(
+            to_json_bounded_boxed(&boxed_value, 1),
+            Err(BoundedJsonError::LengthMismatch)
+        );
+
         let mut output = String::with_capacity(1);
         let initial_capacity = output.capacity();
         let mut sink = ExactJsonSink::new(&mut output, 1);
@@ -1085,6 +1290,16 @@ mod tests {
         };
         assert_eq!(
             to_json_bounded(&value, 2),
+            Err(BoundedJsonError::LengthMismatch)
+        );
+
+        let boxed_value = Stateful {
+            calls: Cell::new(0),
+            first: "00",
+            second: "0",
+        };
+        assert_eq!(
+            to_json_bounded_boxed(&boxed_value, 2),
             Err(BoundedJsonError::LengthMismatch)
         );
     }
@@ -1123,6 +1338,15 @@ mod tests {
             Err(BoundedJsonError::LengthMismatch)
         );
         assert_eq!(value.calls.get(), 2);
+
+        let boxed_value = ErrorsOnSecondPass {
+            calls: Cell::new(0),
+        };
+        assert_eq!(
+            to_json_bounded_boxed(&boxed_value, 2),
+            Err(BoundedJsonError::LengthMismatch)
+        );
+        assert_eq!(boxed_value.calls.get(), 2);
     }
 
     static CUSTOM_BOUNDED_CALLS: AtomicUsize = AtomicUsize::new(0);

@@ -150,7 +150,7 @@ pub struct ModerationModelArtifactV1 {
     /// Feature extraction profile required by the weights.
     pub feature_profile: ModerationFeatureProfileV1,
     /// Model UUID, which must match its manifest fingerprint.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub model_id: [u8; 16],
     /// Maximum payload size accepted by this model.
     pub max_input_bytes: u32,
@@ -174,10 +174,10 @@ pub struct ModerationModelArtifactV1 {
 )]
 pub struct ModerationModelScoreV1 {
     /// Model UUID.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub model_id: [u8; 16],
     /// Digest of the exact canonical artefact bytes used for inference.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub artifact_digest: [u8; 32],
     /// Calibrated model risk score in basis points.
     pub score_bps: u16,
@@ -407,13 +407,13 @@ pub struct ModerationReproBodyV1 {
     /// Schema version; must equal [`MODERATION_REPRO_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
     /// UUID of the moderation committee manifest this record attests to.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_id: [u8; 16],
     /// BLAKE3 digest of the manifest payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_digest: [u8; 32],
     /// BLAKE3 digest of the compiled runner binary.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub runner_hash: [u8; 32],
     /// Runner version string (e.g., `sorafs-ai-runner 0.4.0`).
     pub runtime_version: String,
@@ -439,17 +439,17 @@ pub struct ModerationReproBodyV1 {
 )]
 pub struct ModerationModelFingerprintV1 {
     /// Model UUID.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub model_id: [u8; 16],
     /// Canonical portable path relative to the configured artefact root.
     pub artifact_path: String,
     /// Exact byte length of the canonical encoded artefact.
     pub artifact_bytes: u64,
     /// Digest of the exact canonical encoded artefact bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub artifact_digest: [u8; 32],
     /// Digest binding every value that can affect model behaviour.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub weights_digest: [u8; 32],
     /// Inference engine required to execute the artefact.
     pub engine: ModerationModelEngineV1,
@@ -480,7 +480,7 @@ pub struct ModerationSeedMaterialV1 {
     /// Version of the provenance derivation scheme; must be non-zero.
     pub seed_version: u16,
     /// Governance-signed calibration nonce; integer inference never consumes it.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub run_nonce: [u8; 32],
 }
 
@@ -520,7 +520,7 @@ pub struct ModerationReproSignatureV1 {
 )]
 pub struct ModerationReproManifestSummary {
     /// Referenced manifest UUID.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_id: [u8; 16],
     /// Unix timestamp (seconds) when the manifest was issued.
     pub issued_at_unix: u64,
@@ -554,19 +554,19 @@ pub struct ModerationTrustPolicyBodyV1 {
     /// Schema version; must equal [`MODERATION_TRUST_POLICY_VERSION_V1`].
     pub schema_version: u16,
     /// Stable policy identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_id: [u8; 16],
     /// Domain-separated digest of this body with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Manifest identifier authorized by this policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_id: [u8; 16],
     /// Exact manifest digest authorized by this policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_digest: [u8; 32],
     /// Exact runner executable hash authorized by this policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub runner_hash: [u8; 32],
     /// Policy issue timestamp.
     pub issued_at_unix: u64,
@@ -652,24 +652,24 @@ pub struct ModerationSignedScreeningBodyV1 {
     /// Schema version; must equal [`MODERATION_SIGNED_RESULT_VERSION_V1`].
     pub schema_version: u16,
     /// Manifest identifier used for inference.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_id: [u8; 16],
     /// Exact manifest body digest used for inference.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_digest: [u8; 32],
     /// Exact runner executable hash used for inference.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub runner_hash: [u8; 32],
     /// Trust-policy identifier authorizing the signer.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trust_policy_id: [u8; 16],
     /// Exact trust-policy digest authorizing the signer.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trust_policy_digest: [u8; 32],
     /// Canonical subject identifier.
     pub subject: String,
     /// Digest of the screened payload.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub subject_digest: [u8; 32],
     /// Per-model scores in manifest order.
     #[norito(default)]
@@ -683,10 +683,10 @@ pub struct ModerationSignedScreeningBodyV1 {
     /// Exclusive expiry of this signed result.
     pub expires_at_unix: u64,
     /// Digest of the active screening policy surface.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Domain-separated digest of this body with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
     /// Optional canonical operator note.
     #[norito(default)]
@@ -718,7 +718,7 @@ pub struct ModerationCommitteeMemberV1 {
     /// Distinct policy-authorized runner key.
     pub signer_public_key: PublicKey,
     /// Evidence digest of the exact signed result body.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
     /// Runner aggregate score in basis points.
     pub combined_score_bps: u16,
@@ -740,21 +740,21 @@ pub struct ModerationCommitteeAggregateV1 {
     /// Schema version; must equal [`MODERATION_COMMITTEE_AGGREGATE_VERSION_V1`].
     pub schema_version: u16,
     /// Manifest identifier shared by every member result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_id: [u8; 16],
     /// Exact manifest digest shared by every member result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_digest: [u8; 32],
     /// External trust-policy identifier used for authorization.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trust_policy_id: [u8; 16],
     /// Exact external trust-policy digest used for authorization.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub trust_policy_digest: [u8; 32],
     /// Canonical subject identifier shared by every result.
     pub subject: String,
     /// Digest of the screened payload shared by every result.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub subject_digest: [u8; 32],
     /// Distinct authenticated member results, ordered by signer key.
     pub members: Vec<ModerationCommitteeMemberV1>,
@@ -769,7 +769,7 @@ pub struct ModerationCommitteeAggregateV1 {
     /// Earliest exclusive expiry across all member results.
     pub expires_at_unix: u64,
     /// Domain-separated digest of this aggregate with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub aggregate_digest: [u8; 32],
 }
 
@@ -797,10 +797,10 @@ pub struct ModerationProvenanceEntryV1 {
     /// Zero-based sequence number.
     pub sequence: u64,
     /// Digest of the preceding entry, or zero for the first entry.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub previous_entry_digest: [u8; 32],
     /// Domain-separated digest of this entry with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub entry_digest: [u8; 32],
     /// Local durable-record timestamp.
     pub recorded_at_unix: u64,
@@ -818,10 +818,10 @@ pub struct ModerationProvenanceLogV1 {
     /// Schema version; must equal [`MODERATION_PROVENANCE_LOG_VERSION_V1`].
     pub schema_version: u16,
     /// Operator-assigned non-zero segment identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub log_id: [u8; 16],
     /// Digest of the final entry, or zero for an empty segment.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub head_digest: [u8; 32],
     /// Ordered bounded entry inventory.
     pub entries: Vec<ModerationProvenanceEntryV1>,
@@ -2779,12 +2779,12 @@ pub struct SoraFsModerationBallotContextV1 {
     /// Moderation or appeal case identifier.
     pub case_id: String,
     /// Digest of the evidence bundle reviewed by the panel.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_bundle_digest: [u8; 32],
     /// Appeal pricing/settlement config version used for this case.
     pub appeal_finance_config_version: String,
     /// Digest of the selected panel roster and failover policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub panel_roster_hash: [u8; 32],
     /// Moderation policy reference reviewed by the panel.
     pub policy_reference: String,
@@ -2858,7 +2858,7 @@ pub struct SoraFsModerationBallotCommitV1 {
     /// Stable juror identifier or pseudonym.
     pub juror_id: String,
     /// Blake2b commitment over context, round, juror, choice, and nonce.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub commitment_blake2b_256: [u8; 32],
     /// UTC timestamp (milliseconds) when the commitment was recorded.
     pub committed_at_unix_ms: u64,
@@ -2940,7 +2940,7 @@ pub struct SoraFsModerationBallotRevealV1 {
     /// Moderation outcome selected by the juror.
     pub choice: SoraFsModerationVoteChoice,
     /// Random nonce used when generating the commitment.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub nonce: Vec<u8>,
     /// UTC timestamp (milliseconds) when the reveal was recorded.
     pub revealed_at_unix_ms: u64,
@@ -3107,7 +3107,7 @@ pub struct AdversarialCorpusManifestV1 {
 )]
 pub struct AdversarialPerceptualFamilyV1 {
     /// Deterministic family identifier (UUID).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub family_id: [u8; 16],
     /// Free-form description for operator tooling.
     pub description: String,
@@ -3124,7 +3124,7 @@ pub struct AdversarialPerceptualFamilyV1 {
 )]
 pub struct AdversarialPerceptualVariantV1 {
     /// Variant identifier (UUID).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub variant_id: [u8; 16],
     /// Attack vector description (`jpeg_jitter`, `mosaic`, `zip_bomb`, …).
     pub attack_vector: String,
@@ -3134,7 +3134,7 @@ pub struct AdversarialPerceptualVariantV1 {
     /// Optional canonical perceptual hash (BLAKE3-domain separated, 256-bit).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::sorafs::moderation::json_option_digest32")
+        norito(json = "crate::sorafs::moderation::json_option_digest32")
     )]
     #[norito(default)]
     pub perceptual_hash: Option<[u8; 32]>,
@@ -3144,7 +3144,7 @@ pub struct AdversarialPerceptualVariantV1 {
     /// Optional embedding digest (BLAKE3 of quantised embedding vector).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::sorafs::moderation::json_option_digest32")
+        norito(json = "crate::sorafs::moderation::json_option_digest32")
     )]
     #[norito(default)]
     pub embedding_digest: Option<[u8; 32]>,

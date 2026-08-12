@@ -23,7 +23,9 @@ use super::super::super::{
     ZK_AMS_ACTION_INDEX_V1, ZkAmsAdmissionPublicInputV1, ZkAmsAdmissionRelationWitnessV1,
     ZkAmsProofContextV1,
 };
-use super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1;
+use super::super::phase23_encrypted::{
+    ZkAmsPhase23AccumulatorShapeV1, zk_ams_phase23_release_map_manifest_v1,
+};
 
 const RELEASE_TERMINAL_KAT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.release-terminal-kat";
 const RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1: u32 = 21;
@@ -161,7 +163,7 @@ fn materialized_digest_for_release_kat(
         materialized.r_w.as_slice(),
     ] {
         for value in family {
-            hash.update(value);
+            hash.update(&value.to_be_bytes());
         }
     }
     hash.finalize()
@@ -183,12 +185,11 @@ fn encode_mutated_relation(
 #[test]
 #[ignore = "release-parameter max-fold proof; run in the isolated release resource harness"]
 fn release_terminal_max_fold_kat_emits_candidate_digest() {
-    let maps_owner = zk_ams_phase23_release_maps_v1().expect("canonical release maps");
-    let maps = maps_owner.abc();
-    let shape = super::super::super::canonical_shape().expect("canonical release shape");
-    let terminal_profile =
-        build_terminal_profile(maps, &shape, true).expect("canonical terminal profile");
-    assert!(Arc::ptr_eq(&terminal_profile.shape, &shape));
+    let map_manifest =
+        zk_ams_phase23_release_map_manifest_v1().expect("canonical release map manifest");
+    let terminal_profile = build_terminal_profile(TerminalRelationSourceV1::CanonicalRelease)
+        .expect("canonical terminal profile");
+    let shape = Arc::clone(&terminal_profile.shape);
     let release_public_inputs = release_admission_public()
         .to_scalars()
         .expect("fixed release public input must be canonical");
@@ -255,8 +256,33 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         cross_term_commitments,
     )
     .expect("maximum release public fold history");
-    let witness = precomputation.folded_witness();
-    let instance = &precomputation.folded_instance;
+    let accumulator_shape = ZkAmsPhase23AccumulatorShapeV1::new(
+        u32::try_from(precomputation.folded_instance.public_inputs.len())
+            .expect("release x count fits u32"),
+        u32::try_from(precomputation.folded_witness().error.len())
+            .expect("release error count fits u32"),
+        u32::try_from(precomputation.folded_witness().error_blindings.len())
+            .expect("release error blinding count fits u32"),
+        u32::try_from(precomputation.folded_witness().values.len())
+            .expect("release witness count fits u32"),
+        u32::try_from(precomputation.folded_witness().witness_blindings.len())
+            .expect("release witness blinding count fits u32"),
+    )
+    .expect("release accumulator shape");
+    let fold_count =
+        u8::try_from(precomputation.strict_instances.len()).expect("maximum fold count fits u8");
+    let (instance, witness) = precomputation.into_folded_opening();
+    let RelaxedInstance {
+        public_inputs,
+        relaxation,
+        ..
+    } = instance;
+    let RelaxedWitness {
+        values,
+        witness_blindings,
+        error,
+        error_blindings,
+    } = witness;
     let mut materialized = ZkAmsPhase23MaterializedAccumulatorsV1 {
         version: 1,
         profile_digest: context.profile_digest,
@@ -264,64 +290,28 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         transcript_digest: context.transcript_digest,
         batch_id: context.batch_id,
         ordered_batch_input_digest: context.ordered_batch_input_digest,
-        fold_count: u8::try_from(precomputation.strict_instances.len())
-            .expect("maximum fold count fits u8"),
-        shape: ZkAmsPhase23AccumulatorShapeV1::new(
-            u32::try_from(instance.public_inputs.len()).expect("release x count fits u32"),
-            u32::try_from(witness.error.len()).expect("release error count fits u32"),
-            u32::try_from(witness.error_blindings.len())
-                .expect("release error blinding count fits u32"),
-            u32::try_from(witness.values.len()).expect("release witness count fits u32"),
-            u32::try_from(witness.witness_blindings.len())
-                .expect("release witness blinding count fits u32"),
-        )
-        .expect("release accumulator shape"),
-        x: instance
-            .public_inputs
-            .iter()
-            .copied()
-            .map(Scalar::to_be_bytes)
-            .collect(),
-        u: vec![instance.relaxation.to_be_bytes()],
-        e: witness
-            .error
-            .iter()
-            .copied()
-            .map(Scalar::to_be_bytes)
-            .collect(),
-        r_e: witness
-            .error_blindings
-            .iter()
-            .copied()
-            .map(Scalar::to_be_bytes)
-            .collect(),
-        w: witness
-            .values
-            .iter()
-            .copied()
-            .map(Scalar::to_be_bytes)
-            .collect(),
-        r_w: witness
-            .witness_blindings
-            .iter()
-            .copied()
-            .map(Scalar::to_be_bytes)
-            .collect(),
+        fold_count,
+        shape: accumulator_shape,
+        x: public_inputs,
+        u: vec![relaxation],
+        e: error,
+        r_e: error_blindings,
+        w: values,
+        r_w: witness_blindings,
         digest: [0; 32],
     };
     materialized.digest = materialized_digest_for_release_kat(&materialized);
     validate_materialized_accumulators_v1(&materialized)
         .expect("release materialized accumulator validation");
+    let materialized_digest = materialized.digest;
 
     let output = prove_terminal_inner(
         &proof_context,
         context,
         &governed,
         &history,
-        &materialized,
-        maps,
-        &shape,
-        true,
+        materialized,
+        TerminalRelationSourceV1::CanonicalRelease,
     )
     .expect("release terminal proof");
     assert!(output.proof_bytes.len() <= ZK_AMS_PHASE3_MAX_TERMINAL_PROOF_BYTES_V1);
@@ -330,9 +320,7 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         context,
         &governed,
         &output.batch_anchor,
-        maps,
-        &shape,
-        true,
+        TerminalRelationSourceV1::CanonicalRelease,
         &output.proof_bytes,
     )
     .expect("release terminal verification");
@@ -351,16 +339,13 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
                   context: ZkAmsPhase3TerminalContextV1,
                   governed: &ZkAmsPhase3GovernedBatchV1,
                   anchor: &ZkAmsPhase3BatchAnchorV1,
-                  maps: [&ZkAmsPhase23SparseMapV1; 3],
                   proof: &[u8]| {
         verify_terminal_inner(
             proof_context,
             context,
             governed,
             anchor,
-            maps,
-            &shape,
-            true,
+            TerminalRelationSourceV1::CanonicalRelease,
             proof,
         )
         .is_err()
@@ -378,7 +363,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
             context,
             &governed,
             &output.batch_anchor,
-            maps,
             &corrupt,
         ));
     }
@@ -388,7 +372,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
             context,
             &governed,
             &output.batch_anchor,
-            maps,
             &output.proof_bytes[..length],
         ));
     }
@@ -399,7 +382,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         context,
         &governed,
         &output.batch_anchor,
-        maps,
         &extended,
     ));
     let mut bad_anchor = output.batch_anchor.clone();
@@ -409,7 +391,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         context,
         &governed,
         &bad_anchor,
-        maps,
         &output.proof_bytes,
     ));
     let mut bad_context = context;
@@ -419,7 +400,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         bad_context,
         &governed,
         &output.batch_anchor,
-        maps,
         &output.proof_bytes,
     ));
     for mutation in 0..4 {
@@ -445,7 +425,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
             rebound_context,
             &rebound_governed,
             &rebound_anchor,
-            maps,
             &output.proof_bytes,
         ));
     }
@@ -456,7 +435,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         context,
         &bad_governed,
         &output.batch_anchor,
-        maps,
         &output.proof_bytes,
     ));
     let mut bad_proof_context = proof_context;
@@ -466,17 +444,16 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         context,
         &governed,
         &output.batch_anchor,
-        maps,
         &output.proof_bytes,
     ));
-    let mut swapped_maps = maps;
-    swapped_maps.swap(0, 1);
+    let mut wrong_verifier_context = context;
+    wrong_verifier_context.nifs_verifier_digest[0] ^= 1;
+    wrong_verifier_context.digest = terminal_context_digest(wrong_verifier_context);
     rejected.push(verify(
         &proof_context,
-        context,
+        wrong_verifier_context,
         &governed,
         &output.batch_anchor,
-        swapped_maps,
         &output.proof_bytes,
     ));
     for malformed in [
@@ -521,7 +498,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
             context,
             &governed,
             &output.batch_anchor,
-            maps,
             &malformed,
         ));
     }
@@ -534,11 +510,11 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
     let mut kat = Keccak256::new();
     kat.update(RELEASE_TERMINAL_KAT_DOMAIN_V1);
     kat.update(&context.digest);
-    kat.update(&maps_owner.digest());
+    kat.update(&map_manifest.digest());
     kat.update(&terminal_profile.nifs_verifier_digest);
     kat.update(&governed.digest);
     kat.update(&history.digest);
-    kat.update(&materialized.digest);
+    kat.update(&materialized_digest);
     kat.update(&output.batch_anchor.digest);
     kat.update(
         &u64::try_from(output.proof_bytes.len())
@@ -573,5 +549,6 @@ fn release_terminal_kat_keeps_strict_assignments_streamed() {
     assert!(source.contains("precompute_masked_relaxed_stream_v1("));
     assert!(source.contains("release_admission_assignment(Arc::clone(&shape))"));
     assert!(source.contains("validate_strict_assignment"));
-    assert!(source.contains("Arc::ptr_eq(&terminal_profile.shape, &shape)"));
+    assert!(source.contains("let shape = Arc::clone(&terminal_profile.shape);"));
+    assert!(!source.contains(concat!("zk_ams_phase23_release_", "maps_v1")));
 }

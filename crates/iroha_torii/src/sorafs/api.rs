@@ -26227,7 +26227,7 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
         let mut bytes = [0_u8; 32];
         hex::decode_to_slice(raw, &mut bytes)
             .ok()
-            .map(ManifestDigest::new)
+            .map(|()| ManifestDigest::new(bytes))
     });
     let limit = normalize_limit(query.limit);
     let requested_offset = query
@@ -31306,13 +31306,7 @@ fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
 }
 
 #[cfg(test)]
-#[test]
-fn invalid_internal_header_value_fails_closed_without_panicking() {
-    assert_eq!(
-        header_value("invalid\0value", "X-Test"),
-        HeaderValue::from_static("unavailable")
-    );
-}
+include!("api/invalid_internal_header_value_test.rs");
 
 #[cfg(test)]
 fn checked_test_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {

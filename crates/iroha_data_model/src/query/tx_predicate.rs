@@ -1221,14 +1221,255 @@ pub(super) fn committed_tx_predicate_from_predicate_json(
 }
 
 #[cfg(feature = "json")]
+fn write_predicate_expression_to(
+    operation: &str,
+    out: &mut dyn json::JsonWriteSink,
+    write_arguments: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
+) -> Result<(), json::BoundedJsonError> {
+    out.begin_container()?;
+    out.push_str("{\"args\":")?;
+    out.begin_container()?;
+    out.push('[')?;
+    write_arguments(out)?;
+    out.push(']')?;
+    out.end_container();
+    out.push_str(",\"op\":")?;
+    json::write_json_string_to(operation, out)?;
+    out.push('}')?;
+    out.end_container();
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+fn write_binary_predicate_to(
+    operation: &str,
+    out: &mut dyn json::JsonWriteSink,
+    write_field: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
+    write_value: impl FnOnce(&mut dyn json::JsonWriteSink) -> Result<(), json::BoundedJsonError>,
+) -> Result<(), json::BoundedJsonError> {
+    write_predicate_expression_to(operation, out, |out| {
+        write_field(out)?;
+        out.push(',')?;
+        write_value(out)
+    })
+}
+
+#[cfg(feature = "json")]
+fn write_named_predicate_to<T: JsonSerialize>(
+    operation: &str,
+    field: &str,
+    value: &T,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    write_binary_predicate_to(
+        operation,
+        out,
+        |out| json::write_json_string_to(field, out),
+        |out| value.json_serialize_to(out),
+    )
+}
+
+#[cfg(feature = "json")]
+fn write_json_slice_to<T: JsonSerialize>(
+    values: &[T],
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    out.begin_container()?;
+    out.push('[')?;
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.push(',')?;
+        }
+        value.json_serialize_to(out)?;
+    }
+    out.push(']')?;
+    out.end_container();
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+fn write_metadata_field_to(
+    key: &Name,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    const PREFIX: &[u8] = b"metadata.";
+    const MAX_NAME_BYTES: usize = 255;
+    let name = key.as_ref().as_bytes();
+    if name.len() > MAX_NAME_BYTES {
+        return Err(json::BoundedJsonError::LengthMismatch);
+    }
+    let mut field = [0_u8; PREFIX.len() + MAX_NAME_BYTES];
+    field[..PREFIX.len()].copy_from_slice(PREFIX);
+    field[PREFIX.len()..PREFIX.len() + name.len()].copy_from_slice(name);
+    let field = core::str::from_utf8(&field[..PREFIX.len() + name.len()])
+        .map_err(|_| json::BoundedJsonError::LengthMismatch)?;
+    json::write_json_string_to(field, out)
+}
+
+#[cfg(feature = "json")]
+#[allow(clippy::too_many_lines)]
+fn write_committed_tx_predicate_to(
+    predicate: &CommittedTxPredicate,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    use CommittedTxPredicate as P;
+
+    match predicate {
+        P::And(children) => write_predicate_expression_to("and", out, |out| {
+            for (index, child) in children.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                write_committed_tx_predicate_to(child, out)?;
+            }
+            Ok(())
+        }),
+        P::Or(children) => write_predicate_expression_to("or", out, |out| {
+            for (index, child) in children.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                write_committed_tx_predicate_to(child, out)?;
+            }
+            Ok(())
+        }),
+        P::Not(inner) => write_predicate_expression_to("not", out, |out| {
+            write_committed_tx_predicate_to(inner, out)
+        }),
+        P::BlockEq(value) => write_named_predicate_to("eq", "block_hash", value, out),
+        P::BlockNe(value) => write_named_predicate_to("ne", "block_hash", value, out),
+        P::BlockIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("block_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::BlockNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("block_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::BlockExists(value) => write_named_predicate_to("exists", "block_hash", value, out),
+        P::AuthorityEq(value) => write_named_predicate_to("eq", "authority", value, out),
+        P::AuthorityNe(value) => write_named_predicate_to("ne", "authority", value, out),
+        P::AuthorityIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("authority", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::AuthorityNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("authority", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::AuthorityExists(value) => write_named_predicate_to("exists", "authority", value, out),
+        P::TsEq(value) => write_named_predicate_to("eq", "timestamp_ms", value, out),
+        P::TsLt(value) => write_named_predicate_to("lt", "timestamp_ms", value, out),
+        P::TsLte(value) => write_named_predicate_to("lte", "timestamp_ms", value, out),
+        P::TsGt(value) => write_named_predicate_to("gt", "timestamp_ms", value, out),
+        P::TsGte(value) => write_named_predicate_to("gte", "timestamp_ms", value, out),
+        P::TsIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("timestamp_ms", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::TsNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("timestamp_ms", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::TsExists(value) => write_named_predicate_to("exists", "timestamp_ms", value, out),
+        P::EntryEq(value) => write_named_predicate_to("eq", "entrypoint_hash", value, out),
+        P::EntryNe(value) => write_named_predicate_to("ne", "entrypoint_hash", value, out),
+        P::EntryIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("entrypoint_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::EntryNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("entrypoint_hash", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::EntryExists(value) => write_named_predicate_to("exists", "entrypoint_hash", value, out),
+        P::ResultEq(value) => write_named_predicate_to("eq", "result_ok", value, out),
+        P::ResultNe(value) => write_named_predicate_to("ne", "result_ok", value, out),
+        P::ResultIn(values) => write_binary_predicate_to(
+            "in",
+            out,
+            |out| json::write_json_string_to("result_ok", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::ResultNin(values) => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| json::write_json_string_to("result_ok", out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::ResultExists(value) => write_named_predicate_to("exists", "result_ok", value, out),
+        P::MetadataEq { key, value } => write_binary_predicate_to(
+            "eq",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| value.json_serialize_to(out),
+        ),
+        P::MetadataNe { key, value } => write_binary_predicate_to(
+            "ne",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| value.json_serialize_to(out),
+        ),
+        P::MetadataIn { key, values } => write_binary_predicate_to(
+            "in",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::MetadataNin { key, values } => write_binary_predicate_to(
+            "nin",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| write_json_slice_to(values, out),
+        ),
+        P::MetadataExists { key, exists } => write_binary_predicate_to(
+            "exists",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| exists.json_serialize_to(out),
+        ),
+        P::MetadataIsNull { key, is_null } => write_binary_predicate_to(
+            "is_null",
+            out,
+            |out| write_metadata_field_to(key, out),
+            |out| is_null.json_serialize_to(out),
+        ),
+        P::Const(value) => {
+            write_predicate_expression_to("const", out, |out| value.json_serialize_to(out))
+        }
+    }
+}
+
+#[cfg(feature = "json")]
 impl JsonSerialize for CommittedTxPredicate {
     fn json_serialize(&self, out: &mut String) {
-        match committed_tx_predicate_to_value(self) {
-            Ok(value) => value.json_serialize(out),
-            Err(_) => {
-                committed_tx_predicate_to_value_unchecked(&Self::Const(false)).json_serialize(out)
-            }
+        json::write_with_unbounded_sink(out, |sink| self.json_serialize_to(sink));
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        if validate_committed_tx_predicate(self).is_err() {
+            return write_committed_tx_predicate_to(&Self::Const(false), out);
         }
+        write_committed_tx_predicate_to(self, out)
     }
 }
 
@@ -2559,7 +2800,22 @@ mod tests {
         ];
 
         for predicate in predicates {
+            let legacy = norito::json::to_json(
+                &committed_tx_predicate_to_value(&predicate)
+                    .expect("valid predicate has legacy semantic JSON"),
+            )
+            .expect("encode legacy predicate value JSON");
             let raw = norito::json::to_json(&predicate).expect("encode predicate JSON");
+            assert_eq!(raw, legacy, "direct writer changed canonical JSON bytes");
+            assert_eq!(
+                norito::json::to_json_bounded(&predicate, raw.len())
+                    .expect("encode predicate at exact JSON bound"),
+                raw
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(&predicate, raw.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
             let decoded: CommittedTxPredicate =
                 norito::json::from_json(&raw).expect("decode predicate JSON");
             assert_eq!(decoded, predicate, "roundtrip failed for {raw}");

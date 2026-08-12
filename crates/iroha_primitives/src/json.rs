@@ -320,6 +320,13 @@ impl json::JsonSerialize for Json {
     fn json_serialize(&self, out: &mut String) {
         out.push_str(self.0.as_str());
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_validated_json_to(self.0.as_str(), out)
+    }
 }
 
 impl json::JsonDeserialize for Json {
@@ -677,6 +684,25 @@ mod tests {
         let key = <Json as json::JsonDeserialize>::json_from_map_key("quote\"line\n")
             .expect("convert JSON map key");
         assert_eq!(key.get(), r#""quote\"line\n""#);
+    }
+
+    #[test]
+    fn json_wrapper_has_closed_output_bound_without_reparsing() {
+        let value = Json::from_norito_value_ref(&norito::json!({
+            "text": "quoted\nvalue",
+            "items": [1u64, 2, 3]
+        }))
+        .expect("construct canonical JSON wrapper");
+        let expected = value.get();
+        assert_eq!(
+            norito::json::to_json_bounded(&value, expected.len())
+                .expect("serialize Json at exact bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&value, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
     }
 
     #[test]

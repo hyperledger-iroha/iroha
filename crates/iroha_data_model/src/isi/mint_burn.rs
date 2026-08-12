@@ -117,6 +117,20 @@ where
         JsonSerialize::json_serialize(&self.destination, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push_str(",\"destination\":")?;
+        JsonSerialize::json_serialize_to(&self.destination, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -133,6 +147,20 @@ where
         out.push_str(",\"destination\":");
         JsonSerialize::json_serialize(&self.destination, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push_str(",\"destination\":")?;
+        JsonSerialize::json_serialize_to(&self.destination, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -334,6 +362,28 @@ mod tests {
 
     fn trigger_id() -> TriggerId {
         "nightly_tick".parse().expect("trigger id")
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn mint_and_burn_json_match_legacy_bytes_at_exact_bounds() {
+        assert_exact_json(&Mint::asset_quantity(7_u32, asset_id()));
+        assert_exact_json(&Burn::asset_quantity(3_u32, asset_id()));
+        assert_exact_json(&Mint::trigger_repetitions(5, trigger_id()));
+        assert_exact_json(&Burn::trigger_repetitions(2, trigger_id()));
     }
 
     #[test]

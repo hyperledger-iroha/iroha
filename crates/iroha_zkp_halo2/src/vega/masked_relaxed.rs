@@ -308,6 +308,14 @@ impl MaskedRelaxedPrecomputationV1 {
     pub(super) fn folded_witness(&self) -> &RelaxedWitness {
         &self.folded_witness
     }
+
+    /// Consume the precomputation and move its final folded scalar owners
+    /// without cloning them through a second release-sized representation.
+    #[cfg(test)]
+    pub(super) fn into_folded_opening(mut self) -> (RelaxedInstance, RelaxedWitness) {
+        let folded_witness = self.folded_witness.take();
+        (self.folded_instance, folded_witness)
+    }
 }
 
 /// Build the complete producer-side masked Nova history from strict circuit
@@ -1437,6 +1445,19 @@ impl SecretRelaxedWitness {
         let _ = core::hint::black_box(&mut self.0);
     }
 
+    #[cfg(test)]
+    fn take(&mut self) -> RelaxedWitness {
+        core::mem::replace(
+            &mut self.0,
+            RelaxedWitness {
+                values: Vec::new(),
+                witness_blindings: Vec::new(),
+                error: Vec::new(),
+                error_blindings: Vec::new(),
+            },
+        )
+    }
+
     fn clear_secret(&mut self) {
         let witness = core::hint::black_box(&mut self.0);
         clear_secret_scalar_slice_v1(&mut witness.values);
@@ -1688,6 +1709,13 @@ mod tests {
         assert!(production.contains("Arc::ptr_eq(&assignment.shape, &shape)"));
         assert!(!production.contains("remove(0)"));
         assert!(!production.contains("&vec![Scalar::zero(); shape.constraint_count()]"));
+
+        let expected_values = precomputation.folded_witness().values.len();
+        let (folded_instance, folded_witness) = precomputation.into_folded_opening();
+        assert_eq!(folded_instance.public_inputs.len(), 1);
+        assert_eq!(folded_witness.values.len(), expected_values);
+        drop(SecretRelaxedWitness::new(folded_witness));
+        assert!(production.contains("self.folded_witness.take()"));
     }
 
     #[test]

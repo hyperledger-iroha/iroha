@@ -791,7 +791,7 @@ async fn account_get_handler_returns_not_found_for_missing_account() {
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn account_read_for_routes_rejects_multiroute_before_route_fetch() {
+async fn account_read_for_routes_skips_route_unavailable_until_success() {
     let keypair =
         checked_torii_test_ed25519_keypair(0x2c, "derive Torii routed account-read fixture key");
     let account_id = AccountId::new(keypair.public_key().clone());
@@ -807,21 +807,21 @@ async fn account_read_for_routes_rejects_multiroute_before_route_fetch() {
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
             .headers()
-            .get("x-iroha-reject-code")
+            .get("x-iroha-routed-by")
             .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
+        Some("proxy"),
+        "mixed local/proxy fanout should report proxy routing",
     );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede local or remote account source execution"
-    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("account read body");
+    let payload: AccountReadResponse =
+        norito::json::from_slice(&body).expect("account read payload");
+    assert_eq!(payload.account_id, account_id);
 }
 
 #[cfg(feature = "app_api")]
@@ -1354,7 +1354,7 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn account_read_for_routes_rejects_multiroute_before_missing_source_scan() {
+async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_missing() {
     let missing =
         checked_torii_test_account_id(0x2d, "derive Torii missing routed account-read fixture key");
     let mut app = mk_app_state_for_tests();
@@ -1369,20 +1369,14 @@ async fn account_read_for_routes_rejects_multiroute_before_missing_source_scan()
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(
         response
             .headers()
             .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede missing-account source execution"
+        Some("route_unavailable"),
+        "a definitive missing-account response should outrank an unrelated unavailable route",
     );
 }
 

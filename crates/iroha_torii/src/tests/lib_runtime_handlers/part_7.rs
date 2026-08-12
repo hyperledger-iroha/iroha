@@ -2752,9 +2752,10 @@
             .public_key()
             .clone(),
         );
-        let request = ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        let request = ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::new(b"incoming-read-proxy-stale-route"),
+            deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: vec![ingress_peer_id],
@@ -2790,9 +2791,10 @@
             authority,
         )
         .sign(&key_pair);
-        let request = ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        let request = ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::new(b"incoming-verified-query-proxy-stale-route"),
+            deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: vec![ingress_peer_id],

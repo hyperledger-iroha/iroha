@@ -522,7 +522,7 @@ pub struct SoraInrouManifestV1 {
     /// Admitted guest image assets keyed by guest ISA. Both `x86_64` and `aarch64` are required.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::sora_inrou_guest_images_map")
+        norito(json = "crate::json_helpers::sora_inrou_guest_images_map")
     )]
     pub guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
     /// Optional user-data overlay path copied into the bootstrap seed drive.
@@ -570,6 +570,41 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
         out.push(':');
         self.ssh_authorized_keys.json_serialize(out);
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"schema_version\":")?;
+        self.schema_version.json_serialize_to(out)?;
+        out.push_str(",\"guest_os\":")?;
+        self.guest_os.json_serialize_to(out)?;
+        out.push_str(",\"guest_images\":")?;
+        out.begin_container()?;
+        out.push('{')?;
+        let mut guest_images = self.guest_images.iter();
+        if let Some((guest_isa, image)) = guest_images.next() {
+            json::write_json_string_to(guest_isa.as_str(), out)?;
+            out.push(':')?;
+            image.json_serialize_to(out)?;
+            for (guest_isa, image) in guest_images {
+                out.push(',')?;
+                json::write_json_string_to(guest_isa.as_str(), out)?;
+                out.push(':')?;
+                image.json_serialize_to(out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        out.push_str(",\"bootstrap_user_data_path\":")?;
+        self.bootstrap_user_data_path.json_serialize_to(out)?;
+        out.push_str(",\"ssh_authorized_keys\":")?;
+        self.ssh_authorized_keys.json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -712,6 +747,40 @@ impl JsonDeserialize for SoraInrouManifestV1 {
             bootstrap_user_data_path,
             ssh_authorized_keys,
         })
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod inrou_manifest_checked_json_tests {
+    use super::*;
+
+    #[test]
+    fn manifest_map_writer_matches_legacy_bytes_and_exact_bound() {
+        let manifest = SoraInrouManifestV1 {
+            schema_version: SORA_INROU_MANIFEST_VERSION_V1,
+            guest_os: SoraInrouGuestOsV1::DebianSlim,
+            guest_images: BTreeMap::from([(
+                SoraInrouGuestIsaV1::X8664,
+                SoraInrouGuestImageV1 {
+                    kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
+                    rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
+                    initrd_image_path: None,
+                    distribution: SoraArtifactDistributionPolicyV1::default(),
+                    published_artifact: None,
+                },
+            )]),
+            bootstrap_user_data_path: Some("/bootstrap/user-data".to_owned()),
+            ssh_authorized_keys: vec!["ssh-ed25519 fixture".to_owned()],
+        };
+        let legacy = json::to_json(&manifest).expect("serialize manifest");
+        assert_eq!(
+            json::to_json_bounded(&manifest, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(&manifest, legacy.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
     }
 }
 

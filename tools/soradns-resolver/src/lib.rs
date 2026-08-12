@@ -12,6 +12,7 @@ pub mod config;
 pub mod directory;
 pub mod dns;
 pub mod events;
+pub mod limits;
 pub mod rad;
 pub mod state;
 pub mod transparency;
@@ -65,7 +66,11 @@ use crate::{
     bundle::ProofBundleV1,
     config::{DotTlsConfig, ResolverConfig},
     events::EventEmitter,
-    rad::{ResolverAttestation, validate_rad},
+    limits::{
+        MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES, MAX_TLS_CERT_BYTES,
+        MAX_TLS_KEY_BYTES, read_bounded_file, replace_retained_bytes,
+    },
+    rad::{ResolverAttestation, rad_retained_bytes, validate_rad},
     state::{ResolverState, ResolverStateMetrics},
 };
 
@@ -224,7 +229,7 @@ impl ResolverDaemon {
         let event_addr = config.event_listen();
 
         let mut state = ResolverState::new(config.resolver_id.clone(), config.region.clone());
-        state.update_static_zones(config.static_zones());
+        state.update_static_zones(config.static_zones())?;
 
         let events =
             EventEmitter::new(config.resolver_id.clone(), config.event_log_path().cloned())?;
@@ -252,7 +257,7 @@ impl ResolverDaemon {
         let bundle_count = self.load_proof_bundles(&mut state).await?;
         let rad_count = self.refresh_rad_entries(&mut state).await?;
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        let expirations = state.prune_stale_entries(now);
+        let expirations = state.prune_stale_entries(now)?;
         self.events.emit_expirations(&expirations);
         info!(
             bundles = bundle_count,
@@ -267,6 +272,7 @@ impl ResolverDaemon {
 
     async fn load_proof_bundles(&self, state: &mut ResolverState) -> Result<usize> {
         let mut loaded: HashMap<String, ProofBundleV1> = HashMap::new();
+        let mut retained_bytes = 0usize;
         for source in self.config.bundle_sources() {
             match source.fetch(&self.http_client).await {
                 Ok(bundles) => {
@@ -276,7 +282,49 @@ impl ResolverDaemon {
                             warn!(?error, namehash = %namehash_hex, "skipping invalid proof bundle");
                             continue;
                         }
+                        let entry_bytes = bundle
+                            .retained_bytes()?
+                            .checked_add(namehash_hex.capacity())
+                            .and_then(|bytes| {
+                                bytes.checked_add(
+                                    std::mem::size_of::<(String, ProofBundleV1)>()
+                                        .saturating_mul(2),
+                                )
+                            })
+                            .ok_or_else(|| eyre::eyre!("proof-bundle sync accounting overflow"))?;
+                        let prior_bytes = loaded
+                            .get(&namehash_hex)
+                            .map(|prior| {
+                                prior.retained_bytes().map(|bytes| {
+                                    bytes
+                                        .saturating_add(namehash_hex.capacity())
+                                        .saturating_add(
+                                            std::mem::size_of::<(String, ProofBundleV1)>()
+                                                .saturating_mul(2),
+                                        )
+                                })
+                            })
+                            .transpose()?
+                            .unwrap_or(0);
+                        let next_retained = replace_retained_bytes(
+                            retained_bytes,
+                            prior_bytes,
+                            entry_bytes,
+                            MAX_STATE_RETAINED_BYTES,
+                            "proof-bundle sync map",
+                        )?;
+                        if !loaded.contains_key(&namehash_hex) {
+                            if loaded.len() >= MAX_STATE_BUNDLES {
+                                eyre::bail!(
+                                    "proof-bundle sync map exceeds the {MAX_STATE_BUNDLES}-entry limit"
+                                );
+                            }
+                            loaded.try_reserve(1).map_err(|error| {
+                                eyre::eyre!("failed to grow proof-bundle sync map: {error}")
+                            })?;
+                        }
                         loaded.insert(namehash_hex, bundle);
+                        retained_bytes = next_retained;
                     }
                 }
                 Err(error) => warn!(
@@ -285,13 +333,14 @@ impl ResolverDaemon {
                 ),
             }
         }
-        let diff = state.update_bundles(loaded);
+        let diff = state.update_bundles(loaded)?;
         self.events.emit_bundle_diff(&diff);
         Ok(state.bundle_count())
     }
 
     async fn refresh_rad_entries(&self, state: &mut ResolverState) -> Result<usize> {
         let mut adverts: HashMap<String, ResolverAttestation> = HashMap::new();
+        let mut retained_bytes = 0usize;
         for source in self.config.rad_sources() {
             match source.fetch(&self.http_client).await {
                 Ok(entries) => {
@@ -306,7 +355,48 @@ impl ResolverDaemon {
                             continue;
                         }
                         let resolver_key = hex::encode(advert.resolver_id);
+                        let entry_bytes = rad_retained_bytes(&advert)?
+                            .checked_add(resolver_key.capacity())
+                            .and_then(|bytes| {
+                                bytes.checked_add(
+                                    std::mem::size_of::<(String, ResolverAttestation)>()
+                                        .saturating_mul(2),
+                                )
+                            })
+                            .ok_or_else(|| eyre::eyre!("RAD sync accounting overflow"))?;
+                        let prior_bytes = adverts
+                            .get(&resolver_key)
+                            .map(|prior| {
+                                rad_retained_bytes(prior).map(|bytes| {
+                                    bytes
+                                        .saturating_add(resolver_key.capacity())
+                                        .saturating_add(
+                                            std::mem::size_of::<(String, ResolverAttestation)>()
+                                                .saturating_mul(2),
+                                        )
+                                })
+                            })
+                            .transpose()?
+                            .unwrap_or(0);
+                        let next_retained = replace_retained_bytes(
+                            retained_bytes,
+                            prior_bytes,
+                            entry_bytes,
+                            MAX_STATE_RETAINED_BYTES,
+                            "RAD sync map",
+                        )?;
+                        if !adverts.contains_key(&resolver_key) {
+                            if adverts.len() >= MAX_STATE_RAD_ENTRIES {
+                                eyre::bail!(
+                                    "RAD sync map exceeds the {MAX_STATE_RAD_ENTRIES}-entry limit"
+                                );
+                            }
+                            adverts.try_reserve(1).map_err(|error| {
+                                eyre::eyre!("failed to grow RAD sync map: {error}")
+                            })?;
+                        }
                         adverts.insert(resolver_key, advert);
+                        retained_bytes = next_retained;
                     }
                 }
                 Err(error) => warn!(
@@ -315,7 +405,7 @@ impl ResolverDaemon {
                 ),
             }
         }
-        let diff = state.update_resolver_adverts(adverts);
+        let diff = state.update_resolver_adverts(adverts)?;
         self.events.emit_resolver_diff(&diff);
         Ok(state.resolver_advert_count())
     }
@@ -758,13 +848,13 @@ fn load_tls_configs(config: &DotTlsConfig) -> Result<ResolverTls> {
 }
 
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = read_bounded_file(path, MAX_TLS_CERT_BYTES, "DoT certificate")?;
     let cert = CertificateDer::from(bytes);
     Ok(vec![cert])
 }
 
 fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = read_bounded_file(path, MAX_TLS_KEY_BYTES, "DoT private key")?;
     Ok(PrivateKeyDer::from(PrivatePkcs8KeyDer::from(bytes)))
 }
 
@@ -831,7 +921,8 @@ mod tests {
                 domain: "example.test".into(),
                 records: vec![record],
                 freeze: None,
-            }]);
+                retained_bytes: 1024,
+            }])?;
         }
 
         let server_state = state.clone();
@@ -895,7 +986,8 @@ mod tests {
                 domain: "example.test".into(),
                 records: vec![record],
                 freeze: None,
-            }]);
+                retained_bytes: 1024,
+            }])?;
         }
 
         let server_state = state.clone();

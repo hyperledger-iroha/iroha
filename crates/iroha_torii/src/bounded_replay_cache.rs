@@ -85,12 +85,24 @@ impl ReplayCache {
         self.check_and_insert_at(key, Instant::now())
     }
 
+    /// Admit a caller-domain-separated fixed-size replay digest.
+    ///
+    /// Protocol paths that can stream their structured replay identity should
+    /// use this seam instead of first formatting an attacker-sized `String`.
+    pub(crate) fn check_and_insert_digest(&self, key: Hash) -> Result<(), InsertError> {
+        self.check_and_insert_digest_at(key, Instant::now())
+    }
+
     fn check_and_insert_at(&self, key: String, now: Instant) -> Result<(), InsertError> {
         // Callers may include an attacker-sized authority representation in
         // this key. Retain only a domain-separated fixed-size digest; keeping
         // the original String in both indices would turn the count cap into a
         // large variable-byte cache.
         let key = Hash::new_from_chunks(&[REPLAY_KEY_DIGEST_DOMAIN_V1, key.as_bytes()]);
+        self.check_and_insert_digest_at(key, now)
+    }
+
+    fn check_and_insert_digest_at(&self, key: Hash, now: Instant) -> Result<(), InsertError> {
         let mut inner = self
             .inner
             .lock()
@@ -217,5 +229,26 @@ mod tests {
             .peek()
             .expect("one retained expiration digest");
         assert_eq!(std::mem::size_of_val(queued_key), Hash::LENGTH);
+    }
+
+    #[test]
+    fn structured_digest_admission_preserves_one_shot_semantics() {
+        let cache = ReplayCache::new(
+            Duration::from_secs(300),
+            NonZeroUsize::new(2).expect("non-zero"),
+        );
+        let first = Hash::new(b"structured-a");
+        let second = Hash::new(b"structured-b");
+
+        cache
+            .check_and_insert_digest(first.clone())
+            .expect("first structured digest");
+        assert_eq!(
+            cache.check_and_insert_digest(first),
+            Err(InsertError::Replay)
+        );
+        cache
+            .check_and_insert_digest(second)
+            .expect("a distinct structured digest uses the second slot");
     }
 }

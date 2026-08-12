@@ -576,6 +576,7 @@ mod tests {
             16,
             16 * crate::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES,
             32 * 1_024,
+            16 * 1_024,
             4 * 1_024,
             norito::DecodeLimits::new(64, 4 * 1_024, 256, 16 * 1_024, 16),
         )

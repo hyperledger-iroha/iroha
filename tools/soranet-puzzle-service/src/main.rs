@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashSet,
-    fs,
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -25,12 +24,14 @@ use hex::{decode, encode};
 use iroha_crypto::{
     Algorithm, KeyPair, PrivateKey,
     soranet::{
+        certificate::SRC_V2_MAX_BUNDLE_BYTES,
         pow::{self, Parameters as PowParameters, SignedTicket, Ticket as PowTicket},
         puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
         token::{AdmissionToken, MintError as AdmissionTokenMintError, compute_issuer_fingerprint},
     },
 };
 use norito::{
+    DecodeLimits,
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -38,13 +39,101 @@ use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
 use soranet_pq::{MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use soranet_relay::config::{
     ConfigError as RelayConfigError, HandshakePolicy, PowConfig, RelayConfig,
+    read_bounded_direct_regular_file,
 };
+use soranet_relay::token_tool::REVOCATION_LIST_MAX_ENTRIES_V1;
 use thiserror::Error;
 use tokio::{net::TcpListener, signal};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt::SubscriberBuilder};
 
 const FALLBACK_IDENTITY_SEED: [u8; 32] = [0x42; 32];
+const REVOCATION_FILE_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+const SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1: usize = 256;
+const DESCRIPTOR_MANIFEST_MAX_FIELD_BYTES_V1: usize = 16 * 1024;
+const DESCRIPTOR_MANIFEST_MAX_TOTAL_STRING_BYTES_V1: usize = 48 * 1024;
+const DESCRIPTOR_MANIFEST_MAX_SEQUENCE_ELEMENTS_V1: usize = 1_024;
+const DESCRIPTOR_MANIFEST_MAX_TOTAL_ELEMENTS_V1: usize = 4_096;
+const DESCRIPTOR_MANIFEST_MAX_ALLOCATED_BYTES_V1: usize = 1024 * 1024;
+const DESCRIPTOR_MANIFEST_MAX_DEPTH_V1: usize = 16;
+const DESCRIPTOR_MANIFEST_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    DESCRIPTOR_MANIFEST_MAX_SEQUENCE_ELEMENTS_V1,
+    DESCRIPTOR_MANIFEST_MAX_FIELD_BYTES_V1,
+    DESCRIPTOR_MANIFEST_MAX_TOTAL_ELEMENTS_V1,
+    DESCRIPTOR_MANIFEST_MAX_ALLOCATED_BYTES_V1,
+    DESCRIPTOR_MANIFEST_MAX_DEPTH_V1,
+);
+
+const fn descriptor_manifest_preflight_limits_v1() -> json::JsonPreflightLimits {
+    json::JsonPreflightLimits::new(
+        SRC_V2_MAX_BUNDLE_BYTES,
+        DESCRIPTOR_MANIFEST_MAX_TOTAL_ELEMENTS_V1 + 1,
+        SRC_V2_MAX_BUNDLE_BYTES,
+        DESCRIPTOR_MANIFEST_MAX_FIELD_BYTES_V1,
+        DESCRIPTOR_MANIFEST_MAX_TOTAL_STRING_BYTES_V1,
+        DESCRIPTOR_MANIFEST_MAX_SEQUENCE_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_MAX_TOTAL_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_MAX_TOTAL_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_MAX_TOTAL_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_MAX_DEPTH_V1,
+    )
+}
+
+fn read_bounded_utf8_file(path: &Path, maximum: usize, artifact: &str) -> std::io::Result<String> {
+    let bytes = read_bounded_direct_regular_file(path, maximum, artifact)?;
+    String::from_utf8(bytes).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{artifact} is not valid UTF-8: {error}"),
+        )
+    })
+}
+
+fn decode_exact_hex_bytes(
+    value: &str,
+    expected_bytes: usize,
+    artifact: &str,
+) -> Result<Vec<u8>, String> {
+    let expected_hex_bytes = expected_bytes
+        .checked_mul(2)
+        .ok_or_else(|| format!("{artifact} encoded length overflows the platform address space"))?;
+    if value.len() != expected_hex_bytes {
+        return Err(format!(
+            "{artifact} must contain exactly {expected_hex_bytes} hexadecimal characters; found {}",
+            value.len()
+        ));
+    }
+    let mut decoded = Vec::new();
+    decoded
+        .try_reserve_exact(expected_bytes)
+        .map_err(|_| format!("failed to reserve the bounded {artifact} buffer"))?;
+    decoded.resize(expected_bytes, 0);
+    hex::decode_to_slice(value, &mut decoded)
+        .map_err(|error| format!("failed to decode {artifact} as hexadecimal: {error}"))?;
+    Ok(decoded)
+}
+
+fn secret_file_max_bytes(expected_secret_bytes: usize) -> Result<usize, String> {
+    expected_secret_bytes
+        .checked_mul(2)
+        .and_then(|hex_bytes| {
+            hex_bytes.checked_add(SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1)
+        })
+        .ok_or_else(|| "secret-key file limit overflows the platform address space".to_owned())
+}
+
+fn validate_secret_file_whitespace(raw: &str, trimmed: &str) -> Result<(), String> {
+    let surrounding = raw
+        .len()
+        .checked_sub(trimmed.len())
+        .ok_or_else(|| "secret-key whitespace accounting underflowed".to_owned())?;
+    if surrounding > SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 {
+        return Err(format!(
+            "secret-key file contains {surrounding} surrounding whitespace bytes; first-release limit is {SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1}"
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -214,17 +303,9 @@ impl PuzzleService {
             .signed_ticket_public_key_hex
             .as_ref()
             .map(|value| {
-                let bytes = decode(value)
-                    .map_err(|err| eyre!("invalid signed_ticket_public_key_hex: {err}"))?;
                 let expected = MlDsaSuite::MlDsa44.public_key_len();
-                if bytes.len() != expected {
-                    Err(eyre!(
-                        "invalid signed_ticket_public_key_hex length: expected {expected} bytes for ML-DSA-44, got {}",
-                        bytes.len()
-                    ))
-                } else {
-                    Ok(bytes)
-                }
+                decode_exact_hex_bytes(value, expected, "signed-ticket public key")
+                    .map_err(|error| eyre!(error))
             })
             .transpose()?;
 
@@ -305,7 +386,7 @@ impl PuzzleService {
         if let Some(issuer_mutex) = &self.token {
             let mut issuer = issuer_mutex.lock().expect("token issuer mutex poisoned");
             issuer.refresh_revocations()?;
-            Ok(TokenConfigResponse::enabled(&issuer))
+            TokenConfigResponse::enabled(&issuer)
         } else {
             Ok(TokenConfigResponse::disabled())
         }
@@ -364,6 +445,8 @@ enum TokenInitError {
     DescriptorManifest { message: String },
     #[error("handshake configuration error: {0}")]
     Handshake(String),
+    #[error("token issuer capacity error: {0}")]
+    Capacity(String),
 }
 
 impl From<RelayConfigError> for TokenInitError {
@@ -392,6 +475,8 @@ enum TokenIssuerError {
     ExpiryOverflow,
     #[error("minted token immediately revoked ({0})")]
     Revoked(String),
+    #[error("token issuer capacity error: {0}")]
+    Capacity(String),
 }
 
 struct RevocationFile {
@@ -403,11 +488,15 @@ struct RevocationFile {
 
 impl RevocationFile {
     fn new(path: PathBuf, refresh_interval: Duration) -> Result<Self, TokenInitError> {
-        let contents =
-            fs::read_to_string(&path).map_err(|error| TokenInitError::RevocationFile {
-                path: path.clone(),
-                error: error.to_string(),
-            })?;
+        let contents = read_bounded_utf8_file(
+            &path,
+            REVOCATION_FILE_MAX_BYTES_V1,
+            "SoraNet puzzle-service revocation file",
+        )
+        .map_err(|error| TokenInitError::RevocationFile {
+            path: path.clone(),
+            error: error.to_string(),
+        })?;
         let entries = parse_revocation_contents(&contents).map_err(|reason| {
             TokenInitError::RevocationFile {
                 path: path.clone(),
@@ -429,7 +518,12 @@ impl RevocationFile {
         if self.last_loaded.elapsed() < self.refresh_interval {
             return Ok(());
         }
-        let contents = fs::read_to_string(&self.path).map_err(|error| {
+        let contents = read_bounded_utf8_file(
+            &self.path,
+            REVOCATION_FILE_MAX_BYTES_V1,
+            "SoraNet puzzle-service revocation file",
+        )
+        .map_err(|error| {
             TokenIssuerError::Revocation(format!("failed to read {}: {error}", self.path.display()))
         })?;
         let entries = parse_revocation_contents(&contents).map_err(|reason| {
@@ -593,14 +687,61 @@ impl TokenIssuer {
         }
     }
 
-    fn revocation_ids_hex(&self) -> Vec<String> {
-        let mut ids: Vec<[u8; 32]> = self.static_revocations.iter().copied().collect();
+    fn revocation_ids_hex(&self) -> Result<Vec<String>, TokenIssuerError> {
+        let maximum = self
+            .static_revocations
+            .len()
+            .checked_add(
+                self.revocation_file
+                    .as_ref()
+                    .map_or(0, |file| file.entries.len()),
+            )
+            .ok_or_else(|| {
+                TokenIssuerError::Capacity(
+                    "revocation summary entry count overflowed the platform address space"
+                        .to_owned(),
+                )
+            })?;
+        let mut ids = Vec::new();
+        ids.try_reserve_exact(maximum).map_err(|_| {
+            TokenIssuerError::Capacity(
+                "failed to reserve the bounded revocation summary index".to_owned(),
+            )
+        })?;
+        ids.extend(self.static_revocations.iter().copied());
         if let Some(file) = &self.revocation_file {
             ids.extend(file.entries.iter().copied());
         }
-        ids.sort();
+        ids.sort_unstable();
         ids.dedup();
-        ids.into_iter().map(encode).collect()
+        let mut encoded = Vec::new();
+        encoded.try_reserve_exact(ids.len()).map_err(|_| {
+            TokenIssuerError::Capacity(
+                "failed to reserve the bounded revocation summary output".to_owned(),
+            )
+        })?;
+        for id in ids {
+            let mut literal = [0_u8; 64];
+            hex::encode_to_slice(id, &mut literal).map_err(|error| {
+                TokenIssuerError::Capacity(format!(
+                    "failed to encode a fixed-width revocation identifier: {error}"
+                ))
+            })?;
+            let text = core::str::from_utf8(&literal).map_err(|error| {
+                TokenIssuerError::Capacity(format!(
+                    "fixed-width revocation identifier was not UTF-8: {error}"
+                ))
+            })?;
+            let mut item = String::new();
+            item.try_reserve_exact(text.len()).map_err(|_| {
+                TokenIssuerError::Capacity(
+                    "failed to reserve a fixed-width revocation identifier".to_owned(),
+                )
+            })?;
+            item.push_str(text);
+            encoded.push(item);
+        }
+        Ok(encoded)
     }
 }
 
@@ -721,8 +862,8 @@ impl TokenConfigResponse {
         }
     }
 
-    fn enabled(issuer: &TokenIssuer) -> Self {
-        Self {
+    fn enabled(issuer: &TokenIssuer) -> Result<Self, TokenIssuerError> {
+        Ok(Self {
             enabled: true,
             suite: Some(issuer.suite_label().to_string()),
             relay_id_hex: Some(encode(issuer.relay_id())),
@@ -731,8 +872,8 @@ impl TokenConfigResponse {
             min_ttl_secs: Some(issuer.min_ttl().as_secs()),
             default_ttl_secs: Some(issuer.default_ttl().as_secs()),
             clock_skew_secs: Some(issuer.clock_skew().as_secs()),
-            revocation_ids_hex: issuer.revocation_ids_hex(),
-        }
+            revocation_ids_hex: issuer.revocation_ids_hex()?,
+        })
     }
 }
 
@@ -949,6 +1090,7 @@ async fn mint_token(
             TokenIssuerError::Revoked(id) => {
                 ApiError::Internal(format!("minted token immediately revoked ({id})"))
             }
+            TokenIssuerError::Capacity(message) => ApiError::Internal(message),
         })? {
         Some(token) => token,
         None => {
@@ -1025,11 +1167,27 @@ fn relay_identity_seed(policy: &HandshakePolicy) -> Result<[u8; 32], TokenInitEr
 }
 
 fn identity_seed_from_manifest(path: &Path) -> Result<Option<[u8; 32]>, TokenInitError> {
-    let bytes = fs::read(path).map_err(|error| TokenInitError::DescriptorManifest {
+    let bytes = read_bounded_direct_regular_file(
+        path,
+        SRC_V2_MAX_BUNDLE_BYTES,
+        "SoraNet puzzle-service descriptor manifest",
+    )
+    .map_err(|error| TokenInitError::DescriptorManifest {
         message: format!("failed to read {}: {error}", path.display()),
     })?;
+    json::preflight_slice(&bytes, descriptor_manifest_preflight_limits_v1()).map_err(|error| {
+        TokenInitError::DescriptorManifest {
+            message: format!(
+                "descriptor manifest JSON admission failed for {}: {error}",
+                path.display()
+            ),
+        }
+    })?;
     let value: norito::json::Value =
-        norito::json::from_slice(&bytes).map_err(|error| TokenInitError::DescriptorManifest {
+        norito::with_decode_limits_scope(DESCRIPTOR_MANIFEST_DECODE_LIMITS_V1, || {
+            norito::json::from_slice(&bytes)
+        })
+        .map_err(|error| TokenInitError::DescriptorManifest {
             message: format!("failed to parse {}: {error}", path.display()),
         })?;
     let Some(hex) = extract_manifest_identity_private_key(&value) else {
@@ -1090,16 +1248,15 @@ fn extract_manifest_identity_private_key(value: &norito::json::Value) -> Option<
 }
 
 fn decode_manifest_identity_seed(hex_value: &str) -> Result<[u8; 32], String> {
-    let decoded =
-        hex::decode(hex_value).map_err(|err| format!("identity private key hex invalid: {err}"))?;
-    if decoded.len() != 32 {
+    if hex_value.len() != 64 {
         return Err(format!(
-            "identity private key hex must decode to 32 bytes (got {})",
-            decoded.len()
+            "identity private key hex must contain exactly 64 hexadecimal characters (got {})",
+            hex_value.len()
         ));
     }
     let mut seed = [0u8; 32];
-    seed.copy_from_slice(&decoded);
+    hex::decode_to_slice(hex_value, &mut seed)
+        .map_err(|error| format!("identity private key hex invalid: {error}"))?;
     Ok(seed)
 }
 
@@ -1122,13 +1279,13 @@ fn token_issuer_from_config(
         .issuer_public_key_hex
         .as_ref()
         .ok_or(TokenInitError::MissingPublicKey)?;
-    let public_key =
-        decode(public_hex).map_err(|err| TokenInitError::InvalidPublicKey(err.to_string()))?;
-    if public_key.is_empty() {
-        return Err(TokenInitError::InvalidPublicKey(
-            "decoded public key is empty".to_string(),
-        ));
-    }
+    let suite = MlDsaSuite::MlDsa44;
+    let public_key = decode_exact_hex_bytes(
+        public_hex,
+        suite.public_key_len(),
+        "admission-token issuer public key",
+    )
+    .map_err(TokenInitError::InvalidPublicKey)?;
     let issuer_fingerprint = compute_issuer_fingerprint(&public_key);
 
     let secret_path = cli
@@ -1140,25 +1297,49 @@ fn token_issuer_from_config(
         .as_ref()
         .or(token_cfg.issuer_secret_key_hex.as_ref());
 
+    let expected_secret_bytes = suite.secret_key_len();
     let secret_key_bytes = if let Some(path) = secret_path {
-        let contents = fs::read_to_string(path).map_err(|error| TokenInitError::SecretKeyIo {
-            path: path.clone(),
-            error,
-        })?;
+        let maximum = secret_file_max_bytes(expected_secret_bytes)
+            .map_err(|error| TokenInitError::InvalidSecretKey(error))?;
+        let contents =
+            read_bounded_utf8_file(path, maximum, "SoraNet admission-token issuer secret key")
+                .map_err(|error| TokenInitError::SecretKeyIo {
+                    path: path.clone(),
+                    error,
+                })?;
         let trimmed = contents.trim();
         if trimmed.is_empty() {
             return Err(TokenInitError::InvalidSecretKey(
                 "secret key file is empty".to_string(),
             ));
         }
-        decode(trimmed).map_err(|err| TokenInitError::InvalidSecretKey(err.to_string()))?
+        validate_secret_file_whitespace(&contents, trimmed)
+            .map_err(TokenInitError::InvalidSecretKey)?;
+        decode_exact_hex_bytes(
+            trimmed,
+            expected_secret_bytes,
+            "admission-token issuer secret key",
+        )
+        .map_err(TokenInitError::InvalidSecretKey)?
     } else if let Some(hex) = secret_hex {
-        decode(hex).map_err(|err| TokenInitError::InvalidSecretKey(err.to_string()))?
+        decode_exact_hex_bytes(
+            hex,
+            expected_secret_bytes,
+            "admission-token issuer secret key",
+        )
+        .map_err(TokenInitError::InvalidSecretKey)?
     } else {
         return Err(TokenInitError::MissingSecretKey);
     };
 
     let mut static_revocations = HashSet::new();
+    static_revocations
+        .try_reserve(token_cfg.revocation_list_hex.len())
+        .map_err(|_| {
+            TokenInitError::Capacity(
+                "failed to reserve the bounded static token revocation set".to_owned(),
+            )
+        })?;
     for (idx, value) in token_cfg.revocation_list_hex.iter().enumerate() {
         let entry = hex_to_fixed::<32>(value)
             .map_err(|reason| TokenInitError::InvalidRevocationHex { index: idx, reason })?;
@@ -1204,7 +1385,7 @@ fn token_issuer_from_config(
     };
 
     Ok(Some(TokenIssuer::new(
-        MlDsaSuite::MlDsa44,
+        suite,
         secret_key_bytes,
         issuer_fingerprint,
         relay_id,
@@ -1223,31 +1404,30 @@ fn load_signed_ticket_secret(opts: &SignedTicketSecretOptions) -> Result<Option<
             "set only one of --signed-ticket-secret-hex or --signed-ticket-secret-path"
         ));
     }
+    let suite = MlDsaSuite::MlDsa44;
+    let expected = suite.secret_key_len();
     let source_hex = if let Some(path) = opts.secret_path.as_ref() {
-        let contents = fs::read_to_string(path).wrap_err_with(|| {
-            format!(
-                "failed to read signed ticket secret from {}",
-                path.display()
-            )
-        })?;
-        contents.trim().to_string()
+        let maximum = secret_file_max_bytes(expected).map_err(|error| eyre!(error))?;
+        let contents = read_bounded_utf8_file(path, maximum, "SoraNet signed-ticket secret key")
+            .wrap_err_with(|| {
+                format!(
+                    "failed to read signed ticket secret from {}",
+                    path.display()
+                )
+            })?;
+        let trimmed = contents.trim();
+        validate_secret_file_whitespace(&contents, trimmed).map_err(|error| eyre!(error))?;
+        trimmed.to_owned()
     } else if let Some(hex) = &opts.secret_hex {
-        hex.trim().to_string()
+        hex.trim().to_owned()
     } else {
         String::new()
     };
     if source_hex.is_empty() {
         return Err(eyre!("signed ticket secret is empty"));
     }
-    let decoded =
-        decode(&source_hex).wrap_err_with(|| "failed to decode signed ticket secret as hex")?;
-    let expected = MlDsaSuite::MlDsa44.secret_key_len();
-    if decoded.len() != expected {
-        return Err(eyre!(
-            "signed ticket secret length invalid: expected {expected} bytes (ML-DSA-44), got {}",
-            decoded.len()
-        ));
-    }
+    let decoded = decode_exact_hex_bytes(&source_hex, expected, "signed-ticket secret key")
+        .map_err(|error| eyre!(error))?;
     Ok(Some(decoded))
 }
 
@@ -1268,12 +1448,17 @@ fn validate_signed_ticket_keypair(public_key: &[u8], secret_key: &[u8]) -> Resul
 }
 
 fn hex_to_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
-    let bytes = decode(value).map_err(|err| err.to_string())?;
-    if bytes.len() != N {
-        return Err(format!("expected {N} bytes, found {}", bytes.len()));
+    let expected = N
+        .checked_mul(2)
+        .ok_or_else(|| "hexadecimal width overflows the platform address space".to_owned())?;
+    if value.len() != expected {
+        return Err(format!(
+            "expected {expected} hexadecimal characters, found {}",
+            value.len()
+        ));
     }
     let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
+    hex::decode_to_slice(value, &mut out).map_err(|error| error.to_string())?;
     Ok(out)
 }
 
@@ -1286,19 +1471,127 @@ fn parse_revocation_contents(contents: &str) -> Result<HashSet<[u8; 32]>, String
         }
         let entry =
             hex_to_fixed::<32>(trimmed).map_err(|reason| format!("line {}: {reason}", idx + 1))?;
-        set.insert(entry);
+        if !set.contains(&entry) {
+            if set.len() >= REVOCATION_LIST_MAX_ENTRIES_V1 {
+                return Err(format!(
+                    "revocation list exceeds the first-release limit of {REVOCATION_LIST_MAX_ENTRIES_V1} unique entries"
+                ));
+            }
+            set.try_reserve(1)
+                .map_err(|_| "failed to reserve the bounded revocation set".to_owned())?;
+            set.insert(entry);
+        }
     }
     Ok(set)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{fmt::Write as _, fs, num::NonZeroU32};
 
     use iroha_crypto::soranet::{pow::ChallengeBinding, token::AdmissionTokenVerifier};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
 
     use super::*;
+
+    fn temporary_file_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "soranet_puzzle_{label}_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn bounded_utf8_reader_accepts_exact_limit_and_rejects_plus_one() {
+        let path = temporary_file_path("bounded_utf8");
+        fs::write(&path, b"12345678").expect("write exact fixture");
+        assert_eq!(
+            read_bounded_utf8_file(&path, 8, "fixture").expect("read exact fixture"),
+            "12345678"
+        );
+        fs::write(&path, b"123456789").expect("write oversized fixture");
+        assert!(read_bounded_utf8_file(&path, 8, "fixture").is_err());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn exact_secret_hex_and_whitespace_boundaries_are_enforced() {
+        let encoded = "ab".repeat(32);
+        assert_eq!(
+            decode_exact_hex_bytes(&encoded, 32, "fixture secret").expect("decode exact secret"),
+            vec![0xab; 32]
+        );
+        assert!(
+            decode_exact_hex_bytes(&encoded[..encoded.len() - 2], 32, "fixture secret").is_err()
+        );
+
+        let exact_raw = format!(
+            "{}{encoded}",
+            " ".repeat(SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1)
+        );
+        validate_secret_file_whitespace(&exact_raw, exact_raw.trim())
+            .expect("exact surrounding whitespace");
+        let oversized_raw = format!(
+            "{}{encoded}",
+            " ".repeat(SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 + 1)
+        );
+        assert!(validate_secret_file_whitespace(&oversized_raw, oversized_raw.trim()).is_err());
+    }
+
+    #[test]
+    fn revocation_parser_caps_unique_retained_entries() {
+        let mut exact = String::new();
+        for index in 0..REVOCATION_LIST_MAX_ENTRIES_V1 {
+            writeln!(&mut exact, "{index:064x}").expect("write revocation fixture");
+        }
+        let entries = parse_revocation_contents(&exact).expect("exact revocation set");
+        assert_eq!(entries.len(), REVOCATION_LIST_MAX_ENTRIES_V1);
+
+        writeln!(&mut exact, "{:064x}", REVOCATION_LIST_MAX_ENTRIES_V1)
+            .expect("write overflow entry");
+        assert!(parse_revocation_contents(&exact).is_err());
+    }
+
+    #[test]
+    fn descriptor_manifest_reader_rejects_raw_limit_plus_one() {
+        let path = temporary_file_path("descriptor_manifest_max_plus_one");
+        let file = fs::File::create(&path).expect("create descriptor fixture");
+        file.set_len(
+            u64::try_from(SRC_V2_MAX_BUNDLE_BYTES + 1).expect("descriptor limit fits u64"),
+        )
+        .expect("size descriptor fixture");
+        assert!(identity_seed_from_manifest(&path).is_err());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn signed_ticket_secret_file_uses_source_derived_limit() {
+        let expected = MlDsaSuite::MlDsa44.secret_key_len();
+        let path = temporary_file_path("signed_ticket_secret");
+        fs::write(&path, "00".repeat(expected)).expect("write exact secret fixture");
+        let options = SignedTicketSecretOptions {
+            secret_hex: None,
+            secret_path: Some(path.clone()),
+        };
+        assert_eq!(
+            load_signed_ticket_secret(&options)
+                .expect("load exact secret")
+                .expect("secret present")
+                .len(),
+            expected
+        );
+        fs::write(
+            &path,
+            "0".repeat(secret_file_max_bytes(expected).expect("secret limit") + 1),
+        )
+        .expect("write oversized secret fixture");
+        assert!(load_signed_ticket_secret(&options).is_err());
+        let _ = fs::remove_file(path);
+    }
 
     fn base_service() -> PuzzleService {
         let pow_params = PowParameters::new(5, Duration::from_secs(120), Duration::from_secs(30));

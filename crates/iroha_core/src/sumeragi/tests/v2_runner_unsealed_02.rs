@@ -446,9 +446,9 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         proposer: context.leader(round.view),
         subject,
         manifest,
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification { certificate: None },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
         signature: Vec::new(),
     };
     let effects = [
@@ -530,8 +530,9 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
 
 #[test]
 fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
+    let (context, _) = context();
     assert_eq!(
-        outer_ingress_turns(3).collect::<Vec<_>>(),
+        outer_ingress_turns(3, context.id(), context.height).collect::<Vec<_>>(),
         vec![
             OuterIngressTurn::Completion,
             OuterIngressTurn::Runtime,
@@ -545,7 +546,7 @@ fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
         ]
     );
     assert_eq!(
-        outer_ingress_turns(0).collect::<Vec<_>>(),
+        outer_ingress_turns(0, context.id(), context.height).collect::<Vec<_>>(),
         vec![
             OuterIngressTurn::Completion,
             OuterIngressTurn::Runtime,
@@ -892,13 +893,11 @@ fn complete_tip_recovery_uses_the_same_live_successor_boundary() {
             Hash::new(b"foreign recovered successor context"),
         ));
     let predecessor = test_predecessor(&parent_context, b"complete tip recovery");
-    let foreign_activation = PendingSuccessorActivation::recovered(
-        RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
-            predecessor,
-            foreign_context_id,
-        )),
-    )
-    .expect("authenticate complete-tip retry lifecycle");
+    let foreign_activation =
+        PendingSuccessorActivation::recovered(RecoveredSuccessorActivationAuthority::CompleteTip(
+            test_successor_authority(predecessor, foreign_context_id),
+        ))
+        .expect("authenticate complete-tip retry lifecycle");
     assert!(
         open_ingress_for_active_height(
             output_guard.as_ref(),
@@ -915,13 +914,11 @@ fn complete_tip_recovery_uses_the_same_live_successor_boundary() {
         "rejected recovery must not publish a successor"
     );
 
-    let activation = PendingSuccessorActivation::recovered(
-        RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
-            predecessor,
-            successor.height_context_id,
-        )),
-    )
-    .expect("authenticate complete-tip retry lifecycle");
+    let activation =
+        PendingSuccessorActivation::recovered(RecoveredSuccessorActivationAuthority::CompleteTip(
+            test_successor_authority(predecessor, successor.height_context_id),
+        ))
+        .expect("authenticate complete-tip retry lifecycle");
     open_ingress_for_active_height(
         output_guard.as_ref(),
         &ready,

@@ -245,6 +245,18 @@ where
         JsonSerialize::json_serialize(&self.object, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -258,6 +270,18 @@ where
         out.push_str("\"object\":");
         JsonSerialize::json_serialize(&self.object, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -602,6 +626,28 @@ mod tests {
 
     fn role_id() -> RoleId {
         "auditor".parse().expect("role id")
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn register_and_unregister_json_match_legacy_bytes_at_exact_bounds() {
+        assert_exact_json(&Register::domain(Domain::new(domain_id())));
+        assert_exact_json(&Register::account(Account::new(account(0x64))));
+        assert_exact_json(&Unregister::domain(domain_id()));
+        assert_exact_json(&Unregister::account(account(0x65)));
     }
 
     fn register_peer_with_pop() -> RegisterPeerWithPop {

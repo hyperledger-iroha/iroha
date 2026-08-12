@@ -1,15 +1,15 @@
 // Evaluated-key runtime implementation included at parent-module scope.
 /// Reusable, non-secret runtime context for the exact 32-key evaluated-key set.
 ///
-/// Construction validates the governed roster, all eight ordered proof-carrying
-/// collective-public-key shares, and the complete manifest exactly once. It
-/// retains only the small manifest table and verified aggregate CPK; individual
-/// ~1.5 GiB evaluated-key payloads remain provider-streamed one at a time.
+/// Construction validates the governed roster, compact sealed key binding, and
+/// complete evaluated-key manifest exactly once. It retains only fixed key
+/// identity digests plus the small manifest table; neither the native `2P`
+/// collective key nor any ~1.5 GiB evaluated-key payload remains resident.
 #[derive(Debug)]
-pub(super) struct ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
+pub struct ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     profile: BgvProfile,
     wire_roster: ZkAmsMkheGovernedRosterWireV1,
-    collective_key: ZkAmsMkheCollectivePublicKeyV1,
+    eval_key_binding: super::collective::ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
     transcript_digest: [u8; 32],
     manifest_digest: [u8; 32],
     entries: Vec<ZkAmsMkheCollectiveEvaluatedKeyEntryV1>,
@@ -20,20 +20,26 @@ pub(super) struct ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
 /// One canonical seekable evaluated key validated for one reusable runtime.
 ///
 /// This wrapper never owns a wire payload. It retains only the authenticated
-/// header, provider/snapshot binding, and one fixed offset/digest record per
-/// hybrid digit. It cannot be constructed without incrementally hashing and
-/// parsing the complete canonical entry.
+/// header, provider/snapshot binding, and fixed offset/digest records for every
+/// digit and residue limb. It cannot be constructed without incrementally
+/// hashing and parsing the complete canonical entry and proving that each ZARK
+/// digit matches the expected compact output committed by the consumed CKS
+/// evidence receipts.
 #[derive(PartialEq, Eq)]
-pub(super) struct ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
+pub struct ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     runtime_context_digest: [u8; 32],
     entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
     sorafs_pointer: ZkAmsMkheEvaluatedKeySorafsPointerV1,
     provider_identity: [u8; 32],
     snapshot_identity: [u8; 32],
     provider_binding_digest: [u8; 32],
+    limb_index_digest: [u8; 32],
     a_master_seed: [u8; 32],
     contribution_proof_digest: [u8; 32],
+    evidence_set_capability_seal: [u8; 32],
+    cks_compact_output_set_digest: [u8; 32],
     digits: Vec<SeekableEvaluatedKeyDigitV1>,
+    limbs: Vec<SeekableEvaluatedKeyLimbV1>,
 }
 
 impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
@@ -48,6 +54,7 @@ impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
             .field("provider_identity", &hex::encode(self.provider_identity))
             .field("snapshot_identity", &hex::encode(self.snapshot_identity))
             .field("stored_digits", &self.digits.len())
+            .field("stored_limbs", &self.limbs.len())
             .finish()
     }
 }
@@ -72,13 +79,37 @@ impl ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     }
 }
 
+fn consume_evidence_set_before_provider_v1(
+    evidence_set: ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
+    expected: evidence_set::EvidenceSetRuntimeBindingV1,
+) -> Result<evidence_set::VerifiedEvidenceSetRuntimeAdmissionV1, ZkAmsMkheErrorV1> {
+    evidence_set.consume_for_runtime_v1(expected)
+}
+
 impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
-    /// Validate the aggregate CPK and exact consensus-bound key-set manifest once.
+    /// Construct the reusable runtime from the compact evaluated-key binding.
+    /// The native `2P` key was already dropped during CPK finalization.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(super) fn new_from_compact_cpk_v1(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         transcript_digest: [u8; 32],
-        shares: [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        eval_key_binding: super::collective::ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
+        manifest: &ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
+        expected_manifest_digest: [u8; 32],
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        Self::new_with_eval_key_binding_v1(
+            roster,
+            transcript_digest,
+            eval_key_binding,
+            manifest,
+            expected_manifest_digest,
+        )
+    }
+
+    fn new_with_eval_key_binding_v1(
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        transcript_digest: [u8; 32],
+        eval_key_binding: super::collective::ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
         manifest: &ZkAmsMkheCollectiveEvaluatedKeyManifestV1,
         expected_manifest_digest: [u8; 32],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -89,9 +120,16 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         }
         let profile = release_profile_v1();
         profile.validate()?;
+        eval_key_binding.validate_release_v1()?;
+        if eval_key_binding.profile_digest() != roster.profile_digest()
+            || eval_key_binding.roster_digest() != roster.roster_digest()
+            || eval_key_binding.key_material_digest() != roster.key_material_digest()
+            || eval_key_binding.epoch() != roster.epoch()
+            || eval_key_binding.transcript_digest() != transcript_digest
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
         let wire_roster = roster.to_wire_roster()?;
-        let collective_key =
-            aggregate_zk_ams_mkhe_collective_public_key_v1(roster, transcript_digest, shares)?;
         let manifest_bytes = manifest.encode(&wire_roster)?;
         let decoded = ZkAmsMkheCollectiveEvaluatedKeyManifestV1::decode_exact(
             &manifest_bytes,
@@ -104,26 +142,35 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         if decoded != *manifest {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-        let mut runtime_frame = Vec::with_capacity(256);
-        runtime_frame.extend_from_slice(EVALUATED_KEY_RUNTIME_DOMAIN_V1);
-        runtime_frame.push(MKHE_VERSION_V1);
-        runtime_frame.extend_from_slice(&wire_roster.profile_digest());
-        runtime_frame.extend_from_slice(&wire_roster.roster_digest());
-        runtime_frame.extend_from_slice(&wire_roster.epoch().to_be_bytes());
-        runtime_frame.extend_from_slice(&transcript_digest);
-        runtime_frame.extend_from_slice(&collective_key.digest());
-        runtime_frame.extend_from_slice(&expected_manifest_digest);
-        let runtime_context_digest = keccak256(&runtime_frame);
+        let mut runtime_hash = Keccak256::new();
+        runtime_hash.update(EVALUATED_KEY_RUNTIME_DOMAIN_V1);
+        runtime_hash.update(&[MKHE_VERSION_V1]);
+        runtime_hash.update(&wire_roster.profile_digest());
+        runtime_hash.update(&wire_roster.roster_digest());
+        runtime_hash.update(&wire_roster.epoch().to_be_bytes());
+        runtime_hash.update(&transcript_digest);
+        runtime_hash.update(&eval_key_binding.key_digest());
+        runtime_hash.update(&eval_key_binding.binding_digest());
+        runtime_hash.update(&expected_manifest_digest);
+        let runtime_context_digest = runtime_hash.finalize();
         if runtime_context_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(manifest.entries().len())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if entries.capacity() != manifest.entries().len() {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        entries.extend_from_slice(manifest.entries());
         Ok(Self {
             profile,
             wire_roster,
-            collective_key,
+            eval_key_binding,
             transcript_digest,
             manifest_digest: expected_manifest_digest,
-            entries: manifest.entries().to_vec(),
+            entries,
             sorafs_pointer: manifest.sorafs(),
             runtime_context_digest,
         })
@@ -132,7 +179,7 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     /// Verified aggregate collective-public-key digest.
     #[must_use]
     pub const fn collective_key_digest(&self) -> [u8; 32] {
-        self.collective_key.digest()
+        self.eval_key_binding.key_digest()
     }
 
     /// Exact consensus-bound evaluated-key manifest digest.
@@ -143,22 +190,40 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
 
     /// Incrementally authenticate and index one exact manifest entry.
     ///
+    /// The move-only evidence capability is consumed and fully checked before
+    /// the provider is inspected. The scan then proves that every streamed
+    /// ZARK digit equals the corresponding expected CKS compact output before
+    /// this validated handle is returned.
+    ///
     /// The full entry is read exactly once in bounded chunks. No complete wire,
     /// encoded copy, or decoded digit vector is ever allocated.
     pub fn validate_seekable_key_provider<P>(
         &self,
         ordinal: usize,
+        evidence_set: ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
         provider: &mut P,
     ) -> Result<ZkAmsMkheValidatedCollectiveEvaluatedKeyV1, ZkAmsMkheErrorV1>
     where
         P: ZkAmsMkheCollectiveEvaluatedKeyProviderV1 + ?Sized,
     {
         let entry = self.entry(ordinal)?;
+        let evidence_admission = consume_evidence_set_before_provider_v1(
+            evidence_set,
+            evidence_set::EvidenceSetRuntimeBindingV1 {
+                entry,
+                profile_digest: self.wire_roster.profile_digest(),
+                roster_digest: self.wire_roster.roster_digest(),
+                key_material_digest: self.eval_key_binding.key_material_digest(),
+                epoch: self.wire_roster.epoch(),
+                transcript_digest: self.transcript_digest,
+                collective_key_digest: self.eval_key_binding.key_digest(),
+            },
+        )?;
         let contribution_proof_digest = evaluated_key_evidence_digest(
             entry.purpose(),
             entry.ordinal(),
             entry.galois_exponent(),
-            self.collective_key.digest(),
+            self.eval_key_binding.key_digest(),
             entry.source_proof_set_digest(),
             entry.cks_proof_set_digest(),
         )?;
@@ -172,7 +237,9 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
                 roster_digest: self.wire_roster.roster_digest(),
                 epoch: self.wire_roster.epoch(),
                 transcript_digest: self.transcript_digest,
+                collective_key_digest: self.eval_key_binding.key_digest(),
                 contribution_proof_digest,
+                cks_compact_output_set_digest: evidence_admission.cks_compact_output_set_digest,
             },
             provider,
         )?;
@@ -182,6 +249,9 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             validation.state,
             validation.a_master_seed,
             validation.contribution_proof_digest,
+            evidence_admission.capability_seal,
+            evidence_admission.cks_compact_output_set_digest,
+            validation.limb_index_digest,
         );
         if provider_binding_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -193,9 +263,13 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             provider_identity: validation.state.provider_identity,
             snapshot_identity: validation.state.snapshot_identity,
             provider_binding_digest,
+            limb_index_digest: validation.limb_index_digest,
             a_master_seed: validation.a_master_seed,
             contribution_proof_digest: validation.contribution_proof_digest,
+            evidence_set_capability_seal: evidence_admission.capability_seal,
+            cks_compact_output_set_digest: evidence_admission.cks_compact_output_set_digest,
             digits: validation.digits,
+            limbs: validation.limbs,
         })
     }
 
@@ -247,16 +321,27 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             || key.provider_identity == [0; 32]
             || key.snapshot_identity == [0; 32]
             || key.a_master_seed == [0; 32]
+            || key.limb_index_digest == [0; 32]
+            || key.evidence_set_capability_seal == [0; 32]
+            || key.cks_compact_output_set_digest == [0; 32]
             || key.contribution_proof_digest
                 != evaluated_key_evidence_digest(
                     key.entry.purpose(),
                     key.entry.ordinal(),
                     key.entry.galois_exponent(),
-                    self.collective_key.digest(),
+                    self.eval_key_binding.key_digest(),
                     key.entry.source_proof_set_digest(),
                     key.entry.cks_proof_set_digest(),
                 )?
             || key.digits.len() != self.profile.gadget_digits
+            || key.limbs.len()
+                != self
+                    .profile
+                    .gadget_digits
+                    .checked_mul(self.profile.moduli.len())
+                    .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            || key.limb_index_digest
+                != seekable_evaluated_key_limb_index_digest(key.entry, &key.limbs)?
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -272,6 +357,9 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             state,
             key.a_master_seed,
             key.contribution_proof_digest,
+            key.evidence_set_capability_seal,
+            key.cks_compact_output_set_digest,
+            key.limb_index_digest,
         ) != key.provider_binding_digest
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -291,42 +379,53 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         validate_bound_seekable_provider_state(key, provider)
     }
 
-    fn stored_b_digit<P>(
+    fn stored_b_limb<P>(
         &self,
         key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
         provider: &mut P,
         digit_index: usize,
-    ) -> Result<RnsPolynomial, ZkAmsMkheErrorV1>
+        limb_index: usize,
+        output: &mut [u64],
+    ) -> Result<(), ZkAmsMkheErrorV1>
     where
         P: ZkAmsMkheCollectiveEvaluatedKeyProviderV1 + ?Sized,
     {
-        self.validate_provider_state(key, provider)?;
-        let stored_b =
-            read_seekable_evaluated_key_digit(&self.profile, key, provider, digit_index)?;
-        self.validate_provider_state(key, provider)?;
-        Ok(stored_b)
+        // The immutable key/context binding is checked once immediately
+        // outside the switch core. Repeating it here would allocate its
+        // evidence frame at the arithmetic peak for every limb.
+        validate_bound_seekable_provider_state(key, provider)?;
+        read_seekable_evaluated_key_limb(
+            &self.profile,
+            key,
+            provider,
+            digit_index,
+            limb_index,
+            output,
+        )?;
+        validate_bound_seekable_provider_state(key, provider)?;
+        Ok(())
     }
 
-    fn seeded_a_digit(
+    fn seeded_a_limb(
         &self,
         key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
         digit_index: usize,
-    ) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
-        let seeded_a = derive_target_a(
+        limb_index: usize,
+        output: &mut [u64],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        derive_target_a_limb(
             &self.profile,
             &self.wire_roster,
-            self.collective_key.transcript_digest(),
-            self.collective_key.digest(),
+            self.eval_key_binding.transcript_digest(),
+            self.eval_key_binding.key_digest(),
             key.entry.purpose(),
             key.entry.ordinal(),
             key.entry.galois_exponent(),
             key.a_master_seed,
             digit_index,
-        )?;
-        if seeded_a.coefficients.capacity() != seeded_a.coefficients.len() {
-            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
-        }
-        Ok(seeded_a)
+            limb_index,
+            output,
+        )
     }
 
     fn output_lineage(
@@ -335,16 +434,121 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         input_digest: [u8; 32],
     ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate_key_context(key)?;
-        let mut frame = Vec::with_capacity(192);
-        frame.extend_from_slice(EVALUATED_KEY_LINEAGE_DOMAIN_V1);
-        frame.extend_from_slice(&[MKHE_VERSION_V1, key.entry.purpose() as u8]);
-        frame.extend_from_slice(&key.entry.galois_exponent().to_be_bytes());
-        frame.extend_from_slice(&self.collective_key.digest());
-        frame.extend_from_slice(&self.manifest_digest);
-        frame.extend_from_slice(&key.entry.payload_blake3());
-        frame.extend_from_slice(&input_digest);
-        Ok(keccak256(&frame))
+        let mut hash = Keccak256::new();
+        hash.update(EVALUATED_KEY_LINEAGE_DOMAIN_V1);
+        hash.update(&[MKHE_VERSION_V1, key.entry.purpose() as u8]);
+        hash.update(&key.entry.galois_exponent().to_be_bytes());
+        hash.update(&self.eval_key_binding.key_digest());
+        hash.update(&self.manifest_digest);
+        hash.update(&key.entry.payload_blake3());
+        hash.update(&input_digest);
+        let digest = hash.finalize();
+        if digest == [0; 32] {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        Ok(digest)
     }
+}
+
+fn read_seekable_evaluated_key_limb<P>(
+    profile: &BgvProfile,
+    key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
+    provider: &mut P,
+    digit_index: usize,
+    limb_index: usize,
+    output: &mut [u64],
+) -> Result<(), ZkAmsMkheErrorV1>
+where
+    P: ZkAmsMkheCollectiveEvaluatedKeyProviderV1 + ?Sized,
+{
+    let layout = seekable_evaluated_key_layout(profile)?;
+    if digit_index >= profile.gadget_digits
+        || limb_index >= profile.moduli.len()
+        || output.len() != profile.ring_degree
+        || key.limb_index_digest == [0; 32]
+        || key.limb_index_digest != seekable_evaluated_key_limb_index_digest(key.entry, &key.limbs)?
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let limb_bytes = u64::try_from(
+        profile
+            .ring_degree
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+    )
+    .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let metadata_index = digit_index
+        .checked_mul(profile.moduli.len())
+        .and_then(|value| value.checked_add(limb_index))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let metadata = *key
+        .limbs
+        .get(metadata_index)
+        .ok_or(ZkAmsMkheErrorV1::MissingEvaluatedKey)?;
+    let expected_offset = key
+        .entry
+        .payload_offset()
+        .checked_add(
+            u64::try_from(SEEKABLE_EVALUATED_KEY_HEADER_BYTES_V1)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        )
+        .and_then(|value| {
+            layout
+                .digit_record_bytes
+                .checked_mul(u64::try_from(digit_index).ok()?)
+                .and_then(|digit| value.checked_add(digit))
+        })
+        .and_then(|value| {
+            value.checked_add(u64::try_from(SEEKABLE_EVALUATED_KEY_DIGIT_PREFIX_BYTES_V1).ok()?)
+        })
+        .and_then(|value| {
+            limb_bytes
+                .checked_mul(u64::try_from(limb_index).ok()?)
+                .and_then(|limb| value.checked_add(limb))
+        })
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if metadata.absolute_offset != expected_offset || metadata.canonical_bytes != limb_bytes {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let expected_state = validated_key_provider_state(key);
+    seekable_provider_seek_exact(provider, expected_state, metadata.absolute_offset)?;
+    let mut hasher = seekable_evaluated_key_limb_hasher(
+        digit_index,
+        limb_index,
+        profile.moduli[limb_index],
+        metadata.absolute_offset,
+        metadata.canonical_bytes,
+    )?;
+    let mut buffer = [0_u8; SEEKABLE_EVALUATED_KEY_READ_BYTES_V1];
+    let mut coefficient = 0_usize;
+    let mut remaining = usize::try_from(metadata.canonical_bytes)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    while remaining != 0 {
+        let take = remaining.min(buffer.len());
+        seekable_provider_read_exact(provider, expected_state, &mut buffer[..take])?;
+        hasher.update(&buffer[..take]);
+        for encoded in buffer[..take].chunks_exact(core::mem::size_of::<u64>()) {
+            let residue = u64::from_be_bytes(
+                encoded
+                    .try_into()
+                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+            );
+            if residue >= profile.moduli[limb_index] {
+                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+            }
+            *output
+                .get_mut(coefficient)
+                .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)? = residue;
+            coefficient = coefficient
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        }
+        remaining -= take;
+    }
+    if coefficient != profile.ring_degree || hasher.finalize() != metadata.blake3 {
+        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+    }
+    Ok(())
 }
 
 /// One coefficient-major CRT/radix pass hoisted across a bounded digit batch.
@@ -573,7 +777,7 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
         })
     }
 
-    fn digit(&self, digit_index: usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
+    fn signed_digit(&self, digit_index: usize) -> Result<&[i64], ZkAmsMkheErrorV1> {
         let end_digit = self
             .first_digit
             .checked_add(self.digit_count)
@@ -587,11 +791,30 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
         let end = start
             .checked_add(self.profile.ring_degree)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let signed_digit = self
-            .signed_digits
+        self.signed_digits
             .get(start..end)
-            .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
-        rns_from_signed_exact(self.profile, signed_digit)
+            .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)
+    }
+
+    fn fill_digit_limb(
+        &self,
+        digit_index: usize,
+        limb_index: usize,
+        output: &mut [u64],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        if limb_index >= self.profile.moduli.len() || output.len() != self.profile.ring_degree {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+        let modulus = self.profile.moduli[limb_index];
+        for (output, value) in output.iter_mut().zip(self.signed_digit(digit_index)?) {
+            *output = signed_mod(*value, modulus);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn digit(&self, digit_index: usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
+        rns_from_signed_exact(self.profile, self.signed_digit(digit_index)?)
     }
 }
 
@@ -651,6 +874,7 @@ fn inverse_odd_mod_power_of_two(value: usize, modulus: usize) -> Result<usize, Z
     usize::try_from(inverse).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
 
+#[cfg(test)]
 fn rns_from_signed_exact(
     profile: &BgvProfile,
     values: &[i64],
@@ -696,84 +920,122 @@ fn clone_rns_exact(
     RnsPolynomial::from_flat(profile, coefficients)
 }
 
-fn negacyclic_multiply_exact(
-    left: &[u64],
-    right: &[u64],
-    modulus: u64,
-    psi: u64,
-) -> Result<Vec<u64>, ZkAmsMkheErrorV1> {
-    if left.len() != right.len() || left.is_empty() || !left.len().is_power_of_two() {
-        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
-    }
-    let mut left_twisted = Vec::new();
-    let mut right_twisted = Vec::new();
-    left_twisted
-        .try_reserve_exact(left.len())
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    right_twisted
-        .try_reserve_exact(right.len())
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    if left_twisted.capacity() != left.len() || right_twisted.capacity() != right.len() {
-        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
-    }
-    let mut twist = 1_u64;
-    for (&left, &right) in left.iter().zip(right) {
-        left_twisted.push(super::mod_mul(left, twist, modulus));
-        right_twisted.push(super::mod_mul(right, twist, modulus));
-        twist = super::mod_mul(twist, psi, modulus);
-    }
-    let root = super::mod_mul(psi, psi, modulus);
-    super::cyclic_ntt(&mut left_twisted, root, modulus);
-    super::cyclic_ntt(&mut right_twisted, root, modulus);
-    for (left, right) in left_twisted.iter_mut().zip(&right_twisted) {
-        *left = super::mod_mul(*left, *right, modulus);
-    }
-    drop(right_twisted);
-    super::inverse_cyclic_ntt(&mut left_twisted, root, modulus)?;
-    let inverse_psi = super::mod_inverse(psi, modulus).ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-    let mut untwist = 1_u64;
-    for value in &mut left_twisted {
-        *value = super::mod_mul(*value, untwist, modulus);
-        untwist = super::mod_mul(untwist, inverse_psi, modulus);
-    }
-    Ok(left_twisted)
+struct KeySwitchLimbWorkspaceV1 {
+    evaluated_key: Vec<u64>,
+    signed_digit: Vec<u64>,
 }
 
-fn multiply_accumulate_in_place(
+#[cfg(test)]
+std::thread_local! {
+    static KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn reset_key_switch_limb_workspace_zeroized_drops_v1() {
+    KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
+}
+
+#[cfg(test)]
+fn key_switch_limb_workspace_zeroized_drops_v1() -> usize {
+    KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1.with(std::cell::Cell::get)
+}
+
+impl KeySwitchLimbWorkspaceV1 {
+    fn new(profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut evaluated_key = Vec::new();
+        let mut signed_digit = Vec::new();
+        evaluated_key
+            .try_reserve_exact(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        signed_digit
+            .try_reserve_exact(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if evaluated_key.capacity() != profile.ring_degree
+            || signed_digit.capacity() != profile.ring_degree
+        {
+            return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        }
+        evaluated_key.resize(profile.ring_degree, 0);
+        signed_digit.resize(profile.ring_degree, 0);
+        Ok(Self {
+            evaluated_key,
+            signed_digit,
+        })
+    }
+}
+
+impl Drop for KeySwitchLimbWorkspaceV1 {
+    fn drop(&mut self) {
+        let evaluated_key = core::hint::black_box(&mut self.evaluated_key);
+        evaluated_key.fill(0);
+        let signed_digit = core::hint::black_box(&mut self.signed_digit);
+        signed_digit.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if evaluated_key.iter().all(|value| *value == 0)
+            && signed_digit.iter().all(|value| *value == 0)
+        {
+            let _ = KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        let _ = core::hint::black_box(&mut *evaluated_key);
+        let _ = core::hint::black_box(&mut *signed_digit);
+    }
+}
+
+fn multiply_accumulate_limb_in_place(
     profile: &BgvProfile,
     accumulator: &mut RnsPolynomial,
-    plaintext_digit: &RnsPolynomial,
-    evaluated_key_digit: &RnsPolynomial,
+    limb_index: usize,
+    evaluated_key: &mut [u64],
+    signed_digit: &mut [u64],
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    accumulator.validate(profile)?;
-    plaintext_digit.validate(profile)?;
-    evaluated_key_digit.validate(profile)?;
-    let coefficient_count = profile
-        .ring_degree
-        .checked_mul(profile.moduli.len())
-        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    if accumulator.coefficients.capacity() != coefficient_count
-        || plaintext_digit.coefficients.capacity() != coefficient_count
-        || evaluated_key_digit.coefficients.capacity() != coefficient_count
+    if limb_index >= profile.moduli.len()
+        || evaluated_key.len() != profile.ring_degree
+        || signed_digit.len() != profile.ring_degree
+        || evaluated_key.is_empty()
+        || !evaluated_key.len().is_power_of_two()
     {
-        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
-    for limb in 0..profile.moduli.len() {
-        let product = negacyclic_multiply_exact(
-            plaintext_digit.limb(profile, limb),
-            evaluated_key_digit.limb(profile, limb),
-            profile.moduli[limb],
-            profile.negacyclic_roots[limb],
-        )?;
-        let start = limb
-            .checked_mul(profile.ring_degree)
-            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let end = start
-            .checked_add(profile.ring_degree)
-            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        for (output, contribution) in accumulator.coefficients[start..end].iter_mut().zip(product) {
-            *output = super::mod_add(*output, contribution, profile.moduli[limb]);
-        }
+    let modulus = profile.moduli[limb_index];
+    if evaluated_key.iter().any(|value| *value >= modulus)
+        || signed_digit.iter().any(|value| *value >= modulus)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let psi = profile.negacyclic_roots[limb_index];
+    let mut twist = 1_u64;
+    for (evaluated_key, signed_digit) in evaluated_key.iter_mut().zip(signed_digit.iter_mut()) {
+        *evaluated_key = mod_mul(*evaluated_key, twist, modulus);
+        *signed_digit = mod_mul(*signed_digit, twist, modulus);
+        twist = mod_mul(twist, psi, modulus);
+    }
+    let root = mod_mul(psi, psi, modulus);
+    super::cyclic_ntt(evaluated_key, root, modulus);
+    super::cyclic_ntt(signed_digit, root, modulus);
+    for (evaluated_key, signed_digit) in evaluated_key.iter_mut().zip(signed_digit.iter()) {
+        *evaluated_key = mod_mul(*evaluated_key, *signed_digit, modulus);
+    }
+    super::inverse_cyclic_ntt(evaluated_key, root, modulus)?;
+    let inverse_psi = super::mod_inverse(psi, modulus).ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
+    let start = limb_index
+        .checked_mul(profile.ring_degree)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let end = start
+        .checked_add(profile.ring_degree)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let accumulator = accumulator
+        .coefficients
+        .get_mut(start..end)
+        .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+    let mut untwist = 1_u64;
+    for (output, contribution) in accumulator.iter_mut().zip(evaluated_key.iter_mut()) {
+        *contribution = mod_mul(*contribution, untwist, modulus);
+        *output = mod_add(*output, *contribution, modulus);
+        untwist = mod_mul(untwist, inverse_psi, modulus);
     }
     Ok(())
 }
@@ -797,35 +1059,41 @@ fn observe_seekable_liveness(bytes: u64) {
 fn observe_seekable_liveness(_bytes: u64) {}
 
 #[cfg(test)]
-fn apply_compact_switch_streamed_core<StoredB, SeededA>(
+fn apply_compact_switch_streamed_core<StoredBLimb, SeededALimb>(
     profile: &BgvProfile,
     constant: RnsPolynomial,
     linear: RnsPolynomial,
     switched: &RnsPolynomial,
-    stored_b: StoredB,
-    seeded_a: SeededA,
+    stored_b_limb: StoredBLimb,
+    seeded_a_limb: SeededALimb,
 ) -> Result<(RnsPolynomial, RnsPolynomial), ZkAmsMkheErrorV1>
 where
-    StoredB: FnMut(usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1>,
-    SeededA: FnMut(usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1>,
+    StoredBLimb: FnMut(usize, usize, &mut [u64]) -> Result<(), ZkAmsMkheErrorV1>,
+    SeededALimb: FnMut(usize, usize, &mut [u64]) -> Result<(), ZkAmsMkheErrorV1>,
 {
     apply_compact_switch_streamed_core_with_automorphism(
-        profile, constant, linear, switched, None, stored_b, seeded_a,
+        profile,
+        constant,
+        linear,
+        switched,
+        None,
+        stored_b_limb,
+        seeded_a_limb,
     )
 }
 
-fn apply_compact_switch_streamed_core_with_automorphism<StoredB, SeededA>(
+fn apply_compact_switch_streamed_core_with_automorphism<StoredBLimb, SeededALimb>(
     profile: &BgvProfile,
     mut constant: RnsPolynomial,
     mut linear: RnsPolynomial,
     switched: &RnsPolynomial,
     switched_automorphism: Option<usize>,
-    mut stored_b: StoredB,
-    mut seeded_a: SeededA,
+    mut stored_b_limb: StoredBLimb,
+    mut seeded_a_limb: SeededALimb,
 ) -> Result<(RnsPolynomial, RnsPolynomial), ZkAmsMkheErrorV1>
 where
-    StoredB: FnMut(usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1>,
-    SeededA: FnMut(usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1>,
+    StoredBLimb: FnMut(usize, usize, &mut [u64]) -> Result<(), ZkAmsMkheErrorV1>,
+    SeededALimb: FnMut(usize, usize, &mut [u64]) -> Result<(), ZkAmsMkheErrorV1>,
 {
     let accounting = seekable_evaluated_key_accounting(profile)?;
     if accounting.peak_managed_workspace_bytes
@@ -847,6 +1115,7 @@ where
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     observe_seekable_liveness(accounting.output_accumulator_bytes);
+    let mut workspace = KeySwitchLimbWorkspaceV1::new(profile)?;
     let mut first_digit = 0_usize;
     while first_digit < profile.gadget_digits {
         let digit_count =
@@ -866,19 +1135,30 @@ where
         let end_digit = first_digit
             .checked_add(digit_count)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        observe_seekable_liveness(accounting.decomposition_phase_bytes);
         for digit_index in first_digit..end_digit {
-            let plaintext_digit = hoisted.digit(digit_index)?;
-            observe_seekable_liveness(accounting.decomposition_phase_bytes);
-            {
+            for limb_index in 0..profile.moduli.len() {
                 observe_seekable_liveness(accounting.provider_read_phase_bytes);
-                let stored_b = stored_b(digit_index)?;
+                stored_b_limb(digit_index, limb_index, &mut workspace.evaluated_key)?;
+                hoisted.fill_digit_limb(digit_index, limb_index, &mut workspace.signed_digit)?;
                 observe_seekable_liveness(accounting.multiplication_phase_bytes);
-                multiply_accumulate_in_place(profile, &mut constant, &plaintext_digit, &stored_b)?;
-            }
-            {
-                let seeded_a = seeded_a(digit_index)?;
+                multiply_accumulate_limb_in_place(
+                    profile,
+                    &mut constant,
+                    limb_index,
+                    &mut workspace.evaluated_key,
+                    &mut workspace.signed_digit,
+                )?;
+                seeded_a_limb(digit_index, limb_index, &mut workspace.evaluated_key)?;
+                hoisted.fill_digit_limb(digit_index, limb_index, &mut workspace.signed_digit)?;
                 observe_seekable_liveness(accounting.multiplication_phase_bytes);
-                multiply_accumulate_in_place(profile, &mut linear, &plaintext_digit, &seeded_a)?;
+                multiply_accumulate_limb_in_place(
+                    profile,
+                    &mut linear,
+                    limb_index,
+                    &mut workspace.evaluated_key,
+                    &mut workspace.signed_digit,
+                )?;
             }
         }
         first_digit = end_digit;
@@ -913,8 +1193,12 @@ where
         base_linear,
         switched,
         switched_automorphism,
-        |digit_index| runtime.stored_b_digit(key, provider, digit_index),
-        |digit_index| runtime.seeded_a_digit(key, digit_index),
+        |digit_index, limb_index, output| {
+            runtime.stored_b_limb(key, provider, digit_index, limb_index, output)
+        },
+        |digit_index, limb_index, output| {
+            runtime.seeded_a_limb(key, digit_index, limb_index, output)
+        },
     )?;
     runtime.validate_provider_state(key, provider)?;
     Ok((constant, linear))
@@ -982,8 +1266,10 @@ fn apply_compact_switch(
 /// The reusable runtime has already validated the roster, CPK proofs, and
 /// manifest. `key` owns only authenticated offsets and digests; `provider`
 /// lends one exact stored-`b`/seeded-`a` digit pair at a time.
-pub(super) fn relinearize_zk_ams_mkhe_collective_v1<P>(
+#[cfg(test)]
+pub fn relinearize_zk_ams_mkhe_collective_v1<P>(
     runtime: &ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1,
+    collective_key: &ZkAmsMkheCollectivePublicKeyV1,
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
     provider: &mut P,
     ciphertext: &ZkAmsMkheCollectiveLevelOneV1,
@@ -991,6 +1277,9 @@ pub(super) fn relinearize_zk_ams_mkhe_collective_v1<P>(
 where
     P: ZkAmsMkheCollectiveEvaluatedKeyProviderV1 + ?Sized,
 {
+    runtime
+        .eval_key_binding
+        .validate_native_key_v1(collective_key)?;
     // Reject the governed ceiling before cloning either output accumulator or
     // touching the external provider.
     seekable_evaluated_key_accounting(&runtime.profile)?;
@@ -1000,7 +1289,7 @@ where
     {
         return Err(ZkAmsMkheErrorV1::MissingEvaluatedKey);
     }
-    ciphertext.validate_for_key(&runtime.collective_key, &runtime.profile)?;
+    ciphertext.validate_for_key(collective_key, &runtime.profile)?;
     let (constant, linear) = apply_compact_switch_with_seekable_provider(
         runtime,
         key,
@@ -1012,20 +1301,22 @@ where
     )?;
     ZkAmsMkheCollectiveCiphertextV1::new_with_key(
         &runtime.profile,
-        runtime.collective_key.parties(),
+        collective_key.parties(),
         ciphertext.epoch(),
         runtime.output_lineage(key, ciphertext.digest())?,
         ciphertext.sample_index(),
         1,
         constant,
         linear,
-        Some(runtime.collective_key.digest()),
+        Some(collective_key.digest()),
     )
 }
 
 /// Apply a frozen Galois automorphism and compactly switch back to `S`.
-pub(super) fn automorphism_switch_zk_ams_mkhe_collective_v1<P>(
+#[cfg(test)]
+pub fn automorphism_switch_zk_ams_mkhe_collective_v1<P>(
     runtime: &ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1,
+    collective_key: &ZkAmsMkheCollectivePublicKeyV1,
     schedule_index: usize,
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
     provider: &mut P,
@@ -1034,6 +1325,9 @@ pub(super) fn automorphism_switch_zk_ams_mkhe_collective_v1<P>(
 where
     P: ZkAmsMkheCollectiveEvaluatedKeyProviderV1 + ?Sized,
 {
+    runtime
+        .eval_key_binding
+        .validate_native_key_v1(collective_key)?;
     // Reject the governed ceiling before allocating the transformed output
     // accumulator or touching the external provider.
     seekable_evaluated_key_accounting(&runtime.profile)?;
@@ -1046,7 +1340,7 @@ where
     {
         return Err(ZkAmsMkheErrorV1::MissingEvaluatedKey);
     }
-    validate_compact_for_key(ciphertext, &runtime.collective_key, &runtime.profile)?;
+    validate_compact_for_key(ciphertext, collective_key, &runtime.profile)?;
     let exponent = usize::try_from(key.entry.galois_exponent())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     let transformed_constant = ciphertext
@@ -1063,13 +1357,13 @@ where
     )?;
     ZkAmsMkheCollectiveCiphertextV1::new_with_key(
         &runtime.profile,
-        runtime.collective_key.parties(),
+        collective_key.parties(),
         ciphertext.epoch(),
         runtime.output_lineage(key, ciphertext.digest())?,
         ciphertext.sample_index(),
         ciphertext.level(),
         constant,
         linear,
-        Some(runtime.collective_key.digest()),
+        Some(collective_key.digest()),
     )
 }

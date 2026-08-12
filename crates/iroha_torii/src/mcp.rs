@@ -40,7 +40,7 @@ use crate::{SharedAppState, limits, openapi};
 mod connect_session_tools;
 mod governance_ballot_tools;
 
-use connect_session_tools::build_connect_session_create_body;
+use connect_session_tools::{build_connect_session_create_body, decode_canonical, required_string};
 use governance_ballot_tools::{
     governance_selector_v1_schema, iroha_gov_ballots_plain_tool,
     iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,

@@ -11,13 +11,13 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 
-/// Schema version for Torii proxy requests with generation-bound durable admission.
-pub const TORII_PROXY_REQUEST_VERSION_V5: u16 = 5;
+/// Schema version for deadline-bound Torii proxy requests.
+pub const TORII_PROXY_REQUEST_VERSION_V6: u16 = 6;
 /// Maximum inner body admitted by a first-release Torii proxy request.
 pub const TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1: usize = 64_000_000;
 /// Source-coupled allowance for the signed proxy request envelope.
 pub const TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1: usize = 8 * 1024 * 1024;
-/// Maximum encoded `ToriiProxyRequestV5`/HTTP body before relay framing.
+/// Maximum encoded `ToriiProxyRequestV6`/HTTP body before relay framing.
 pub const TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1: usize =
     TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1 + TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1;
 /// Maximum enum/length framing around one proxy request or response inside `NetworkMessage`.
@@ -1414,13 +1414,19 @@ pub enum ToriiProxyRequestKindV4 {
     HostedHttp(ToriiHostedHttpProxyRequestV1),
 }
 
-/// Version-5 P2P Torii proxy request sent from ingress to an authoritative peer.
+/// Version-6 P2P Torii proxy request sent from ingress to an authoritative peer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct ToriiProxyRequestV5 {
+pub struct ToriiProxyRequestV6 {
     /// Version of the proxy request envelope.
     pub schema_version: u16,
     /// Correlation id selected by the ingress node.
     pub request_id: Hash,
+    /// Authenticated absolute execution deadline in Unix epoch milliseconds.
+    ///
+    /// Every proxy hop preserves this value. Receivers reject expired or
+    /// excessive horizons before executing the request, and reserve the final
+    /// portion of the budget for returning the bounded response.
+    pub deadline_unix_ms: u64,
     /// Current forwarding depth observed by this hop.
     pub hop_count: u8,
     /// Maximum number of hops allowed before the request is rejected.
@@ -1530,6 +1536,18 @@ mod tests {
         max_hops: u8,
         visited_peer_ids: Vec<PeerId>,
         request: TransientBoolToriiProxyRequestKindV1,
+    }
+
+    /// Frozen test-only copy of the checked-in V5 request envelope.
+    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+    #[norito(schema_name = "iroha_core::torii_proxy::ToriiProxyRequestV5")]
+    struct HistoricalToriiProxyRequestV5 {
+        schema_version: u16,
+        request_id: Hash,
+        hop_count: u8,
+        max_hops: u8,
+        visited_peer_ids: Vec<PeerId>,
+        request: ToriiProxyRequestKindV4,
     }
 
     /// Frozen admission discriminants from the retired pre-global layout.
@@ -2038,10 +2056,11 @@ mod tests {
     }
 
     #[test]
-    fn torii_proxy_v5_envelope_roundtrips_exact_request() {
-        let request = ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
-            request_id: Hash::new(b"torii-proxy-v5-roundtrip"),
+    fn torii_proxy_v6_envelope_roundtrips_exact_deadline_bound_request() {
+        let request = ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+            request_id: Hash::new(b"torii-proxy-v6-roundtrip"),
+            deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
@@ -2058,10 +2077,53 @@ mod tests {
             }),
         };
 
-        let encoded = norito::to_bytes(&request).expect("encode V5 Torii proxy request");
-        let decoded = norito::decode_from_bytes::<ToriiProxyRequestV5>(&encoded)
-            .expect("decode V5 Torii proxy request");
+        let encoded = norito::to_bytes(&request).expect("encode V6 Torii proxy request");
+        let decoded = norito::decode_from_bytes::<ToriiProxyRequestV6>(&encoded)
+            .expect("decode V6 Torii proxy request");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn historical_v5_envelope_cannot_be_accepted_as_deadline_bound_v6() {
+        let current = ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+            request_id: Hash::new(b"torii-proxy-v6-version-separation"),
+            deadline_unix_ms: 1_900_000_000_000,
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
+                endpoint: ToriiReadEndpointV1::AccountsList,
+                expected_route: ToriiRouteHintV1 {
+                    lane_id: LaneId::new(3),
+                    dataspace_id: DataSpaceId::new(9),
+                },
+                path_args: Vec::new(),
+                query_string: None,
+                body: Vec::new(),
+                response_format: ToriiProxyResponseFormatV1::Json,
+            }),
+        };
+        let historical = HistoricalToriiProxyRequestV5 {
+            schema_version: 5,
+            request_id: current.request_id.clone(),
+            hop_count: current.hop_count,
+            max_hops: current.max_hops,
+            visited_peer_ids: current.visited_peer_ids.clone(),
+            request: current.request.clone(),
+        };
+        let historical_bytes =
+            norito::to_bytes(&historical).expect("encode frozen V5 proxy request");
+        assert!(
+            norito::decode_from_bytes::<ToriiProxyRequestV6>(&historical_bytes).is_err(),
+            "V5 requests without an authenticated deadline must fail closed"
+        );
+
+        let current_bytes = norito::to_bytes(&current).expect("encode V6 proxy request");
+        assert!(
+            norito::decode_from_bytes::<HistoricalToriiProxyRequestV5>(&current_bytes).is_err(),
+            "V6 deadline-bound requests must not decode as the retired V5 layout"
+        );
     }
 
     fn historical_v2_submit_fixture() -> HistoricalToriiProxyRequestV2 {
@@ -2093,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v5() {
+    fn historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v6() {
         let historical = historical_v2_submit_fixture();
         let historical_bytes =
             norito::to_bytes(&historical).expect("encode checked-in historical V2 Submit fixture");
@@ -2109,8 +2171,8 @@ mod tests {
             historical
         );
         assert!(
-            norito::decode_from_bytes::<ToriiProxyRequestV5>(&historical_bytes).is_err(),
-            "the checked-in V2 request must not decode as a V5 request"
+            norito::decode_from_bytes::<ToriiProxyRequestV6>(&historical_bytes).is_err(),
+            "the checked-in V2 request must not decode as a V6 request"
         );
 
         let historical_network = HistoricalNetworkMessage::ToriiProxyRequest(Box::new(historical));
@@ -2133,7 +2195,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v2_submit_bool_wire_cannot_be_accepted_as_v5() {
+    fn legacy_v2_submit_bool_wire_cannot_be_accepted_as_v6() {
         let keypair =
             iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
@@ -2186,17 +2248,17 @@ mod tests {
                 legacy
             );
             assert!(
-                norito::decode_from_bytes::<ToriiProxyRequestV5>(&legacy_bytes).is_err(),
-                "the genuine V2 frame must not decode as a V5 request"
+                norito::decode_from_bytes::<ToriiProxyRequestV6>(&legacy_bytes).is_err(),
+                "the genuine V2 frame must not decode as a V6 request"
             );
 
-            let mut relabeled_as_v5 = legacy_bytes;
-            relabeled_as_v5[6..22]
-                .copy_from_slice(&<ToriiProxyRequestV5 as norito::NoritoSerialize>::schema_hash());
+            let mut relabeled_as_v6 = legacy_bytes;
+            relabeled_as_v6[6..22]
+                .copy_from_slice(&<ToriiProxyRequestV6 as norito::NoritoSerialize>::schema_hash());
             assert!(
-                norito::decode_from_bytes::<ToriiProxyRequestV5>(&relabeled_as_v5).is_err(),
-                "even a V5 schema label must not turn the legacy one-byte bool payload into the \
-                 V5 admission-binding shape; no compatibility fallback is permitted"
+                norito::decode_from_bytes::<ToriiProxyRequestV6>(&relabeled_as_v6).is_err(),
+                "even a V6 schema label must not turn the legacy one-byte bool payload into the \
+                 V6 deadline/admission-binding shape; no compatibility fallback is permitted"
             );
         }
     }

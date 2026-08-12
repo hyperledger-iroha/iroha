@@ -1130,12 +1130,47 @@ impl<F: ProofScalar> VectorCommitmentOpening<F> {
     }
 }
 
+/// Owned opening of one scalar Pedersen commitment.
+///
+/// The type stays private so only the bounded witness constructor can create
+/// it. Both named secret slots are cleared on success, error, and unwind.
+struct ScalarCommitmentOpening<F: ProofScalar> {
+    value: F,
+    mask: F,
+}
+
+impl<F: ProofScalar> ScalarCommitmentOpening<F> {
+    fn new(value: F, mask: F) -> Self {
+        Self { value, mask }
+    }
+}
+
+/// Guard for the tuple allocation accepted at the crate-private boundary.
+struct ScalarCommitmentOpeningInputs<F: ProofScalar>(Vec<(F, F)>);
+
+impl<F: ProofScalar> Drop for ScalarCommitmentOpeningInputs<F> {
+    fn drop(&mut self) {
+        for (value, mask) in &mut self.0 {
+            value.clear_secret();
+            mask.clear_secret();
+        }
+    }
+}
+
+impl<F: ProofScalar> Drop for ScalarCommitmentOpening<F> {
+    fn drop(&mut self) {
+        self.value.clear_secret();
+        self.mask.clear_secret();
+    }
+}
+
 /// Witness for a concrete generalized-Bulletproof arithmetic circuit.
 pub struct ArithmeticCircuitWitness<S: ProofSuite> {
     a_l: ScalarVector<S::Scalar>,
     a_r: ScalarVector<S::Scalar>,
     a_o: ScalarVector<S::Scalar>,
     vector_commitments: Vec<VectorCommitmentOpening<S::Scalar>>,
+    scalar_commitments: Vec<ScalarCommitmentOpening<S::Scalar>>,
 }
 
 impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
@@ -1148,8 +1183,28 @@ impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
         a_r: Vec<S::Scalar>,
         vector_commitments: Vec<VectorCommitmentOpening<S::Scalar>>,
     ) -> Result<Self, GeneralizedBulletproofErrorV1> {
+        Self::new_with_scalar_commitments(a_l, a_r, vector_commitments, Vec::new())
+    }
+
+    /// Construct a witness which also opens the statement's scalar Pedersen
+    /// commitments in statement order.
+    pub(crate) fn new_with_scalar_commitments(
+        a_l: Vec<S::Scalar>,
+        a_r: Vec<S::Scalar>,
+        vector_commitments: Vec<VectorCommitmentOpening<S::Scalar>>,
+        scalar_commitments: Vec<(S::Scalar, S::Scalar)>,
+    ) -> Result<Self, GeneralizedBulletproofErrorV1> {
         let a_l = ScalarVector(a_l);
         let a_r = ScalarVector(a_r);
+        let scalar_commitment_inputs = ScalarCommitmentOpeningInputs(scalar_commitments);
+        let mut scalar_commitments = Vec::new();
+        scalar_commitments
+            .try_reserve_exact(scalar_commitment_inputs.0.len())
+            .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        for (value, mask) in &scalar_commitment_inputs.0 {
+            scalar_commitments.push(ScalarCommitmentOpening::new(*value, *mask));
+        }
+        drop(scalar_commitment_inputs);
         if a_l.len() != a_r.len() {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
@@ -1159,6 +1214,7 @@ impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
             a_r,
             a_o,
             vector_commitments,
+            scalar_commitments,
         })
     }
 }
@@ -1484,7 +1540,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         if witness.a_l.len() > n
             || witness.a_l.len() != witness.a_r.len()
             || witness.vector_commitments.len() != commitment_count
-            || !self.scalar_commitments.is_empty()
+            || witness.scalar_commitments.len() != self.scalar_commitments.len()
         {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
@@ -1518,6 +1574,18 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
         }
+        for (commitment, opening) in self
+            .scalar_commitments
+            .iter()
+            .zip(&witness.scalar_commitments)
+        {
+            let mut terms = SecretMultiexpBuilder::<S>::new(2)?;
+            terms.push(opening.value, self.generators.g)?;
+            terms.push(opening.mask, self.generators.h)?;
+            if terms.evaluate()? != *commitment {
+                return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+            }
+        }
         for constraint in &self.constraints {
             let mut evaluation = SecretScalar::new(constraint.c);
             for (index, weight) in &constraint.wl {
@@ -1535,7 +1603,10 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                         witness.vector_commitments[commitment].values[*index] * *weight;
                 }
             }
-            if !constraint.wv.is_empty() || !evaluation.expose_copy().is_zero() {
+            for (commitment, weight) in &constraint.wv {
+                *evaluation.expose_mut() += witness.scalar_commitments[*commitment].value * *weight;
+            }
+            if !evaluation.expose_copy().is_zero() {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
         }
@@ -1664,6 +1735,13 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             }
             cg_weights.push(weights);
         }
+        // The omitted center coefficient commits each scalar opening with
+        // q_i = -sum_j z_j w_{j,i}. Its value is already fixed by the native
+        // constraint precheck; its Pedersen mask is carried by tau_x below.
+        let mut scalar_commitment_weights = ScalarVector::zero(self.scalar_commitments.len());
+        for (constraint, z) in self.constraints.iter().zip(&z.0) {
+            accumulate(&mut scalar_commitment_weights, &constraint.wv, -*z);
+        }
         for (mut index, (opening, weights)) in witness
             .vector_commitments
             .iter()
@@ -1722,11 +1800,23 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         drop(r);
         let t_caret = SecretScalar::new(l_eval.inner_product(r_eval.0.iter().copied()));
 
-        // FCMP does not use scalar commitments, so the omitted t[ni] mask is
-        // zero. Vector-commitment masks instead contribute to `u` below.
+        let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);
+        for (weight, opening) in scalar_commitment_weights
+            .0
+            .iter()
+            .copied()
+            .zip(&witness.scalar_commitments)
+        {
+            *tau_ni.expose_mut() += weight * opening.mask;
+        }
+        drop(scalar_commitment_weights);
+
+        // The omitted t[ni] commitment is reconstructed from the scalar
+        // statement commitments. Vector-commitment masks instead contribute
+        // to `u` below.
         let mut tau_x_poly = ScalarVector(Vec::with_capacity(t_poly_len));
         tau_x_poly.0.extend(tau_before.0.iter().copied());
-        tau_x_poly.0.push(S::Scalar::ZERO);
+        tau_x_poly.0.push(tau_ni.expose_copy());
         tau_x_poly.0.extend(tau_after.0.iter().copied());
         let mut tau_x = SecretScalar::new(S::Scalar::ZERO);
         for (index, coefficient) in tau_x_poly.0.iter().copied().enumerate() {
@@ -1735,6 +1825,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         drop(tau_before);
         drop(tau_after);
         drop(tau_x_poly);
+        drop(tau_ni);
         let mut u = SecretScalar::new(
             (alpha.expose_copy() * x[ilr])
                 + (beta.expose_copy() * x[io])
@@ -3094,5 +3185,79 @@ mod secret_cleanup_tests {
             Err(GeneralizedBulletproofErrorV1::RandomnessUnavailable)
         ));
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn scalar_commitment_openings_clear_on_success_error_and_unwind() {
+        let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let legacy = ArithmeticCircuitWitness::<TrackingSuite>::new(
+            vec![TrackingScalar(3)],
+            vec![TrackingScalar(5)],
+            Vec::new(),
+        )
+        .expect("legacy witness constructor remains valid");
+        assert!(legacy.scalar_commitments.is_empty());
+        drop(legacy);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let witness = ArithmeticCircuitWitness::<TrackingSuite>::new_with_scalar_commitments(
+            vec![TrackingScalar(3)],
+            vec![TrackingScalar(5)],
+            Vec::new(),
+            vec![(TrackingScalar(7), TrackingScalar(11))],
+        )
+        .expect("scalar-opening witness constructor succeeds");
+        drop(witness);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 7);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            ArithmeticCircuitWitness::<TrackingSuite>::new_with_scalar_commitments(
+                vec![TrackingScalar(3)],
+                Vec::new(),
+                Vec::new(),
+                vec![(TrackingScalar(7), TrackingScalar(11))],
+            ),
+            Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+        ));
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 5);
+
+        CLEAR_CALLS.store(0, Ordering::SeqCst);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _witness = ArithmeticCircuitWitness::<TrackingSuite>::new_with_scalar_commitments(
+                vec![TrackingScalar(3)],
+                vec![TrackingScalar(5)],
+                Vec::new(),
+                vec![(TrackingScalar(7), TrackingScalar(11))],
+            )
+            .expect("unwind fixture witness");
+            panic!("exercise scalar-opening witness unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 7);
+    }
+
+    #[test]
+    fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
+        let source = include_str!("generalized_bulletproof.rs");
+        let fcmp_bulletproof =
+            include_str!("../../iroha_core/src/privacy_engines/fcmp_plus_plus/bulletproof.rs");
+        let fcmp_circuit =
+            include_str!("../../iroha_core/src/privacy_engines/fcmp_plus_plus/circuit.rs");
+
+        assert!(source.contains("struct ScalarCommitmentOpening<F: ProofScalar>"));
+        assert!(!source.contains("pub struct ScalarCommitmentOpening"));
+        assert!(source.contains("struct ScalarCommitmentOpeningInputs<F: ProofScalar>"));
+        assert!(source.contains("pub(crate) fn new_with_scalar_commitments("));
+        assert!(source.contains("self.value.clear_secret();\n        self.mask.clear_secret();"));
+        assert!(source.contains("for (value, mask) in &mut self.0"));
+        assert!(source.contains("terms.push(opening.value, self.generators.g)?;"));
+        assert!(source.contains("terms.push(opening.mask, self.generators.h)?;"));
+        assert!(source.contains("accumulate(&mut scalar_commitment_weights, &constraint.wv, -*z)"));
+        assert!(!fcmp_bulletproof.contains("new_with_scalar_commitments"));
+        assert!(!fcmp_circuit.contains("new_with_scalar_commitments"));
     }
 }

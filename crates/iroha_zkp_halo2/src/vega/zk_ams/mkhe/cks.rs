@@ -1,37 +1,40 @@
-//! Proof-bound collective ingress for the governed ZK-AMS MKHE roster.
+//! Bounded proof primitives for governed ZK-AMS MKHE collective key switching.
 //!
-//! The native relation proved by each ordered party is
-//! `b_i = -a_pk*s_i + t*e_i` together with
-//! `d_i = (c_i-a_target)*s_i + t*z_i`. Every public entry point validates the
-//! complete profile, roster, epoch, transcript, source, key context, party,
-//! and native relation before accepting or combining a contribution.
+//! Production verifies canonical contribution records through the seekable
+//! streaming corridor. The former native full-roster owner and replay path is
+//! retained only for differential tests; compiling it into production would
+//! make simultaneous ownership of the source and contribution set possible.
 
 use core::mem::size_of;
 
 use super::{
-    ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
-    MaskedRelaxedRandomSourceV1, RnsPolynomial, SecretPolynomial, ZkAmsMkheActivePartySecretV1,
-    ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCksContributionWireV1,
-    ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheErrorV1, ZkAmsMkheGovernedRosterWireV1,
-    ZkAmsMkhePartyIdV1, ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1,
-    ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheWireBindingV1, checked_ring_multiplication_work,
-    collective::ZkAmsMkheCollectivePartyStateV1,
+    BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, ZkAmsMkheErrorV1,
+    ZkAmsMkheGovernedRosterWireV1, ZkAmsMkhePartyIdV1, ZkAmsMkheWireBindingV1,
     decryption::{
-        SignedWideV1, WIDE_RELATION_MASK_SLACK_LOG2_V1, WideMagnitudeV1, sample_signed_small,
-        sample_signed_wide, small_response_parameters, sparse_negacyclic_mul_small,
-        sparse_negacyclic_mul_wide, validate_wide_relation_random_health,
-        wide_relation_challenge_weight, wide_response_parameters, wide_vector_as_rns,
+        SignedWideV1, WIDE_RELATION_MASK_SLACK_LOG2_V1, small_response_parameters,
+        wide_relation_challenge_weight, wide_response_parameters,
     },
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_noise_certificate_v1,
-        zk_ams_mkhe_release_manifest_v1,
     },
-    wire::{
-        ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, derive_wire_length_certificate_v1,
-        zk_ams_mkhe_cks_statement_digest_v1,
-    },
+    wire::{ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, derive_wire_length_certificate_v1},
 };
 use crate::vega::sponge::{Keccak256, keccak256, shake256};
+
+#[cfg(test)]
+use super::{
+    ArtifactAuthentication, MaskedRelaxedRandomSourceV1, RnsPolynomial, SecretPolynomial,
+    ZkAmsMkheActivePartySecretV1, ZkAmsMkheAuthenticationWireV1, ZkAmsMkheCksContributionWireV1,
+    ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1,
+    ZkAmsMkheRnsPolynomialWireV1, checked_ring_multiplication_work,
+    collective::ZkAmsMkheCollectivePartyStateV1,
+    decryption::{
+        WideMagnitudeV1, sample_signed_small, sample_signed_wide, sparse_negacyclic_mul_small,
+        sparse_negacyclic_mul_wide, validate_wide_relation_random_health, wide_vector_as_rns,
+    },
+    manifest::zk_ams_mkhe_release_manifest_v1,
+    wire::zk_ams_mkhe_cks_statement_digest_v1,
+};
 
 const CKS_PROOF_TAG_V1: [u8; 4] = *b"ZACP";
 const CKS_PROOF_HEADER_BYTES_V1: usize = 4 + 1 + 2 + 4 + 32 + 4 + 4 + 4;
@@ -46,8 +49,9 @@ const CKS_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cks-proof-fiat-sha
 const CKS_SPARSE_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cks-proof-sparse-challenge";
 
 /// Canonical full-roster extension of an independently keyed source ciphertext.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ZkAmsMkheCksSourceCiphertextV1 {
+pub(super) struct ZkAmsMkheCksSourceCiphertextV1 {
     profile_digest: [u8; 32],
     roster_digest: [u8; 32],
     epoch: u64,
@@ -61,6 +65,7 @@ pub struct ZkAmsMkheCksSourceCiphertextV1 {
     source_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl ZkAmsMkheCksSourceCiphertextV1 {
     /// Construct and canonically extend an ordered source component list to the full roster.
     ///
@@ -216,9 +221,10 @@ impl ZkAmsMkheCksSourceCiphertextV1 {
     }
 }
 
-/// Borrowed public CKS statement for one governed source ciphertext.
+/// Borrowed legacy CKS statement for one governed source ciphertext.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
-pub struct ZkAmsMkheCksStatementV1<'a> {
+pub(super) struct ZkAmsMkheCksStatementV1<'a> {
     roster: &'a ZkAmsMkheGovernedRosterWireV1,
     source: &'a ZkAmsMkheCksSourceCiphertextV1,
     target_a: &'a ZkAmsMkheRnsPolynomialWireV1,
@@ -227,6 +233,7 @@ pub struct ZkAmsMkheCksStatementV1<'a> {
     key_context_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheCksStatementV1<'a> {
     /// Construct the complete release statement for all ordered CKS contributions.
     pub fn new(
@@ -263,18 +270,21 @@ impl<'a> ZkAmsMkheCksStatementV1<'a> {
 
     /// Exact governed roster.
     #[must_use]
+    #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn roster(&self) -> &'a ZkAmsMkheGovernedRosterWireV1 {
         self.roster
     }
 
     /// Canonically zero-extended source ciphertext.
     #[must_use]
+    #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn source(&self) -> &'a ZkAmsMkheCksSourceCiphertextV1 {
         self.source
     }
 
     /// Compact-output linear polynomial `a_target`.
     #[must_use]
+    #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn target_a(&self) -> &'a ZkAmsMkheRnsPolynomialWireV1 {
         self.target_a
     }
@@ -295,6 +305,7 @@ impl<'a> ZkAmsMkheCksStatementV1<'a> {
 
     /// Digest binding the target and complete governed public-key relation set.
     #[must_use]
+    #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn key_context_digest(&self) -> [u8; 32] {
         self.key_context_digest
     }
@@ -355,14 +366,117 @@ impl<'a> ZkAmsMkheCksStatementV1<'a> {
     }
 }
 
+fn clear_cks_i64_slice_v1(values: &mut [i64]) {
+    let values = core::hint::black_box(values);
+    values.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+fn clear_cks_byte_slice_v1(values: &mut [u8]) {
+    let values = core::hint::black_box(values);
+    values.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CKS_ZEROIZING_DROP_AUDIT_V1: core::cell::Cell<(usize, usize)> =
+        const { core::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+fn record_cks_zeroizing_drop_v1(all_zero: bool) {
+    CKS_ZEROIZING_DROP_AUDIT_V1.with(|audit| {
+        let (drops, failed) = audit.get();
+        audit.set((drops + 1, failed + usize::from(!all_zero)));
+    });
+}
+
+struct ZeroizingCksI64BufferV1(Vec<i64>);
+
+impl ZeroizingCksI64BufferV1 {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn into_vec(mut self) -> Vec<i64> {
+        core::mem::take(&mut self.0)
+    }
+}
+
+impl core::ops::Deref for ZeroizingCksI64BufferV1 {
+    type Target = Vec<i64>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for ZeroizingCksI64BufferV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for ZeroizingCksI64BufferV1 {
+    fn drop(&mut self) {
+        clear_cks_i64_slice_v1(&mut self.0);
+        #[cfg(test)]
+        record_cks_zeroizing_drop_v1(self.0.iter().all(|value| *value == 0));
+    }
+}
+
+struct ZeroizingCksByteBufferV1(Vec<u8>);
+
+impl ZeroizingCksByteBufferV1 {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn into_vec(mut self) -> Vec<u8> {
+        core::mem::take(&mut self.0)
+    }
+}
+
+impl core::ops::Deref for ZeroizingCksByteBufferV1 {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for ZeroizingCksByteBufferV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for ZeroizingCksByteBufferV1 {
+    fn drop(&mut self) {
+        clear_cks_byte_slice_v1(&mut self.0);
+        #[cfg(test)]
+        record_cks_zeroizing_drop_v1(self.0.iter().all(|value| *value == 0));
+    }
+}
+
 /// Canonical fixed-width wide-coefficient CKS relation proof.
-#[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
+#[derive(PartialEq, Eq)]
 pub struct ZkAmsMkheCksProofV1 {
     wide_response_bytes: u16,
     challenge_seed: [u8; 32],
     secret_response: Vec<i64>,
     public_key_error_response: Vec<i64>,
-    smudge_response: Vec<SignedWideV1>,
+    /// Canonical fixed-stride signed-wide coefficients.
+    ///
+    /// Keeping the wire representation is intentional: the release profile uses
+    /// 23 bytes per coefficient, while the arithmetic helper occupies 264 bytes.
+    /// Arithmetic decodes one coefficient into a stack-local value instead of
+    /// retaining the 33 MiB expanded table.
+    smudge_response: Vec<u8>,
 }
 
 impl core::fmt::Debug for ZkAmsMkheCksProofV1 {
@@ -376,13 +490,126 @@ impl core::fmt::Debug for ZkAmsMkheCksProofV1 {
     }
 }
 
+impl Drop for ZkAmsMkheCksProofV1 {
+    fn drop(&mut self) {
+        clear_cks_i64_slice_v1(&mut self.secret_response);
+        clear_cks_i64_slice_v1(&mut self.public_key_error_response);
+        clear_cks_byte_slice_v1(&mut self.smudge_response);
+        #[cfg(test)]
+        record_cks_zeroizing_drop_v1(
+            self.secret_response.iter().all(|value| *value == 0)
+                && self
+                    .public_key_error_response
+                    .iter()
+                    .all(|value| *value == 0)
+                && self.smudge_response.iter().all(|value| *value == 0),
+        );
+    }
+}
+
 impl ZkAmsMkheCksProofV1 {
+    fn smudge_response_count(&self) -> Option<usize> {
+        let width = usize::from(self.wide_response_bytes);
+        if width == 0 || self.smudge_response.len() % width != 0 {
+            None
+        } else {
+            Some(self.smudge_response.len() / width)
+        }
+    }
+
+    pub(super) fn smudge_responses(
+        &self,
+    ) -> Result<
+        impl ExactSizeIterator<Item = Result<SignedWideV1, ZkAmsMkheErrorV1>> + '_,
+        ZkAmsMkheErrorV1,
+    > {
+        let width = usize::from(self.wide_response_bytes);
+        if width == 0 || self.smudge_response.len() % width != 0 {
+            return Err(ZkAmsMkheErrorV1::InvalidCksProof);
+        }
+        Ok(self
+            .smudge_response
+            .chunks_exact(width)
+            .map(SignedWideV1::decode_fixed))
+    }
+
+    pub(super) const fn challenge_seed(&self) -> [u8; 32] {
+        self.challenge_seed
+    }
+
+    pub(super) fn secret_responses(&self) -> &[i64] {
+        &self.secret_response
+    }
+
+    pub(super) fn public_key_error_responses(&self) -> &[i64] {
+        &self.public_key_error_response
+    }
+
+    pub(super) fn validate_release_response_bounds(
+        &self,
+        smudge_bits: usize,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let profile = release_profile_v1();
+        let weight = wide_relation_challenge_weight(profile.ring_degree)?;
+        let (_, secret_limit) = small_response_parameters(1, weight, &profile)?;
+        let (_, error_limit) =
+            small_response_parameters(i64::from(profile.error_eta), weight, &profile)?;
+        let (_, wide_limit, wide_bytes) = wide_response_parameters(smudge_bits, weight)?;
+        if self.challenge_seed == [0; 32]
+            || self.secret_response.len() != profile.ring_degree
+            || self.public_key_error_response.len() != profile.ring_degree
+            || self.smudge_response_count() != Some(profile.ring_degree)
+            || usize::from(self.wide_response_bytes) != wide_bytes
+            || self
+                .secret_response
+                .iter()
+                .any(|value| value.unsigned_abs() > secret_limit as u64)
+            || self
+                .public_key_error_response
+                .iter()
+                .any(|value| value.unsigned_abs() > error_limit as u64)
+            || self.smudge_responses()?.any(|response| match response {
+                Ok(response) => response.magnitude > wide_limit,
+                Err(_) => true,
+            })
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCksProof);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn replace_smudge_response_for_test(
+        &mut self,
+        index: usize,
+        value: &SignedWideV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let width = usize::from(self.wide_response_bytes);
+        let start = index
+            .checked_mul(width)
+            .ok_or(ZkAmsMkheErrorV1::InvalidCksProof)?;
+        let end = start
+            .checked_add(width)
+            .ok_or(ZkAmsMkheErrorV1::InvalidCksProof)?;
+        let destination = self
+            .smudge_response
+            .get_mut(start..end)
+            .ok_or(ZkAmsMkheErrorV1::InvalidCksProof)?;
+        let mut encoded = Vec::new();
+        encoded
+            .try_reserve_exact(width)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        value.encode_fixed_into(&mut encoded, width)?;
+        destination.copy_from_slice(&encoded);
+        Ok(())
+    }
+
     /// Exact length of the canonical fixed-width native proof.
     pub fn encoded_len(&self) -> Result<usize, ZkAmsMkheErrorV1> {
         if self.challenge_seed == [0; 32]
             || self.secret_response.is_empty()
             || self.secret_response.len() != self.public_key_error_response.len()
-            || self.secret_response.len() != self.smudge_response.len()
+            || Some(self.secret_response.len()) != self.smudge_response_count()
         {
             return Err(ZkAmsMkheErrorV1::InvalidCksProof);
         }
@@ -412,7 +639,8 @@ impl ZkAmsMkheCksProofV1 {
         for count in [
             self.secret_response.len(),
             self.public_key_error_response.len(),
-            self.smudge_response.len(),
+            self.smudge_response_count()
+                .ok_or(ZkAmsMkheErrorV1::InvalidCksProof)?,
         ] {
             bytes.extend_from_slice(
                 &u32::try_from(count)
@@ -426,9 +654,7 @@ impl ZkAmsMkheCksProofV1 {
         for value in &self.public_key_error_response {
             bytes.extend_from_slice(&value.to_be_bytes());
         }
-        for value in &self.smudge_response {
-            value.encode_fixed_into(&mut bytes, usize::from(self.wide_response_bytes))?;
-        }
+        bytes.extend_from_slice(&self.smudge_response);
         if bytes.len() != length {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
@@ -464,9 +690,12 @@ impl ZkAmsMkheCksProofV1 {
                 return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
             }
         }
-        let mut secret_response = Vec::new();
-        let mut public_key_error_response = Vec::new();
-        let mut smudge_response = Vec::new();
+        let mut secret_response = ZeroizingCksI64BufferV1::new();
+        let mut public_key_error_response = ZeroizingCksI64BufferV1::new();
+        let smudge_response_bytes = expected_degree
+            .checked_mul(expected_wide_response_bytes)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let mut smudge_response = ZeroizingCksByteBufferV1::new();
         for target in [&mut secret_response, &mut public_key_error_response] {
             target
                 .try_reserve_exact(expected_degree)
@@ -476,17 +705,17 @@ impl ZkAmsMkheCksProofV1 {
             }
         }
         smudge_response
-            .try_reserve_exact(expected_degree)
+            .try_reserve_exact(smudge_response_bytes)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for _ in 0..expected_degree {
             let end = cursor
                 .checked_add(expected_wide_response_bytes)
                 .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-            smudge_response.push(SignedWideV1::decode_fixed(
-                bytes
-                    .get(cursor..end)
-                    .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            )?);
+            let encoded = bytes
+                .get(cursor..end)
+                .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
+            SignedWideV1::decode_fixed(encoded)?;
+            smudge_response.extend_from_slice(encoded);
             cursor = end;
         }
         if cursor != bytes.len() {
@@ -496,9 +725,9 @@ impl ZkAmsMkheCksProofV1 {
             wide_response_bytes: u16::try_from(expected_wide_response_bytes)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
             challenge_seed,
-            secret_response,
-            public_key_error_response,
-            smudge_response,
+            secret_response: secret_response.into_vec(),
+            public_key_error_response: public_key_error_response.into_vec(),
+            smudge_response: smudge_response.into_vec(),
         })
     }
 
@@ -514,12 +743,30 @@ impl ZkAmsMkheCksProofV1 {
 }
 
 /// One proof-bound and authentication-key-bound CKS contribution.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ZkAmsMkheAuthenticatedCksContributionV1 {
+#[cfg(test)]
+#[cfg_attr(test, derive(Clone))]
+#[derive(PartialEq, Eq)]
+pub(super) struct ZkAmsMkheAuthenticatedCksContributionV1 {
     binding: CksBindingV1,
     contribution: RnsPolynomial,
     proof: ZkAmsMkheCksProofV1,
     authentication: ArtifactAuthentication,
+}
+
+#[cfg(test)]
+impl core::fmt::Debug for ZkAmsMkheAuthenticatedCksContributionV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ZkAmsMkheAuthenticatedCksContributionV1")
+            .field("party_index", &self.binding.party_index)
+            .field("party", &self.binding.party)
+            .field(
+                "contribution_residue_count",
+                &self.contribution.coefficients.len(),
+            )
+            .field("proof", &self.proof)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Exact release proof and contribution-record size evidence.
@@ -552,9 +799,10 @@ pub struct ZkAmsMkheCksResourceEvidenceV1 {
 }
 
 /// Deterministic reason for rejecting an ordered CKS contribution set.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum ZkAmsMkheCksAbortReasonV1 {
+pub(super) enum ZkAmsMkheCksAbortReasonV1 {
     /// A required governed contribution was absent.
     MissingContribution = 1,
     /// More than the exact governed roster size was supplied.
@@ -570,8 +818,9 @@ pub enum ZkAmsMkheCksAbortReasonV1 {
 }
 
 /// First governed roster slot rejected during CKS combination.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ZkAmsMkheIdentifiableCksAbortV1 {
+pub(super) struct ZkAmsMkheIdentifiableCksAbortV1 {
     /// Zero-based first rejected input slot. The first excess slot is exactly the roster length.
     pub party_index: u8,
     /// Governed party expected at the rejected slot, or `None` for an excess slot.
@@ -660,7 +909,7 @@ fn cks_resource_digest(evidence: ZkAmsMkheCksResourceEvidenceV1) -> [u8; 32] {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct CksBindingV1 {
+pub(super) struct CksBindingV1 {
     profile_digest: [u8; 32],
     roster_digest: [u8; 32],
     epoch: u64,
@@ -675,7 +924,7 @@ struct CksBindingV1 {
 }
 
 impl CksBindingV1 {
-    fn update_hash(&self, hash: &mut Keccak256) {
+    pub(super) fn update_hash(&self, hash: &mut Keccak256) {
         hash.update(CKS_BINDING_DOMAIN_V1);
         hash.update(&self.profile_digest);
         hash.update(&self.roster_digest);
@@ -691,6 +940,41 @@ impl CksBindingV1 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn streaming_cks_binding_v1(
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    transcript_digest: [u8; 32],
+    source_digest: [u8; 32],
+    key_context_digest: [u8; 32],
+    source_record_index: u32,
+    sample_index: u64,
+    party_index: usize,
+    level: u8,
+) -> Result<CksBindingV1, ZkAmsMkheErrorV1> {
+    if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+        || transcript_digest == [0; 32]
+        || source_digest == [0; 32]
+        || key_context_digest == [0; 32]
+        || level > 1
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidCksSet);
+    }
+    Ok(CksBindingV1 {
+        profile_digest: roster.profile_digest(),
+        roster_digest: roster.roster_digest(),
+        epoch: roster.epoch(),
+        transcript_digest,
+        source_digest,
+        key_context_digest,
+        source_record_index,
+        sample_index,
+        party_index: u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
+        party: roster.parties()[party_index],
+        level,
+    })
+}
+
+#[cfg(test)]
 fn wire_polynomial_digest(
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -732,6 +1016,7 @@ fn zero_polynomial_digest(profile: &BgvProfile) -> Result<[u8; 32], ZkAmsMkheErr
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn key_context_digest(
     target_a: &ZkAmsMkheRnsPolynomialWireV1,
     public_key_a: &ZkAmsMkheRnsPolynomialWireV1,
@@ -745,6 +1030,92 @@ fn key_context_digest(
         hash.update(&wire_polynomial_digest(polynomial)?);
     }
     Ok(hash.finalize())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn streaming_cks_source_digest_v1(
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    transcript_digest: [u8; 32],
+    record_index: u32,
+    sample_index: u64,
+    level: u8,
+    constant_digest: [u8; 32],
+    component_digests: &[Option<[u8; 32]>; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    let zero_digest = zero_polynomial_digest(&profile)?;
+    let mut hash = Keccak256::new();
+    hash.update(CKS_SOURCE_DOMAIN_V1);
+    hash.update(&roster.profile_digest());
+    hash.update(&roster.roster_digest());
+    hash.update(&roster.epoch().to_be_bytes());
+    hash.update(&transcript_digest);
+    hash.update(&record_index.to_be_bytes());
+    hash.update(&sample_index.to_be_bytes());
+    hash.update(&[level]);
+    hash.update(&constant_digest);
+    for (party, digest) in roster.parties().iter().zip(component_digests) {
+        hash.update(&party.to_bytes());
+        hash.update(&digest.unwrap_or(zero_digest));
+    }
+    Ok(hash.finalize())
+}
+
+pub(super) fn streaming_cks_key_context_digest_v1(
+    target_a_digest: [u8; 32],
+    public_key_a_digest: [u8; 32],
+    party_public_b_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(CKS_KEY_CONTEXT_DOMAIN_V1);
+    hash.update(&target_a_digest);
+    hash.update(&public_key_a_digest);
+    for digest in party_public_b_digests {
+        hash.update(digest);
+    }
+    hash.finalize()
+}
+
+pub(super) fn streaming_cks_wire_statement_digest_v1(
+    binding: ZkAmsMkheWireBindingV1,
+    source_digest: [u8; 32],
+    party: ZkAmsMkhePartyIdV1,
+    contribution_wire_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut frame = Vec::with_capacity(256);
+    frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.cks-wire-statement");
+    frame.extend_from_slice(&binding.profile_digest());
+    frame.extend_from_slice(&binding.roster_digest());
+    frame.extend_from_slice(&binding.epoch().to_be_bytes());
+    frame.extend_from_slice(&binding.transcript_digest());
+    frame.extend_from_slice(&binding.record_index().to_be_bytes());
+    frame.push(binding.level());
+    frame.extend_from_slice(&source_digest);
+    frame.extend_from_slice(&party.to_bytes());
+    frame.extend_from_slice(&contribution_wire_digest);
+    keccak256(&frame)
+}
+
+pub(super) fn streaming_cks_record_digest_v1(
+    binding: &CksBindingV1,
+    contribution_digest: [u8; 32],
+    proof_bytes: &[u8],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let mut hash = Keccak256::new();
+    hash.update(CKS_AUTH_DOMAIN_V1);
+    binding.update_hash(&mut hash);
+    hash.update(&contribution_digest);
+    hash.update(
+        &u32::try_from(proof_bytes.len())
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?
+            .to_be_bytes(),
+    );
+    hash.update(proof_bytes);
+    Ok(hash.finalize())
+}
+
+pub(super) const fn streaming_cks_auth_domain_v1() -> &'static [u8] {
+    CKS_AUTH_DOMAIN_V1
 }
 
 fn expect(cursor: &mut usize, bytes: &[u8], expected: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
@@ -774,6 +1145,7 @@ fn read_array<const N: usize>(
     Ok(value)
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CksRelationV1 {
     binding: CksBindingV1,
@@ -783,6 +1155,7 @@ struct CksRelationV1 {
     target_a: RnsPolynomial,
 }
 
+#[cfg(test)]
 impl CksRelationV1 {
     fn validate(
         &self,
@@ -825,17 +1198,20 @@ impl CksRelationV1 {
     }
 }
 
+#[cfg(test)]
 struct CksPartyWitnessV1<'a> {
     secret: &'a SecretPolynomial,
     public_key_error: &'a SecretPolynomial,
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for CksPartyWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("CksPartyWitnessV1([REDACTED])")
     }
 }
 
+#[cfg(test)]
 fn validate_witness(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -875,6 +1251,7 @@ fn validate_witness(
     Ok(())
 }
 
+#[cfg(test)]
 fn native_polynomial_digest(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -893,6 +1270,7 @@ fn native_polynomial_digest(
     Ok(hash.finalize())
 }
 
+#[cfg(test)]
 fn cks_challenge_seed(
     profile: &BgvProfile,
     relation: &CksRelationV1,
@@ -930,7 +1308,49 @@ fn cks_challenge_seed(
     Ok(hash.finalize())
 }
 
-fn derive_cks_sparse_challenge(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn streaming_cks_challenge_seed_v1(
+    profile: &BgvProfile,
+    binding: &CksBindingV1,
+    public_key_a_digest: [u8; 32],
+    party_public_b_digest: [u8; 32],
+    source_component_digest: [u8; 32],
+    target_a_digest: [u8; 32],
+    contribution_digest: [u8; 32],
+    public_key_commitment_digest: [u8; 32],
+    contribution_commitment_digest: [u8; 32],
+    smudge_bits: usize,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let mut hash = Keccak256::new();
+    hash.update(CKS_CHALLENGE_DOMAIN_V1);
+    hash.update(CKS_PROOF_DOMAIN_V1);
+    hash.update(
+        &u16::try_from(smudge_bits)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    hash.update(
+        &u16::try_from(wide_relation_challenge_weight(profile.ring_degree)?)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    hash.update(&WIDE_RELATION_MASK_SLACK_LOG2_V1.to_be_bytes());
+    binding.update_hash(&mut hash);
+    for digest in [
+        public_key_a_digest,
+        party_public_b_digest,
+        source_component_digest,
+        target_a_digest,
+        contribution_digest,
+        public_key_commitment_digest,
+        contribution_commitment_digest,
+    ] {
+        hash.update(&digest);
+    }
+    Ok(hash.finalize())
+}
+
+pub(super) fn derive_cks_sparse_challenge(
     ring_degree: usize,
     challenge_seed: [u8; 32],
 ) -> Result<Vec<i8>, ZkAmsMkheErrorV1> {
@@ -982,6 +1402,7 @@ fn derive_cks_sparse_challenge(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -1066,9 +1487,23 @@ fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
             sparse_negacyclic_mul_small(&challenge, &witness.public_key_error.coefficients)?;
         let folded_smudge = sparse_negacyclic_mul_wide(&challenge, smudge)?;
         let mut accepted = true;
-        let mut secret_response = Vec::with_capacity(profile.ring_degree);
-        let mut public_key_error_response = Vec::with_capacity(profile.ring_degree);
-        let mut smudge_response = Vec::with_capacity(profile.ring_degree);
+        let mut secret_response = ZeroizingCksI64BufferV1::new();
+        secret_response
+            .try_reserve_exact(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let mut public_key_error_response = ZeroizingCksI64BufferV1::new();
+        public_key_error_response
+            .try_reserve_exact(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let mut smudge_response = ZeroizingCksByteBufferV1::new();
+        smudge_response
+            .try_reserve_exact(
+                profile
+                    .ring_degree
+                    .checked_mul(wide_response_bytes)
+                    .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+            )
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for (mask, folded) in secret_mask.iter().copied().zip(folded_secret) {
             let response = mask
                 .checked_add(folded)
@@ -1088,7 +1523,7 @@ fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
                 .checked_add(&folded)
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             accepted &= response.magnitude <= wide_response_limit;
-            smudge_response.push(response);
+            response.encode_fixed_into(&mut smudge_response, wide_response_bytes)?;
         }
         secret_mask.fill(0);
         error_mask.fill(0);
@@ -1100,9 +1535,9 @@ fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
             wide_response_bytes: u16::try_from(wide_response_bytes)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
             challenge_seed,
-            secret_response,
-            public_key_error_response,
-            smudge_response,
+            secret_response: secret_response.into_vec(),
+            public_key_error_response: public_key_error_response.into_vec(),
+            smudge_response: smudge_response.into_vec(),
         };
         verify_cks_relation(
             profile,
@@ -1117,6 +1552,7 @@ fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
+#[cfg(test)]
 fn verify_cks_relation(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -1130,7 +1566,7 @@ fn verify_cks_relation(
     if proof.challenge_seed == [0; 32]
         || proof.secret_response.len() != profile.ring_degree
         || proof.public_key_error_response.len() != profile.ring_degree
-        || proof.smudge_response.len() != profile.ring_degree
+        || proof.smudge_response_count() != Some(profile.ring_degree)
     {
         return Err(ZkAmsMkheErrorV1::InvalidCksProof);
     }
@@ -1140,6 +1576,10 @@ fn verify_cks_relation(
         small_response_parameters(i64::from(profile.error_eta), weight, profile)?;
     let (_, wide_response_limit, wide_response_bytes) =
         wide_response_parameters(smudge_bits, weight)?;
+    let invalid_wide_response = proof.smudge_responses()?.any(|response| match response {
+        Ok(response) => response.magnitude > wide_response_limit,
+        Err(_) => true,
+    });
     if usize::from(proof.wide_response_bytes) != wide_response_bytes
         || proof
             .secret_response
@@ -1149,17 +1589,25 @@ fn verify_cks_relation(
             .public_key_error_response
             .iter()
             .any(|value| value.unsigned_abs() > error_response_limit as u64)
-        || proof
-            .smudge_response
-            .iter()
-            .any(|value| value.magnitude > wide_response_limit)
+        || invalid_wide_response
     {
         return Err(ZkAmsMkheErrorV1::InvalidCksProof);
     }
     checked_ring_multiplication_work(profile, 8)?;
     let secret_response = RnsPolynomial::from_signed(profile, &proof.secret_response)?;
     let error_response = RnsPolynomial::from_signed(profile, &proof.public_key_error_response)?;
-    let smudge_response = wide_vector_as_rns(profile, &proof.smudge_response)?;
+    let mut smudge_response_coefficients = Vec::with_capacity(
+        profile
+            .ring_degree
+            .checked_mul(profile.moduli.len())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+    );
+    for modulus in profile.moduli {
+        for response in proof.smudge_responses()? {
+            smudge_response_coefficients.push(response?.mod_u64(*modulus));
+        }
+    }
+    let smudge_response = RnsPolynomial::from_flat(profile, smudge_response_coefficients)?;
     let challenge = derive_cks_sparse_challenge(profile.ring_degree, proof.challenge_seed)?;
     let challenge_rns = RnsPolynomial::from_signed(
         profile,
@@ -1196,6 +1644,7 @@ fn verify_cks_relation(
     Ok(())
 }
 
+#[cfg(test)]
 fn create_cks_contribution<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -1241,6 +1690,7 @@ fn create_cks_contribution<R: MaskedRelaxedRandomSourceV1>(
     })
 }
 
+#[cfg(test)]
 impl ZkAmsMkheAuthenticatedCksContributionV1 {
     /// Governed roster index authenticated by this contribution.
     #[must_use]
@@ -1256,17 +1706,20 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
 
     /// Canonical contribution residues `d_i`.
     #[must_use]
+    #[expect(dead_code, reason = "native CKS contribution inspection surface")]
     pub fn contribution_residues(&self) -> &[u64] {
         &self.contribution.coefficients
     }
 
     /// Native fixed-width proof.
     #[must_use]
+    #[expect(dead_code, reason = "native CKS contribution inspection surface")]
     pub const fn proof(&self) -> &ZkAmsMkheCksProofV1 {
         &self.proof
     }
 
     /// Canonical native proof bytes.
+    #[expect(dead_code, reason = "native CKS contribution inspection surface")]
     pub fn canonical_proof_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         self.proof.encode()
     }
@@ -1391,6 +1844,10 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
     }
 
     /// Decode, bind, authenticate, and verify one exact canonical `ZACK` byte string.
+    #[expect(
+        dead_code,
+        reason = "native CKS exact decoder retained as a reference seam"
+    )]
     pub fn decode_release_wire_exact(
         statement: ZkAmsMkheCksStatementV1<'_>,
         party_index: u8,
@@ -1413,7 +1870,8 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
 }
 
 /// Prove and authenticate one governed CKS contribution.
-pub fn prove_zk_ams_mkhe_cks_contribution_v1<R: MaskedRelaxedRandomSourceV1>(
+#[cfg(test)]
+pub(super) fn prove_zk_ams_mkhe_cks_contribution_v1<R: MaskedRelaxedRandomSourceV1>(
     statement: ZkAmsMkheCksStatementV1<'_>,
     party_index: usize,
     party_state: &ZkAmsMkheCollectivePartyStateV1,
@@ -1460,7 +1918,8 @@ pub fn prove_zk_ams_mkhe_cks_contribution_v1<R: MaskedRelaxedRandomSourceV1>(
 }
 
 /// Verify one governed CKS contribution against the complete public statement.
-pub fn verify_zk_ams_mkhe_cks_contribution_v1(
+#[cfg(test)]
+pub(super) fn verify_zk_ams_mkhe_cks_contribution_v1(
     statement: ZkAmsMkheCksStatementV1<'_>,
     contribution: &ZkAmsMkheAuthenticatedCksContributionV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1498,7 +1957,8 @@ pub fn verify_zk_ams_mkhe_cks_contribution_v1(
 }
 
 /// Verify and combine the exact ordered full-roster CKS contribution set.
-pub fn combine_zk_ams_mkhe_cks_v1(
+#[cfg(test)]
+pub(super) fn combine_zk_ams_mkhe_cks_v1(
     statement: ZkAmsMkheCksStatementV1<'_>,
     contributions: &[ZkAmsMkheAuthenticatedCksContributionV1],
 ) -> Result<ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheIdentifiableCksAbortV1> {
@@ -1552,6 +2012,7 @@ pub fn combine_zk_ams_mkhe_cks_v1(
     .map_err(|_| abort(0, None, ZkAmsMkheCksAbortReasonV1::BindingMismatch))
 }
 
+#[cfg(test)]
 fn first_cks_set_shape_error(
     expected_parties: &[ZkAmsMkhePartyIdV1],
     contributions: &[ZkAmsMkheAuthenticatedCksContributionV1],
@@ -1590,6 +2051,7 @@ fn first_cks_set_shape_error(
     None
 }
 
+#[cfg(test)]
 fn identifiable_cks_abort(
     statement: ZkAmsMkheCksStatementV1<'_>,
     index: usize,
@@ -1640,6 +2102,75 @@ mod tests {
     const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
     const TEST_SMUDGE_BITS: usize = 8;
+
+    #[test]
+    fn production_surface_keeps_only_bounded_cks_hooks() {
+        let source = include_str!("cks.rs");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests {")
+            .expect("CKS tests must remain the final source section")
+            .0;
+        let assert_test_only = |signature: &str| {
+            let position = production
+                .find(signature)
+                .unwrap_or_else(|| panic!("missing dense CKS item: {signature}"));
+            let item_prefix = production[..position]
+                .rsplit_once("\n\n")
+                .map_or(&production[..position], |(_, value)| value);
+            assert!(
+                item_prefix.contains("#[cfg(test)]"),
+                "dense CKS item compiled in production: {signature}"
+            );
+        };
+        for signature in [
+            "pub(super) struct ZkAmsMkheCksSourceCiphertextV1",
+            "pub(super) struct ZkAmsMkheCksStatementV1",
+            "pub(super) struct ZkAmsMkheAuthenticatedCksContributionV1",
+            "pub(super) enum ZkAmsMkheCksAbortReasonV1",
+            "pub(super) struct ZkAmsMkheIdentifiableCksAbortV1",
+            "fn wire_polynomial_digest(",
+            "fn key_context_digest(",
+            "struct CksRelationV1",
+            "struct CksPartyWitnessV1",
+            "fn validate_witness(",
+            "fn native_polynomial_digest(",
+            "fn cks_challenge_seed(",
+            "fn prove_cks_relation<",
+            "fn verify_cks_relation(",
+            "fn create_cks_contribution<",
+            "pub(super) fn prove_zk_ams_mkhe_cks_contribution_v1<",
+            "pub(super) fn verify_zk_ams_mkhe_cks_contribution_v1(",
+            "pub(super) fn combine_zk_ams_mkhe_cks_v1(",
+            "fn first_cks_set_shape_error(",
+            "fn identifiable_cks_abort(",
+        ] {
+            assert_test_only(signature);
+        }
+        for signature in [
+            "pub struct ZkAmsMkheCksProofV1",
+            "pub fn zk_ams_mkhe_cks_resource_evidence_v1()",
+            "pub(super) struct CksBindingV1",
+            "pub(super) fn streaming_cks_binding_v1(",
+            "pub(super) fn streaming_cks_source_digest_v1(",
+            "pub(super) fn streaming_cks_key_context_digest_v1(",
+            "pub(super) fn streaming_cks_wire_statement_digest_v1(",
+            "pub(super) fn streaming_cks_record_digest_v1(",
+            "pub(super) const fn streaming_cks_auth_domain_v1(",
+            "pub(super) fn streaming_cks_challenge_seed_v1(",
+            "pub(super) fn derive_cks_sparse_challenge(",
+        ] {
+            let position = production
+                .find(signature)
+                .unwrap_or_else(|| panic!("missing bounded CKS hook: {signature}"));
+            let item_prefix = production[..position]
+                .rsplit_once("\n\n")
+                .map_or(&production[..position], |(_, value)| value);
+            assert!(
+                !item_prefix.contains("#[cfg(test)]"),
+                "bounded CKS hook became test-only: {signature}"
+            );
+        }
+    }
 
     fn test_profile() -> BgvProfile {
         BgvProfile {
@@ -2052,8 +2583,17 @@ mod tests {
         error.proof.public_key_error_response[0] += 1;
         assert!(verify_native(&fixture, 0, &error).is_err());
         let mut wide = contribution.clone();
-        wide.proof.smudge_response[0] = wide.proof.smudge_response[0]
+        let changed_wide_response = wide
+            .proof
+            .smudge_responses()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
             .checked_add(&SignedWideV1::from_i64(1))
+            .unwrap();
+        wide.proof
+            .replace_smudge_response_for_test(0, &changed_wide_response)
             .unwrap();
         assert!(verify_native(&fixture, 0, &wide).is_err());
         let mut auth = contribution.clone();
@@ -2122,12 +2662,50 @@ mod tests {
         assert_eq!(evidence.challenge_weight, 20);
         assert_eq!(evidence.wide_response_coefficient_bytes, 23);
         assert_eq!(evidence.proof_payload_bytes, 5_111_863);
+        let canonical_wide_bytes = usize::try_from(evidence.ring_degree).unwrap()
+            * usize::from(evidence.wide_response_coefficient_bytes);
+        let expanded_wide_bytes =
+            usize::try_from(evidence.ring_degree).unwrap() * core::mem::size_of::<SignedWideV1>();
+        assert_eq!(canonical_wide_bytes, 3_014_656);
+        assert!(canonical_wide_bytes < expanded_wide_bytes);
         assert_eq!(evidence.total_contribution_record_bytes, 44_958_187);
         assert!(evidence.proof_payload_ceiling_met);
         assert!(evidence.contribution_ceiling_met);
         assert_eq!(evidence.contribution_headroom_bytes, 22_150_677);
         assert_ne!(evidence.evidence_digest, [0; 32]);
         assert_eq!(evidence.evidence_digest, cks_resource_digest(evidence));
+    }
+
+    #[test]
+    fn streaming_challenge_digest_matches_dense_algebra() {
+        let fixture = fixture();
+        let relation = &fixture.relations[0];
+        let contribution = &fixture.constant;
+        let public_key_commitment = &fixture.relations[1].public_key_a;
+        let contribution_commitment = &fixture.relations[1].target_a;
+        let dense = cks_challenge_seed(
+            &fixture.profile,
+            relation,
+            contribution,
+            public_key_commitment,
+            contribution_commitment,
+            TEST_SMUDGE_BITS,
+        )
+        .unwrap();
+        let streamed = streaming_cks_challenge_seed_v1(
+            &fixture.profile,
+            &relation.binding,
+            native_polynomial_digest(&fixture.profile, &relation.public_key_a).unwrap(),
+            native_polynomial_digest(&fixture.profile, &relation.party_public_b).unwrap(),
+            native_polynomial_digest(&fixture.profile, &relation.source_component).unwrap(),
+            native_polynomial_digest(&fixture.profile, &relation.target_a).unwrap(),
+            native_polynomial_digest(&fixture.profile, contribution).unwrap(),
+            native_polynomial_digest(&fixture.profile, public_key_commitment).unwrap(),
+            native_polynomial_digest(&fixture.profile, contribution_commitment).unwrap(),
+            TEST_SMUDGE_BITS,
+        )
+        .unwrap();
+        assert_eq!(streamed, dense);
     }
 
     #[test]
@@ -2148,7 +2726,7 @@ mod tests {
         let mut error = contribution.proof.clone();
         error.public_key_error_response[0] = error_limit + 1;
         let mut wide = contribution.proof.clone();
-        wide.smudge_response[0] = SignedWideV1::new(
+        let out_of_range_wide_response = SignedWideV1::new(
             false,
             wide_limit
                 .checked_add(&WideMagnitudeV1 {
@@ -2161,6 +2739,8 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+        wide.replace_smudge_response_for_test(0, &out_of_range_wide_response)
+            .unwrap();
         for proof in [secret, error, wide] {
             assert!(
                 verify_cks_relation(
@@ -2174,5 +2754,57 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn cks_secret_owners_zeroize_on_success_error_and_unwind() {
+        let reset = || CKS_ZEROIZING_DROP_AUDIT_V1.with(|audit| audit.set((0, 0)));
+        let observed = || CKS_ZEROIZING_DROP_AUDIT_V1.with(core::cell::Cell::get);
+
+        reset();
+        {
+            let mut signed = ZeroizingCksI64BufferV1::new();
+            signed.extend([1, -2, 3]);
+            let mut bytes = ZeroizingCksByteBufferV1::new();
+            bytes.extend([4, 5, 6]);
+        }
+        assert_eq!(observed(), (2, 0));
+
+        fn fail_after_secret_owner() -> Result<(), ZkAmsMkheErrorV1> {
+            let mut signed = ZeroizingCksI64BufferV1::new();
+            signed.extend([7, -8]);
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        }
+        reset();
+        assert_eq!(
+            fail_after_secret_owner(),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        );
+        assert_eq!(observed(), (1, 0));
+
+        reset();
+        let unwound = std::panic::catch_unwind(|| {
+            let _proof = ZkAmsMkheCksProofV1 {
+                wide_response_bytes: 1,
+                challenge_seed: [9; 32],
+                secret_response: vec![10, -11],
+                public_key_error_response: vec![12, -13],
+                smudge_response: vec![14, 15],
+            };
+            panic!("intentional CKS owner unwind");
+        });
+        assert!(unwound.is_err());
+        assert_eq!(observed(), (1, 0));
+
+        let source = include_str!("cks.rs");
+        let corridor = source
+            .split("fn clear_cks_i64_slice_v1")
+            .nth(1)
+            .expect("CKS zeroization corridor")
+            .split("/// Canonical fixed-width wide-coefficient CKS relation proof")
+            .next()
+            .expect("CKS zeroization corridor end");
+        assert!(corridor.matches("core::hint::black_box").count() >= 4);
+        assert!(corridor.matches("compiler_fence").count() >= 2);
     }
 }

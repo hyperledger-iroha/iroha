@@ -917,10 +917,10 @@ mod model {
         /// Asset committed by the confidential note.
         pub asset: AssetDefinitionId,
         /// Current note commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub note_commitment: [u8; 32],
         /// Nullifier consumed by the next split or redemption.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub spend_nullifier: [u8; 32],
         /// Exact amount at the authoritative asset scale.
         pub amount: KagemushaScaledAmountV2,
@@ -941,7 +941,7 @@ mod model {
         /// One left (`0`) or right (`1`) direction per tree level.
         pub directions: Vec<u8>,
         /// Root authenticated by the complete path.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub root: [u8; 32],
     }
 
@@ -978,12 +978,12 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendBranchPathV2 {
         /// Stable top-up lineage root, unique for one online-to-offline operation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub lineage_root: [u8; 32],
         /// Number of significant path bits, from zero through 64.
         pub depth: u8,
         /// Big-endian branch bits; unused low-order bits are canonical zeroes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub path_bits: [u8; 8],
     }
 
@@ -1004,7 +1004,7 @@ mod model {
         /// Canonical leaf coordinate used for ancestor/descendant conflicts.
         pub path: KagemushaRecursiveSpendBranchPathV2,
         /// Contiguous exact-depth transition-selection history with no padding.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub transition_tags: Vec<u8>,
     }
 
@@ -1027,7 +1027,7 @@ mod model {
         /// Exact requested amount at the authoritative asset scale.
         pub amount: KagemushaScaledAmountV2,
         /// Non-zero receiver-created nonce that domain-separates derivation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
     }
 
@@ -1065,14 +1065,14 @@ mod model {
         /// Online account used only for recipient/request identity binding.
         pub recipient: AccountId,
         /// Domain-separated receiver-device public-key reference.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_key_reference: [u8; 32],
         /// Registered receiver device identifier.
         pub receiver_device_id: String,
         /// Device-bound key that authenticates this request and its later ACK.
         pub receiver_public_key: KagemushaDevicePublicKeyV2,
         /// Unique request/nonce identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
@@ -1107,14 +1107,14 @@ mod model {
         /// Online account used only for recipient/request identity binding.
         pub recipient: AccountId,
         /// Stable receiver-side key reference; not secret key bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_key_reference: [u8; 32],
         /// Registered receiver device identifier.
         pub receiver_device_id: String,
         /// Device-bound public key authenticating the request and later ACK.
         pub receiver_public_key: KagemushaDevicePublicKeyV2,
         /// Unique request/nonce identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
@@ -1188,20 +1188,20 @@ mod model {
         /// Unlike nonces and payload digests, this identifier is not scoped by
         /// `authority`; every Kagemusha V2 chain operation shares one replay
         /// namespace.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
         /// Inclusive request expiry time in Unix milliseconds.
         pub expires_at_ms: u64,
         /// Unique signed nonce.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub nonce: [u8; 32],
         /// Digest of the canonical unsigned top-up or redemption payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_digest: [u8; 32],
         /// Canonical Iroha hash of the exact registration admitted by consensus.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub registration_hash: [u8; 32],
         /// Typed assertion from the registered online hardware key.
         pub hardware_assertion: KagemushaOnlineHardwareAssertionV1,
@@ -1221,10 +1221,10 @@ mod model {
     #[norito(deny_unknown_fields)]
     pub struct KagemushaTopUpShieldEvidenceV2 {
         /// Authoritative confidential root before inserting the top-up note.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub initial_root: [u8; 32],
         /// Root after inserting exactly the requested top-up note.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub finalized_root: [u8; 32],
         /// Authoritative zero-leaf position consumed by the insertion.
         pub leaf_index: u32,
@@ -1244,10 +1244,10 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendTopUpAnchorRefV2 {
         /// Stable top-up operation identifier used for the chain-state lookup.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub topup_operation_id: [u8; 32],
         /// Canonical digest of the complete finalized anchor.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub anchor_digest: [u8; 32],
     }
 
@@ -1325,7 +1325,7 @@ mod model {
         /// Siblings from leaf level to root.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::vec")
+            norito(json = "crate::json_helpers::fixed_bytes::vec")
         )]
         pub siblings: Vec<[u8; 32]>,
     }
@@ -1392,7 +1392,7 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendInputBranchV2 {
         /// Canonical digest of the complete previous recursive bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub bundle_digest: [u8; 32],
         /// Exact note consumed by the confidential transfer.
         pub input_note: KagemushaSpendableNoteDescriptorV2,
@@ -1400,7 +1400,7 @@ mod model {
         /// carries one transition-bound claim per contributing ancestor.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
         /// Root at which the input transfer output was created.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_root: [u8; 32],
         /// Recursive proof-step count of the consumed bundle.
         pub proof_step_count: u32,
@@ -1430,31 +1430,31 @@ mod model {
     )]
     pub struct KagemushaUnshieldPublicInputsBindingV2 {
         /// First input note commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_commitment_0: [u8; 32],
         /// Optional second input note commitment; zero for Kagemusha redemption.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_commitment_1: [u8; 32],
         /// First input nullifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub nullifier_0: [u8; 32],
         /// Optional second input nullifier; zero for Kagemusha redemption.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub nullifier_1: [u8; 32],
         /// Zero for full redemption or the partial-redemption change commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub change_output_commitment: [u8; 32],
         /// Root at which the input note is proved live.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub root: [u8; 32],
         /// Confidential-circuit encoding of the exact credited atomic amount.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub public_amount: [u8; 32],
         /// Canonical asset tag.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub asset_tag: [u8; 32],
         /// Canonical network tag.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub network_tag: [u8; 32],
     }
 
@@ -1575,12 +1575,12 @@ mod model {
         /// Exact framed byte length.
         pub size_bytes: u64,
         /// SHA-256 of the exact framed file bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub sha256: [u8; 32],
         /// Exact byte length of the unframed cryptographic payload.
         pub payload_size_bytes: u64,
         /// SHA-256 of the unframed cryptographic payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_sha256: [u8; 32],
     }
 
@@ -1616,10 +1616,10 @@ mod model {
         /// Authenticated IPA degree.
         pub ipa_k: u32,
         /// Domain-separated identity of the embedded canonical circuit parameters.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub circuit_params_sha256: [u8; 32],
         /// Value-free compiled protocol structure selected by this profile.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub compiled_protocol_structure_sha256: [u8; 32],
         /// Measured ordinary Step proof bytes selected by this profile.
         pub step_proof_size_bytes: u32,
@@ -1628,7 +1628,7 @@ mod model {
         /// Exact byte length of the following unframed payload.
         pub payload_size_bytes: u64,
         /// Raw SHA-256 of the following unframed payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_sha256: [u8; 32],
     }
 
@@ -1644,7 +1644,7 @@ mod model {
         /// Exact canonical Norito byte length.
         pub size_bytes: u64,
         /// SHA-256 of the exact canonical roster bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub sha256: [u8; 32],
         /// Exact generation declared by the roster archive.
         pub artifact_generation: String,
@@ -1676,7 +1676,7 @@ mod model {
         /// Complete authenticated Halo2 base-circuit configuration.
         pub circuit_params: KagemushaStepCircuitParamsV4,
         /// Value-free structure identity shared by bootstrap and final protocol.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub compiled_protocol_structure_sha256: [u8; 32],
         /// Measured augmented proof bytes for this exact key and layout.
         pub step_proof_size_bytes: u32,
@@ -1697,7 +1697,7 @@ mod model {
         /// SHA-256 of the exact regular-file bytes.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub blob_sha256: [u8; 32],
         /// Canonical lowercase SHA-1 Git blob object id of the same bytes.
@@ -1732,13 +1732,13 @@ mod model {
         /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub source_tree_sha256: [u8; 32],
         /// SHA-256 of the canonical full-index binary Git diff from `source_commit`.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub tracked_binary_diff_sha256: [u8; 32],
         /// Exact number of raw-byte-sorted untracked manifest entries.
@@ -1749,7 +1749,7 @@ mod model {
         /// SHA-256 of each entry's canonical compact sorted-key JSON plus LF.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
         /// Exact ignored root `Cargo.lock` byte length.
@@ -1757,13 +1757,13 @@ mod model {
         /// SHA-256 of the exact ignored root `Cargo.lock` bytes.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub ignored_cargo_lock_sha256: [u8; 32],
         /// Fingerprint proving the tracked diff and untracked manifest are empty.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes_hex")
+            norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub combined_source_fingerprint_sha256: [u8; 32],
     }
@@ -1790,14 +1790,14 @@ mod model {
         /// Lowercase 40-hex source revision.
         pub source_commit: String,
         /// SHA-256 of the exact tracked and untracked build source tree.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
         /// Whether the exact build tree differed from `source_commit`.
         pub source_repo_dirty: bool,
         /// Complete independently pinned reviewed clean source closure.
         pub reviewed_source_closure: KagemushaReviewedSourceClosureV1,
         /// SHA-256 of the exact canonical descriptor JSON bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
         /// Exact network for which the release was built.
         pub network_id: NetworkId,
@@ -1816,23 +1816,23 @@ mod model {
         /// Exact mandatory in-process memory enforcement profile.
         pub generation_memory_enforcement_profile: String,
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the immutable candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// Eq then Ep V4 recursive-step profiles.
         pub profiles: Vec<KagemushaPastaCycleProofProfileV4>,
         /// Release-bound validator roster reference.
         pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4,
         /// Digest of signed physical-device benchmark evidence.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
         /// Digest of independent cryptographic review evidence.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub cryptographic_review_sha256: [u8; 32],
         /// Digest of the V4 signed release attestation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub release_attestation_sha256: [u8; 32],
     }
 
@@ -1874,17 +1874,17 @@ mod model {
         /// Receipt layout version.
         pub(super) version: u16,
         /// SHA-256 of the exact canonical unsigned candidate record.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub(super) candidate_sha256: [u8; 32],
         /// SHA-256 of the candidate's exact canonical unsigned manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub(super) manifest_sha256: [u8; 32],
         /// Exact in-process physical-memory ceiling committed by the candidate.
         pub(super) generation_memory_limit_bytes: u64,
         /// Exact mandatory in-process memory enforcement profile.
         pub(super) generation_memory_enforcement_profile: String,
         /// Framed then payload SHA-256 for all eight canonical artifact roles.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_array"))]
         pub(super) artifact_role_digests: [[u8; 32]; 16],
         /// Exact canonical Eq/Ep initialization proof pair bytes.
         pub(super) initialization_pair: Vec<u8>,
@@ -1905,25 +1905,25 @@ mod model {
     #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendCryptographicReviewSubjectV4 {
         /// SHA-256 of the canonical immutable pre-evidence candidate.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// Exact release generation copied from the candidate.
         pub generation: String,
         /// Exact source revision copied from the candidate.
         pub source_commit: String,
         /// Exact source-tree identity copied from the candidate.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
         /// Exact reviewed clean-tree state copied from the candidate (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the candidate.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
         /// Exact network for which the reviewed candidate was built.
         pub network_id: NetworkId,
@@ -1996,7 +1996,7 @@ mod model {
         /// Review result; production finalization requires `Passed`.
         pub status: KagemushaRecursiveSpendCryptographicReviewCheckStatusV4,
         /// SHA-256 of property-specific evidence retained by the reviewer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub evidence_sha256: [u8; 32],
     }
 
@@ -2015,7 +2015,7 @@ mod model {
         /// Review disposition; production requires `Approved`.
         pub decision: KagemushaRecursiveSpendCryptographicReviewDecisionV4,
         /// SHA-256 of the complete retained review report.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub report_sha256: [u8; 32],
         /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI-21.
         pub artifact_roles: Vec<String>,
@@ -2079,31 +2079,31 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
         /// SHA-256 of the canonical V4 manifest with its attestation slot zeroed.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_subject_sha256: [u8; 32],
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// Exact release generation copied from the V4 manifest.
         pub generation: String,
         /// Exact source revision copied from the V4 manifest.
         pub source_commit: String,
         /// Exact source-tree identity copied from the V4 manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
         /// Exact clean-tree state copied from the V4 manifest (`false`).
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
         /// Digest of the signed physical-device evidence file.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
         /// Digest of the independent cryptographic review file.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub cryptographic_review_sha256: [u8; 32],
     }
 
@@ -2213,22 +2213,22 @@ mod model {
         /// Authenticated V4 release generation.
         pub generation: String,
         /// SHA-256 of the immutable pre-evidence candidate record.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
         /// SHA-256 of the canonical actual-recursion qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualification_receipt_sha256: [u8; 32],
         /// Domain-separated identity of the candidate and qualification receipt.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
         /// SHA-256 of the complete canonical V4 manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
         /// SHA-256 of the canonical signed V4 release attestation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub release_attestation_sha256: [u8; 32],
         /// SHA-256 of the locally trusted release policy.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub release_policy_sha256: [u8; 32],
         /// Canonically ordered role/signer identities whose signatures were verified.
         pub approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
@@ -2276,7 +2276,7 @@ mod model {
         /// Fully authenticated signed release record.
         pub release_record: KagemushaRecursiveSpendReleaseRecordV4,
         /// SHA-256 of the operator-configured canonical release policy.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub configured_policy_sha256: [u8; 32],
         /// Registry id for the EqAffine/Vesta verifying key.
         pub step_eq_verifier_key_id: VerifyingKeyId,
@@ -2303,7 +2303,7 @@ mod model {
         /// Human-readable authenticated V4 release generation.
         pub generation: String,
         /// SHA-256 of the exact signed V4 manifest bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
     }
 
@@ -2320,23 +2320,23 @@ mod model {
     )]
     pub struct KagemushaReceiverAcknowledgementPayloadV2 {
         /// Sender operation whose reserved inputs may be committed after ACK verification.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Canonical digest of the receiver-created payment request.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Canonical digest of the accepted recipient bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payment_bundle_digest: [u8; 32],
         /// Recipient output commitment persisted by the receiver.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_commitment: [u8; 32],
         /// Receiver wall-clock time captured once at the durable commit boundary.
         pub accepted_at_ms: u64,
         /// Registered receiver device identifier used for device-lineage lookup.
         pub receiver_device_id: String,
         /// Domain-separated reference to `receiver_public_key`.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub receiver_key_reference: [u8; 32],
         /// Device-bound acknowledgement verification key.
         pub receiver_public_key: KagemushaDevicePublicKeyV2,
@@ -2365,16 +2365,16 @@ mod model {
         /// All request, bundle, key-reference, and signature bindings passed.
         pub valid: bool,
         /// Stable sender operation id copied from the verified acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Canonical receiver request digest copied from the verified acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Canonical accepted-bundle digest copied from the verified acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payment_bundle_digest: [u8; 32],
         /// Canonical identity digest of the complete acknowledgement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub acknowledgement_digest: [u8; 32],
     }
 
@@ -2433,23 +2433,23 @@ mod model {
         /// Authenticated artifact generation.
         pub artifact_generation: String,
         /// SHA-256 of the exact authenticated V4 manifest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
         /// Eq parameter generation identifier.
         pub step_eq_parameter_generation: String,
         /// Ep parameter generation identifier.
         pub step_ep_parameter_generation: String,
         /// Domain-separated identity of the Eq circuit configuration.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_eq_circuit_params_sha256: [u8; 32],
         /// Domain-separated identity of the Ep circuit configuration.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_ep_circuit_params_sha256: [u8; 32],
         /// SHA-256 of the exact Eq processed verifier-key payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_eq_verifier_key_sha256: [u8; 32],
         /// SHA-256 of the exact Ep processed verifier-key payload.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub step_ep_verifier_key_sha256: [u8; 32],
         /// Canonical cross-field state boundary exposed by the proof.
         pub state_boundary: KagemushaRecursiveSpendStateBoundaryV5,
@@ -2472,7 +2472,7 @@ mod model {
         /// All 1,080 exact public limbs; no compact or legacy encoding is accepted.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_u32_limbs")
+            norito(json = "crate::json_helpers::fixed_u32_limbs")
         )]
         pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4],
     }
@@ -2485,15 +2485,15 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendPeerSplitTransitionV4 {
         /// Circuit-exposed digest of the exact local split intent.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub binding_digest: [u8; 32],
         /// Independently spendable output selected by this statement.
         pub branch: KagemushaRecursiveSpendBranchV2,
         /// Receiver request digest bound by the split.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Stable split operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Maximum proof-step count among the consumed parent bundles.
         pub parent_max_proof_step_count: u32,
@@ -2509,13 +2509,13 @@ mod model {
     )]
     pub struct KagemushaRecursiveSpendRedemptionChangeTransitionV4 {
         /// Circuit-exposed digest of the exact redemption/change intent.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub binding_digest: [u8; 32],
         /// Parent bundle identity consumed by the unshield transition.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub parent_bundle_digest: [u8; 32],
         /// Stable redemption operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Parent proof-step count.
         pub parent_proof_step_count: u32,
@@ -2551,7 +2551,7 @@ mod model {
         /// Authoritative asset scale.
         pub asset_scale: u32,
         /// Root after the current transition.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub final_root: [u8; 32],
         /// First empty commitment-tree leaf after this transition.
         pub next_zero_leaf_index: u32,
@@ -2583,7 +2583,7 @@ mod model {
         /// Verifier selected by the statement.
         pub verifier_key_id: VerifyingKeyId,
         /// Circuit-exposed digest of the complete V4 public statement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub public_statement_digest: [u8; 32],
         /// Explicitly versioned envelope containing the opaque native pair.
         pub proof_envelope: KagemushaPastaCycleProofEnvelopeV4,
@@ -2624,32 +2624,32 @@ mod model {
         /// Exact positive amount reserved into escrow.
         pub amount: KagemushaScaledAmountV2,
         /// Confidential root before the finalized transfer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub initial_root: [u8; 32],
         /// Confidential root finalized by the transfer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub finalized_root: [u8; 32],
         /// Confidential tree position consumed by the top-up note.
         pub shield_leaf_index: u32,
         /// Exact first spendable note.
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Stable top-up operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub topup_operation_id: [u8; 32],
         /// Active shield verifier selected at finalization.
         pub shield_verifier_id: VerifyingKeyId,
         /// Registered shield verifier commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub shield_verifier_commitment: [u8; 32],
         /// Authenticated V4 recursive artifact release.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Finalization block height.
         pub finalized_height: u64,
         /// Canonical transaction hash that created the anchor.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub finalized_tx_hash: [u8; 32],
         /// Canonical digest of every preceding receipt field.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub anchor_digest: [u8; 32],
     }
 
@@ -2674,7 +2674,7 @@ mod model {
         /// Authenticated ABI-21 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 
@@ -2700,7 +2700,7 @@ mod model {
         /// Authenticated ABI-21 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Self-contained payer/device authorization.
         pub authorization: KagemushaRequestAuthorizationV2,
@@ -2732,10 +2732,10 @@ mod model {
         /// Sender-owned remainder, if any.
         pub change_output: Option<KagemushaSpendableNoteDescriptorV2>,
         /// Digest of the receiver's nonce-bound payment request.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Stable idempotency/replay identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 
@@ -2761,10 +2761,10 @@ mod model {
         /// Peer-hop count of the parent bundle.
         pub parent_peer_hop_count: u32,
         /// Canonical digest of the complete input bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub parent_bundle_digest: [u8; 32],
         /// Input confidential root exposed by unshield-v3.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub input_root: [u8; 32],
         /// Online account receiving the public credit.
         pub recipient: AccountId,
@@ -2777,10 +2777,10 @@ mod model {
         /// Canonical unshield-v3 public words.
         pub unshield_public_inputs: KagemushaUnshieldPublicInputsBindingV2,
         /// Digest of the unshield words exposed by the V4 transition circuit.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub unshield_public_inputs_digest: [u8; 32],
         /// Stable authorization/idempotency operation id.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 
@@ -2815,7 +2815,7 @@ mod model {
         /// Complete offline-verifiable origin provenance for the initialized branch.
         pub topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
         /// Circuit-exposed digest of the complete public statement.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub public_statement_digest: [u8; 32],
     }
 
@@ -2859,7 +2859,7 @@ mod model {
         /// Exact value-conserving transition shared by both branches.
         pub split: KagemushaRecursiveSpendSplitIntentV4,
         /// Circuit-exposed binding to the split and parent accumulator.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub split_binding_digest: [u8; 32],
         /// Receiver-owned independently spendable output.
         pub recipient_bundle: KagemushaRecursiveSpendBundleV4,
@@ -2951,10 +2951,10 @@ mod model {
         /// Exact current spendable amount.
         pub amount: KagemushaScaledAmountV2,
         /// Current note commitment.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub note_commitment: [u8; 32],
         /// Current note nullifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub spend_nullifier: [u8; 32],
         /// Current peer-hop count.
         pub hop_count: u32,
@@ -2967,7 +2967,7 @@ mod model {
         /// Recursive verifier selected by the proof.
         pub verifier_key_id: VerifyingKeyId,
         /// Canonical identity digest of the complete opaque bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub bundle_digest: [u8; 32],
     }
 
@@ -2989,10 +2989,10 @@ mod model {
         /// Verified ABI-21 bundle summary.
         pub summary: KagemushaRecursiveSpendBundleSummaryV4,
         /// Canonical receiver request digest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub recipient_request_digest: [u8; 32],
         /// Digest binding request, output, and bundle.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub request_output_binding_digest: [u8; 32],
         /// Active recursive verifier record identifier.
         pub verifier_key_id: VerifyingKeyId,
@@ -3043,7 +3043,7 @@ mod model {
         /// Signed proof-evaluation snapshot, bounded by the eventual execution height.
         pub block_height: u64,
         /// Stable idempotency identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 
@@ -3071,7 +3071,7 @@ mod model {
         /// Signed proof-evaluation snapshot, bounded by the eventual execution height.
         pub block_height: u64,
         /// Stable idempotency identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 
@@ -3085,7 +3085,7 @@ mod model {
         /// Complete unsigned V4 chain-request fields.
         pub unsigned: KagemushaRecursiveSpendRedeemUnsignedV4,
         /// Exact digest that device authorization must sign.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub authorization_digest: [u8; 32],
         /// Independently spendable proof-bound change.
         pub offline_change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
@@ -3094,7 +3094,7 @@ mod model {
         /// Complete inherited origin provenance for proof-bound change.
         pub offline_change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
         /// Stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 
@@ -3124,7 +3124,7 @@ mod model {
         /// Signed proof-evaluation snapshot; chain execution also checks the current window.
         pub block_height: u64,
         /// Globally unique idempotency identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Self-contained recipient/device authorization.
         pub authorization: KagemushaRequestAuthorizationV2,
@@ -3148,7 +3148,7 @@ mod model {
         /// Complete inherited origin provenance for proof-bound change.
         pub offline_change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
         /// Stable operation identifier.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
 }

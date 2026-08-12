@@ -1509,6 +1509,33 @@ impl json::FastJsonWrite for SignatureAlgorithm {
         };
         json::write_json_string(label, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to("ed25519", out)
+    }
+}
+
+#[cfg(test)]
+mod signature_algorithm_json_tests {
+    use super::*;
+
+    #[test]
+    fn signature_algorithm_has_exact_checked_json_bytes() {
+        let value = SignatureAlgorithm::Ed25519;
+        let expected = json::to_json(&value).expect("serialize signature algorithm");
+        assert_eq!(expected, "\"ed25519\"");
+        assert_eq!(
+            json::to_json_bounded(&value, expected.len()).expect("serialize at exact bound"),
+            expected
+        );
+        assert_eq!(
+            json::to_json_bounded(&value, expected.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+    }
 }
 
 impl json::JsonDeserialize for SignatureAlgorithm {
@@ -10641,50 +10668,7 @@ mod tests {
         to_bytes,
     };
 
-    fn demo_hash(seed: u8) -> Hash {
-        let mut bytes = [0u8; 32];
-        bytes.fill(seed);
-        bytes
-    }
-
-    fn demo_signature(seed: u8) -> Signature {
-        let mut bytes = [0u8; 64];
-        bytes.fill(seed);
-        bytes
-    }
-
-    fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
-        const LUT: &[u8; 16] = b"0123456789abcdef";
-        let mut out = String::with_capacity(bytes.as_ref().len() * 2);
-        for byte in bytes.as_ref() {
-            out.push(char::from(LUT[(byte >> 4) as usize]));
-            out.push(char::from(LUT[(byte & 0x0f) as usize]));
-        }
-        out
-    }
-
-    #[test]
-    fn shared_blake3_adapter_matches_official_vectors() {
-        assert_eq!(
-            hex_encode(blake3_hash(b"")),
-            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
-        );
-        assert_eq!(
-            hex_encode(blake3_hash(b"abc")),
-            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
-        );
-
-        let message = b"incremental content-addressed artifact verification";
-        let mut incremental = Blake3Hasher::new();
-        for chunk in message.chunks(3) {
-            incremental.update(chunk);
-        }
-        assert_eq!(incremental.finalize(), blake3_hash(message));
-
-        let mut empty = Blake3Hasher::default();
-        empty.update(&[]);
-        assert_eq!(empty.finalize(), blake3_hash(b""));
-    }
+    include!("streaming/shared_hash_tests.rs");
 
     #[test]
     fn decode_from_slice_rejects_short_payloads() {

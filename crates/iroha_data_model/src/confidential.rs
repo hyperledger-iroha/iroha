@@ -42,13 +42,13 @@ pub const CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES: usize = 64 * 1024
 pub struct ConfidentialEncryptedPayload {
     version: u8,
     /// Sender's ephemeral X25519 public key used for ECDH (32 bytes).
-    #[cfg_attr(feature = "json", norito(with = "fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
     ephemeral_pubkey: [u8; 32],
     /// XChaCha20-Poly1305 nonce (24 bytes).
-    #[cfg_attr(feature = "json", norito(with = "fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
     nonce: [u8; 24],
     /// Encrypted payload + Poly1305 tag bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     ciphertext: Vec<u8>,
 }
 
@@ -394,7 +394,7 @@ pub struct ConfidentialFeatureDigest {
     /// Optional hash summarizing the set of active verifying keys.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub vk_set_hash: Option<[u8; 32]>,
     /// Poseidon parameter set identifier expected by the node.
@@ -406,7 +406,7 @@ pub struct ConfidentialFeatureDigest {
     /// Hash of the ZK consensus policy that affects proof admission and verification.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub zk_policy_hash: Option<[u8; 32]>,
 }
@@ -523,10 +523,10 @@ pub struct PedersenParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
     /// Hash of the curve generators used by the Pedersen commitment scheme.
-    #[cfg_attr(feature = "json", norito(with = "fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
     pub generators_hash: [u8; 32],
     /// Hash of auxiliary constants (domain separators, blinding hints, etc.).
-    #[cfg_attr(feature = "json", norito(with = "fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
     pub constants_hash: [u8; 32],
     /// Optional URI (CID) pointing to the canonical parameter bundle documentation.
     pub metadata_uri_cid: Option<String>,
@@ -571,10 +571,10 @@ pub struct PoseidonParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
     /// Hash of the Poseidon round constants.
-    #[cfg_attr(feature = "json", norito(with = "fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
     pub round_constants_hash: [u8; 32],
     /// Hash of the Poseidon MDS matrix.
-    #[cfg_attr(feature = "json", norito(with = "fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
     pub mds_matrix_hash: [u8; 32],
     /// Optional URI (CID) pointing to the canonical parameter bundle documentation.
     pub metadata_uri_cid: Option<String>,
@@ -658,6 +658,19 @@ mod tests {
     fn encrypted_payload_roundtrips() {
         let payload =
             ConfidentialEncryptedPayload::new([1u8; 32], [2u8; 24], vec![3, 4, 5, 6, 7, 8, 9]);
+        #[cfg(feature = "json")]
+        {
+            let ordinary = norito::json::to_json(&payload).expect("serialize payload JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(&payload, ordinary.len())
+                    .expect("serialize payload at exact JSON limit"),
+                ordinary
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(&payload, ordinary.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
         let encoded = encode_adaptive(&payload);
         let decoded: ConfidentialEncryptedPayload =
             decode_adaptive(&encoded).expect("decode encrypted payload");

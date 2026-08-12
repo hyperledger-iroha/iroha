@@ -1,5 +1,5 @@
 #[tokio::test]
-async fn alias_lookup_by_account_rejects_multiroute_before_public_alias_filtering() {
+async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
     let authority = checked_torii_test_account_id(
         0xa8,
         "derive unsigned alias lookup filtering authority fixture key",
@@ -30,24 +30,18 @@ async fn alias_lookup_by_account_rejects_multiroute_before_public_alias_filterin
         axum::body::Bytes::from(body),
     )
     .await
-    .expect("handler should return a fixed multi-route rejection")
+    .expect("unsigned lookup should return only visible public aliases")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede alias source execution"
-    );
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .expect("collect public alias lookup response")
+        .to_bytes();
+    let dto: routing::AliasLookupByAccountResponseDto =
+        norito::json::from_slice(&body).expect("decode public alias lookup response");
+    assert_eq!(dto.total, 1);
+    assert_eq!(dto.items[0].alias, "merchant@universal");
 }
 
 #[tokio::test]
@@ -232,7 +226,7 @@ async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
 }
 
 #[tokio::test]
-async fn alias_lookup_by_account_rejects_multiroute_before_permission_filtering() {
+async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant() {
     let caller_keypair = checked_torii_test_ed25519_keypair(
         0x37,
         "derive alias lookup permission filter caller fixture key",
@@ -268,6 +262,34 @@ async fn alias_lookup_by_account_rejects_multiroute_before_permission_filtering(
         .expect("alias by-account uri");
     let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
     let response = handler_alias_lookup_by_account(
+        State(app.clone()),
+        method.clone(),
+        uri.clone(),
+        headers.clone(),
+        axum::body::Bytes::from(body.clone()),
+    )
+    .await
+    .expect("handler should succeed")
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let dto: routing::AliasLookupByAccountResponseDto =
+        norito::json::from_slice(&body).expect("json decode");
+    assert_eq!(dto.total, 1);
+    assert_eq!(dto.items[0].alias, "merchant@restricted");
+
+    let domain_alias = AccountAlias::from_literal(
+        "merchant@bank.restricted",
+        &app.state.nexus_snapshot().dataspace_catalog,
+    )
+    .expect("domain alias");
+    grant_alias_resolve_permissions(&app, &caller, &domain_alias);
+    let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+    let response = handler_alias_lookup_by_account(
         State(app),
         method,
         uri,
@@ -275,28 +297,26 @@ async fn alias_lookup_by_account_rejects_multiroute_before_permission_filtering(
         axum::body::Bytes::from(body),
     )
     .await
-    .expect("handler should return a fixed multi-route rejection")
+    .expect("handler should succeed after exact domain grant")
     .into_response();
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
-    );
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let dto: routing::AliasLookupByAccountResponseDto =
+        norito::json::from_slice(&body).expect("json decode");
+    assert_eq!(dto.total, 2);
     assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede permission filtering and source execution"
+        dto.items
+            .iter()
+            .any(|item| item.alias == "merchant@bank.restricted")
     );
 }
 
 #[tokio::test]
-async fn alias_lookup_by_account_rejects_multiroute_before_offline_route_fetch() {
+async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_has_no_reachable_aliases()
+ {
     let authority_keypair = checked_torii_test_ed25519_keypair(
         0xaa,
         "derive alias lookup offline fanout authority fixture key",
@@ -339,24 +359,34 @@ async fn alias_lookup_by_account_rejects_multiroute_before_offline_route_fetch()
         axum::body::Bytes::from(body),
     )
     .await
-    .expect("handler should return a fixed multi-route rejection")
+    .expect("handler should return a routed response")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
             .headers()
-            .get("x-iroha-reject-code")
+            .get("x-iroha-routed-by")
             .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
+        Some("proxy")
     );
-    assert!(
+    assert_eq!(
         response
             .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede offline route execution"
+            .get("x-iroha-fanout-routes-unavailable")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
     );
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let dto: routing::AliasLookupByAccountResponseDto =
+        norito::json::from_slice(&body).expect("json decode");
+    assert_eq!(dto.account_id, authority.to_string());
+    assert_eq!(dto.total, 0);
+    assert!(dto.items.is_empty());
+    assert_eq!(dto.source.as_deref(), Some("fanout"));
 }
 
 #[tokio::test]
@@ -2267,61 +2297,35 @@ async fn torii_norito_body_decodes_successful_responses() {
         bridge: None,
     };
     let response = (StatusCode::OK, utils::NoritoBody(record.clone())).into_response();
-    let phase_bytes = 1024 * 1024;
-    let working_set_bytes = super::query_fanout_fixed_overhead_bytes()
-        .expect("fixed fanout overhead fits")
-        .checked_add(
-            phase_bytes
-                .checked_mul(super::QUERY_FANOUT_PREBODY_UNITS)
-                .expect("test phase geometry fits"),
-        )
-        .expect("test working set fits");
-    let mut budget = super::ToriiRoutedReadMemoryBudget::new(working_set_bytes, phase_bytes)
-        .expect("test routed-read budget");
 
-    let decoded =
-        super::torii_norito_body::<ProofRecord>(response, "proof record response", &mut budget)
-            .await
-            .expect("norito body should decode");
+    let decoded = super::torii_norito_body::<ProofRecord>(response, "proof record response")
+        .await
+        .expect("norito body should decode");
 
-    assert_eq!(decoded.value, record);
-    assert_eq!(
-        decoded.canonical_bytes,
-        norito::to_bytes(&decoded.value).expect("canonical proof record encoding")
-    );
+    assert_eq!(decoded, record);
 }
 
 #[tokio::test]
-async fn resolve_torii_proof_record_for_routes_rejects_multiroute_before_source_execution() {
+async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xBC; 32]);
     let routes = super::torii_all_dataspace_routes(app.as_ref());
 
-    assert!(routes.len() > 1, "fixture must exercise multi-route fanout");
-    let response = super::resolve_torii_proof_record_for_routes(&app, routes, id)
-        .await
-        .expect_err("multi-route proof reads must fail before source execution");
+    let (record, diagnostics, routed_by) =
+        super::resolve_torii_proof_record_for_routes(&app, routes, id.clone())
+            .await
+            .expect("proof record fanout should resolve");
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede route execution"
-    );
+    assert_eq!(record.id.to_string(), id);
+    assert_eq!(diagnostics.attempted_routes, 3);
+    assert_eq!(diagnostics.succeeded_routes, 3);
+    assert_eq!(routed_by, "local");
 }
 
 #[tokio::test]
-async fn resolve_torii_proof_record_for_routes_rejects_multiroute_before_route_fetch() {
+async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unavailable_when_missing()
+ {
     let mut app = mk_app_state_for_tests();
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
@@ -2337,22 +2341,16 @@ async fn resolve_torii_proof_record_for_routes_rejects_multiroute_before_route_f
         missing_id,
     )
     .await
-    .expect_err("multi-route proof reads must fail before remote fetch");
+    .expect_err("missing proof record should return an error response");
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(
         response
             .headers()
             .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede remote route execution"
+        Some("route_unavailable"),
+        "a definitive missing-proof response should outrank an unrelated unavailable route",
     );
 }
 
@@ -2439,40 +2437,54 @@ async fn proof_record_get_advertises_cache_and_304() {
 }
 
 #[tokio::test]
-async fn proof_record_get_rejects_multiroute_before_local_source() {
+async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);
 
     let response = handler_proof_record_get(
-        State(app),
+        State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        axum::extract::Path(id),
+        axum::extract::Path(id.clone()),
     )
     .await
-    .expect("proof handler should return a fixed multi-route rejection")
+    .expect("proof record ok")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
             .headers()
-            .get("x-iroha-reject-code")
+            .get("x-iroha-routed-by")
             .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
+        Some("local")
     );
-    assert!(
+    assert_eq!(
         response
             .headers()
             .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede local proof source execution"
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
     );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-succeeded")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let record = norito::decode_from_bytes::<ProofRecord>(&body).expect("proof record body");
+    assert_eq!(record.id.to_string(), id);
 }
 
 #[tokio::test]
-async fn proof_record_get_rejects_multiroute_before_missing_source_scan() {
+async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let missing_id = ProofId {
@@ -2482,7 +2494,7 @@ async fn proof_record_get_rejects_multiroute_before_missing_source_scan() {
     .to_string();
 
     let response = handler_proof_record_get(
-        State(app),
+        State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         axum::extract::Path(missing_id),
@@ -2491,21 +2503,12 @@ async fn proof_record_get_rejects_multiroute_before_missing_source_scan() {
     .expect("proof handler should return a response")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("query_unsupported")
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .is_none(),
-        "the rejection must precede missing-proof source execution"
-    );
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).expect("error envelope payload");
+    assert_eq!(envelope.code, "proof_record_not_found");
 }
 
 #[tokio::test]

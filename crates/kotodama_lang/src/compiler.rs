@@ -9727,8 +9727,8 @@ seiyaku Test {
         let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &sample_account_id(),
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

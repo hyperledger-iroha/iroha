@@ -44,12 +44,13 @@ use crate::vega::{
     sumcheck::{CompressedUnivariate, SumcheckProof},
 };
 
+#[cfg(test)]
+use super::collective::{
+    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
+    ZkAmsMkheCollectivePublicKeyV1, validate_compact_for_key,
+};
 use super::{
     ZkAmsMkheErrorV1,
-    collective::{
-        ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
-        ZkAmsMkheCollectivePublicKeyV1, validate_compact_for_key,
-    },
     manifest::{ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1},
     packing::{
         ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
@@ -60,7 +61,7 @@ use super::{
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
         ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
         ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23PackedAccumulatorSetV1,
-        zk_ams_phase23_release_map_set_digest_v1, zk_ams_phase23_release_maps_v1,
+        zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
@@ -375,17 +376,17 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
     }
     let rns_limb_count =
         u16::try_from(profile.moduli.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
-    let maps = zk_ams_phase23_release_maps_v1()?;
-    let [a, b, c] = maps.abc();
-    if a.row_count != b.row_count
-        || a.row_count != c.row_count
-        || a.column_count != b.column_count
-        || a.column_count != c.column_count
+    let manifest = zk_ams_phase23_release_map_manifest_v1()?;
+    let [a, b, c] = manifest.abc();
+    if a.row_count() != b.row_count()
+        || a.row_count() != c.row_count()
+        || a.column_count() != b.column_count()
+        || a.column_count() != c.column_count()
     {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
-    let relation_row_count = a.row_count;
-    let paper_column_count = a.column_count;
+    let relation_row_count = a.row_count();
+    let paper_column_count = a.column_count();
     let public_and_relaxation = u32::try_from(
         ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1
             .checked_add(1)
@@ -395,7 +396,7 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
     let witness_value_count = paper_column_count
         .checked_sub(public_and_relaxation)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-    let preimage = maps.commitment_preimage_layout();
+    let preimage = manifest.commitment_preimage_layout();
     let commitment_columns = u32::try_from(MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     if relation_row_count
@@ -455,7 +456,7 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
     }
 
     let profile_digest = profile.digest()?;
-    let map_set_digest = maps.digest();
+    let map_set_digest = manifest.digest();
     let commitment_count =
         u16::try_from(commitment_count).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let mut frame = Vec::with_capacity(NATIVE_GEOMETRY_DOMAIN_V1.len() + 384);
@@ -1290,11 +1291,12 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 
 // TODO: Bind the first operational consumer's statement and replay context in
 // its consuming API before this local check can authorize any state change.
-/// Safe-Rust seal for the sole production opening-consumer boundary.
+/// Safe-Rust seal for the unit-only native opening-consumer boundary.
 ///
 /// The private field is constructible only in this module and its descendants.
 /// This type deliberately implements neither cloning, default construction,
 /// decoding, nor serialization, and carries no evidence or authority.
+#[cfg(test)]
 pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
 
 #[allow(
@@ -1304,13 +1306,31 @@ pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
 #[path = "phase23_rns_link_q_pcs.rs"]
 mod q_pcs;
 
+#[allow(
+    dead_code,
+    reason = "cross-field prerequisite remains production-uninhabited until source/range/mask/qPCS seals and the global ZK lookup theorem are wired"
+)]
+#[path = "phase23_rns_link_cross_field_v2.rs"]
+mod cross_field_v2;
+
+#[cfg(test)]
 #[path = "phase23_rns_link_q_relation_adapter.rs"]
 mod q_relation_adapter;
+#[cfg(test)]
 pub(super) use q_relation_adapter::ZkAmsPhase23QNativeRelationAdapterSinkV1;
 
 #[path = "phase23_rns_link_external_source.rs"]
 mod external_source;
+#[allow(
+    unused_imports,
+    reason = "private concrete confidential-source seam; its collective producer and relation consumer are not wired yet"
+)]
+pub(super) use external_source::{
+    ZkAmsPhase23RnsLinkExternalSourceAssemblyV1, ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
+    ZkAmsPhase23RnsLinkSecretChunkV1, ZkAmsPhase23RnsLinkSourcePublicationReceiptV1,
+};
 
+#[cfg(test)]
 #[path = "phase23_rns_link_state_owned.rs"]
 mod state_owned;
 #[cfg(test)]
@@ -1353,6 +1373,7 @@ impl Drop for ZeroizingNativeDecodedPlaintextV1 {
     }
 }
 
+#[cfg(test)]
 fn validate_native_bgv_public_artifacts_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     layout: ZkAmsT256PackingLayoutV1,
@@ -1392,6 +1413,7 @@ fn validate_native_bgv_public_artifacts_v1(
 /// live.
 /// No checked token, callback, witness reference, or transferable authority is
 /// returned.
+#[cfg(test)]
 fn verify_zk_ams_phase23_native_bgv_opening_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     layout: ZkAmsT256PackingLayoutV1,

@@ -410,9 +410,8 @@ def test_transport_geometry_source_fidelity_rejects_reply_route_mutants(
             "drop",
             (
                 (
-                    "impl", "<", "T", ":", "Pload", ",", "K", ":", "Kex",
-                    ",", "E", ":", "Enc", ">", "Drop", "for", "NetworkBase",
-                    "<", "T", ",", "K", ",", "E", ">",
+                    "impl", "<", "T", ":", "Pload", ",", "E", ":", "Enc", ">",
+                    "Drop", "for", "NetworkBase", "<", "T", ",", "E", ">",
                 ),
             ),
             "let _ = self.cancel_all_reply_route_tenures();",
@@ -983,7 +982,15 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         tmp_path, module, "SumeragiV2AsyncNetwork.tla"
     )
     repo_root = formal_dir.parents[2]
-    assert module._transport_geometry_production_source_fidelity_errors(repo_root) == []
+    baseline_errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
+    p2p_taira_markers = (
+        "/crates/iroha_p2p/", "/scripts/render_taira_validator_bundle.py",
+        "/configs/soranexus/taira/", "/defaults/kagami/iroha3-taira/",
+    )
+    assert not [
+        error for error in baseline_errors
+        if any(marker in error for marker in p2p_taira_markers)
+    ], baseline_errors
 
     network_path = repo_root / "crates" / "iroha_p2p" / "src" / "network.rs"
     source = network_path.read_text(encoding="utf-8")
@@ -1173,6 +1180,58 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         )
 
 
+def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    repo_root = formal_dir.parents[2]
+    markers = (
+        "/crates/iroha_p2p/", "/scripts/render_taira_validator_bundle.py",
+        "/configs/soranexus/taira/", "/defaults/kagami/iroha3-taira/",
+    )
+    baseline = module._transport_geometry_production_source_fidelity_errors(repo_root)
+    assert not [error for error in baseline if any(marker in error for marker in markers)], baseline
+
+    renderer_path = repo_root / "scripts/render_taira_validator_bundle.py"
+    renderer_source = renderer_path.read_text(encoding="utf-8")
+    renderer_path.write_text(
+        renderer_source.replace(
+            "validator_count + authenticated_non_validator_sources + 1",
+            "validator_count + 1",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    production_path = repo_root / "configs/soranexus/taira/genesis.json"
+    production_source = production_path.read_text(encoding="utf-8")
+    production_path.write_text(
+        production_source.replace('"max_payload_size_bytes":16777216', '"max_payload_size_bytes":16777215', 1)
+        .replace('"max_tx_bytes": 10485760', '"max_tx_bytes": 10485759', 1),
+        encoding="utf-8",
+    )
+    default_path = repo_root / "defaults/kagami/iroha3-taira/genesis.json"
+    default_source = default_path.read_text(encoding="utf-8")
+    default_path.write_text(
+        default_source.replace(
+            '"max_payload_size_bytes": 16777216,',
+            '"max_payload_size_bytes": 16777216,\n      "max_payload_size_bytes": 16777216,',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
+    for expected in (
+        "Taira renderer scales aggregate bytes by N+H+1",
+        "production Taira genesis DA pins the revision-4 protocol ceiling",
+        "production Taira genesis admits one maximum privacy transaction",
+        "default Taira genesis must parse with unique keys",
+    ):
+        assert any(expected in error for error in errors), (expected, errors)
+
+
 def test_transport_geometry_source_fidelity_rejects_sm_distid_bit_length_mutant(
     tmp_path: Path,
 ) -> None:
@@ -1301,6 +1360,30 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
             "ordinary source geometry must include the exact Kura replica-advert network ceiling",
         ),
         (
+            "configure_roster_for_context",
+            "fair_v2_ingress_required_recovery_request_bytes(network_id, roster.len())",
+            "fair_v2_ingress_required_recovery_request_bytes(&NetworkId::default(), roster.len())",
+            "exact v2 and lane-local progress/completion/recovery ceilings",
+        ),
+        (
+            "try_push_at",
+            "queued.ownership_snapshot = ownership_snapshot;",
+            "let _ = ownership_snapshot;",
+            "validated ingress route shadow commits atomically beside its exact ownership evidence",
+        ),
+        (
+            "try_push_at",
+            "&& !authenticated_historical_recovery_response",
+            "&& false",
+            "current-roster or proof-carrying historical authority premise",
+        ),
+        (
+            "dequeue_selected_locked",
+            "state.pending_wire_owners.remove(key)",
+            "state.pending_wire_owners.get(key).cloned()",
+            "semantic request ownership retires only when its queued occurrence is serviced",
+        ),
+        (
             "try_recv_if_at_checked",
             "FairV2IngressBarrierBypass::None,",
             "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
@@ -1385,6 +1468,59 @@ def test_transport_geometry_reviewed_ingress_items_survive_digest_refresh(
 
 
 @pytest.mark.parametrize(
+    ("relative", "item_name", "old", "new", "seal", "expected_error"),
+    (
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_queue_gate_verdict",
+            "if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass)",
+            "if false || (!ingress_barrier_allows && !dependency_bypass)",
+            "ingress::fair_v2_ingress_queue_gate_verdict",
+            "live control predecessor blocks strict-newer carrier authorization",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "scheduler_arbitration_inputs",
+            "(deferred_owner_blocks_fifo || older_signer_blocks_fifo)",
+            "deferred_owner_blocks_fifo",
+            "scheduler_arbitration_inputs",
+            "deferred-owner alias or older-signer predecessor",
+        ),
+    ),
+)
+def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
+    tmp_path: Path,
+    relative: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    seal: str,
+    expected_error: str,
+) -> None:
+    """Moved selector and runtime blockers remain semantic after resealing."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    repo_root = formal_dir.parents[2]
+    path = reviewed_rust_item_provider(module, repo_root, relative, item_name)
+    mutate_rust_item_source(module, path, item_name, old, new)
+    item = module.rust_items(path.read_text(encoding="utf-8"), item_name)[0]
+    digest = module._rust_item_token_sha256(item)
+    if seal.startswith("ingress::"):
+        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[seal] = digest
+    else:
+        module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[seal] = digest
+
+    errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
     ("item_name", "context", "old", "new", "expected_error"),
     (
         (
@@ -1397,14 +1533,12 @@ def test_transport_geometry_reviewed_ingress_items_survive_digest_refresh(
         (
             "try_push_at",
             (("impl", "FairV2Ingress"),),
-            "        if is_transport_completion && !is_validator_origin {\n"
-            "            return Err(FairV2IngressPushError::Rejected(inbound));\n"
-            "        }\n",
-            "",
-            "roster-origin premise for completion relayed through any authenticated hop",
+            "&& !authenticated_historical_recovery_response",
+            "&& false",
+            "current-roster or proof-carrying historical authority premise",
         ),
         (
-            "try_recv_if_at_checked_classified",
+            "dequeue_selected_locked",
             (("impl", "FairV2Ingress"),),
             "if entry.class == FairV2IngressClass::TransportCompletion {",
             "if false && entry.class == FairV2IngressClass::TransportCompletion {",
@@ -1525,10 +1659,17 @@ def test_transport_geometry_source_fidelity_requires_configure_and_open_rechecks
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "start_with_crypto",
+            "start_with_crypto_and_initial_authorities",
             "let transport_geometry = validate_transport_queue_geometry::<E>(",
             "let transport_geometry = unchecked_transport_queue_geometry::<E>(",
             "complete transport geometry validation must be the first P2P startup action before any listener bind",
+        ),
+        (
+            Path("crates/iroha_p2p/src/network.rs"),
+            "start_with_crypto",
+            "Self::start_with_crypto_and_initial_trusted_sources(",
+            "Self::unchecked_startup(",
+            "public P2P crypto startup wrapper delegates through protected-source startup",
         ),
         (
             Path("crates/irohad/src/main.rs"),

@@ -301,17 +301,50 @@ fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionE
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
+    decode_state_with_current(bytes, label, None)
+}
+
+fn decode_state_for_current<T>(
+    bytes: &[u8],
+    label: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    decode_state_with_current(bytes, label, Some(current))
+}
+
+fn decode_state_with_current<T>(
+    bytes: &[u8],
+    label: &str,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
     if bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
-        bytes.len(),
-        STATE_LIMITS,
-    )
+    let limits = match current.as_deref() {
+        Some(current) => current.decode_limits(bytes.len(), STATE_LIMITS),
+        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
+            bytes.len(),
+            STATE_LIMITS,
+        ),
+    }
     .map_err(InstructionExecutionError::Query)?;
-    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+    let (value, allocation_bytes) = if current.is_some() {
+        let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+            decode_from_bytes_with_limits::<T>(bytes, limits)
+        });
+        (value, Some(usage.total_allocated_bytes()))
+    } else {
+        (decode_from_bytes_with_limits::<T>(bytes, limits), None)
+    };
+    let value = value.map_err(|error| {
         if crate::smartcontracts::isi::query::singular_query_limits_active()
             && error.is_decode_resource_limit()
         {
@@ -320,10 +353,17 @@ where
             corrupt_state(format!("failed to decode {label}: {error}"))
         }
     })?;
-    if encode_state(&value, label)? != bytes {
-        return Err(corrupt_state(format!(
-            "{label} state is not exact canonical Norito"
-        )));
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            corrupt_state(format!("{label} state is not exact canonical Norito"))
+        } else {
+            corrupt_state(format!("failed to encode {label}: {error}"))
+        }
+    })?;
+    if let (Some(current), Some(allocation_bytes)) = (current.as_deref_mut(), allocation_bytes) {
+        current
+            .add_nested(allocation_bytes)
+            .map_err(InstructionExecutionError::Query)?;
     }
     Ok(value)
 }
@@ -446,12 +486,31 @@ fn decode_persisted_event(
     bytes: &[u8],
     sequence: u64,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
+    decode_persisted_event_with_current(bytes, sequence, None)
+}
+
+fn decode_persisted_event_for_current(
+    bytes: &[u8],
+    sequence: u64,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
+    decode_persisted_event_with_current(bytes, sequence, Some(current))
+}
+
+fn decode_persisted_event_with_current(
+    bytes: &[u8],
+    sequence: u64,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
     if bytes.len() > RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 {
         return Err(corrupt_state(format!(
             "reserve committed event exceeds {RESERVE_COMMITTED_EVENT_MAX_BYTES_V1} bytes"
         )));
     }
-    let record: ReservePersistedEventV1 = decode_state(bytes, "reserve committed event")?;
+    let record: ReservePersistedEventV1 = match current {
+        Some(current) => decode_state_for_current(bytes, "reserve committed event", current)?,
+        None => decode_state(bytes, "reserve committed event")?,
+    };
     validate_persisted_event(&record, sequence)?;
     Ok(record)
 }
@@ -783,7 +842,24 @@ fn read_reserve_state(
 }
 
 fn decode_reserve_state(bytes: &[u8]) -> Result<ReserveStateV1, InstructionExecutionError> {
-    let state: ReserveStateV1 = decode_state(bytes, "reserve state")?;
+    decode_reserve_state_with_current(bytes, None)
+}
+
+fn decode_reserve_state_for_current(
+    bytes: &[u8],
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<ReserveStateV1, InstructionExecutionError> {
+    decode_reserve_state_with_current(bytes, Some(current))
+}
+
+fn decode_reserve_state_with_current(
+    bytes: &[u8],
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<ReserveStateV1, InstructionExecutionError> {
+    let state: ReserveStateV1 = match current {
+        Some(current) => decode_state_for_current(bytes, "reserve state", current)?,
+        None => decode_state(bytes, "reserve state")?,
+    };
     validate_policy_record(&state.policy)?;
     if state.journal_head.last_sequence == 0 || state.journal_head.last_target_block_height == 0 {
         return Err(corrupt_state(
@@ -2415,7 +2491,12 @@ fn read_policy_for_query(
     let bytes = world.smart_contract_state().get(key);
     budget.inspect_direct_read(key, bytes.map_or(0, |bytes| bytes.len()))?;
     bytes
-        .map(|bytes| decode_reserve_state(bytes).map(|state| state.policy))
+        .map(|bytes| {
+            let mut current =
+                crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)
+                    .map_err(InstructionExecutionError::Query)?;
+            decode_reserve_state_for_current(bytes, &mut current).map(|state| state.policy)
+        })
         .transpose()
         .map_err(query_failure)
 }
@@ -2476,14 +2557,19 @@ fn read_persisted_event_for_query(
 ) -> Result<Option<ReservePersistedEventV1>, QueryExecutionFail> {
     if sequence == 0 {
         return Err(query_failure(
-            "reserve event sequence zero cannot be queried",
+            "reserve event sequence zero cannot be queried".into(),
         ));
     }
     let key = event_key(sequence);
     let bytes = world.smart_contract_state().get(&key);
     budget.inspect_direct_read(&key, bytes.map_or(0, |bytes| bytes.len()))?;
     bytes
-        .map(|bytes| decode_persisted_event(bytes, sequence))
+        .map(|bytes| {
+            let mut current =
+                crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)
+                    .map_err(InstructionExecutionError::Query)?;
+            decode_persisted_event_for_current(bytes, sequence, &mut current)
+        })
         .transpose()
         .map_err(query_failure)
 }
@@ -2498,9 +2584,13 @@ fn read_event_journal_head_for_query(
     let Some(bytes) = bytes else {
         return Ok(None);
     };
-    let head = decode_reserve_state(bytes)
-        .map_err(query_failure)?
-        .journal_head;
+    let head = {
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        decode_reserve_state_for_current(bytes, &mut current)
+            .map_err(query_failure)?
+            .journal_head
+    };
     let record =
         read_persisted_event_for_query(world, head.last_sequence, budget)?.ok_or_else(|| {
             QueryExecutionFail::Conversion(
@@ -2514,21 +2604,32 @@ fn read_event_journal_head_for_query(
             "reserve event journal head does not match its terminal event".to_owned(),
         ));
     }
-    let predecessor = if head.last_sequence == 1 {
+    let terminal_position = ReserveQueryEventPosition::from(&record);
+    drop(record);
+    let predecessor_position = if head.last_sequence == 1 {
         None
     } else {
         let predecessor_sequence = head.last_sequence - 1;
-        Some(
-            read_persisted_event_for_query(world, predecessor_sequence, budget)?.ok_or_else(
-                || {
-                    QueryExecutionFail::Conversion(format!(
-                        "reserve event journal is missing terminal predecessor sequence {predecessor_sequence}"
-                    ))
-                },
-            )?,
-        )
+        let predecessor = read_persisted_event_for_query(world, predecessor_sequence, budget)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(format!(
+                    "reserve event journal is missing terminal predecessor sequence {predecessor_sequence}"
+                ))
+            })?;
+        Some(ReserveQueryEventPosition::from(&predecessor))
     };
-    validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
+    let record =
+        read_persisted_event_for_query(world, head.last_sequence, budget)?.ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "reserve event journal terminal record disappeared during validation".to_owned(),
+            )
+        })?;
+    if ReserveQueryEventPosition::from(&record) != terminal_position {
+        return Err(QueryExecutionFail::Conversion(
+            "reserve event journal terminal identity changed during validation".to_owned(),
+        ));
+    }
+    validate_query_event_successor(predecessor_position, &record)?;
     Ok(Some(head))
 }
 
@@ -2544,12 +2645,12 @@ fn ensure_no_event_after_head_for_query(
     budget.inspect_range_read(&prefix_start, first.map(|(key, value)| (key, value.len())))?;
     let Some((first_key, _)) = first else {
         return Err(query_failure(
-            "reserve event journal head exists without event records",
+            "reserve event journal head exists without event records".into(),
         ));
     };
     if !first_key.as_ref().starts_with(EVENT_STATE_KEY_PREFIX) || *first_key != event_key(1) {
         return Err(query_failure(
-            "reserve event journal does not begin at sequence one",
+            "reserve event journal does not begin at sequence one".into(),
         ));
     }
 
@@ -2568,7 +2669,7 @@ fn ensure_no_event_after_head_for_query(
         }
         if key.as_ref().starts_with(EVENT_STATE_KEY_PREFIX) {
             return Err(query_failure(
-                "reserve event journal contains a record beyond its head",
+                "reserve event journal contains a record beyond its head".into(),
             ));
         }
         break;
@@ -2578,7 +2679,7 @@ fn ensure_no_event_after_head_for_query(
 
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
-    record: &ReservePersistedEventV1,
+    record: ReservePersistedEventV1,
     budget: &mut ReserveEventQueryBudgetV1,
 ) -> Result<ReserveFinalizedEventV1, QueryExecutionFail> {
     let hash_index = record
@@ -2604,22 +2705,72 @@ fn resolve_committed_event(
             record.sequence
         )));
     }
-    crate::smartcontracts::isi::query::own_singular_query_struct::<ReserveFinalizedEventV1, 5>(
-        [
-            &record.sequence,
-            &record.target_block_height,
-            &block_hash,
-            &record.event_index,
-            &record.event,
-        ],
-        || ReserveFinalizedEventV1 {
+    Ok(ReserveFinalizedEventV1 {
+        sequence: record.sequence,
+        block_height: record.target_block_height,
+        block_hash,
+        event_index: record.event_index,
+        event: record.event,
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ReserveQueryEventPosition {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+}
+
+impl From<&ReservePersistedEventV1> for ReserveQueryEventPosition {
+    fn from(record: &ReservePersistedEventV1) -> Self {
+        Self {
             sequence: record.sequence,
-            block_height: record.target_block_height,
-            block_hash,
+            target_block_height: record.target_block_height,
             event_index: record.event_index,
-            event: record.event.clone(),
-        },
-    )
+        }
+    }
+}
+
+fn validate_query_event_successor(
+    previous: Option<ReserveQueryEventPosition>,
+    current: &ReservePersistedEventV1,
+) -> Result<(), QueryExecutionFail> {
+    let Some(previous) = previous else {
+        return (current.sequence == 1 && current.event_index == 0)
+            .then_some(())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "reserve event journal does not begin at sequence one and block index zero"
+                        .to_owned(),
+                )
+            });
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "reserve event journal sequence is not contiguous".to_owned(),
+        ));
+    }
+    match previous
+        .target_block_height
+        .cmp(&current.target_block_height)
+    {
+        core::cmp::Ordering::Less if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        _ => Err(QueryExecutionFail::Conversion(
+            "reserve event journal block height/index ordering is invalid".to_owned(),
+        )),
+    }
 }
 
 fn query_reserve_event_page(
@@ -2652,27 +2803,21 @@ fn query_reserve_event_page(
             "reserve event journal does not begin with policy activation".to_owned(),
         ));
     }
-    resolve_committed_event(state_ro, &first, budget)?;
+    resolve_committed_event(state_ro, first, budget)?;
     let terminal =
         read_persisted_event_for_query(world, head.last_sequence, budget)?.ok_or_else(|| {
             QueryExecutionFail::Conversion(
                 "reserve event journal terminal record disappeared during read".to_owned(),
             )
         })?;
-    resolve_committed_event(state_ro, &terminal, budget)?;
+    resolve_committed_event(state_ro, terminal, budget)?;
     ensure_no_event_after_head_for_query(world, head, budget)?;
     let mut previous = match query.after {
         Some(after) => {
             if after.sequence == 0 || after.sequence > head.last_sequence {
                 return Err(QueryExecutionFail::Expired);
             }
-            let record = read_persisted_event_for_query(world, after.sequence, budget)?
-                .ok_or(QueryExecutionFail::Expired)?;
-            let resolved = resolve_committed_event(state_ro, &record, budget)?;
-            if resolved.cursor() != after {
-                return Err(QueryExecutionFail::Expired);
-            }
-            let predecessor = if after.sequence == 1 {
+            let predecessor_record = if after.sequence == 1 {
                 None
             } else {
                 let predecessor_sequence = after.sequence - 1;
@@ -2689,8 +2834,19 @@ fn query_reserve_event_page(
                     })?,
                 )
             };
-            validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
-            Some(record)
+            let predecessor = predecessor_record
+                .as_ref()
+                .map(ReserveQueryEventPosition::from);
+            drop(predecessor_record);
+            let record = read_persisted_event_for_query(world, after.sequence, budget)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            validate_query_event_successor(predecessor, &record)?;
+            let position = ReserveQueryEventPosition::from(&record);
+            let resolved = resolve_committed_event(state_ro, record, budget)?;
+            if resolved.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            Some(position)
         }
         None => None,
     };
@@ -2709,17 +2865,15 @@ fn query_reserve_event_page(
                     "reserve event journal is missing sequence {current_sequence}"
                 ))
             })?;
-        validate_event_successor(previous.as_ref(), &record).map_err(query_failure)?;
-        let resolved = resolve_committed_event(state_ro, &record, budget)?;
+        validate_query_event_successor(previous, &record)?;
+        let position = ReserveQueryEventPosition::from(&record);
+        let resolved = resolve_committed_event(state_ro, record, budget)?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(
-                norito::core::encoded_frame_len(&resolved)
-                    .map_err(|error| {
-                        QueryExecutionFail::Conversion(format!(
-                            "failed to size committed reserve event: {error}"
-                        ))
-                    })?,
-            )
+            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+                QueryExecutionFail::Conversion(format!(
+                    "failed to size committed reserve event: {error}"
+                ))
+            })?)
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
                     "committed reserve event page byte counter overflow".to_owned(),
@@ -2730,7 +2884,7 @@ fn query_reserve_event_page(
                 "committed reserve event page exceeds {page_bytes_limit} bytes"
             )));
         }
-        previous = Some(record);
+        previous = Some(position);
         events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
@@ -2745,7 +2899,7 @@ fn query_reserve_event_page(
     });
     let page = ReserveFinalizedEventPageV1 {
         finalized_cursor,
-        events: events.into_vec(),
+        events: events.into_vec()?,
         has_more,
         next_after,
     };
@@ -2801,7 +2955,7 @@ where
             records.try_push(record)?;
         }
     }
-    Ok((records.into_vec(), has_more))
+    Ok((records.into_vec()?, has_more))
 }
 
 fn checked_page_records<T, I: Copy>(
@@ -2845,8 +2999,9 @@ impl ValidSingularQuery for FindSorafsReservePolicy {
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ReserveAuthorityPolicyRecordV1, QueryExecutionFail> {
-        read_policy(state_ro.world())
-            .map_err(query_failure)?
+        let mut budget = ReserveEventQueryBudgetV1::default();
+        read_event_journal_head_for_query(state_ro.world(), &mut budget)?;
+        read_policy_for_query(state_ro.world(), &mut budget)?
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsReservePolicy))
     }
 }

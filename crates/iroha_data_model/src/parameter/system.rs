@@ -1244,12 +1244,7 @@ impl JsonSerialize for SumeragiParameters {
         out.begin_container()?;
         out.push('{')?;
         let mut first = true;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "block_cadence_ms",
-            &self.block_cadence_ms,
-        )?;
+        json_support::write_field_to(out, &mut first, "block_cadence_ms", &self.block_cadence_ms)?;
         json_support::write_field_to(
             out,
             &mut first,
@@ -1274,12 +1269,7 @@ impl JsonSerialize for SumeragiParameters {
             "key_expiry_grace_blocks",
             &self.key_expiry_grace_blocks,
         )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "key_require_hsm",
-            &self.key_require_hsm,
-        )?;
+        json_support::write_field_to(out, &mut first, "key_require_hsm", &self.key_require_hsm)?;
         json_support::write_field_to(
             out,
             &mut first,
@@ -1544,12 +1534,7 @@ impl JsonSerialize for BlockParameters {
         out.begin_container()?;
         out.push('{')?;
         let mut first = true;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "max_transactions",
-            &self.max_transactions,
-        )?;
+        json_support::write_field_to(out, &mut first, "max_transactions", &self.max_transactions)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -1776,12 +1761,7 @@ impl JsonSerialize for Parameters {
         json_support::write_field_to(out, &mut first, "block", &self.block)?;
         json_support::write_field_to(out, &mut first, "transaction", &self.transaction)?;
         json_support::write_field_to(out, &mut first, "executor", &self.executor)?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "smart_contract",
-            &self.smart_contract,
-        )?;
+        json_support::write_field_to(out, &mut first, "smart_contract", &self.smart_contract)?;
         if !self.custom.is_empty() {
             json_support::write_field_to(out, &mut first, "custom", &self.custom)?;
         }
@@ -2061,18 +2041,8 @@ impl JsonSerialize for TransactionParameters {
         out.begin_container()?;
         out.push('{')?;
         let mut first = true;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "max_signatures",
-            &self.max_signatures,
-        )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "max_instructions",
-            &self.max_instructions,
-        )?;
+        json_support::write_field_to(out, &mut first, "max_signatures", &self.max_signatures)?;
+        json_support::write_field_to(out, &mut first, "max_instructions", &self.max_instructions)?;
         json_support::write_field_to(
             out,
             &mut first,
@@ -2104,12 +2074,7 @@ impl JsonSerialize for TransactionParameters {
             "require_height_ttl",
             &self.require_height_ttl,
         )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "require_sequence",
-            &self.require_sequence,
-        )?;
+        json_support::write_field_to(out, &mut first, "require_sequence", &self.require_sequence)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -2394,24 +2359,9 @@ impl JsonSerialize for SmartContractParameters {
         let mut first = true;
         json_support::write_field_to(out, &mut first, "fuel", &self.fuel)?;
         json_support::write_field_to(out, &mut first, "memory", &self.memory)?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "execution_depth",
-            &self.execution_depth,
-        )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "max_output_items",
-            &self.max_output_items,
-        )?;
-        json_support::write_field_to(
-            out,
-            &mut first,
-            "max_output_bytes",
-            &self.max_output_bytes,
-        )?;
+        json_support::write_field_to(out, &mut first, "execution_depth", &self.execution_depth)?;
+        json_support::write_field_to(out, &mut first, "max_output_items", &self.max_output_items)?;
+        json_support::write_field_to(out, &mut first, "max_output_bytes", &self.max_output_bytes)?;
         out.push('}')?;
         out.end_container();
         Ok(())

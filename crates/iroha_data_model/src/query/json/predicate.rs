@@ -6,6 +6,7 @@
 //! caches.
 
 use std::{
+    cell::Cell,
     string::{String, ToString},
     vec::Vec,
 };
@@ -14,6 +15,116 @@ use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use thiserror::Error;
 
 use crate::query::dsl::CompoundPredicate;
+
+#[derive(Clone, Copy)]
+struct PredicateJsonExecutionBounds {
+    body_bytes: usize,
+    allocation_bytes: usize,
+}
+
+std::thread_local! {
+    static PREDICATE_JSON_EXECUTION_BOUNDS: Cell<Option<PredicateJsonExecutionBounds>> = const {
+        Cell::new(None)
+    };
+}
+
+struct PredicateJsonExecutionBoundsGuard(Option<PredicateJsonExecutionBounds>);
+
+impl Drop for PredicateJsonExecutionBoundsGuard {
+    fn drop(&mut self) {
+        PREDICATE_JSON_EXECUTION_BOUNDS.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Run predicate JSON work with checked body and allocation ceilings.
+///
+/// This server-boundary hook leaves ordinary in-process evaluation unchanged
+/// when no scope is installed. Nested scopes can only tighten either ceiling.
+#[doc(hidden)]
+pub fn with_bounded_predicate_json_execution<R>(
+    body_bytes: usize,
+    allocation_bytes: usize,
+    execute: impl FnOnce() -> R,
+) -> R {
+    let requested = PredicateJsonExecutionBounds {
+        body_bytes,
+        allocation_bytes,
+    };
+    let previous = PREDICATE_JSON_EXECUTION_BOUNDS.with(|slot| {
+        let previous = slot.get();
+        let effective = previous.map_or(requested, |outer| PredicateJsonExecutionBounds {
+            body_bytes: outer.body_bytes.min(requested.body_bytes),
+            allocation_bytes: outer.allocation_bytes.min(requested.allocation_bytes),
+        });
+        slot.set(Some(effective));
+        previous
+    });
+    let _guard = PredicateJsonExecutionBoundsGuard(previous);
+    execute()
+}
+
+fn predicate_json_execution_bounds() -> Option<PredicateJsonExecutionBounds> {
+    PREDICATE_JSON_EXECUTION_BOUNDS.with(Cell::get)
+}
+
+fn predicate_json_decode_limits(bounds: PredicateJsonExecutionBounds) -> norito::DecodeLimits {
+    let total_elements = bounds.allocation_bytes.max(bounds.body_bytes);
+    norito::DecodeLimits::new(
+        total_elements,
+        bounds.body_bytes,
+        total_elements,
+        bounds.allocation_bytes,
+        norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+    )
+}
+
+/// Materialize one predicate candidate through the checked JSON writer when a
+/// server execution scope is active.
+#[doc(hidden)]
+pub fn predicate_json_value_for_execution<T: JsonSerialize + ?Sized>(value: &T) -> Option<Value> {
+    let Some(bounds) = predicate_json_execution_bounds() else {
+        return json::to_value(value).ok();
+    };
+    norito::core::with_decode_limits_scope(predicate_json_decode_limits(bounds), || {
+        let bytes = json::to_json_bounded_boxed(value, bounds.body_bytes).ok()?;
+        let raw = std::str::from_utf8(&bytes).ok()?;
+        json::parse_value(raw).ok()
+    })
+}
+
+/// Parse retained predicate JSON through the owned, allocation-charged
+/// conversion when a server execution scope is active.
+#[doc(hidden)]
+pub fn predicate_json_from_raw_for_execution(raw: &str) -> Option<PredicateJson> {
+    let Some(bounds) = predicate_json_execution_bounds() else {
+        let value = json::from_json::<Value>(raw).ok()?;
+        return PredicateJson::try_from_value(&value).ok();
+    };
+    if raw.len() > bounds.body_bytes {
+        return None;
+    }
+    norito::core::with_decode_limits_scope(predicate_json_decode_limits(bounds), || {
+        let value = json::from_json::<Value>(raw).ok()?;
+        PredicateJson::try_from_owned_value(value).ok()
+    })
+}
+
+/// Parse predicate JSON for an optional producer-local candidate plan.
+///
+/// The bounded ordinary-query lane deliberately returns no candidate plan:
+/// its source proof covers the full world scan, while the predicate itself is
+/// still evaluated through [`predicate_json_from_raw_for_execution`]. Legacy
+/// callers retain their existing indexed plan outside that execution scope.
+#[doc(hidden)]
+pub fn predicate_json_candidate_plan_for_execution(raw: &str) -> Option<PredicateJson> {
+    if predicate_json_execution_bounds().is_some() {
+        // TODO: Restore indexed ordinary plans after every typed identifier
+        // parser and candidate container has an allocation-accounted seam.
+        return None;
+    }
+    let value = json::from_json::<Value>(raw).ok()?;
+    PredicateJson::try_from_value(&value).ok()
+}
 
 /// JSON representation of a lightweight predicate tree.
 ///
@@ -84,9 +195,13 @@ impl PredicateJson {
     }
 
     fn sort_in_place(&mut self) {
-        self.equals.sort_by(|a, b| a.field.cmp(&b.field));
-        self.r#in.sort_by(|a, b| a.field.cmp(&b.field));
-        self.exists.sort();
+        stable_insertion_sort_by(&mut self.equals, |left, right| {
+            left.field.cmp(&right.field)
+        });
+        stable_insertion_sort_by(&mut self.r#in, |left, right| {
+            left.field.cmp(&right.field)
+        });
+        stable_insertion_sort_by(&mut self.exists, |left, right| left.cmp(right));
     }
 
     /// Build predicate from JSON value.
@@ -168,6 +283,85 @@ impl PredicateJson {
         }
     }
 
+    /// Build a predicate by consuming an owned JSON value.
+    ///
+    /// Unlike [`Self::try_from_value`], this path moves condition strings and
+    /// nested JSON values out of the parser graph. It is used by bounded Norito
+    /// request decoding so retained predicate state does not deep-clone an
+    /// attacker-sized `Value` tree after the decode allocation scope ends.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the JSON structure does not match the predicate
+    /// schema or its destination vectors cannot be admitted by the active
+    /// decode-allocation limit.
+    pub fn try_from_owned_value(value: Value) -> Result<Self, PredicateParseError> {
+        let map = match value {
+            Value::Null => return Ok(Self::default()),
+            Value::Object(map) => map,
+            other => return Err(PredicateParseError::ExpectedObjectRoot(other.type_name())),
+        };
+
+        let mut predicate = PredicateJson::default();
+        for (key, entry) in map {
+            match key.as_str() {
+                "equals" => {
+                    let Value::Array(items) = entry else {
+                        return Err(PredicateParseError::ExpectedArray("equals"));
+                    };
+                    predicate.equals = admitted_vec(items.len())?;
+                    for item in items {
+                        let Value::Object(mut object) = item else {
+                            return Err(PredicateParseError::ExpectedObjectSection("equals"));
+                        };
+                        let field = take_string_field(&mut object, "equals", "field")?;
+                        let value = object
+                            .remove("value")
+                            .ok_or(PredicateParseError::MissingField("equals", "value"))?;
+                        predicate.equals.push(EqualsCondition::new(field, value));
+                    }
+                }
+                "in" => {
+                    let Value::Array(items) = entry else {
+                        return Err(PredicateParseError::ExpectedArray("in"));
+                    };
+                    predicate.r#in = admitted_vec(items.len())?;
+                    for item in items {
+                        let Value::Object(mut object) = item else {
+                            return Err(PredicateParseError::ExpectedObjectSection("in"));
+                        };
+                        let field = take_string_field(&mut object, "in", "field")?;
+                        let values = object
+                            .remove("values")
+                            .ok_or(PredicateParseError::MissingField("in", "values"))?;
+                        let Value::Array(values) = values else {
+                            return Err(PredicateParseError::ExpectedArray("values"));
+                        };
+                        if values.is_empty() {
+                            return Err(PredicateParseError::EmptyValues(field));
+                        }
+                        predicate.r#in.push(InCondition::new(field, values));
+                    }
+                }
+                "exists" => {
+                    let Value::Array(items) = entry else {
+                        return Err(PredicateParseError::ExpectedArray("exists"));
+                    };
+                    predicate.exists = admitted_vec(items.len())?;
+                    for item in items {
+                        let Value::String(field) = item else {
+                            return Err(PredicateParseError::ExpectedString("exists", "field"));
+                        };
+                        predicate.exists.push(field);
+                    }
+                }
+                other => return Err(PredicateParseError::UnknownKey(other.to_owned())),
+            }
+        }
+        predicate.sort_in_place();
+        Ok(predicate)
+    }
+
     /// Convert into a [`CompoundPredicate`] by serialising the canonical JSON
     /// representation. The resulting predicate carries the JSON payload that
     /// backends can interpret later.
@@ -183,9 +377,163 @@ impl PredicateJson {
     }
 }
 
+fn stable_insertion_sort_by<T>(values: &mut [T], compare: impl Fn(&T, &T) -> core::cmp::Ordering) {
+    for index in 1..values.len() {
+        let mut current = index;
+        while current > 0
+            && compare(&values[current], &values[current - 1]).is_lt()
+        {
+            values.swap(current, current - 1);
+            current -= 1;
+        }
+    }
+}
+
+fn admitted_vec<T>(capacity: usize) -> Result<Vec<T>, PredicateParseError> {
+    let requested = capacity
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or(PredicateParseError::ResourceLimit)?;
+    norito::core::reserve_decode_allocation(requested)
+        .map_err(|_| PredicateParseError::ResourceLimit)?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| PredicateParseError::ResourceLimit)?;
+    let allocated = values
+        .capacity()
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or(PredicateParseError::ResourceLimit)?;
+    if let Some(excess) = allocated.checked_sub(requested)
+        && excess != 0
+    {
+        norito::core::reserve_decode_allocation(excess)
+            .map_err(|_| PredicateParseError::ResourceLimit)?;
+    }
+    Ok(values)
+}
+
+fn take_string_field(
+    object: &mut Map,
+    section: &'static str,
+    field: &'static str,
+) -> Result<String, PredicateParseError> {
+    match object
+        .remove(field)
+        .ok_or(PredicateParseError::MissingField(section, field))?
+    {
+        Value::String(value) => Ok(value),
+        _ => Err(PredicateParseError::ExpectedString(section, field)),
+    }
+}
+
+#[cfg(feature = "json")]
+fn next_sorted_index_by<T, F>(items: &[T], previous: Option<usize>, key: F) -> Option<usize>
+where
+    F: for<'a> Fn(&'a T) -> &'a str + Copy,
+{
+    (0..items.len())
+        .filter(|&index| {
+            let Some(previous) = previous else {
+                return true;
+            };
+            (key(&items[index]), index) > (key(&items[previous]), previous)
+        })
+        .min_by(|&left, &right| (key(&items[left]), left).cmp(&(key(&items[right]), right)))
+}
+
 impl JsonSerialize for PredicateJson {
     fn json_serialize(&self, out: &mut String) {
-        self.to_value().json_serialize(out);
+        json::write_with_unbounded_sink(out, |sink| self.json_serialize_to(sink));
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut wrote_section = false;
+
+        if !self.equals.is_empty() {
+            out.push_str("\"equals\":[")?;
+            out.begin_container()?;
+            let mut previous = None;
+            let mut wrote = false;
+            while let Some(index) =
+                next_sorted_index_by(&self.equals, previous, |item| item.field.as_str())
+            {
+                if wrote {
+                    out.push(',')?;
+                }
+                let condition = &self.equals[index];
+                out.begin_container()?;
+                out.push_str("{\"field\":")?;
+                condition.field.json_serialize_to(out)?;
+                out.push_str(",\"value\":")?;
+                condition.value.json_serialize_to(out)?;
+                out.push('}')?;
+                out.end_container();
+                wrote = true;
+                previous = Some(index);
+            }
+            out.push(']')?;
+            out.end_container();
+            wrote_section = true;
+        }
+
+        if !self.exists.is_empty() {
+            if wrote_section {
+                out.push(',')?;
+            }
+            out.push_str("\"exists\":[")?;
+            out.begin_container()?;
+            let mut previous = None;
+            let mut wrote = false;
+            while let Some(index) = next_sorted_index_by(&self.exists, previous, String::as_str) {
+                if wrote {
+                    out.push(',')?;
+                }
+                self.exists[index].json_serialize_to(out)?;
+                wrote = true;
+                previous = Some(index);
+            }
+            out.push(']')?;
+            out.end_container();
+            wrote_section = true;
+        }
+
+        if !self.r#in.is_empty() {
+            if wrote_section {
+                out.push(',')?;
+            }
+            out.push_str("\"in\":[")?;
+            out.begin_container()?;
+            let mut previous = None;
+            let mut wrote = false;
+            while let Some(index) =
+                next_sorted_index_by(&self.r#in, previous, |item| item.field.as_str())
+            {
+                if wrote {
+                    out.push(',')?;
+                }
+                let condition = &self.r#in[index];
+                out.begin_container()?;
+                out.push_str("{\"field\":")?;
+                condition.field.json_serialize_to(out)?;
+                out.push_str(",\"values\":")?;
+                condition.values.json_serialize_to(out)?;
+                out.push('}')?;
+                out.end_container();
+                wrote = true;
+                previous = Some(index);
+            }
+            out.push(']')?;
+            out.end_container();
+        }
+
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -262,6 +610,10 @@ pub enum PredicateParseError {
     /// Membership conditions must contain at least one value.
     #[error("`in` values for field `{0}` must not be empty")]
     EmptyValues(String),
+    /// An active decode-allocation limit or the platform allocator rejected a
+    /// destination collection before it was constructed.
+    #[error("predicate JSON exceeds the active allocation limit")]
+    ResourceLimit,
 }
 
 trait ValueExt {
@@ -346,9 +698,117 @@ mod tests {
     }
 
     #[test]
+    fn owned_predicate_conversion_moves_values_and_obeys_decode_limits() {
+        fn value() -> Value {
+            norito::json!({
+                "equals": [{"field": "metadata.rank", "value": 7}],
+                "in": [{"field": "authority", "values": [ALICE_ID_STR]}],
+                "exists": ["metadata.rank"]
+            })
+        }
+
+        let input = value();
+        let expected = PredicateJson::try_from_value(&input).expect("borrowed conversion");
+        let limits = norito::DecodeLimits::new(64, 4 * 1_024, 256, 4 * 1_024, 16);
+        let (actual, usage) = norito::core::with_decode_limits_measured(limits, || {
+            PredicateJson::try_from_owned_value(input)
+        });
+        assert_eq!(actual.expect("owned conversion"), expected);
+        assert!(usage.total_allocated_bytes() > 0);
+
+        let denied = norito::core::with_decode_limits(
+            norito::DecodeLimits::new(64, 4 * 1_024, 256, 1, 16),
+            || {
+                PredicateJson::try_from_owned_value(value()).map_err(|error| {
+                    norito::core::Error::Message(error.to_string())
+                })
+            },
+        );
+        assert!(denied.is_err());
+    }
+
+    #[test]
+    fn execution_scope_checks_candidate_body_and_restores_legacy_path() {
+        let value = norito::json!({"id": "alice", "metadata": {"rank": 7}});
+        let canonical = json::to_json(&value).expect("canonical JSON");
+        let admitted = with_bounded_predicate_json_execution(
+            canonical.len(),
+            8 * 1_024,
+            || predicate_json_value_for_execution(&value),
+        );
+        assert_eq!(admitted, Some(value.clone()));
+
+        let denied = with_bounded_predicate_json_execution(
+            canonical.len() - 1,
+            8 * 1_024,
+            || predicate_json_value_for_execution(&value),
+        );
+        assert!(denied.is_none());
+        assert_eq!(predicate_json_value_for_execution(&value), Some(value));
+    }
+
+    #[test]
+    fn execution_scope_uses_owned_predicate_conversion_under_allocation_limit() {
+        let predicate = PredicateJson {
+            equals: vec![EqualsCondition::new("metadata.rank", Value::from(7_u64))],
+            r#in: Vec::new(),
+            exists: vec!["metadata.rank".to_owned()],
+        };
+        let raw = json::to_json(&predicate).expect("canonical predicate JSON");
+        let admitted = with_bounded_predicate_json_execution(raw.len(), 8 * 1_024, || {
+            predicate_json_from_raw_for_execution(&raw)
+        });
+        assert_eq!(admitted, Some(predicate));
+        let denied = with_bounded_predicate_json_execution(raw.len(), 1, || {
+            predicate_json_from_raw_for_execution(&raw)
+        });
+        assert!(denied.is_none());
+    }
+
+    #[test]
+    fn predicate_wire_decoders_have_no_borrowed_deep_clone_path() {
+        for source in [include_str!("../dsl.rs"), include_str!("../dsl_fast.rs")] {
+            assert!(!source.contains("PredicateJson::try_from_value(&value)"));
+            assert!(!source.contains(
+                "PredicateJsonPayload::from_predicate(&predicate)\n                    .as_str()",
+            ));
+        }
+    }
+
+    #[test]
     fn predicate_empty_defaults_to_pass() {
         let predicate = PredicateJson::default();
         let compound = predicate.into_compound::<()>().expect("compound predicate");
         assert!(compound.json_payload().is_none());
+    }
+
+    #[test]
+    fn direct_predicate_json_matches_legacy_value_and_exact_bound() {
+        let predicate = PredicateJson {
+            equals: vec![
+                EqualsCondition::new("z", Value::Bool(true)),
+                EqualsCondition::new("a", Value::Number(1_u64.into())),
+                EqualsCondition::new("a", Value::Number(2_u64.into())),
+            ],
+            r#in: vec![
+                InCondition::new("z", vec![Value::String("last".to_owned())]),
+                InCondition::new("a", vec![Value::String("first".to_owned())]),
+            ],
+            exists: vec!["z".to_owned(), "a".to_owned(), "a".to_owned()],
+        };
+        let legacy = json::to_json(&predicate.to_value()).expect("serialize legacy value");
+        let direct = json::to_json(&predicate).expect("serialize direct predicate");
+        assert_eq!(
+            direct, legacy,
+            "stable sorting and object-key order changed"
+        );
+        assert_eq!(
+            json::to_json_bounded(&predicate, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(&predicate, direct.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
     }
 }

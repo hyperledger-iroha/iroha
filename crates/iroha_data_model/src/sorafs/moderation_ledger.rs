@@ -86,7 +86,7 @@ pub struct ModerationLedgerPolicyV1 {
     /// Digest of the immediately preceding policy, absent only for revision one.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Largest panel governance permits for one case.
@@ -180,11 +180,7 @@ impl ModerationLedgerPolicyV1 {
     ///
     /// Returns a Norito encoding error if canonical serialization fails.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1);
-        hasher.update(&encoded);
-        Ok(*hasher.finalize().as_bytes())
+        canonical_digest(MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1, self)
     }
 }
 
@@ -264,7 +260,7 @@ pub struct ModerationLedgerPolicyRecord {
     /// Policy body.
     pub policy: ModerationLedgerPolicyV1,
     /// Canonical policy digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Block timestamp at activation.
     pub activated_at_unix_ms: u64,
@@ -280,22 +276,22 @@ pub struct ModerationLedgerPolicyRecord {
 )]
 pub struct ModerationPoPRegistrySnapshotV1 {
     /// Issuer policy digest used to admit both active publications.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub issuer_policy_digest: [u8; 32],
     /// Active private-credential commitment root.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub commitment_root: [u8; 32],
     /// Active commitment-tree version.
     pub commitment_tree_version: u64,
     /// Active sparse revocation root.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub revocation_root: [u8; 32],
     /// Active revocation-list version.
     pub revocation_list_version: u64,
     /// Monotonic registry audit sequence fixing the snapshot.
     pub registry_audit_sequence: u64,
     /// Registry audit-chain head fixing the snapshot.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub registry_audit_head: [u8; 32],
     /// Consensus block timestamp at which the snapshot was captured.
     pub captured_at_unix_ms: u64,
@@ -337,11 +333,7 @@ impl ModerationPoPRegistrySnapshotV1 {
     ///
     /// Returns an error when Norito cannot encode the snapshot.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1);
-        hasher.update(&encoded);
-        Ok(*hasher.finalize().as_bytes())
+        canonical_digest(MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1, self)
     }
 }
 
@@ -378,16 +370,16 @@ pub struct ModerationAppealIntakeV1 {
     /// Universal account submitting and owning the appeal.
     pub appellant: AccountId,
     /// Digest of the moderation decision being appealed.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub appealed_decision_digest: [u8; 32],
     /// Single-use digest of proof tokens authorising the appeal without placing them on-chain.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proof_token_digest: [u8; 32],
     /// Digest of the complete evidence bundle.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_bundle_digest: [u8; 32],
     /// Single-use digest of the confirmed appeal-deposit lock.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub appeal_deposit_lock_digest: [u8; 32],
     /// Appeal-finance configuration version fixing quote and settlement policy.
     pub appeal_finance_config_version: String,
@@ -414,7 +406,7 @@ pub struct ModerationAppealIntakeV1 {
     /// Last timestamp at which reveals are accepted.
     pub reveal_deadline_unix_ms: u64,
     /// Active moderation policy digest expected by the appellant.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
 }
 
@@ -510,12 +502,31 @@ impl ModerationAppealIntakeV1 {
     ///
     /// Returns an error when Norito cannot encode the intake.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1);
-        hasher.update(&encoded);
-        Ok(*hasher.finalize().as_bytes())
+        canonical_digest(MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1, self)
     }
+}
+
+fn canonical_digest<T: norito::core::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<[u8; 32], norito::Error> {
+    struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+
+    impl std::io::Write for Blake3Writer<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    norito::core::write_canonical_to_writer(value, &mut Blake3Writer(&mut hasher))?;
+    Ok(*hasher.finalize().as_bytes())
 }
 
 fn validate_appeal_identifier(
@@ -666,13 +677,13 @@ pub struct ModerationJurorEligibilityRecordV1 {
     /// Eligibility class proven by the hidden credential.
     pub eligibility_class: ModerationJurorEligibilityClassV1,
     /// Digest of exact canonical proof bytes; proof bytes are not persisted.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proof_digest: [u8; 32],
     /// Per-credential, per-appeal nullifier preventing duplicate-person entries.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub nullifier: [u8; 32],
     /// `PoP` registry snapshot digest against which the proof verified.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub pop_snapshot_digest: [u8; 32],
     /// Hidden credential expiry disclosed by the membership statement.
     pub credential_expires_at_epoch: u64,
@@ -688,17 +699,17 @@ pub struct ModerationJurorEligibilityRecordV1 {
 )]
 pub struct ModerationPanelSelectionV1 {
     /// Exact already-committed parent block fixed only after registration closes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub randomness_anchor: [u8; 32],
     /// Deterministic seed digest fixed by appeal, `PoP` snapshot, and parent block.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub seed_digest: [u8; 32],
     /// Primary jurors in canonical score order.
     pub jurors: Vec<AccountId>,
     /// Failover jurors in canonical score order.
     pub waitlist: Vec<AccountId>,
     /// Digest committing to snapshot, seed, primary roster, waitlist, and quorum.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub sortition_digest: [u8; 32],
     /// Consensus block timestamp at selection.
     pub selected_at_unix_ms: u64,
@@ -754,14 +765,14 @@ pub struct ModerationAppealRecordV1 {
     /// Immutable appellant intake.
     pub intake: ModerationAppealIntakeV1,
     /// Canonical intake digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub intake_digest: [u8; 32],
     /// Immutable active moderation-policy snapshot.
     pub policy: ModerationLedgerPolicyV1,
     /// Immutable active `PoP` registry snapshot.
     pub pop_snapshot: ModerationPoPRegistrySnapshotV1,
     /// Canonical `PoP` snapshot digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub pop_snapshot_digest: [u8; 32],
     /// Current appeal lifecycle phase.
     pub status: ModerationAppealStatusV1,
@@ -1006,7 +1017,7 @@ pub struct ModerationCaseSpecV1 {
     /// Last block timestamp at which reveals are accepted.
     pub reveal_deadline_unix_ms: u64,
     /// Active policy digest the opener expects.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
 }
 
@@ -1232,7 +1243,7 @@ pub struct ModerationCommitRecordV1 {
     /// Canonical juror authority.
     pub juror: AccountId,
     /// Exact canonical `SoraFsModerationBallotCommitV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_commit: Vec<u8>,
     /// Block timestamp assigned at admission.
     pub accepted_at_unix_ms: u64,
@@ -1252,7 +1263,7 @@ pub struct ModerationRevealRecordV1 {
     /// Canonical juror authority.
     pub juror: AccountId,
     /// Exact canonical `SoraFsModerationBallotRevealV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_reveal: Vec<u8>,
     /// Block timestamp assigned at admission.
     pub accepted_at_unix_ms: u64,
@@ -1336,7 +1347,7 @@ pub struct ModerationChallengeRecordV1 {
     /// Optional juror target required by juror-scoped kinds.
     pub target_juror: Option<AccountId>,
     /// Digest of external challenge evidence; raw evidence is never stored.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
     /// Bounded payload-free reason label.
     pub reason: String,
@@ -1485,7 +1496,7 @@ pub struct ModerationNoShowRecordV1 {
     /// Policy-controlled points recorded for downstream reputation settlement.
     pub penalty_points: u32,
     /// Policy digest that fixed the penalty value.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Block timestamp assigned at finalization.
     pub recorded_at_unix_ms: u64,
@@ -1538,7 +1549,7 @@ pub struct ModerationFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same state view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -1554,7 +1565,7 @@ pub struct ModerationFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Finalized block hash resolved only after the block commits.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Moderation-event index within the committing block.
     pub event_index: u32,
@@ -1572,7 +1583,7 @@ pub struct ModerationFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash resolved from finalized state.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Moderation-event index within the committing block.
     pub event_index: u32,
@@ -1656,7 +1667,7 @@ pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Finalized block height.
     pub finalized_height: u64,
     /// Finalized block hash resolved from the same immutable state view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finalized_block_hash: [u8; 32],
     /// Signed creation timestamp of that exact finalized block, in Unix milliseconds.
     pub finalized_at_unix_ms: u64,
@@ -1831,7 +1842,7 @@ pub struct RepairLedgerLeaseV1 {
 )]
 pub struct RepairLedgerCompletedV1 {
     /// Digest of the completion evidence.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
 }
 
@@ -1843,7 +1854,7 @@ pub struct RepairLedgerCompletedV1 {
 )]
 pub struct RepairLedgerFailedV1 {
     /// Digest of the payload-free failure reason or external evidence.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub failure_digest: [u8; 32],
 }
 
@@ -1855,7 +1866,7 @@ pub struct RepairLedgerFailedV1 {
 )]
 pub struct RepairLedgerEscalatedV1 {
     /// Digest of the exact canonical slash proposal.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub slash_proposal_digest: [u8; 32],
 }
 
@@ -1903,10 +1914,10 @@ pub struct RepairLedgerTerminalOutcomeV1 {
 )]
 pub struct RepairLedgerActionReceiptV1 {
     /// Task-scoped idempotency key digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub idempotency_digest: [u8; 32],
     /// Digest of the exact canonical action body.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub action_digest: [u8; 32],
     /// Task revision produced by the action.
     pub resulting_revision: u64,
@@ -1920,10 +1931,10 @@ pub struct RepairLedgerActionReceiptV1 {
 )]
 pub struct RepairLedgerSlashRecordV1 {
     /// Exact canonical `sorafs_manifest::repair::RepairSlashProposalV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_proposal: Vec<u8>,
     /// Digest of `canonical_proposal`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proposal_digest: [u8; 32],
     /// Worker that committed the proposal.
     pub submitted_by: AccountId,
@@ -1939,15 +1950,15 @@ pub struct RepairLedgerSlashRecordV1 {
 )]
 pub struct RepairLedgerAppealRecordV1 {
     /// Deterministic appeal identity.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub appeal_id: [u8; 32],
     /// Digest of the slash proposal being appealed.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub slash_proposal_digest: [u8; 32],
     /// Provider-owner account that submitted the appeal.
     pub appellant: AccountId,
     /// Digest of external appeal evidence.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
     /// Bounded payload-free reason.
     pub reason: String,
@@ -1991,24 +2002,24 @@ pub struct RepairLedgerTaskV1 {
     /// Schema version; must equal [`REPAIR_LEDGER_TASK_VERSION_V1`].
     pub version: u16,
     /// Immutable task identity derived from the exact canonical report.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub task_id: [u8; 32],
     /// Non-zero exactly-once identity supplied by the originating proof subsystem.
     ///
     /// `PoTR` uses the signed receipt digest; other subsystems use an equally
     /// stable canonical failure or handoff digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub source_identity: [u8; 32],
     /// Canonical repair ticket identifier.
     pub ticket_id: String,
     /// Exact canonical `sorafs_manifest::repair::RepairReportV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_report: Vec<u8>,
     /// Manifest under repair.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_digest: [u8; 32],
     /// Provider responsible for the affected replica.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub provider_id: [u8; 32],
     /// Auditor account that admitted the task.
     pub submitted_by: AccountId,
@@ -2067,7 +2078,7 @@ pub struct RepairFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same immutable state view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -2113,7 +2124,7 @@ pub struct RepairLedgerTaskPageV1 {
     /// Exclusive task-id cursor for the next page, present only when `has_more` is true.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub next_after_task_id: Option<[u8; 32]>,
 }
@@ -2130,7 +2141,7 @@ pub struct RepairFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Finalized block hash resolved only after the block commits.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Repair-event index within the committing block.
     pub event_index: u32,
@@ -2148,7 +2159,7 @@ pub struct RepairFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash resolved from finalized state.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Repair-event index within the committing block.
     pub event_index: u32,
@@ -2346,6 +2357,28 @@ mod tests {
             intake.digest().expect("appeal-intake digest"),
             sorafs_repair_action_digest_v1(&authority, &action).expect("repair action digest"),
         );
+        for (domain, value, digest) in [
+            (
+                MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1,
+                norito::encode_canonical(&policy).expect("historical policy bytes"),
+                expected.0,
+            ),
+            (
+                MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1,
+                norito::encode_canonical(&snapshot).expect("historical snapshot bytes"),
+                expected.1,
+            ),
+            (
+                MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1,
+                norito::encode_canonical(&intake).expect("historical intake bytes"),
+                expected.2,
+            ),
+        ] {
+            let mut historical = blake3::Hasher::new();
+            historical.update(domain);
+            historical.update(&value);
+            assert_eq!(digest, *historical.finalize().as_bytes());
+        }
         let canonical = norito::encode_canonical(&action).expect("canonical repair action");
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;

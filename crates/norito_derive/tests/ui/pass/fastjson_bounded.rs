@@ -24,7 +24,7 @@ mod quoted {
 #[derive(norito::derive::FastJsonWrite)]
 struct Item {
     id: u64,
-    #[norito(with = "quoted", bounded_with = "quoted::serialize_bounded")]
+    #[norito(json = "quoted")]
     displayed: u64,
 }
 

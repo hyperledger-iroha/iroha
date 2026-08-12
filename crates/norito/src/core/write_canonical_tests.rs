@@ -1,4 +1,4 @@
-//! Tests for allocation-free canonical frame streaming.
+// Tests for allocation-free canonical frame streaming.
 
 use std::{cell::Cell, io::Write};
 
@@ -18,6 +18,18 @@ fn streamed_canonical_frame_matches_buffered_encoding() {
         write_canonical_to_writer(&value, &mut actual).expect("stream canonical frame");
     }
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn streamed_frame_preserves_active_layout_bytes() {
+    let value = vec![1_u64, 2, 3, 5, 8, 13];
+    for flags in [0, default_encode_flags()] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let expected = to_bytes(&value).expect("encode buffered frame");
+        let mut actual = Vec::new();
+        write_frame_to_writer(&value, &mut actual).expect("stream frame with active flags");
+        assert_eq!(actual, expected, "flags=0x{flags:02x}");
+    }
 }
 
 struct ChangingPayload {

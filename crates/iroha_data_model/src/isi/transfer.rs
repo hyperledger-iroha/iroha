@@ -448,6 +448,22 @@ where
         JsonSerialize::json_serialize(&self.destination, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"source\":")?;
+        JsonSerialize::json_serialize_to(&self.source, out)?;
+        out.push_str(",\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push_str(",\"destination\":")?;
+        JsonSerialize::json_serialize_to(&self.destination, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -467,6 +483,26 @@ impl FastJsonWrite for TransferAssetBatchEntry {
         JsonSerialize::json_serialize(&self.amount, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"leg_id\":")?;
+        JsonSerialize::json_serialize_to(&self.leg_id, out)?;
+        out.push_str(",\"from\":")?;
+        JsonSerialize::json_serialize_to(&self.from, out)?;
+        out.push_str(",\"to\":")?;
+        JsonSerialize::json_serialize_to(&self.to, out)?;
+        out.push_str(",\"asset_definition\":")?;
+        JsonSerialize::json_serialize_to(&self.asset_definition, out)?;
+        out.push_str(",\"amount\":")?;
+        JsonSerialize::json_serialize_to(&self.amount, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -479,6 +515,20 @@ impl FastJsonWrite for TransferAssetBatch {
         out.push_str("\"entries\":");
         JsonSerialize::json_serialize(&self.entries, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"mode\":")?;
+        JsonSerialize::json_serialize_to(&self.mode, out)?;
+        out.push_str(",\"entries\":")?;
+        JsonSerialize::json_serialize_to(&self.entries, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -501,6 +551,35 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         )
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn transfer_json_families_match_legacy_bytes_at_exact_bounds() {
+        let from = account(0x0a);
+        let to = account(0x0b);
+        assert_exact_json(&Transfer::asset_quantity(
+            AssetId::of(asset_definition(), from.clone()),
+            7_u32,
+            to.clone(),
+        ));
+        let entry =
+            TransferAssetBatchEntry::with_leg_id("invoice", from, to, asset_definition(), 9_u32);
+        assert_exact_json(&entry);
+        assert_exact_json(&TransferAssetBatch::independent(vec![entry]));
     }
 
     #[test]

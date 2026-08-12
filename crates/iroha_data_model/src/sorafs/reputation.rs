@@ -17,7 +17,7 @@
 //! sequence and exact committed target; it intentionally contains no automatic
 //! age, capacity, or process-local retention policy.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -105,7 +105,7 @@ pub struct ReputationFinalizedArchiveRetentionTargetV1 {
     /// One-based finalized block height.
     pub height: u64,
     /// Exact finalized block hash at `height`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -161,13 +161,13 @@ pub struct ReputationFinalizedArchiveRetentionRequestV1 {
     /// Digest of the immediately preceding canonical request.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_request_digest: Option<[u8; 32]>,
     /// Exact finalized ancestor selected explicitly by governance.
     pub compact_through: ReputationFinalizedArchiveRetentionTargetV1,
     /// Domain-separated digest of every preceding field.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub request_digest: [u8; 32],
 }
 
@@ -513,7 +513,7 @@ pub struct ReputationJournalAuthorityPolicyV1 {
     /// Digest of the immediately preceding canonical policy.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Exact governed authority allowed to record `PoR` terminals.
@@ -567,12 +567,8 @@ impl ReputationJournalAuthorityPolicyV1 {
     /// Returns a policy validation or canonical encoding error.
     pub fn canonical_digest(&self) -> Result<[u8; 32], ReputationJournalValidationError> {
         self.validate()?;
-        let bytes = norito::encode_canonical(self)
-            .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
-        Ok(domain_digest(
-            REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1,
-            &bytes,
-        ))
+        canonical_domain_digest(REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1, self)
+            .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)
     }
 
     /// Return the exact recorder authorized for `source`.
@@ -596,7 +592,7 @@ pub struct ReputationJournalAuthorityPolicyRecordV1 {
     /// Canonical governed policy.
     pub policy: ReputationJournalAuthorityPolicyV1,
     /// Canonical domain-separated digest of `policy`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Governance authority that activated the revision.
     pub activated_by: AccountId,
@@ -738,10 +734,10 @@ impl PorTerminalStatusV1 {
 )]
 pub struct PorTerminalOutcomeV1 {
     /// Native BLAKE3-256 challenge identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub challenge_id: [u8; 32],
     /// Manifest named by the challenge.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_digest: [u8; 32],
     /// Challenge epoch.
     pub epoch_id: u64,
@@ -764,13 +760,13 @@ pub struct PorTerminalOutcomeV1 {
     /// Canonical provider-signed proof digest for proof-bearing terminals.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub proof_digest: Option<[u8; 32]>,
     /// Authoritative repair task for a failed challenge.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub repair_task_id: Option<[u8; 32]>,
     /// Deterministic verifier latency in integer milliseconds.
@@ -921,7 +917,7 @@ pub struct ProviderDisputeResolutionV1 {
     /// Authenticated governance decision time.
     pub resolved_at_unix_ms: u64,
     /// Digest of the canonical decision evidence/envelope.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub decision_digest: [u8; 32],
     /// Optional bounded, canonical governance rationale.
     pub rationale: Option<String>,
@@ -959,7 +955,7 @@ pub struct ProviderDisputeEventV1 {
     /// Existing capacity-dispute category.
     pub kind: ProviderDisputeKindV1,
     /// Digest of the canonical evidence bundle.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
     /// Authenticated source submission time.
     pub submitted_at_unix_ms: u64,
@@ -1354,7 +1350,7 @@ impl StreamTokenCarRangeV1 {
 #[norito(deny_unknown_fields)]
 pub struct StreamTokenChunkRequestV1 {
     /// Exact BLAKE3 chunk digest resolved below the manifest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub chunk_digest: [u8; 32],
     /// Exact stored chunk length served by this request.
     pub stored_length: u64,
@@ -1464,11 +1460,11 @@ impl StreamTokenRequestRouteV1 {
 pub struct StreamTokenValidationRequestContextV1 {
     version: u8,
     provider_id: ProviderId,
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     manifest_digest: [u8; 32],
     manifest_cid: Vec<u8>,
     chunk_profile_handle: String,
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     request_nonce_digest: [u8; 32],
     token_presentation: StreamTokenPresentationV1,
     route: StreamTokenRequestRouteV1,
@@ -1650,12 +1646,12 @@ impl StreamTokenValidationRequestContextV1 {
 #[norito(deny_unknown_fields)]
 pub struct StreamTokenValidationBindingV1 {
     /// Stable authenticated identity of the regional gateway.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub gateway_id: [u8; 32],
     /// Non-zero sequence allocated by that gateway's sealed monotonic state.
     pub gateway_sequence: u64,
     /// Digest of the exact range request and provider-serving context.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub request_context_digest: [u8; 32],
 }
 
@@ -1715,7 +1711,7 @@ pub struct StreamTokenValidationOutcomeV1 {
     /// Canonical signed token-body digest, present exactly after successful decode.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub token_body_digest: Option<[u8; 32]>,
     /// Signing-key version from the decoded token body.
@@ -1833,7 +1829,7 @@ pub struct ReputationJournalEntryV1 {
     /// Provider whose counters may be affected.
     pub provider_id: ProviderId,
     /// Digest of the active recorder-authority policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub authority_policy_digest: [u8; 32],
     /// Exact governed transaction authority that committed the entry.
     pub recorded_by: AccountId,
@@ -1941,11 +1937,11 @@ impl ReputationJournalEntryV1 {
         if self.event_id != self.expected_event_id()? {
             return Err(ReputationJournalValidationError::EventIdMismatch);
         }
-        let encoded = norito::encode_canonical(self)
+        let encoded_len = canonical_frame_len(self)
             .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
-        if encoded.len() > REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1 {
+        if encoded_len > REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1 {
             return Err(ReputationJournalValidationError::EntryTooLarge {
-                found: encoded.len(),
+                found: encoded_len,
                 maximum: REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1,
             });
         }
@@ -2005,14 +2001,12 @@ impl ReputationJournalEntryV1 {
     fn expected_event_id(
         &self,
     ) -> Result<ReputationJournalEventIdV1, ReputationJournalValidationError> {
-        let mut material = self.clone();
-        material.event_id = ReputationJournalEventIdV1::ZERO;
-        let bytes = norito::encode_canonical(&material)
-            .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
-        Ok(ReputationJournalEventIdV1(domain_digest(
+        canonical_domain_digest(
             REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1,
-            &bytes,
-        )))
+            &ReputationJournalEventIdSource(self),
+        )
+        .map(ReputationJournalEventIdV1)
+        .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)
     }
 }
 
@@ -2116,7 +2110,7 @@ pub struct ReputationJournalFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Exact finalized block hash from that same view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Exact finalized block timestamp in milliseconds since Unix epoch.
     pub finalized_at_unix_ms: u64,
@@ -2153,7 +2147,7 @@ pub struct ReputationJournalFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Exact committing block hash.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Journal-event index within the committing block.
     pub event_index: u32,
@@ -2186,7 +2180,7 @@ pub struct ReputationJournalFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Journal-event index within the committing block.
     pub event_index: u32,
@@ -2329,12 +2323,14 @@ impl ReputationJournalFinalizedEventPageV1 {
             }
         }
 
-        let mut event_ids = BTreeSet::new();
-        let mut source_revisions = BTreeMap::new();
         let mut previous: Option<&ReputationJournalFinalizedEventV1> = None;
-        for event in &self.events {
+        for (index, event) in self.events.iter().enumerate() {
             event.validate(self.finalized_cursor)?;
-            if !event_ids.insert(event.entry.event_id) {
+            let preceding = &self.events[..index];
+            if preceding
+                .iter()
+                .any(|candidate| candidate.entry.event_id == event.entry.event_id)
+            {
                 return Err(ReputationJournalValidationError::DuplicateEventId);
             }
             if let Some(previous) = previous {
@@ -2353,15 +2349,20 @@ impl ReputationJournalFinalizedEventPageV1 {
                     return Err(ReputationJournalValidationError::EventTimestampReordered);
                 }
             }
-            validate_source_revision(&mut source_revisions, &event.entry)?;
+            let previous_source = preceding
+                .iter()
+                .rev()
+                .find(|candidate| candidate.entry.source_id == event.entry.source_id)
+                .map(|candidate| &candidate.entry);
+            validate_source_revision(previous_source, &event.entry)?;
             previous = Some(event);
         }
 
-        let encoded = norito::encode_canonical(self)
+        let encoded_len = canonical_frame_len(self)
             .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
-        if encoded.len() > REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        if encoded_len > REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
             return Err(ReputationJournalValidationError::EncodedPageTooLarge {
-                found: encoded.len(),
+                found: encoded_len,
                 maximum: REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
             });
         }
@@ -2719,6 +2720,96 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+
+impl io::Write for Blake3Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn canonical_domain_digest<T: norito::core::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<[u8; 32], norito::core::Error> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    norito::core::write_canonical_to_writer(value, &mut Blake3Writer(&mut hasher))?;
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn canonical_frame_len<T: norito::core::NoritoSerialize>(
+    value: &T,
+) -> Result<usize, norito::core::Error> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    norito::core::encoded_frame_len(value)
+}
+
+struct ReputationJournalEventIdSource<'a>(&'a ReputationJournalEntryV1);
+
+impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
+    fn schema_hash() -> [u8; 16] {
+        <ReputationJournalEntryV1 as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        if norito::core::use_packed_struct() {
+            return Err(norito::core::Error::UnsupportedFeature(
+                "borrowed reputation event-id packed struct",
+            ));
+        }
+        let zero = ReputationJournalEventIdV1::ZERO;
+        let fields: [&dyn norito::core::NoritoSerialize; 10] = [
+            &self.0.version,
+            &zero,
+            &self.0.source_id,
+            &self.0.source_revision,
+            &self.0.predecessor_event_id,
+            &self.0.provider_id,
+            &self.0.authority_policy_digest,
+            &self.0.recorded_by,
+            &self.0.source_time_unix_ms,
+            &self.0.payload,
+        ];
+        let mut scratch = norito::core::DeriveSmallBuf::new();
+        for field in fields {
+            norito::core::write_len_prefixed(writer, field, &mut scratch)?;
+        }
+        Ok(())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        if norito::core::use_packed_struct() {
+            return None;
+        }
+        let zero = ReputationJournalEventIdV1::ZERO;
+        let fields: [&dyn norito::core::NoritoSerialize; 10] = [
+            &self.0.version,
+            &zero,
+            &self.0.source_id,
+            &self.0.source_revision,
+            &self.0.predecessor_event_id,
+            &self.0.provider_id,
+            &self.0.authority_policy_digest,
+            &self.0.recorded_by,
+            &self.0.source_time_unix_ms,
+            &self.0.payload,
+        ];
+        fields.into_iter().try_fold(0usize, |total, field| {
+            let field_len = field.encoded_len_exact()?;
+            total
+                .checked_add(norito::core::len_prefix_len(field_len))?
+                .checked_add(field_len)
+        })
+    }
+}
+
 fn source_id(domain: &[u8], native_id: [u8; 32]) -> ReputationJournalSourceIdV1 {
     ReputationJournalSourceIdV1(domain_digest(domain, &native_id))
 }
@@ -2758,11 +2849,10 @@ fn validate_block_order(
 }
 
 fn validate_source_revision(
-    revisions: &mut BTreeMap<ReputationJournalSourceIdV1, ReputationJournalEntryV1>,
+    previous: Option<&ReputationJournalEntryV1>,
     entry: &ReputationJournalEntryV1,
 ) -> Result<(), ReputationJournalValidationError> {
-    let Some(previous) = revisions.get(&entry.source_id).cloned() else {
-        revisions.insert(entry.source_id, entry.clone());
+    let Some(previous) = previous else {
         return Ok(());
     };
     if previous.source_kind() != entry.source_kind()
@@ -2775,9 +2865,7 @@ fn validate_source_revision(
     {
         return Err(ReputationJournalValidationError::SourceRevisionDiscontinuity);
     }
-    validate_source_revision_material(&previous, entry)?;
-    revisions.insert(entry.source_id, entry.clone());
-    Ok(())
+    validate_source_revision_material(previous, entry)
 }
 
 fn validate_source_revision_material(
@@ -2854,6 +2942,14 @@ mod tests {
         let canonical_digest = policy.canonical_digest().expect("valid policy digest");
         let canonical_bytes =
             norito::encode_canonical(&policy).expect("encode canonical authority policy");
+        assert_eq!(
+            canonical_digest,
+            domain_digest(
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1,
+                &canonical_bytes,
+            ),
+            "streamed policy hashing must preserve the canonical digest",
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -3041,6 +3137,28 @@ mod tests {
             por_payload(seed),
         )
         .expect("valid PoR entry")
+    }
+
+    #[test]
+    fn streamed_event_id_and_frame_count_match_canonical_material() {
+        let entry = por_entry(0x31);
+        let mut legacy_material = entry.clone();
+        legacy_material.event_id = ReputationJournalEventIdV1::ZERO;
+        let legacy_bytes =
+            norito::encode_canonical(&legacy_material).expect("encode legacy event-id material");
+        assert_eq!(
+            entry.expected_event_id().expect("stream event-id material"),
+            ReputationJournalEventIdV1(domain_digest(
+                REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1,
+                &legacy_bytes,
+            )),
+        );
+        assert_eq!(
+            canonical_frame_len(&entry).expect("count canonical entry"),
+            norito::encode_canonical(&entry)
+                .expect("encode canonical entry")
+                .len(),
+        );
     }
 
     fn finalized_event(

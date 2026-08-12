@@ -1,5 +1,7 @@
 //! Exact T256 packing through conjugate quadratic factors of `X^N + 1`.
 
+use core::fmt;
+
 use super::{
     BgvProfile, RnsPolynomial, ZkAmsMkheErrorV1, bytes_mod_u64, checked_coefficient_work,
     manifest::{
@@ -89,10 +91,12 @@ struct T256Fp2 {
     c1: Scalar,
 }
 
-/// Bounded scratch owner for decoded scalar coefficients and slots.
+/// Test-only bounded scratch owner for scalar decoder parity checks.
 /// Deliberately neither `Clone` nor `Debug`.
+#[cfg(test)]
 struct ZeroizingPackingScalarsV1(Vec<Scalar>);
 
+#[cfg(test)]
 impl ZeroizingPackingScalarsV1 {
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -100,10 +104,6 @@ impl ZeroizingPackingScalarsV1 {
             .try_reserve_exact(capacity)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         Ok(Self(values))
-    }
-
-    fn as_slice(&self) -> &[Scalar] {
-        &self.0
     }
 
     fn push(&mut self, value: Scalar) {
@@ -115,56 +115,7 @@ impl ZeroizingPackingScalarsV1 {
     }
 }
 
-/// Canonical decoded-byte owner retained until the public decoder returns.
-/// Deliberately neither `Clone` nor `Debug`.
-struct ZeroizingPackingBytesV1(Vec<[u8; 32]>);
-
 #[cfg(test)]
-std::thread_local! {
-    static PACKING_BYTES_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
-        std::cell::Cell::new(0)
-    };
-}
-
-#[cfg(test)]
-fn packing_bytes_zeroized_drop_count_v1() -> usize {
-    PACKING_BYTES_ZEROIZED_DROPS_V1
-        .try_with(std::cell::Cell::get)
-        .unwrap_or(0)
-}
-
-impl ZeroizingPackingBytesV1 {
-    fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(capacity)
-            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        Ok(Self(values))
-    }
-
-    fn take(&mut self) -> Vec<[u8; 32]> {
-        core::mem::take(&mut self.0)
-    }
-}
-
-impl Drop for ZeroizingPackingBytesV1 {
-    fn drop(&mut self) {
-        let values = core::hint::black_box(&mut self.0);
-        #[cfg(test)]
-        let owned_values = !values.is_empty();
-        for value in values.iter_mut() {
-            value.fill(0);
-        }
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        #[cfg(test)]
-        if owned_values && values.iter().all(|value| *value == [0; 32]) {
-            let _ = PACKING_BYTES_ZEROIZED_DROPS_V1
-                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
-        }
-        let _ = core::hint::black_box(&mut *values);
-    }
-}
-
 impl Drop for ZeroizingPackingScalarsV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -189,6 +140,7 @@ impl ZeroizingPackingFp2V1 {
         Ok(Self(values))
     }
 
+    #[cfg(test)]
     fn push(&mut self, value: T256Fp2) {
         self.0.push(value);
     }
@@ -202,6 +154,108 @@ impl Drop for ZeroizingPackingFp2V1 {
             value.c1.clear_secret();
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *values);
+    }
+}
+
+/// Wiping owner borrowed by the visitor for one canonical decoded scalar.
+/// Deliberately neither `Clone` nor `Debug`; errors and unwinds erase it.
+struct ZeroizingPackingScalarBytesV1([u8; 32]);
+
+#[cfg(test)]
+std::thread_local! {
+    static PACKING_SCALAR_BYTES_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn packing_scalar_bytes_zeroized_drop_count_v1() -> usize {
+    PACKING_SCALAR_BYTES_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+impl ZeroizingPackingScalarBytesV1 {
+    const fn new() -> Self {
+        Self([0; 32])
+    }
+
+    fn encode_from(&mut self, value: &Scalar) {
+        self.0 = value.to_be_bytes();
+    }
+
+    const fn as_array(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl Drop for ZeroizingPackingScalarBytesV1 {
+    fn drop(&mut self) {
+        let bytes = core::hint::black_box(&mut self.0);
+        bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if bytes.iter().all(|byte| *byte == 0) {
+            let _ = PACKING_SCALAR_BYTES_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        let _ = core::hint::black_box(&mut *bytes);
+    }
+}
+
+/// Reusable, exactly release-sized decoder workspace. The sole evaluation
+/// vector is erased after every chunk and again when the workspace is dropped.
+/// Deliberately neither `Clone` nor `Debug`.
+pub(super) struct T256PackedPlaintextDecodeWorkspaceV1(ZeroizingPackingFp2V1);
+
+impl T256PackedPlaintextDecodeWorkspaceV1 {
+    /// Fallibly reserve the complete decoder workspace before consuming input.
+    pub(super) fn try_new_v1() -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut evaluations =
+            ZeroizingPackingFp2V1::with_capacity(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)?;
+        evaluations
+            .0
+            .resize(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, T256Fp2::zero());
+        Ok(Self(evaluations))
+    }
+}
+
+/// Borrow guard that erases the named decoder workspace on success, error,
+/// and unwind. Compiler-created scalar/register copies remain outside this
+/// narrow optimizer-resistant guarantee.
+struct ClearingPackingFp2BorrowV1<'workspace>(&'workspace mut [T256Fp2]);
+
+#[cfg(test)]
+std::thread_local! {
+    static PACKING_WORKSPACE_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn packing_workspace_zeroized_drop_count_v1() -> usize {
+    PACKING_WORKSPACE_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+impl Drop for ClearingPackingFp2BorrowV1<'_> {
+    fn drop(&mut self) {
+        let values = core::hint::black_box(&mut self.0);
+        for value in values.iter_mut() {
+            value.c0.clear_secret();
+            value.c1.clear_secret();
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if values
+            .iter()
+            .all(|value| value.c0.is_zero() && value.c1.is_zero())
+        {
+            let _ = PACKING_WORKSPACE_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
         let _ = core::hint::black_box(&mut *values);
     }
 }
@@ -375,7 +429,7 @@ impl<'packed> ValidatedT256PackedPlaintextV1<'packed> {
     /// padding artifact validation once, then preflight the same complete
     /// release-lift work gate used by the native full-RNS path.
     ///
-    /// The work gate runs before decoded-padding allocation. Once this method
+    /// The work gate runs before decoder-workspace allocation. Once this method
     /// succeeds, partial or repeated limb reads neither bypass nor repeatedly
     /// claim the full 38-limb source-operation budget.
     pub(super) fn validate_for_release_limb_stream_v1(
@@ -389,12 +443,15 @@ impl<'packed> ValidatedT256PackedPlaintextV1<'packed> {
         checked_coefficient_work(&profile, profile.moduli.len())?;
 
         // Padding is a slot-domain property, so coefficient checks alone are
-        // insufficient. The exact decoder necessarily reparses canonical bytes
-        // into separate scalar scratch; it does not repeat artifact validation.
-        // This decoded-byte owner is erased when validation returns. The public
-        // decoder continues to transfer its output instead.
-        let _decoded_padding_owner =
-            decode_validated_packed_plaintext_into_zeroizing_owner_v1(packed)?;
+        // insufficient. The in-place decoder performs the NTT in one Fp2
+        // owner and visits no values here; it retains neither scalar nor byte
+        // copies after validation.
+        let mut workspace = T256PackedPlaintextDecodeWorkspaceV1::try_new_v1()?;
+        visit_validated_packed_plaintext_used_slots_with_workspace_v1(
+            packed,
+            &mut workspace,
+            |_| Ok(()),
+        )?;
 
         Ok(Self { layout, packed })
     }
@@ -693,7 +750,8 @@ pub struct ZkAmsT256PackingLayoutV1 {
 }
 
 /// One exact packed-plaintext chunk in coefficient representation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
+#[derive(PartialEq, Eq)]
 pub struct ZkAmsT256PackedPlaintextV1 {
     /// Packed artifact version.
     pub version: u8,
@@ -709,6 +767,57 @@ pub struct ZkAmsT256PackedPlaintextV1 {
     pub coefficients: Vec<[u8; 32]>,
     /// Digest binding header, coefficients, and padding semantics.
     pub digest: [u8; 32],
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PACKED_PLAINTEXT_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn packed_plaintext_zeroized_drop_count_v1() -> usize {
+    PACKED_PLAINTEXT_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+impl Drop for ZkAmsT256PackedPlaintextV1 {
+    fn drop(&mut self) {
+        let coefficients = core::hint::black_box(&mut self.coefficients);
+        #[cfg(test)]
+        let owned_coefficients = !coefficients.is_empty();
+        for coefficient in coefficients.iter_mut() {
+            coefficient.fill(0);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if owned_coefficients
+            && coefficients
+                .iter()
+                .all(|coefficient| *coefficient == [0; 32])
+        {
+            let _ = PACKED_PLAINTEXT_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        let _ = core::hint::black_box(&mut *coefficients);
+    }
+}
+
+impl fmt::Debug for ZkAmsT256PackedPlaintextV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ZkAmsT256PackedPlaintextV1")
+            .field("version", &self.version)
+            .field("profile_digest", &self.profile_digest)
+            .field("layout_digest", &self.layout_digest)
+            .field("chunk_index", &self.chunk_index)
+            .field("used_slots", &self.used_slots)
+            .field("coefficient_count", &self.coefficients.len())
+            .field("digest", &self.digest)
+            .finish()
+    }
 }
 
 /// Direction of the exact slot permutation induced by a Galois automorphism.
@@ -1188,34 +1297,86 @@ pub fn decode_zk_ams_t256_packed_plaintext_v1(
 ) -> Result<Vec<[u8; 32]>, ZkAmsMkheErrorV1> {
     validate_layout(layout)?;
     validate_packed(layout, packed)?;
-    let mut decoded = decode_validated_packed_plaintext_into_zeroizing_owner_v1(packed)?;
-    Ok(decoded.take())
-}
-
-fn decode_validated_packed_plaintext_into_zeroizing_owner_v1(
-    packed: &ZkAmsT256PackedPlaintextV1,
-) -> Result<ZeroizingPackingBytesV1, ZkAmsMkheErrorV1> {
-    let mut coefficients = ZeroizingPackingScalarsV1::with_capacity(packed.coefficients.len())?;
-    for bytes in &packed.coefficients {
-        coefficients.push(
-            Scalar::from_be_bytes_exact(*bytes).map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?,
-        );
-    }
-    let slots = ZeroizingPackingScalarsV1(decode_coefficients(
-        coefficients.as_slice(),
-        ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
-    )?);
-    let mut decoded = ZeroizingPackingBytesV1::with_capacity(slots.as_slice().len())?;
+    let mut decoded = Vec::new();
     decoded
-        .0
-        .extend(slots.as_slice().iter().copied().map(Scalar::to_be_bytes));
-    if decoded.0[packed.used_slots as usize..]
-        .iter()
-        .any(|slot| *slot != [0; 32])
-    {
+        .try_reserve_exact(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    decoded.resize(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, [0; 32]);
+    let mut workspace = T256PackedPlaintextDecodeWorkspaceV1::try_new_v1()?;
+    let mut next_slot = 0_usize;
+    visit_validated_packed_plaintext_used_slots_with_workspace_v1(
+        packed,
+        &mut workspace,
+        |value| {
+            let destination = decoded
+                .get_mut(next_slot)
+                .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+            destination.copy_from_slice(value);
+            next_slot = next_slot
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+            Ok(())
+        },
+    )?;
+    if next_slot != packed.used_slots as usize {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
     Ok(decoded)
+}
+
+/// Decode one validated chunk through a caller-owned reusable workspace.
+pub(super) fn visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1(
+    layout: ZkAmsT256PackingLayoutV1,
+    packed: &ZkAmsT256PackedPlaintextV1,
+    workspace: &mut T256PackedPlaintextDecodeWorkspaceV1,
+    visit: impl FnMut(&[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    validate_layout(layout)?;
+    validate_packed(layout, packed)?;
+    visit_validated_packed_plaintext_used_slots_with_workspace_v1(packed, workspace, visit)
+}
+
+fn visit_validated_packed_plaintext_used_slots_with_workspace_v1(
+    packed: &ZkAmsT256PackedPlaintextV1,
+    workspace: &mut T256PackedPlaintextDecodeWorkspaceV1,
+    mut visit: impl FnMut(&[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let degree = ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1;
+    if workspace.0.0.len() != degree {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let evaluations = ClearingPackingFp2BorrowV1(&mut workspace.0.0);
+    let root = root_for_degree(degree)?;
+    let omega = root.mul(root);
+    let mut twist = T256Fp2::one();
+    for (evaluation, bytes) in evaluations.0.iter_mut().zip(&packed.coefficients) {
+        let coefficient =
+            Scalar::from_be_bytes_exact(*bytes).map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?;
+        *evaluation = T256Fp2::from_base(coefficient).mul(twist);
+        twist = twist.mul(root);
+    }
+    cyclic_ntt(evaluations.0, omega);
+
+    let used_slots = usize::try_from(packed.used_slots)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    for slot in 0..degree / 2 {
+        let index = slot_root_index(degree, slot)?;
+        let conjugate = degree - 1 - index;
+        let value = &evaluations.0[index];
+        if !value.c1.is_zero() || &evaluations.0[conjugate] != value {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+        if slot >= used_slots && !value.c0.is_zero() {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+    }
+    let mut encoded = ZeroizingPackingScalarBytesV1::new();
+    for slot in 0..used_slots {
+        let index = slot_root_index(degree, slot)?;
+        encoded.encode_from(&evaluations.0[index].c0);
+        visit(encoded.as_array())?;
+    }
+    Ok(())
 }
 
 /// Apply the exact slot permutation as an independent plaintext oracle.
@@ -2020,6 +2181,7 @@ fn encode_coefficients(slots: &[Scalar], degree: usize) -> Result<Vec<Scalar>, Z
     Ok(coefficients)
 }
 
+#[cfg(test)]
 fn decode_coefficients(
     coefficients: &[Scalar],
     degree: usize,
@@ -2357,30 +2519,85 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn decoded_padding_byte_owner_zeroizes_success_error_and_unwind() {
-        let owner = || ZeroizingPackingBytesV1(vec![[0x5a; 32], [0xa5; 32]]);
+    fn in_place_decoder_workspace_and_packed_owner_zeroize_on_drop_paths() {
+        assert_eq!(core::mem::size_of::<Scalar>(), 32);
+        assert_eq!(core::mem::size_of::<T256Fp2>(), 64);
+        let dirty = T256Fp2 {
+            c0: Scalar::from_u64(3),
+            c1: Scalar::from_u64(5),
+        };
+        let cleared = |values: &[T256Fp2]| {
+            values
+                .iter()
+                .all(|value| value.c0.is_zero() && value.c1.is_zero())
+        };
+        let mut success = vec![dirty; 3];
+        drop(ClearingPackingFp2BorrowV1(&mut success));
+        assert!(cleared(&success));
 
-        let before_success = packing_bytes_zeroized_drop_count_v1();
-        drop(owner());
-        assert_eq!(packing_bytes_zeroized_drop_count_v1(), before_success + 1);
-
-        fn reject_owner(_owner: ZeroizingPackingBytesV1) -> Result<(), ZkAmsMkheErrorV1> {
+        fn reject(values: &mut [T256Fp2]) -> Result<(), ZkAmsMkheErrorV1> {
+            let _guard = ClearingPackingFp2BorrowV1(values);
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         }
-        let before_error = packing_bytes_zeroized_drop_count_v1();
-        assert_eq!(
-            reject_owner(owner()),
-            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
-        );
-        assert_eq!(packing_bytes_zeroized_drop_count_v1(), before_error + 1);
+        let mut error = vec![dirty; 3];
+        assert_eq!(reject(&mut error), Err(ZkAmsMkheErrorV1::InvalidPolynomial));
+        assert!(cleared(&error));
 
-        let before_unwind = packing_bytes_zeroized_drop_count_v1();
+        let mut unwind_values = vec![dirty; 3];
         let unwind = catch_unwind(AssertUnwindSafe(|| {
-            let _owner = owner();
-            panic!("intentional decoded-padding owner erasure audit");
+            let _guard = ClearingPackingFp2BorrowV1(&mut unwind_values);
+            panic!("intentional decoder-workspace erasure audit");
         }));
         assert!(unwind.is_err());
-        assert_eq!(packing_bytes_zeroized_drop_count_v1(), before_unwind + 1);
+        assert!(cleared(&unwind_values));
+
+        let scalar_bytes_before = packing_scalar_bytes_zeroized_drop_count_v1();
+        let mut scalar_bytes = ZeroizingPackingScalarBytesV1::new();
+        scalar_bytes.encode_from(&Scalar::from_u64(7));
+        assert_eq!(scalar_bytes.as_array(), &Scalar::from_u64(7).to_be_bytes());
+        drop(scalar_bytes);
+        assert_eq!(
+            packing_scalar_bytes_zeroized_drop_count_v1(),
+            scalar_bytes_before + 1
+        );
+
+        fn reject_scalar_bytes() -> Result<(), ZkAmsMkheErrorV1> {
+            let mut bytes = ZeroizingPackingScalarBytesV1::new();
+            bytes.encode_from(&Scalar::from_u64(9));
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        }
+        assert_eq!(
+            reject_scalar_bytes(),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert_eq!(
+            packing_scalar_bytes_zeroized_drop_count_v1(),
+            scalar_bytes_before + 2
+        );
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let mut bytes = ZeroizingPackingScalarBytesV1::new();
+            bytes.encode_from(&Scalar::from_u64(11));
+            panic!("intentional decoded-scalar erasure audit");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            packing_scalar_bytes_zeroized_drop_count_v1(),
+            scalar_bytes_before + 3
+        );
+
+        let before = packed_plaintext_zeroized_drop_count_v1();
+        let packed = ZkAmsT256PackedPlaintextV1 {
+            version: 1,
+            profile_digest: [1; 32],
+            layout_digest: [2; 32],
+            chunk_index: 0,
+            used_slots: 2,
+            coefficients: vec![[0x5a; 32], [0xa5; 32]],
+            digest: [3; 32],
+        };
+        assert!(format!("{packed:?}").len() < 1_024);
+        drop(packed);
+        assert_eq!(packed_plaintext_zeroized_drop_count_v1(), before + 1);
     }
 
     #[test]
@@ -2523,8 +2740,8 @@ pub(super) mod tests {
             .find("checked_coefficient_work(&profile, profile.moduli.len())?")
             .expect("one full-lift work preflight");
         let padding_decode = corridor
-            .find("decode_validated_packed_plaintext_into_zeroizing_owner_v1(packed)?")
-            .expect("zeroizing decoded-padding validation");
+            .find("visit_validated_packed_plaintext_used_slots_with_workspace_v1(")
+            .expect("in-place decoded-padding validation");
         let absorb = corridor
             .find(".absorb_limb(limb, &output.coefficients)?")
             .expect("exact limb absorption");
@@ -2900,14 +3117,14 @@ pub(super) mod tests {
         let native_binding_digest = rns_polynomial_digest(&profile, &native.0).unwrap();
         assert_ne!(native_binding_digest, [0; 32]);
 
-        let padding_drops_before = packing_bytes_zeroized_drop_count_v1();
+        let workspace_drops_before = packing_workspace_zeroized_drop_count_v1();
         let plaintext =
             ValidatedT256PackedPlaintextV1::validate_for_release_limb_stream_v1(layout, &packed)
                 .unwrap();
         assert_eq!(
-            packing_bytes_zeroized_drop_count_v1(),
-            padding_drops_before + 1,
-            "the validated view must not retain decoded padding"
+            packing_workspace_zeroized_drop_count_v1(),
+            workspace_drops_before + 1,
+            "the validated view must erase its decoder workspace"
         );
         let mut streamed = T256PackedRnsBindingHasherV1::new(plaintext).unwrap();
         let limb_drops_before = t256_release_limb_zeroized_drop_count_v1();
@@ -2972,7 +3189,6 @@ pub(super) mod tests {
             packed_plaintext_rns_binding_digest_v1(layout, &stale_coefficient_digest),
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         );
-        let stale_drops_before = packing_bytes_zeroized_drop_count_v1();
         assert!(matches!(
             ValidatedT256PackedPlaintextV1::validate_for_release_limb_stream_v1(
                 layout,
@@ -2980,11 +3196,6 @@ pub(super) mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         ));
-        assert_eq!(
-            packing_bytes_zeroized_drop_count_v1(),
-            stale_drops_before,
-            "artifact rejection must precede decoded-padding allocation"
-        );
         let mut stale_metadata_digest = packed.clone();
         stale_metadata_digest.used_slots -= 1;
         assert_eq!(
@@ -3208,7 +3419,7 @@ pub(super) mod tests {
             mutation.layout_digest = partial_layout.digest;
             mutation.used_slots = 1;
             mutation.digest = packed_plaintext_digest(&mutation).unwrap();
-            let padding_drops_before = packing_bytes_zeroized_drop_count_v1();
+            let workspace_drops_before = packing_workspace_zeroized_drop_count_v1();
             let actual = match ValidatedT256PackedPlaintextV1::validate_for_release_limb_stream_v1(
                 partial_layout,
                 &mutation,
@@ -3218,9 +3429,9 @@ pub(super) mod tests {
             };
             assert_eq!(actual, ZkAmsMkheErrorV1::InvalidPolynomial);
             assert_eq!(
-                packing_bytes_zeroized_drop_count_v1(),
-                padding_drops_before + 1,
-                "decoded padding owner must erase on rejection"
+                packing_workspace_zeroized_drop_count_v1(),
+                workspace_drops_before + 1,
+                "decoder workspace must erase on padding rejection"
             );
             negative.record(b"decode.padding", actual);
         }

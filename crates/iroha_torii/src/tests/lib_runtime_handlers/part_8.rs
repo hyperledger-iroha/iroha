@@ -1,4 +1,3 @@
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_read_proxy_rejects_inactive_autoscale_range_lane_hint() {
@@ -754,9 +753,10 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
     );
     assert_eq!(candidates.loop_prevention_drops, 2);
 
-    let local_fanout_request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let local_fanout_request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"local-nexus-fanout-cannot-target-self"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
         visited_peer_ids: vec![local_peer_id.clone()],
@@ -820,9 +820,10 @@ async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
     Arc::get_mut(&mut app)
         .expect("unique local Nexus fanout app")
         .local_peer_id = Some(local_peer_id.clone());
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"local-nexus-fanout-terminates"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
         visited_peer_ids: vec![local_peer_id.clone()],
@@ -851,16 +852,17 @@ async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
 
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
-async fn incoming_torii_proxy_rejects_every_non_v5_schema_before_dispatch() {
+async fn incoming_torii_proxy_rejects_every_non_v6_schema_before_dispatch() {
     let app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    for schema_version in [0, 1, 2, 3, 4, u16::MAX] {
-        let request = ToriiProxyRequestV5 {
+    for schema_version in [0, 1, 2, 3, 4, 5, u16::MAX] {
+        let request = ToriiProxyRequestV6 {
             schema_version,
             request_id: Hash::new(
-                norito::to_bytes(&("reject-non-v5-torii-proxy-request", schema_version))
-                    .expect("encode non-V5 request id"),
+                norito::to_bytes(&("reject-non-v6-torii-proxy-request", schema_version))
+                    .expect("encode non-V6 request id"),
             ),
+            deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
@@ -878,6 +880,55 @@ async fn incoming_torii_proxy_rejects_every_non_v5_schema_before_dispatch() {
             response.status(),
             StatusCode::BAD_REQUEST,
             "schema version {schema_version} must fail before dispatch"
+        );
+    }
+}
+
+#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[tokio::test]
+async fn incoming_torii_proxy_rejects_expired_and_excessive_authenticated_deadlines() {
+    let app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let now_unix_ms = super::torii_proxy_now_unix_ms().expect("test clock must be available");
+    let max_horizon_ms = u64::try_from(super::TORII_PROXY_MAX_DEADLINE_HORIZON.as_millis())
+        .expect("fixed proxy deadline horizon fits u64 milliseconds");
+    for (label, deadline_unix_ms) in [
+        ("expired", now_unix_ms.saturating_sub(1)),
+        (
+            "excessive",
+            now_unix_ms
+                .checked_add(max_horizon_ms + 10_000)
+                .expect("test deadline fits u64"),
+        ),
+    ] {
+        let request = ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+            request_id: Hash::new(label.as_bytes()),
+            deadline_unix_ms,
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV4::Read(super::torii_read_request(
+                ToriiReadEndpointV1::AccountGet,
+                route,
+                vec![ALICE_ID.to_string()],
+                None,
+                Vec::new(),
+            )),
+        };
+
+        let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::REQUEST_TIMEOUT,
+            "{label} proxy deadline must fail before dispatch"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("proxy_deadline_exceeded")
         );
     }
 }
@@ -913,9 +964,10 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
     }
 
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    let proxy_request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let proxy_request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"internal-torii-proxy-read"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: vec![sender_peer_id],
@@ -994,9 +1046,10 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         "derive untrusted internal Torii HTTP bridge sender fixture key",
     );
     let untrusted_peer_id = PeerId::from(untrusted_signer.public_key().clone());
-    let untrusted_body = norito::to_bytes(&ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let untrusted_body = norito::to_bytes(&ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"internal-torii-proxy-untrusted-peer"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: vec![untrusted_peer_id],
@@ -1066,9 +1119,10 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
             axum::routing::post(handler_internal_torii_proxy_request).layer(peer_layer),
         )
         .with_state(app.clone());
-    let body = norito::to_bytes(&ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let body = norito::to_bytes(&ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"internal-torii-proxy-read-unsigned"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: vec![PeerId::from(
@@ -1229,9 +1283,10 @@ async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hop
         &app,
         &sender_peer_id,
         route,
-        &ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        &ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::new(b"torii-proxy-hop-exhausted"),
+            deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
             hop_count: 1,
             max_hops: 1,
             visited_peer_ids: vec![sender_peer_id.clone()],
@@ -1376,9 +1431,10 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
         &app,
         &sender_peer_id,
         route,
-        &ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        &ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id,
+            deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: vec![sender_peer_id.clone()],

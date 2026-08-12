@@ -9,6 +9,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/merge_ledger_latest_execution_index.rs"),
     Path("crates/iroha_core/src/kura/replica_advert_and_body_status.rs"),
     Path("crates/iroha_core/src/kura/retained_finality_replica_authority.rs"),
+    Path("crates/iroha_core/src/kura/wsv_checkpoint_read_helpers.rs"),
     Path("crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"),
     Path("crates/iroha_core/src/kura/prune_intent_publication.rs"),
     Path("crates/iroha_core/src/kura/prune_recovery_capacity.rs"),
@@ -30,6 +31,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/indexed_sidecar_io.rs"),
     Path("crates/iroha_core/src/kura/indexed_sidecar_rewrite.rs"),
     Path("crates/iroha_core/src/kura/lane_history_compaction.rs"),
+    Path("crates/iroha_core/src/kura/prune_block_store_tail.rs"),
     Path("crates/iroha_core/src/kura/test_fault_injection_state.rs"),
     Path("crates/iroha_core/src/kura/test_fault_injection_controls.rs"),
     Path("crates/iroha_core/src/kura/file_error_support.rs"),
@@ -39,12 +41,19 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("commit_roster_journal/tests.rs"),
     ),
     Path("crates/iroha_config/src/parameters/actual.rs"): (
-        Path("actual/runtime_tail_tests.rs"),
+        Path("actual/torii_http_transport.rs"),
+        Path("actual/torii_mcp_profile.rs"),
         Path("actual/tests.rs"),
     ),
     Path("crates/iroha_config/src/parameters/user.rs"): (
         Path("user/kura.rs"),
+        Path("user/torii_peer_geo.rs"),
+        Path("user/torii_soranet_privacy_ingest.rs"),
         Path("user/governance_dag_head_mode_tests.rs"),
+        Path("user/zk_prover_report_retention_tests.rs"),
+        Path("user/query_fanout_memory_tests.rs"),
+        Path("user/verified_source_ingress_tests.rs"),
+        Path("user/iso_bridge_store_memory_tests.rs"),
         Path("user/kura_and_snapshot_tests.rs"),
         Path("user/runtime_tail_tests.rs"),
     ),
@@ -60,6 +69,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("kura/merge_ledger_latest_execution_index.rs"),
         Path("kura/replica_advert_and_body_status.rs"),
         Path("kura/retained_finality_replica_authority.rs"),
+        Path("kura/wsv_checkpoint_read_helpers.rs"),
         Path("kura/durable_block_and_atomic_sidecar_io.rs"),
         Path("kura/prune_intent_publication.rs"),
         Path("kura/prune_recovery_capacity.rs"),
@@ -78,6 +88,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("kura/indexed_sidecar_io.rs"),
         Path("kura/indexed_sidecar_rewrite.rs"),
         Path("kura/lane_history_compaction.rs"),
+        Path("kura/prune_block_store_tail.rs"),
         Path("kura/test_fault_injection_state.rs"),
         Path("kura/test_fault_injection_controls.rs"),
         Path("kura/file_error_support.rs"),
@@ -148,6 +159,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/queue.rs"): (
         Path("queue/canonical_terminal_cleanup.rs"),
+        Path("queue/nexus_reconfigure_manifest_reload_tests.rs"),
         Path("queue/plan_journal_startup_atomicity_tests.rs"),
         Path("queue/global_guard_claim_conflict_tests.rs"),
         Path("queue/queue_metadata_and_admission_tests.rs"),
@@ -204,7 +216,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("peer_tests.rs"),
     ),
     Path("crates/irohad/src/main.rs"): (
+        Path("main/shared_sorafs_provider_cache_tests.rs"),
         Path("main/runtime_deps.rs"),
+        Path("main/online_peers_provider.rs"),
         Path("main_tests/governance_dag_publisher_binding_signer.rs"),
         Path("main/governance_dag_launcher_tests.rs"),
         Path("main/runtime_budget_and_config_tests.rs"),
@@ -214,6 +228,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("taira_public_localnet_config_digest_test.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/mod.rs"): (
+        Path("fair_v2_ingress_selector.rs"),
         Path("tests/mod_authoritative_runtime_gate_01_support.rs"),
         Path("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs"),
         Path("tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs"),
@@ -228,27 +243,29 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("status/test_guards.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2.rs"): (
-        Path("tests/v2_adapter_activation_context.rs"),
-        Path("tests/v2_adapter_01_replay_and_registry.rs"),
-        Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
-        Path("tests/v2_adapter_03_tc_and_terminal_ingress.rs"),
+        Path("tests/v2_adapter_main_00.rs"),
+        Path("tests/v2_adapter_main_01.rs"),
+        Path("tests/v2_adapter_main_02.rs"),
+        Path("tests/v2_adapter_main_03.rs"),
+        Path("tests/v2_adapter_main_04.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
         Path("v2_worker/exact_output_rollover_claim.rs"),
         Path("v2_worker/kura_replica_advert_refresh.rs"),
         Path("v2_worker/current_lane_output_rollover_claim.rs"),
-        Path("tests/v2_worker_reply_route_cases.rs"),
-        Path("tests/v2_worker_backpressure_cases.rs"),
+        Path("tests/v2_worker_main_00.rs"),
+        Path("tests/v2_worker_main_01.rs"),
         Path("v2_worker/applied_height_handoff_tests.rs"),
         Path("v2_worker/upstream_reply_route_test.rs"),
-        Path("tests/v2_worker_nonzero_view_restart.rs"),
-        Path("tests/v2_worker_serve_unsealed_cases.rs"),
-        Path("tests/v2_worker_serve_decision_restart_cases.rs"),
-        Path("tests/v2_worker_certified_serve_budget_cases.rs"),
+        Path("tests/v2_worker_main_02.rs"),
+        Path("tests/v2_worker_main_03.rs"),
+        Path("tests/v2_worker_main_04.rs"),
+        Path("tests/v2_worker_main_05.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_runner.rs"): (
         Path("v2_runner/height_ingress_bindings.rs"),
         Path("v2_runner/lifecycle_terminal_recovery.rs"),
+        Path("v2_runner/decided_lane_recovery.rs"),
         Path("v2_runner/finalized_output_rollover.rs"),
         Path("v2_runner/canonical_recovery_ingress.rs"),
         Path("v2_runner/reply_route_retention.rs"),
@@ -263,6 +280,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): (
         Path("v2_apply/autonomous_recovery_types.rs"),
+        Path("v2_apply/historical_autonomous_recovery.rs"),
         Path("v2_apply/reconciliation_authority.rs"),
         Path("v2_apply/committed_carrier_cleanup.rs"),
         Path("v2_apply/error_recovery.rs"),
@@ -287,9 +305,21 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_core_terminal_transactionality.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_effects.rs"): (
-        Path("tests/v2_effects_kura_tip_replay.rs"),
-        Path("tests/v2_effects_01_view_churn_and_runtime_steps.rs"),
-        Path("tests/v2_effects_02_admission_handoffs.rs"),
+        Path("tests/v2_effects_main_00.rs"),
+        Path("tests/v2_effects_main_01.rs"),
+        Path("tests/v2_effects_main_02.rs"),
+        Path("tests/v2_effects_main_03.rs"),
+        Path("tests/v2_effects_main_04.rs"),
+        Path("tests/v2_effects_main_05.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
+        Path("tests/v2_runtime_main_00.rs"),
+        Path("tests/v2_runtime_main_01.rs"),
+        Path("tests/v2_runtime_main_02.rs"),
+        Path("tests/v2_runtime_main_03.rs"),
+        Path("tests/v2_runtime_main_04.rs"),
+        Path("tests/v2_runtime_main_05.rs"),
+        Path("tests/v2_runtime_main_06.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("v2_lane_work/canonical_executed_block_application_repair.rs"),
@@ -1424,6 +1454,26 @@ def test_async_source_fidelity_pins_live_serve_occurrence_identity(
     )
 
 
+def reviewed_rust_item_provider(
+    module, repo_root: Path, relative: Path, item_name: str
+) -> Path:
+    """Resolve one item through its authenticated parent/include closure."""
+
+    parent = repo_root / relative
+    candidates = (parent,) + tuple(
+        parent.parent / component
+        for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+            relative.as_posix(), ()
+        )
+    )
+    providers = tuple(
+        path for path in candidates
+        if path.is_file() and module.rust_items(path.read_text(encoding="utf-8"), item_name)
+    )
+    assert len(providers) == 1, (relative, item_name, providers)
+    return providers[0]
+
+
 def copy_timeout_vote_window_fixture(tmp_path: Path, module) -> Path:
     """Copy the bounded TimeoutVote production and regression sources."""
 
@@ -1437,6 +1487,7 @@ def copy_timeout_vote_window_fixture(tmp_path: Path, module) -> Path:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(module.ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
     return tmp_path / relatives[0]
 
 
@@ -1508,7 +1559,10 @@ def test_timeout_vote_semantic_capacity_rejects_real_source_mutations(
     """Bounded admission and both protected prune arms fail closed."""
 
     module = load_checker()
-    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    rust_path = reviewed_rust_item_provider(
+        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), item_name
+    )
     mutate_rust_item_source_in_context(
         module,
         rust_path,
@@ -1531,7 +1585,11 @@ def test_timeout_vote_semantic_capacity_rejects_two_roster_sets(
     """The semantic table reserves lock plus both bounded timeout rounds."""
 
     module = load_checker()
-    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    rust_path = reviewed_rust_item_provider(
+        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        "semantic_ingress_capacity",
+    )
     mutate_rust_item_source(
         module,
         rust_path,
@@ -1688,7 +1746,10 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
     """Capacity, adjacent, full-lane, and cross-view regressions stay exact."""
 
     module = load_checker()
-    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    rust_path = reviewed_rust_item_provider(
+        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), test_name
+    )
     mutate_rust_item_source(
         module,
         rust_path,
@@ -2154,6 +2215,13 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "const fn merge_sidecar_server_stream_capacity(",
+            "roster_len + wire::MAX_VALIDATORS_PER_HEIGHT",
+            "roster_len",
+            "adapter sidecar server stream capacity reserves current and predecessor committees",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "None => MergeSidecarTransport::open_durable_with_server_stream_capacity(",
             "limits.merge_sidecar_limits,",
             "MergeSidecarLimits::defaults(),",
@@ -2161,11 +2229,13 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "let mut adapter = Self {",
+            "let adapter = Self {",
             "merge_sidecars,\n"
+            "            predecessor_sidecar_requesters: None,\n"
             "            exact_output_handoff_owner,\n"
             "            authenticated_merge_qcs:",
             "merge_sidecars,\n"
+            "            predecessor_sidecar_requesters: None,\n"
             "            authenticated_merge_qcs:",
             "adapter hands the exact rehydrated sidecar transport into the live production field",
         ),

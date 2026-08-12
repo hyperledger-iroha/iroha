@@ -1807,7 +1807,7 @@ pub struct SoraUploadedModelEncryptionRecipientV1 {
     /// AEAD suite expected for the wrapped bundle key.
     pub aead: SoraUploadedModelKeyWrapAeadV1,
     /// Raw recipient public key bytes for the configured KEM.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub public_key_bytes: Vec<u8>,
     /// Commitment over the recipient public key bytes.
     pub public_key_fingerprint: Hash,
@@ -1891,13 +1891,13 @@ pub struct SoraUploadedModelWrappedKeyV1 {
     /// AEAD suite used to encrypt the wrapped bundle key.
     pub aead: SoraUploadedModelKeyWrapAeadV1,
     /// Raw ephemeral public key bytes used for the KEM exchange.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ephemeral_public_key: Vec<u8>,
     /// Nonce used by the AEAD wrapping operation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub nonce: Vec<u8>,
     /// Opaque wrapped bundle-key ciphertext bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub wrapped_key_ciphertext: Vec<u8>,
     /// Commitment over `wrapped_key_ciphertext`.
     pub ciphertext_hash: Hash,

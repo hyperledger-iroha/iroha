@@ -2,23 +2,24 @@
 //!
 //! This module is deliberately opt-in. IVM and other in-process callers keep
 //! the existing query behavior unless they attach [`OrdinaryQueryExecutionLimits`]
-//! to [`super::QueryLimits`]. The initial Torii corridor admits only output
-//! shapes whose source rows have a protocol-level resident bound before the
-//! query implementation can clone them.
+//! to [`super::QueryLimits`]. Torii admits every singular producer only with
+//! the source-specific preflight and output limits installed below. Iterable
+//! admission is coupled to source-specific immutable-world adapters in
+//! `ordinary_iterable` before a query implementation can clone any row.
 
 use std::{
     fmt,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
-#[cfg(feature = "fast_dsl")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "fast_dsl")]
-use iroha_data_model::prelude::SelectorTuple;
 use iroha_data_model::{
-    prelude::{Identifiable as _, QueryParams, RoleId, TriggerId},
-    query::{QueryRequest, QueryResponse, SingularQueryBox, error::QueryExecutionFail as Error},
+    query::{
+        QueryRequest, QueryResponse, SingularQueryBox, error::QueryExecutionFail as Error,
+        parameters::QueryParams,
+    },
+    sns::{NameSelectorV1, SuffixId},
+    state_path::StatePath,
 };
 use mv::storage::StorageReadOnly as _;
 use norito::core::{DecodeFlagsGuard, NoritoSerialize};
@@ -47,6 +48,13 @@ pub const ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES: u64 = 4 * 1_024;
 /// metadata that remain live alongside the value itself.
 pub const ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES: u64 = 128;
 
+/// The admitted peer adapter measures once, then owns the bounded prefix in a
+/// second immutable-world pass.
+const ORDINARY_SOURCE_SCAN_PASSES: u64 = 2;
+/// One row is traversed once for its exact length and twice by the canonical
+/// writer in each of the two source passes.
+const ORDINARY_SOURCE_FRAME_TRAVERSALS: u64 = 6;
+
 /// Fixed failure categories for invalid ordinary-query memory geometry.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum OrdinaryQueryExecutionLimitError {
@@ -55,9 +63,14 @@ pub enum OrdinaryQueryExecutionLimitError {
     ZeroPageItems,
     /// A checked geometry calculation overflowed.
     GeometryOverflow,
-    /// The deterministic execution budget cannot cover one full page plus its
-    /// continuation probe at the configured source-row charge.
+    /// Neither items nor source bytes consume deterministic work units.
+    UnmeteredExecutionBudget,
+    /// The deterministic execution budget cannot cover both immutable-source
+    /// passes for one full page plus its continuation probe.
     ExecutionBudgetTooSmall,
+    /// The retained request-graph ceiling exceeds the schema-audited allocation
+    /// ceiling used when replaying its canonical Start archive.
+    RequestGraphExceedsDecodeLimit,
     /// The configured peak reservation does not cover source, page, response,
     /// and encoding overlap.
     ExecutionHeadroomTooSmall,
@@ -71,8 +84,14 @@ impl fmt::Display for OrdinaryQueryExecutionLimitError {
         let message = match self {
             Self::ZeroPageItems => "ordinary query page size must be non-zero",
             Self::GeometryOverflow => "ordinary query memory geometry overflowed",
+            Self::UnmeteredExecutionBudget => {
+                "ordinary query execution budget must charge items or source bytes"
+            }
             Self::ExecutionBudgetTooSmall => {
-                "ordinary query execution budget cannot cover one page plus probe"
+                "ordinary query execution budget cannot cover two source passes plus probe"
+            }
+            Self::RequestGraphExceedsDecodeLimit => {
+                "ordinary query request graph exceeds its replay decode limit"
             }
             Self::ExecutionHeadroomTooSmall => {
                 "ordinary query execution headroom is below the required phase envelope"
@@ -181,6 +200,7 @@ pub struct OrdinaryQueryExecutionLimits {
     max_cursor_value_bytes: u64,
     max_cursor_retained_bytes: u64,
     max_revalidation_archive_bytes: u64,
+    max_request_graph_bytes: u64,
     revalidation_decode_limits: norito::DecodeLimits,
 }
 
@@ -203,26 +223,42 @@ impl OrdinaryQueryExecutionLimits {
         max_cursor_retained_items: u64,
         max_cursor_value_bytes: u64,
         max_cursor_retained_bytes: u64,
+        max_request_graph_bytes: u64,
         max_revalidation_archive_bytes: u64,
         revalidation_decode_limits: norito::DecodeLimits,
     ) -> Result<Self, OrdinaryQueryExecutionLimitError> {
         if max_page_items == 0 {
             return Err(OrdinaryQueryExecutionLimitError::ZeroPageItems);
         }
+        if execution_budget.units_per_item == 0 && execution_budget.units_per_byte == 0 {
+            return Err(OrdinaryQueryExecutionLimitError::UnmeteredExecutionBudget);
+        }
         let page_with_probe = max_page_items
             .checked_add(1)
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        let source_items = page_with_probe
+            .checked_mul(ORDINARY_SOURCE_SCAN_PASSES)
+            .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
         let probe_source_bytes = page_with_probe
             .checked_mul(max_source_item_bytes)
+            .and_then(|bytes| bytes.checked_mul(ORDINARY_SOURCE_FRAME_TRAVERSALS))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
         execution_budget
-            .ensure(page_with_probe, probe_source_bytes)
+            .ensure(source_items, probe_source_bytes)
             .map_err(|_| OrdinaryQueryExecutionLimitError::ExecutionBudgetTooSmall)?;
 
+        let revalidation_graph_bytes = u64::try_from(
+            revalidation_decode_limits.max_total_allocated_bytes(),
+        )
+        .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        if max_request_graph_bytes > revalidation_graph_bytes {
+            return Err(OrdinaryQueryExecutionLimitError::RequestGraphExceedsDecodeLimit);
+        }
         let required_execution = Self::required_execution_headroom_bytes(
             max_page_items,
             max_source_item_bytes,
             max_response_bytes,
+            max_request_graph_bytes,
             max_revalidation_archive_bytes,
             revalidation_decode_limits,
         )?;
@@ -250,19 +286,35 @@ impl OrdinaryQueryExecutionLimits {
             max_cursor_value_bytes,
             max_cursor_retained_bytes,
             max_revalidation_archive_bytes,
+            max_request_graph_bytes,
             revalidation_decode_limits,
         })
     }
 
-    /// Compute the minimum peak reservation `P` for source/work, page
-    /// materialization, response ownership, and encoding overlap.
+    /// Compute the minimum fresh execution reservation for the decoded request,
+    /// source/work, page materialization, response ownership, and encoding
+    /// overlap.
+    ///
+    /// The decoded request graph is bounded by the same server-supplied
+    /// allocation ceiling used to decode a canonical Start archive. Stored
+    /// Start execution concurrently owns its canonical archive, but that archive
+    /// is already included in [`Self::required_cursor_retained_bytes`]; Torii
+    /// reserves both returned parts before decoding or execution begins.
     pub fn required_execution_headroom_bytes(
         max_page_items: u64,
         max_source_item_bytes: u64,
         max_response_bytes: u64,
+        max_request_graph_bytes: u64,
         max_revalidation_archive_bytes: u64,
         revalidation_decode_limits: norito::DecodeLimits,
     ) -> Result<u64, OrdinaryQueryExecutionLimitError> {
+        let replay_graph_limit = u64::try_from(
+            revalidation_decode_limits.max_total_allocated_bytes(),
+        )
+        .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        if max_request_graph_bytes > replay_graph_limit {
+            return Err(OrdinaryQueryExecutionLimitError::RequestGraphExceedsDecodeLimit);
+        }
         let page_with_probe = max_page_items
             .checked_add(1)
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
@@ -276,9 +328,31 @@ impl OrdinaryQueryExecutionLimits {
             .checked_mul(ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES)
             .and_then(|bytes| bytes.checked_add(ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
-        let execution_phase = source_work
+        let request_inline = u64::try_from(core::mem::size_of::<QueryRequest>())
+            .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        let request_graph = max_request_graph_bytes
+            .checked_add(request_inline)
+            .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+
+        // The Start request remains live while its exact (Q, T) source plan is
+        // consumed and while the first page is materialized. The response frame
+        // is encoded only after that request and the source iterator are gone.
+        let source_phase = request_graph
+            .checked_add(source_work)
             .checked_add(owned_page_values)
             .and_then(|bytes| bytes.checked_add(page_container))
+            .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        // Selector projection begins only after the immutable source iterator
+        // is dropped, but the unprojected page remains live until the projected
+        // page is complete. Both page-value representations therefore belong
+        // to fresh execution headroom.
+        let selector_phase = request_graph
+            .checked_add(owned_page_values)
+            .and_then(|bytes| bytes.checked_add(owned_page_values))
+            .and_then(|bytes| bytes.checked_add(page_container))
+            .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        let response_phase = owned_page_values
+            .checked_add(page_container)
             .and_then(|bytes| bytes.checked_add(max_response_bytes))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
 
@@ -286,14 +360,14 @@ impl OrdinaryQueryExecutionLimits {
         // decoded Start request and its bounded canonical re-encode coexist in
         // fresh headroom `P`. Revalidation completes before source execution,
         // so the required peak is the larger phase rather than their sum.
-        let decoded_archive_bytes =
-            u64::try_from(revalidation_decode_limits.max_total_allocated_bytes())
-                .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
         let revalidation_phase = max_revalidation_archive_bytes
-            .checked_add(decoded_archive_bytes)
+            .checked_add(request_graph)
             .and_then(|bytes| bytes.checked_add(ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
-        Ok(execution_phase.max(revalidation_phase))
+        Ok(source_phase
+            .max(selector_phase)
+            .max(response_phase)
+            .max(revalidation_phase))
     }
 
     /// Compute the minimum retained reservation `R` for cursor values, the
@@ -348,7 +422,10 @@ impl OrdinaryQueryExecutionLimits {
         self.max_source_item_bytes
     }
 
-    /// Maximum complete framed response bytes accepted before Torii encoding.
+    /// Maximum canonical preflight and final HTTP response-body bytes.
+    ///
+    /// Core checks the canonical Norito frame before returning ownership;
+    /// Torii applies the same ceiling to its negotiated checked JSON body.
     #[must_use]
     pub const fn max_response_bytes(self) -> u64 {
         self.max_response_bytes
@@ -376,6 +453,15 @@ impl OrdinaryQueryExecutionLimits {
     #[must_use]
     pub const fn max_revalidation_archive_bytes(self) -> u64 {
         self.max_revalidation_archive_bytes
+    }
+
+    /// Maximum allocator-owned graph retained by one decoded Start request.
+    ///
+    /// This is the embedding server's measured decode-allocation ceiling, not
+    /// an estimate derived from an item discriminant or encoded byte length.
+    #[must_use]
+    pub const fn max_request_graph_bytes(self) -> u64 {
+        self.max_request_graph_bytes
     }
 
     /// Schema-audited limits for decoding a stored Start archive during
@@ -459,10 +545,6 @@ pub(crate) struct OrdinaryQueryCursorBinding {
 impl OrdinaryQueryCursorBinding {
     pub(crate) const fn retained_bytes(self) -> u64 {
         self.retained_bytes
-    }
-
-    pub(crate) const fn policy(self) -> OrdinaryQueryCursorPolicy {
-        self.policy
     }
 
     pub(crate) fn is_compatible_with(self, current: OrdinaryQueryCursorPolicy) -> bool {
@@ -569,17 +651,19 @@ pub(super) fn ensure_request_admitted(
         QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_)) => {
             ensure_source_bound(limits, ORDINARY_ABI_VERSION_SOURCE_BYTES)
         }
+        QueryRequest::Singular(_) if query_limits.singular_output_limits.is_some() => Ok(()),
         QueryRequest::Singular(_) => {
-            // TODO: Add borrowed pre-clone adapters for state-backed singular
-            // entities and bespoke bounded builders for synthesized/vector
-            // outputs before admitting more variants here.
+            // Every non-scalar producer needs the singular output guard before
+            // source preflight can decode, project, or build an owned result.
+            // Torii installs that guard only after reserving the complete
+            // singular working set; legacy in-process callers remain closed.
             Err(Error::Conversion(
-                "ordinary Torii query rejects an unadapted singular result before query execution"
+                "ordinary Torii query requires a server-owned singular output lane before query execution"
                     .to_owned(),
             ))
         }
         QueryRequest::Start(start) => {
-            ensure_identifier_start_shape(start, mode, query_limits, limits)
+            ensure_world_state_start_shape(start, mode, query_limits, limits)
         }
         QueryRequest::Continue(_) if mode == OrdinaryCursorMode::Stored => Ok(()),
         QueryRequest::Continue(_) => Err(Error::Conversion(
@@ -596,7 +680,7 @@ pub(crate) fn ensure_stored_revalidation_admitted(
     ensure_request_admitted(request, OrdinaryCursorMode::Stored, query_limits, limits)
 }
 
-pub(super) fn ensure_response_admitted(
+pub(crate) fn ensure_response_admitted(
     response: &QueryResponse,
     limits: OrdinaryQueryExecutionLimits,
 ) -> Result<(), Error> {
@@ -613,7 +697,7 @@ fn ensure_source_bound(
     Ok(())
 }
 
-fn ensure_identifier_start_shape(
+fn ensure_world_state_start_shape(
     start: &iroha_data_model::query::QueryWithParams,
     mode: OrdinaryCursorMode,
     query_limits: QueryLimits,
@@ -621,93 +705,84 @@ fn ensure_identifier_start_shape(
 ) -> Result<(), Error> {
     ensure_source_bound(limits, ORDINARY_NAME_ID_SOURCE_BYTES)?;
 
-    let identity_protocol_bounded = if let Some(query_box) = start.query_box() {
-        non_fast_identifier_shape(query_box)
+    let peer_source = if let Some(query_box) = start.query_box() {
+        non_fast_peer_source_shape(query_box)
     } else {
-        fast_identifier_shape(start)
+        fast_peer_source_shape(start, query_limits)?
     };
-    if !identity_protocol_bounded {
-        // TODO: Add query-specific borrowed source adapters. Item-kind-only
-        // admission is unsound because `AccountId`, entities, blocks, and
-        // transactions can own attacker-sized nested values before metering.
+    if !peer_source {
+        // TODO: Add query-specific borrowed adapters for the remaining 36
+        // world producers. The three Kura producers additionally require an
+        // authenticated fixed projection in the bounded reader.
         return Err(Error::Conversion(
-            "ordinary Torii query rejects an unadapted iterable source before payload decoding or query execution"
+            "ordinary iterable producer is awaiting a source-specific bounded adapter".to_owned(),
+        ));
+    }
+
+    if mode != OrdinaryCursorMode::Ephemeral
+        || start.params.pagination.offset_value() != 0
+        || start.params.sorting.sort_by_metadata_key.is_some()
+    {
+        return Err(Error::Conversion(
+            "ordinary peer adapter currently requires ephemeral, unsorted, zero-offset pagination"
                 .to_owned(),
         ));
     }
 
-    ensure_identifier_params(&start.params, mode, query_limits, limits)
+    ensure_iterable_params(&start.params, mode, query_limits, limits)
 }
 
-fn non_fast_identifier_shape(
+fn non_fast_peer_source_shape(
     query_box: &iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>,
 ) -> bool {
-    macro_rules! admitted {
-        ($item:ty) => {
-            iroha_data_model::query::iter_query_inner::<$item>(query_box).is_some_and(|erased| {
-                erased.payload().is_empty()
-                    && erased.predicate().is_pass()
-                    && erased.selector().iter().next().is_none()
-            })
-        };
-    }
-    admitted!(RoleId) || admitted!(TriggerId)
+    let Some(erased) = iroha_data_model::query::iter_query_inner::<
+        iroha_data_model::peer::PeerId,
+    >(query_box) else {
+        return false;
+    };
+    super::decode_iter_query_payload_exact::<
+        iroha_data_model::query::peer::prelude::FindPeers,
+    >(erased.payload())
+    .is_some()
+        && erased.predicate().is_pass()
+        && erased.selector().iter().next().is_none()
 }
 
 #[cfg(feature = "fast_dsl")]
-fn fast_identifier_shape(start: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::query::{QueryItemKind, dsl::CompoundPredicate};
-    use norito::codec::Encode as _;
-
-    fn role_predicate() -> &'static [u8] {
-        static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-        BYTES
-            .get_or_init(|| CompoundPredicate::<RoleId>::PASS.encode())
-            .as_slice()
-    }
-
-    fn role_selector() -> &'static [u8] {
-        static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-        BYTES
-            .get_or_init(|| SelectorTuple::<RoleId>::default().encode())
-            .as_slice()
-    }
-
-    fn trigger_predicate() -> &'static [u8] {
-        static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-        BYTES
-            .get_or_init(|| CompoundPredicate::<TriggerId>::PASS.encode())
-            .as_slice()
-    }
-
-    fn trigger_selector() -> &'static [u8] {
-        static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
-        BYTES
-            .get_or_init(|| SelectorTuple::<TriggerId>::default().encode())
-            .as_slice()
-    }
+fn fast_peer_source_shape(
+    start: &iroha_data_model::query::QueryWithParams,
+    query_limits: QueryLimits,
+) -> Result<bool, Error> {
+    use iroha_data_model::query::{
+        QueryItemKind,
+        dsl::{CompoundPredicate, SelectorTuple},
+        peer::prelude::FindPeers,
+    };
 
     let Some((item, predicate, selector, payload)) = start.fast_dsl_parts() else {
-        return false;
+        return Ok(false);
     };
-    if !payload.is_empty() {
-        return false;
+    if item != QueryItemKind::PeerId {
+        return Ok(false);
     }
-    match item {
-        QueryItemKind::RoleId => predicate == role_predicate() && selector == role_selector(),
-        QueryItemKind::TriggerId => {
-            predicate == trigger_predicate() && selector == trigger_selector()
-        }
-        _ => false,
-    }
+    let mut decoder =
+        super::FastIterComponentDecoder::new(query_limits, [payload, predicate, selector])?;
+    let _: FindPeers = decoder.decode(payload)?;
+    let predicate: CompoundPredicate<iroha_data_model::peer::PeerId> =
+        decoder.decode(predicate)?;
+    let selector: SelectorTuple<iroha_data_model::peer::PeerId> = decoder.decode(selector)?;
+    Ok(predicate.is_pass() && selector.iter().next().is_none())
 }
 
 #[cfg(not(feature = "fast_dsl"))]
-fn fast_identifier_shape(_start: &iroha_data_model::query::QueryWithParams) -> bool {
-    false
+fn fast_peer_source_shape(
+    _start: &iroha_data_model::query::QueryWithParams,
+    _query_limits: QueryLimits,
+) -> Result<bool, Error> {
+    Ok(false)
 }
 
-fn ensure_identifier_params(
+fn ensure_iterable_params(
     params: &QueryParams,
     mode: OrdinaryCursorMode,
     query_limits: QueryLimits,
@@ -724,11 +799,38 @@ fn ensure_identifier_params(
 
     if mode == OrdinaryCursorMode::Stored {
         if params.sorting.sort_by_metadata_key.is_some() {
-            // TODO: Replace the legacy stored-sorted overflow tail with a
-            // snapshot-consistent bounded replay/top-K continuation.
-            return Err(Error::Conversion(
-                "ordinary stored query rejects sorting before source execution".to_owned(),
-            ));
+            let requested = params.pagination.limit_value().ok_or_else(|| {
+                Error::Conversion(
+                    "ordinary stored sorted query requires an explicit bounded limit".to_owned(),
+                )
+            })?;
+            let requested = requested.get();
+            let keep = params
+                .pagination
+                .offset_value()
+                .checked_add(requested)
+                .ok_or(Error::CapacityLimit)?;
+            let configured = limits.max_cursor_retained_items();
+            let streaming = u64::try_from(STREAMING_SORTED_PREFIX_LIMIT).unwrap_or(u64::MAX);
+            if keep > configured || keep > streaming {
+                return Err(Error::CapacityLimit);
+            }
+            let first_page = requested.min(fetch_size);
+            let retained_items = requested
+                .checked_sub(first_page)
+                .ok_or(Error::CapacityLimit)?;
+            let retained_bytes = retained_items
+                .checked_mul(limits.max_source_item_bytes())
+                .ok_or(Error::CapacityLimit)?;
+            if retained_items > limits.max_cursor_retained_items()
+                || retained_bytes > limits.max_cursor_value_bytes()
+            {
+                return Err(Error::CapacityLimit);
+            }
+            // The typed source plan charges the global scan and the top-K
+            // heap against immutable state. Only the already-sorted bounded
+            // tail is transferred to cursor retention.
+            return Ok(());
         }
         let offset = params.pagination.offset_value();
         let (scanned_items, retained_items) = match query_limits.count_mode {
@@ -795,105 +897,168 @@ fn ensure_identifier_params(
     Ok(())
 }
 
-fn singular_query_has_preexecute_bounded_producer(query: &SingularQueryBox) -> bool {
-    match query {
-        SingularQueryBox::FindAccountByAlias(_)
-        | SingularQueryBox::FindAliasesByAccountId(_)
-        | SingularQueryBox::FindAccountRecoveryPolicyByAlias(_)
-        | SingularQueryBox::FindAccountRecoveryRequestByAlias(_)
-        | SingularQueryBox::FindDataspaceNameOwnerById(_) => false,
-        SingularQueryBox::FindExecutorDataModel(_)
-        | SingularQueryBox::FindParameters(_)
-        | SingularQueryBox::FindAccountById(_)
-        | SingularQueryBox::FindProofRecordById(_)
-        | SingularQueryBox::FindContractManifestByCodeHash(_)
-        | SingularQueryBox::FindAbiVersion(_)
-        | SingularQueryBox::FindAssetById(_)
-        | SingularQueryBox::FindDomainById(_)
-        | SingularQueryBox::FindAssetDefinitionById(_)
-        | SingularQueryBox::FindAssetEscrowById(_)
-        | SingularQueryBox::FindTriggerById(_)
-        | SingularQueryBox::FindTwitterBindingByHash(_)
-        | SingularQueryBox::FindOracleFeedById(_)
-        | SingularQueryBox::FindOracleDisputeById(_)
-        | SingularQueryBox::FindOracleChangeById(_)
-        | SingularQueryBox::FindOracleProviderStatsByKey(_)
-        | SingularQueryBox::FindLatestDefiOracleAttestation(_)
-        | SingularQueryBox::FindDomainEndorsements(_)
-        | SingularQueryBox::FindDomainEndorsementPolicy(_)
-        | SingularQueryBox::FindDomainCommittee(_)
-        | SingularQueryBox::FindDaPinIntentByTicket(_)
-        | SingularQueryBox::FindDaPinIntentByManifest(_)
-        | SingularQueryBox::FindDaPinIntentByAlias(_)
-        | SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_)
-        | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
-        | SingularQueryBox::FindFeeSponsorProgramById(_)
-        | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
-        | SingularQueryBox::FindFxCorridorPolicyById(_)
-        | SingularQueryBox::FindSorafsProviderOwner(_)
-        | SingularQueryBox::FindSorafsPinManifest(_)
-        | SingularQueryBox::FindSorafsPinManifests(_)
-        | SingularQueryBox::FindSorafsOrderbookPolicy(_)
-        | SingularQueryBox::FindSorafsOrderbookOrderById(_)
-        | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
-        | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
-        | SingularQueryBox::FindSorafsOrderbookTradeById(_)
-        | SingularQueryBox::FindSorafsOrderbookChannelById(_)
-        | SingularQueryBox::FindSorafsOrderbookStatus(_)
-        | SingularQueryBox::FindSorafsOrderbookOrders(_)
-        | SingularQueryBox::FindSorafsOrderbookReceipts(_)
-        | SingularQueryBox::FindSorafsOrderbookTrades(_)
-        | SingularQueryBox::FindSorafsOrderbookChannels(_)
-        | SingularQueryBox::FindSorafsOrderbookEvents(_)
-        | SingularQueryBox::FindSorafsReservePolicy(_)
-        | SingularQueryBox::FindSorafsReserveProviderById(_)
-        | SingularQueryBox::FindSorafsReserveMovementById(_)
-        | SingularQueryBox::FindSorafsReserveAppealById(_)
-        | SingularQueryBox::FindSorafsReserveProviders(_)
-        | SingularQueryBox::FindSorafsReserveMovements(_)
-        | SingularQueryBox::FindSorafsReserveAppeals(_)
-        | SingularQueryBox::FindSorafsReserveEvents(_)
-        | SingularQueryBox::FindSorafsPopIssuerPolicy(_)
-        | SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_)
-        | SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_)
-        | SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_)
-        | SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_)
-        | SingularQueryBox::FindSorafsPopAuditDigestBySequence(_)
-        | SingularQueryBox::FindSorafsPopRegistryStatus(_)
-        | SingularQueryBox::FindSorafsRepairTask(_)
-        | SingularQueryBox::FindSorafsRepairTasks(_)
-        | SingularQueryBox::FindSorafsRepairStatus(_)
-        | SingularQueryBox::FindSorafsRepairEvents(_)
-        | SingularQueryBox::FindSorafsProofOutcome(_)
-        | SingularQueryBox::FindSorafsProofOutcomeEvents(_)
-        | SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_)
-        | SingularQueryBox::FindSorafsReputationJournalEventBySourceId(_)
-        | SingularQueryBox::FindSorafsReputationJournalEvents(_)
-        | SingularQueryBox::FindSorafsModerationPolicy(_)
-        | SingularQueryBox::FindSorafsModerationAppeal(_)
-        | SingularQueryBox::FindSorafsModerationJurorEligibility(_)
-        | SingularQueryBox::FindSorafsModerationCase(_)
-        | SingularQueryBox::FindSorafsModerationCommit(_)
-        | SingularQueryBox::FindSorafsModerationReveal(_)
-        | SingularQueryBox::FindSorafsModerationChallenge(_)
-        | SingularQueryBox::FindSorafsModerationOutcome(_)
-        | SingularQueryBox::FindSorafsModerationNoShow(_)
-        | SingularQueryBox::FindSorafsModerationStatus(_)
-        | SingularQueryBox::FindSorafsModerationSnapshot(_)
-        | SingularQueryBox::FindSorafsModerationEvents(_)
-        | SingularQueryBox::FindMusubiExactPackageV1(_)
-        | SingularQueryBox::FindMusubiExactReleaseV1(_)
-        | SingularQueryBox::FindMusubiProviderBundleAttestationV1(_)
-        | SingularQueryBox::FindMusubiResolverIndexV1(_)
-        | SingularQueryBox::FindMusubiVersionsV1(_)
-        | SingularQueryBox::FindMusubiMaintainersV1(_)
-        | SingularQueryBox::FindMusubiArchiveLocationsV1(_)
-        | SingularQueryBox::FindMusubiArchiveRetentionV1(_)
-        | SingularQueryBox::FindMusubiAliasV1(_)
-        | SingularQueryBox::FindMusubiAliasHistoryV1(_)
-        | SingularQueryBox::FindMusubiOrderedPrefixV1(_)
-        | SingularQueryBox::FindNftById(_) => true,
+fn sns_record_source_bytes(
+    world: &impl WorldReadOnly,
+    selector: &NameSelectorV1,
+) -> Result<u64, Error> {
+    let key = crate::sns::record_storage_key(selector);
+    let Some(bytes) = world.smart_contract_state().get(&key) else {
+        return Ok(0);
+    };
+    u64::try_from(key.as_ref().len())
+        .ok()
+        .and_then(|key_bytes| {
+            u64::try_from(bytes.len())
+                .ok()
+                .and_then(|value_bytes| key_bytes.checked_add(value_bytes))
+        })
+        .ok_or(Error::GasBudgetExceeded)
+}
+
+fn sns_record_prefix_source_bytes(
+    world: &impl WorldReadOnly,
+    suffix_id: SuffixId,
+) -> Result<u64, Error> {
+    let prefix_literal = format!("sns/records/{suffix_id}/");
+    let prefix = StatePath::from_str(&prefix_literal)
+        .map_err(|error| Error::Conversion(format!("invalid SNS state prefix: {error}")))?;
+    let mut total = 0_u64;
+    for (key, bytes) in world.smart_contract_state().range(prefix..) {
+        if !key.as_ref().starts_with(&prefix_literal) {
+            break;
+        }
+        let row = u64::try_from(key.as_ref().len())
+            .ok()
+            .and_then(|key_bytes| {
+                u64::try_from(bytes.len())
+                    .ok()
+                    .and_then(|value_bytes| key_bytes.checked_add(value_bytes))
+            })
+            .ok_or(Error::GasBudgetExceeded)?;
+        total = total.checked_add(row).ok_or(Error::GasBudgetExceeded)?;
     }
+    Ok(total)
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SingularSourceAdmission {
+    ProvenBounded,
+}
+
+#[cfg(test)]
+macro_rules! define_singular_source_admission {
+    ($($number:literal => $variant:ident: $class:ident),+ $(,)?) => {
+        fn singular_source_admission(query: &SingularQueryBox) -> SingularSourceAdmission {
+            match query {
+                $(SingularQueryBox::$variant(_) => SingularSourceAdmission::$class,)+
+            }
+        }
+
+        const SINGULAR_SOURCE_ADMISSION_AUDIT: &[(u8, &str, SingularSourceAdmission)] = &[
+            $(($number, stringify!($variant), SingularSourceAdmission::$class),)+
+        ];
+    };
+}
+
+#[cfg(test)]
+define_singular_source_admission! {
+    1 => FindExecutorDataModel: ProvenBounded,
+    2 => FindParameters: ProvenBounded,
+    3 => FindAccountById: ProvenBounded,
+    4 => FindAccountByAlias: ProvenBounded,
+    5 => FindAliasesByAccountId: ProvenBounded,
+    6 => FindAccountRecoveryPolicyByAlias: ProvenBounded,
+    7 => FindAccountRecoveryRequestByAlias: ProvenBounded,
+    8 => FindProofRecordById: ProvenBounded,
+    9 => FindContractManifestByCodeHash: ProvenBounded,
+    10 => FindAbiVersion: ProvenBounded,
+    11 => FindAssetById: ProvenBounded,
+    12 => FindAssetDefinitionById: ProvenBounded,
+    13 => FindNftById: ProvenBounded,
+    14 => FindAssetEscrowById: ProvenBounded,
+    15 => FindTriggerById: ProvenBounded,
+    16 => FindTwitterBindingByHash: ProvenBounded,
+    17 => FindOracleFeedById: ProvenBounded,
+    18 => FindOracleDisputeById: ProvenBounded,
+    19 => FindOracleChangeById: ProvenBounded,
+    20 => FindOracleProviderStatsByKey: ProvenBounded,
+    21 => FindLatestDefiOracleAttestation: ProvenBounded,
+    22 => FindDaPinIntentByTicket: ProvenBounded,
+    23 => FindDaPinIntentByManifest: ProvenBounded,
+    24 => FindDaPinIntentByAlias: ProvenBounded,
+    25 => FindDaPinIntentByLaneEpochSequence: ProvenBounded,
+    26 => FindLaneRelayEnvelopeByRef: ProvenBounded,
+    27 => FindSorafsProviderOwner: ProvenBounded,
+    28 => FindSorafsOrderbookPolicy: ProvenBounded,
+    29 => FindSorafsOrderbookOrderById: ProvenBounded,
+    30 => FindSorafsOrderbookCancellationByOrderId: ProvenBounded,
+    31 => FindSorafsOrderbookReceiptById: ProvenBounded,
+    32 => FindSorafsOrderbookTradeById: ProvenBounded,
+    33 => FindSorafsOrderbookChannelById: ProvenBounded,
+    34 => FindSorafsOrderbookStatus: ProvenBounded,
+    35 => FindSorafsOrderbookOrders: ProvenBounded,
+    36 => FindSorafsOrderbookReceipts: ProvenBounded,
+    37 => FindSorafsOrderbookTrades: ProvenBounded,
+    38 => FindSorafsOrderbookChannels: ProvenBounded,
+    39 => FindSorafsOrderbookEvents: ProvenBounded,
+    40 => FindSorafsReservePolicy: ProvenBounded,
+    41 => FindSorafsReserveProviderById: ProvenBounded,
+    42 => FindSorafsReserveMovementById: ProvenBounded,
+    43 => FindSorafsReserveAppealById: ProvenBounded,
+    44 => FindSorafsReserveProviders: ProvenBounded,
+    45 => FindSorafsReserveMovements: ProvenBounded,
+    46 => FindSorafsReserveAppeals: ProvenBounded,
+    47 => FindSorafsReserveEvents: ProvenBounded,
+    48 => FindSorafsPopIssuerPolicy: ProvenBounded,
+    49 => FindSorafsPopCredentialCommitmentByDigest: ProvenBounded,
+    50 => FindSorafsPopCommitmentRootByVersion: ProvenBounded,
+    51 => FindSorafsPopRevocationPublicationByVersion: ProvenBounded,
+    52 => FindSorafsPopRevocationByNonceCommitment: ProvenBounded,
+    53 => FindSorafsPopAuditDigestBySequence: ProvenBounded,
+    54 => FindSorafsPopRegistryStatus: ProvenBounded,
+    55 => FindSorafsPinManifest: ProvenBounded,
+    56 => FindSorafsPinManifests: ProvenBounded,
+    57 => FindSorafsRepairTask: ProvenBounded,
+    58 => FindSorafsRepairTasks: ProvenBounded,
+    59 => FindSorafsRepairStatus: ProvenBounded,
+    60 => FindSorafsRepairEvents: ProvenBounded,
+    61 => FindSorafsProofOutcome: ProvenBounded,
+    62 => FindSorafsProofOutcomeEvents: ProvenBounded,
+    63 => FindSorafsReputationJournalAuthorityPolicy: ProvenBounded,
+    64 => FindSorafsReputationJournalEventBySourceId: ProvenBounded,
+    65 => FindSorafsReputationJournalEvents: ProvenBounded,
+    66 => FindSorafsModerationPolicy: ProvenBounded,
+    67 => FindSorafsModerationAppeal: ProvenBounded,
+    68 => FindSorafsModerationJurorEligibility: ProvenBounded,
+    69 => FindSorafsModerationCase: ProvenBounded,
+    70 => FindSorafsModerationCommit: ProvenBounded,
+    71 => FindSorafsModerationReveal: ProvenBounded,
+    72 => FindSorafsModerationChallenge: ProvenBounded,
+    73 => FindSorafsModerationOutcome: ProvenBounded,
+    74 => FindSorafsModerationNoShow: ProvenBounded,
+    75 => FindSorafsModerationStatus: ProvenBounded,
+    76 => FindSorafsModerationSnapshot: ProvenBounded,
+    77 => FindSorafsModerationEvents: ProvenBounded,
+    78 => FindDataspaceNameOwnerById: ProvenBounded,
+    79 => FindMusubiExactPackageV1: ProvenBounded,
+    80 => FindMusubiExactReleaseV1: ProvenBounded,
+    81 => FindMusubiProviderBundleAttestationV1: ProvenBounded,
+    82 => FindMusubiResolverIndexV1: ProvenBounded,
+    83 => FindMusubiVersionsV1: ProvenBounded,
+    84 => FindMusubiMaintainersV1: ProvenBounded,
+    85 => FindMusubiArchiveLocationsV1: ProvenBounded,
+    86 => FindMusubiArchiveRetentionV1: ProvenBounded,
+    87 => FindMusubiAliasV1: ProvenBounded,
+    88 => FindMusubiAliasHistoryV1: ProvenBounded,
+    89 => FindMusubiOrderedPrefixV1: ProvenBounded,
+    90 => FindDomainById: ProvenBounded,
+    91 => FindFeeSponsorProgramById: ProvenBounded,
+    92 => FindFxCorridorPolicyRegistry: ProvenBounded,
+    93 => FindFxCorridorPolicyById: ProvenBounded,
+    94 => FindDomainEndorsements: ProvenBounded,
+    95 => FindDomainEndorsementPolicy: ProvenBounded,
+    96 => FindDomainCommittee: ProvenBounded,
 }
 
 /// Measure a singular source before a metered server lane can clone or decode it.
@@ -909,7 +1074,10 @@ pub(super) fn preflight_server_singular_source_materialization(
     singular_output_lane_active: bool,
 ) -> Result<u64, Error> {
     fn charge<T: NoritoSerialize>(value: &T, remaining: &mut u64) -> Result<(), Error> {
-        let bytes = super::bounded_bare_encoded_len(value, *remaining)?;
+        let resident_frame_limit =
+            super::singular_query_frame_limit(usize::try_from(*remaining).unwrap_or(usize::MAX));
+        let resident_frame_limit = u64::try_from(resident_frame_limit).unwrap_or(u64::MAX);
+        let bytes = super::bounded_bare_encoded_len(value, (*remaining).min(resident_frame_limit))?;
         *remaining = remaining
             .checked_sub(bytes)
             .ok_or(Error::GasBudgetExceeded)?;
@@ -937,22 +1105,58 @@ pub(super) fn preflight_server_singular_source_materialization(
         }
     }
 
-    if singular_output_lane_active && !singular_query_has_preexecute_bounded_producer(query) {
-        return Err(reject_unbounded("unsupported singular producer"));
-    }
-
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let limit = budget.remaining_bytes(1, 0)?;
     let world = state.world();
+    let catalog = &state.nexus().dataspace_catalog;
+    let now_ms = state.query_ledger_time_ms();
     let mut remaining = limit;
+
+    let charge_alias_resolution = |alias: &iroha_data_model::account::rekey::AccountAlias,
+                                   repetitions: u64,
+                                   remaining: &mut u64|
+     -> Result<(), Error> {
+        let dataspace_scan =
+            sns_record_prefix_source_bytes(world, crate::sns::DATASPACE_ALIAS_SUFFIX_ID)?
+                .checked_mul(repetitions)
+                .ok_or(Error::GasBudgetExceeded)?;
+        charge_fixed(dataspace_scan, remaining)?;
+
+        if let Ok(selector) =
+            crate::sns::active_account_alias_selector(world, catalog, alias, now_ms)
+        {
+            let record_bytes = sns_record_source_bytes(world, &selector)?
+                .checked_mul(repetitions)
+                .ok_or(Error::GasBudgetExceeded)?;
+            charge_fixed(record_bytes, remaining)?;
+        }
+        if let Some(account_id) = world.account_aliases().get(alias) {
+            for _ in 0..repetitions {
+                charge(account_id, remaining)?;
+            }
+        }
+        if let Some(rekey) = world.account_rekey_records().get(alias) {
+            for _ in 0..repetitions {
+                charge(&rekey.active_account_id, remaining)?;
+            }
+        }
+        Ok(())
+    };
 
     match query {
         SingularQueryBox::FindExecutorDataModel(_) => {
             let model = world.executor_data_model();
             if model.permissions().is_empty() {
-                return Err(reject_unbounded("FindExecutorDataModel fallback"));
+                // The fallback is built solely from the compile-time
+                // permission-name table. Materialize and measure that same
+                // fixed producer here so an empty on-chain model preserves
+                // its public query behavior without opening an unbounded
+                // state-derived source path.
+                let fallback = crate::executor::initial_executor_data_model_fallback();
+                charge(&fallback, &mut remaining)?;
+            } else {
+                charge(model, &mut remaining)?;
             }
-            charge(model, &mut remaining)?;
         }
         SingularQueryBox::FindParameters(_) => charge(world.parameters(), &mut remaining)?,
         SingularQueryBox::FindAccountById(query) => {
@@ -964,11 +1168,93 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge_fixed(64, &mut remaining)?;
             }
         }
-        SingularQueryBox::FindAccountByAlias(_)
-        | SingularQueryBox::FindAliasesByAccountId(_)
-        | SingularQueryBox::FindAccountRecoveryPolicyByAlias(_)
-        | SingularQueryBox::FindAccountRecoveryRequestByAlias(_) => {
-            return Err(reject_unbounded("account alias resolution"));
+        SingularQueryBox::FindAccountByAlias(query) => {
+            require_active_adapter(singular_output_lane_active, "FindAccountByAlias")?;
+            charge_alias_resolution(query.alias(), 1, &mut remaining)?;
+            if let Some(account_id) = world.account_aliases().get(query.alias())
+                && let Some((stored_id, account_value)) = world.accounts().get_key_value(account_id)
+            {
+                charge(stored_id, &mut remaining)?;
+                charge(account_value.as_ref(), &mut remaining)?;
+                charge_fixed(64, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAliasesByAccountId(query) => {
+            require_active_adapter(singular_output_lane_active, "FindAliasesByAccountId")?;
+            if let Some(account) = world.accounts().get(query.account_id()) {
+                charge(query.account_id(), &mut remaining)?;
+                charge_fixed(64, &mut remaining)?;
+                if let Some(primary) = account.as_ref().label() {
+                    charge(primary, &mut remaining)?;
+                }
+            }
+
+            let labels = world.account_aliases_by_account().get(query.account_id());
+            let label_count = u64::try_from(labels.map_or(0, |labels| labels.len()))
+                .map_err(|_| Error::GasBudgetExceeded)?;
+            let label_source_bytes = label_count
+                .checked_mul(ORDINARY_NAME_ID_SOURCE_BYTES)
+                .ok_or(Error::GasBudgetExceeded)?;
+            charge_fixed(label_source_bytes, &mut remaining)?;
+
+            let dataspace_scans_per_label = 4_u64;
+            let filter_scans = u64::from(query.dataspace().is_some());
+            let scan_repetitions = label_count
+                .checked_mul(dataspace_scans_per_label)
+                .and_then(|scans| scans.checked_add(filter_scans))
+                .ok_or(Error::GasBudgetExceeded)?;
+            let dataspace_scan =
+                sns_record_prefix_source_bytes(world, crate::sns::DATASPACE_ALIAS_SUFFIX_ID)?
+                    .checked_mul(scan_repetitions)
+                    .ok_or(Error::GasBudgetExceeded)?;
+            charge_fixed(dataspace_scan, &mut remaining)?;
+
+            if let Some(filter) = query.dataspace()
+                && let Ok(selector) = crate::sns::selector_for_dataspace_alias(filter.trim())
+            {
+                charge_fixed(sns_record_source_bytes(world, &selector)?, &mut remaining)?;
+            }
+            if let Some(labels) = labels {
+                for label in labels {
+                    if let Ok(selector) =
+                        crate::sns::active_account_alias_selector(world, catalog, label, now_ms)
+                    {
+                        let record_bytes = sns_record_source_bytes(world, &selector)?
+                            .checked_mul(2)
+                            .ok_or(Error::GasBudgetExceeded)?;
+                        charge_fixed(record_bytes, &mut remaining)?;
+                    }
+                }
+            }
+        }
+        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => {
+            require_active_adapter(
+                singular_output_lane_active,
+                "FindAccountRecoveryPolicyByAlias",
+            )?;
+            charge_alias_resolution(query.alias(), 1, &mut remaining)?;
+            if let Some(policy) = world.account_recovery_policies().get(query.alias()) {
+                charge(policy, &mut remaining)?;
+            }
+        }
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
+            require_active_adapter(
+                singular_output_lane_active,
+                "FindAccountRecoveryRequestByAlias",
+            )?;
+            // The request path resolves the active alias once directly and
+            // once again while validating its canonical rekey lineage.
+            charge_alias_resolution(query.alias(), 2, &mut remaining)?;
+            if let Some(request) = world.account_recovery_requests().get(query.alias()) {
+                charge(request, &mut remaining)?;
+            }
+            if let Some(rekey) = world.account_rekey_records().get(query.alias()) {
+                let predecessor_bytes = u64::try_from(rekey.previous_account_ids.len())
+                    .ok()
+                    .and_then(|count| count.checked_mul(ORDINARY_NAME_ID_SOURCE_BYTES))
+                    .ok_or(Error::GasBudgetExceeded)?;
+                charge_fixed(predecessor_bytes, &mut remaining)?;
+            }
         }
         SingularQueryBox::FindProofRecordById(query) => {
             if let Some(record) = world.proofs().get(&query.id) {
@@ -1045,11 +1331,10 @@ pub(super) fn preflight_server_singular_source_materialization(
         }
         SingularQueryBox::FindDomainEndorsements(query) => {
             if let Some(hashes) = world.domain_endorsements_by_domain().get(&query.domain_id) {
-                charge_fixed(8, &mut remaining)?;
+                charge(hashes, &mut remaining)?;
                 for hash in hashes {
                     if let Some(record) = world.domain_endorsements().get(hash) {
                         charge(record, &mut remaining)?;
-                        charge_fixed(16, &mut remaining)?;
                     }
                 }
             }
@@ -1101,8 +1386,7 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge(policy, &mut remaining)?;
             }
         }
-        SingularQueryBox::FindFxCorridorPolicyRegistry(_)
-        | SingularQueryBox::FindFxCorridorPolicyById(_) => {
+        SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {
             require_active_adapter(
                 singular_output_lane_active,
                 "FX corridor policy materialization",
@@ -1112,6 +1396,9 @@ pub(super) fn preflight_server_singular_source_materialization(
             if let Some(parameter) = world.parameters().custom().get(&parameter_id) {
                 charge(parameter.payload(), &mut remaining)?;
             }
+        }
+        SingularQueryBox::FindFxCorridorPolicyById(_) => {
+            require_active_adapter(singular_output_lane_active, "FindFxCorridorPolicyById")?;
         }
         SingularQueryBox::FindSorafsProviderOwner(query) => {
             if let Some(owner) = world.provider_owners().get(&query.provider_id) {
@@ -1129,8 +1416,10 @@ pub(super) fn preflight_server_singular_source_materialization(
                 "SoraFS pin-manifest page query",
             )?;
         }
-        SingularQueryBox::FindSorafsOrderbookPolicy(_)
-        | SingularQueryBox::FindSorafsOrderbookOrderById(_)
+        SingularQueryBox::FindSorafsOrderbookPolicy(_) => {
+            require_active_adapter(singular_output_lane_active, "FindSorafsOrderbookPolicy")?;
+        }
+        SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
         | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
         | SingularQueryBox::FindSorafsOrderbookTradeById(_)
@@ -1194,8 +1483,26 @@ pub(super) fn preflight_server_singular_source_materialization(
         | SingularQueryBox::FindSorafsModerationEvents(_) => {
             require_active_adapter(singular_output_lane_active, "SoraFS moderation query")?;
         }
-        SingularQueryBox::FindDataspaceNameOwnerById(_) => {
-            return Err(reject_unbounded("FindDataspaceNameOwnerById"));
+        SingularQueryBox::FindDataspaceNameOwnerById(query) => {
+            require_active_adapter(singular_output_lane_active, "FindDataspaceNameOwnerById")?;
+            charge_fixed(
+                sns_record_prefix_source_bytes(world, crate::sns::DATASPACE_ALIAS_SUFFIX_ID)?,
+                &mut remaining,
+            )?;
+            if let Ok(alias) = crate::sns::resolve_active_dataspace_alias_by_id(
+                world,
+                catalog,
+                query.dataspace_id(),
+                now_ms,
+            ) && let Ok(selector) = crate::sns::selector_for_dataspace_alias(&alias)
+            {
+                charge_fixed(sns_record_source_bytes(world, &selector)?, &mut remaining)?;
+                if let Some(owner) =
+                    crate::sns::active_dataspace_owner_by_alias(world, &alias, now_ms)
+                {
+                    charge(&owner, &mut remaining)?;
+                }
+            }
         }
         SingularQueryBox::FindMusubiExactPackageV1(_)
         | SingularQueryBox::FindMusubiExactReleaseV1(_)
@@ -1291,7 +1598,7 @@ mod tests {
     fn limits() -> OrdinaryQueryExecutionLimits {
         OrdinaryQueryExecutionLimits::try_new(
             11,
-            QueryExecutionBudget::from_weighted_limit(64 * 1024, 1, 1),
+            QueryExecutionBudget::from_weighted_limit(128 * 1024, 1, 1),
             16,
             64 * 1024,
             ORDINARY_NAME_ID_SOURCE_BYTES,
@@ -1299,6 +1606,7 @@ mod tests {
             16,
             16 * ORDINARY_NAME_ID_SOURCE_BYTES,
             32 * 1024,
+            16 * 1024,
             4 * 1024,
             norito::DecodeLimits::new(64, 4 * 1024, 256, 16 * 1024, 16),
         )
@@ -1316,21 +1624,66 @@ mod tests {
             .expect("ordinary policy")
     }
 
+    fn peer_start(params: QueryParams) -> QueryRequest {
+        use iroha_data_model::{
+            peer::PeerId,
+            query::{
+                ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryWithParams,
+                dsl::{CompoundPredicate, SelectorTuple},
+                peer::prelude::FindPeers,
+            },
+        };
+
+        let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<PeerId>::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            norito::codec::Encode::encode(&FindPeers),
+        ));
+        #[cfg(feature = "fast_dsl")]
+        let query = QueryWithParams::new(&query, params);
+        #[cfg(not(feature = "fast_dsl"))]
+        let query = QueryWithParams::new(query, params);
+        QueryRequest::Start(query)
+    }
+
     #[test]
-    fn validated_geometry_requires_exact_f_plus_one_work() {
+    fn singular_source_admission_audit_covers_all_96_variants() {
+        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 96);
+        for (index, (number, name, class)) in SINGULAR_SOURCE_ADMISSION_AUDIT.iter().enumerate() {
+            assert_eq!(usize::from(*number), index + 1);
+            assert!(!name.is_empty());
+            assert_eq!(*class, SingularSourceAdmission::ProvenBounded);
+        }
+
+        let representative = SingularQueryBox::FindAbiVersion(
+            iroha_data_model::query::runtime::prelude::FindAbiVersion,
+        );
+        assert_eq!(
+            singular_source_admission(&representative),
+            SingularSourceAdmission::ProvenBounded
+        );
+    }
+
+    #[test]
+    fn validated_geometry_requires_two_exact_source_passes() {
         let max_page_items = 4_u64;
         let max_source_item_bytes = 1_024_u64;
         let page_with_probe = max_page_items.checked_add(1).expect("F + 1");
+        let source_items = page_with_probe
+            .checked_mul(ORDINARY_SOURCE_SCAN_PASSES)
+            .expect("two source passes");
         let probe_bytes = page_with_probe
             .checked_mul(max_source_item_bytes)
+            .and_then(|bytes| bytes.checked_mul(ORDINARY_SOURCE_FRAME_TRAVERSALS))
             .expect("probe bytes");
-        let exact_units = page_with_probe
+        let exact_units = source_items
             .checked_add(probe_bytes)
             .expect("weighted units");
         let decode = norito::DecodeLimits::new(16, 1_024, 32, 4 * 1_024, 8);
         let execution_headroom = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
             max_page_items,
             max_source_item_bytes,
+            4 * 1_024,
             4 * 1_024,
             1_024,
             decode,
@@ -1354,10 +1707,11 @@ mod tests {
             4,
             4 * 1_024,
             cursor_retained,
+            4 * 1_024,
             1_024,
             decode,
         )
-        .expect("exact F + 1 work must be admitted");
+        .expect("two exact F + 1 source passes must be admitted");
 
         assert_eq!(
             OrdinaryQueryExecutionLimits::try_new(
@@ -1370,10 +1724,50 @@ mod tests {
                 4,
                 4 * 1_024,
                 cursor_retained,
+                4 * 1_024,
                 1_024,
                 decode,
             ),
             Err(OrdinaryQueryExecutionLimitError::ExecutionBudgetTooSmall)
+        );
+    }
+
+    #[test]
+    fn validated_geometry_rejects_a_zero_weight_work_budget() {
+        let decode = norito::DecodeLimits::new(16, 1_024, 32, 4 * 1_024, 8);
+        let execution_headroom = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
+            4,
+            1_024,
+            4 * 1_024,
+            4 * 1_024,
+            1_024,
+            decode,
+        )
+        .expect("execution geometry");
+        let cursor_retained = OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(
+            4,
+            1_024,
+            4 * 1_024,
+            1_024,
+        )
+        .expect("cursor geometry");
+
+        assert_eq!(
+            OrdinaryQueryExecutionLimits::try_new(
+                1,
+                QueryExecutionBudget::from_weighted_limit(u64::MAX, 0, 0),
+                4,
+                execution_headroom,
+                1_024,
+                4 * 1_024,
+                4,
+                4 * 1_024,
+                cursor_retained,
+                4 * 1_024,
+                1_024,
+                decode,
+            ),
+            Err(OrdinaryQueryExecutionLimitError::UnmeteredExecutionBudget)
         );
     }
 
@@ -1383,6 +1777,7 @@ mod tests {
         let required_execution = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
             4,
             1_024,
+            4 * 1_024,
             4 * 1_024,
             1_024,
             decode,
@@ -1408,6 +1803,7 @@ mod tests {
                 4,
                 4 * 1_024,
                 required_cursor,
+                4 * 1_024,
                 1_024,
                 decode,
             ),
@@ -1424,6 +1820,7 @@ mod tests {
                 4,
                 4 * 1_024,
                 required_cursor - 1,
+                4 * 1_024,
                 1_024,
                 decode,
             ),
@@ -1433,6 +1830,7 @@ mod tests {
             OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
                 u64::MAX,
                 2,
+                1,
                 1,
                 1,
                 decode,
@@ -1452,13 +1850,17 @@ mod tests {
             1,
             1,
             1,
+            16 * 1_024,
             8 * 1_024,
             decode,
         )
         .expect("revalidation geometry");
         assert_eq!(
             required,
-            8 * 1_024 + 16 * 1_024 + ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES
+            8 * 1_024
+                + 16 * 1_024
+                + u64::try_from(core::mem::size_of::<QueryRequest>()).expect("request size")
+                + ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES
         );
 
         let retained =
@@ -1467,7 +1869,7 @@ mod tests {
         assert_eq!(
             OrdinaryQueryExecutionLimits::try_new(
                 1,
-                QueryExecutionBudget::from_weighted_limit(2, 0, 1),
+                QueryExecutionBudget::from_weighted_limit(12, 0, 1),
                 1,
                 required - 1,
                 1,
@@ -1475,6 +1877,7 @@ mod tests {
                 1,
                 1,
                 retained,
+                16 * 1_024,
                 8 * 1_024,
                 decode,
             ),
@@ -1503,6 +1906,7 @@ mod tests {
             limits.max_cursor_retained_items(),
             limits.max_cursor_value_bytes(),
             limits.max_cursor_retained_bytes(),
+            limits.max_request_graph_bytes(),
             limits.max_revalidation_archive_bytes(),
             limits.revalidation_decode_limits(),
         )
@@ -1584,7 +1988,41 @@ mod tests {
     }
 
     #[test]
-    fn unadapted_singular_fails_before_execution() {
+    fn peer_adapter_admission_is_exact_and_pre_source() {
+        let ordinary = limits();
+        let query_limits = QueryLimits::new(16).with_ordinary_execution_limits(ordinary);
+        ensure_request_admitted(
+            &peer_start(QueryParams::default()),
+            OrdinaryCursorMode::Ephemeral,
+            query_limits,
+            ordinary,
+        )
+        .expect("the exact peer pass-through shape must be admitted");
+
+        let mut offset = QueryParams::default();
+        offset.pagination = Pagination::new(None, 1);
+        assert!(matches!(
+            ensure_request_admitted(
+                &peer_start(offset),
+                OrdinaryCursorMode::Ephemeral,
+                query_limits,
+                ordinary,
+            ),
+            Err(Error::Conversion(_))
+        ));
+        assert!(matches!(
+            ensure_request_admitted(
+                &peer_start(QueryParams::default()),
+                OrdinaryCursorMode::Stored,
+                query_limits,
+                ordinary,
+            ),
+            Err(Error::Conversion(_))
+        ));
+    }
+
+    #[test]
+    fn state_backed_singular_requires_an_active_output_lane() {
         let request = QueryRequest::Singular(
             iroha_data_model::query::account::prelude::FindAccountById::new(
                 iroha_test_samples::ALICE_ID.clone(),
@@ -1597,8 +2035,21 @@ mod tests {
             QueryLimits::new(16),
             limits(),
         )
-        .expect_err("account clone is not adapted");
+        .expect_err("state-backed output requires the singular lane");
         assert!(matches!(error, Error::Conversion(_)));
+
+        ensure_request_admitted(
+            &request,
+            OrdinaryCursorMode::Ephemeral,
+            QueryLimits::new(16).with_singular_output_limits(
+                crate::smartcontracts::isi::query::SingularQueryOutputLimits::new(
+                    4 * 1_024,
+                    4 * 1_024,
+                ),
+            ),
+            limits(),
+        )
+        .expect("the server-owned singular lane admits the bounded producer");
     }
 
     #[test]
@@ -1607,23 +2058,23 @@ mod tests {
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(nonzero!(16_u64)));
         let error =
-            ensure_identifier_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
+            ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
                 .expect_err("exact count without a limit must fail closed");
         assert!(matches!(error, Error::Conversion(_)));
 
         params.pagination = Pagination::new(Some(nonzero!(16_u64)), 0);
-        ensure_identifier_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
+        ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
             .expect("the configured retained bound is admitted");
 
         params.pagination = Pagination::new(Some(nonzero!(17_u64)), 0);
         assert_eq!(
-            ensure_identifier_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
+            ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
             Err(Error::CapacityLimit)
         );
 
-        params.pagination = Pagination::new(Some(nonzero!(16_u64)), 64 * 1_024);
+        params.pagination = Pagination::new(Some(nonzero!(16_u64)), 112);
         assert_eq!(
-            ensure_identifier_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
+            ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
             Err(Error::CapacityLimit),
             "offset plus limit may not scan beyond the server work budget"
         );
@@ -1636,20 +2087,20 @@ mod tests {
             fetch_size: FetchSize::new(Some(nonzero!(16_u64))),
             ..QueryParams::default()
         };
-        params.pagination = Pagination::new(Some(nonzero!(16_u64)), 47);
-        ensure_identifier_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
+        params.pagination = Pagination::new(Some(nonzero!(16_u64)), 111);
+        ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
             .expect("offset plus page fits the shared item/byte budget exactly enough");
 
-        params.pagination = Pagination::new(Some(nonzero!(16_u64)), 48);
+        params.pagination = Pagination::new(Some(nonzero!(16_u64)), 112);
         assert_eq!(
-            ensure_identifier_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
+            ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
             Err(Error::CapacityLimit),
             "offset and page bytes may not each consume the same weighted pool"
         );
 
-        params.pagination = Pagination::new(None, 31);
+        params.pagination = Pagination::new(None, 95);
         assert_eq!(
-            ensure_identifier_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
+            ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
             Err(Error::CapacityLimit),
             "bounded Start must account for offset, first page, retained tail, and overflow probe"
         );

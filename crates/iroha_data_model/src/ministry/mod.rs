@@ -60,7 +60,7 @@ pub struct AgendaProposalV1 {
     /// BCP‑47 language tag for the human-readable summary.
     pub language: String,
     /// Requested action (e.g., add/remove entry, amend policy).
-    #[cfg_attr(feature = "json", norito(with = "crate::ministry::json::action"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::ministry::json::action"))]
     pub action: AgendaProposalAction,
     /// Human-readable summary text.
     pub summary: AgendaProposalSummary,
@@ -273,7 +273,7 @@ pub struct AgendaEvidenceAttachment {
     /// Evidence kind (URL, `SoraFS` CID, Torii case, etc.).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::ministry::json::evidence_kind")
+        norito(json = "crate::ministry::json::evidence_kind")
     )]
     pub kind: AgendaEvidenceKind,
     /// URI or identifier for the evidence.
@@ -1127,7 +1127,7 @@ pub enum ReviewPanelCitationKind {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReviewPanelAiEvidence {
     /// Manifest UUID referenced by the panel.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub manifest_id: [u8; 16],
     /// Runner version string.
     pub runtime_version: String,
@@ -1315,7 +1315,7 @@ pub mod prelude {
 
 #[cfg(feature = "json")]
 mod json {
-    use norito::json::{self, JsonSerialize, Parser};
+    use norito::json::{self, BoundedJsonError, JsonSerialize, JsonWriteSink, Parser};
 
     use super::{AgendaEvidenceKind, AgendaProposalAction};
 
@@ -1330,6 +1330,19 @@ mod json {
                 AgendaProposalAction::AmendPolicy => "amend-policy",
             };
             JsonSerialize::json_serialize(label, out);
+        }
+
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        pub fn serialize_bounded(
+            value: &AgendaProposalAction,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            let label = match value {
+                AgendaProposalAction::AddToDenylist => "add-to-denylist",
+                AgendaProposalAction::RemoveFromDenylist => "remove-from-denylist",
+                AgendaProposalAction::AmendPolicy => "amend-policy",
+            };
+            label.json_serialize_to(out)
         }
 
         pub fn deserialize(parser: &mut Parser<'_>) -> Result<AgendaProposalAction, json::Error> {
@@ -1355,6 +1368,20 @@ mod json {
                 AgendaEvidenceKind::Attachment => "attachment",
             };
             JsonSerialize::json_serialize(label, out);
+        }
+
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        pub fn serialize_bounded(
+            value: &AgendaEvidenceKind,
+            out: &mut dyn JsonWriteSink,
+        ) -> Result<(), BoundedJsonError> {
+            let label = match value {
+                AgendaEvidenceKind::Url => "url",
+                AgendaEvidenceKind::ToriiCase => "torii-case",
+                AgendaEvidenceKind::SorafsCid => "sorafs-cid",
+                AgendaEvidenceKind::Attachment => "attachment",
+            };
+            label.json_serialize_to(out)
         }
 
         pub fn deserialize(parser: &mut Parser<'_>) -> Result<AgendaEvidenceKind, json::Error> {
@@ -1497,6 +1524,19 @@ mod tests {
     fn agenda_proposal_validate_succeeds() {
         let proposal = sample_proposal();
         assert!(proposal.validate().is_ok());
+        #[cfg(feature = "json")]
+        {
+            let ordinary = json::to_json(&proposal).expect("serialize agenda proposal JSON");
+            assert_eq!(
+                json::to_json_bounded(&proposal, ordinary.len())
+                    .expect("serialize proposal at exact JSON limit"),
+                ordinary
+            );
+            assert_eq!(
+                json::to_json_bounded(&proposal, ordinary.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            );
+        }
     }
 
     #[test]

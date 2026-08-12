@@ -17,19 +17,30 @@
 //! gate remains closed until both families are wired to canonical records and
 //! release KATs.
 
+use std::sync::Arc;
+
+use super::packing::{
+    ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
+    zk_ams_t256_galois_key_schedule_v1,
+};
 use super::{
     ArtifactAuthentication, AuthenticationSecret, MKHE_VERSION_V1, Scalar,
     ZeroizingScalarEntropyV1, ZeroizingScalarV1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     auth_generator,
+    cpk_relation::derive_active_collective_public_a_limb_v1,
     manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
-    packing::{
-        ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
-        zk_ams_t256_galois_key_schedule_v1,
-    },
 };
 use crate::vega::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1,
     sponge::{Keccak256, keccak256, shake256},
+};
+
+#[path = "active/source_stream.rs"]
+mod source_stream;
+pub(super) use source_stream::{
+    IndexedActiveSourcePolynomialV1, IndexedActiveSourceStatementV1,
+    decode_indexed_active_source_proof_v1, indexed_source_limb_hashers_v1,
+    verify_indexed_active_source_proof_v1,
 };
 
 const ACTIVE_ROSTER_KEY_MATERIAL_DOMAIN_V1: &[u8] =
@@ -1526,6 +1537,7 @@ impl<'a> ZkAmsMkheActiveCollectivePublicKeyWitnessV1<'a> {
 }
 
 /// Borrowed public statement for one streamed RKG round-one digit.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub struct ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
     public_key: ZkAmsMkheActiveCollectivePublicKeyStatementV1<'a>,
@@ -1537,6 +1549,7 @@ pub struct ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
     digit_index: u32,
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
     /// Construct the exact two-equation RKG round-one statement for one digit.
     #[allow(clippy::too_many_arguments)]
@@ -1573,12 +1586,17 @@ impl<'a> ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
 
     /// Canonical hybrid-RNS digit index.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "native RKG round-one inspection accessor retained for reference tests"
+    )]
     pub const fn digit_index(self) -> u32 {
         self.digit_index
     }
 }
 
 /// Borrowed bounded witnesses for one streamed RKG round-one digit.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub struct ZkAmsMkheActiveRkgRoundOneWitnessV1<'a> {
     secret: &'a [i64],
@@ -1588,12 +1606,14 @@ pub struct ZkAmsMkheActiveRkgRoundOneWitnessV1<'a> {
     error_one: &'a [i64],
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheActiveRkgRoundOneWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActiveRkgRoundOneWitnessV1([REDACTED])")
     }
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundOneWitnessV1<'a> {
     /// Construct all five witnesses with exact release dimensions and bounds.
     pub fn new(
@@ -1619,6 +1639,7 @@ impl<'a> ZkAmsMkheActiveRkgRoundOneWitnessV1<'a> {
 }
 
 /// Borrowed public statement for one streamed RKG round-two digit.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub struct ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
     round_one: ZkAmsMkheActiveRkgRoundOneStatementV1<'a>,
@@ -1627,6 +1648,7 @@ pub struct ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
     k0: &'a super::ZkAmsMkheRnsPolynomialWireV1,
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
     /// Construct the exact round-two statement, including this party's
     /// round-one equations to equality-link the ephemeral witness.
@@ -1649,24 +1671,31 @@ impl<'a> ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
 
     /// Canonical hybrid-RNS digit index inherited from round one.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "native RKG round-two inspection accessor retained for reference tests"
+    )]
     pub const fn digit_index(self) -> u32 {
         self.round_one.digit_index
     }
 }
 
 /// Borrowed bounded witnesses for one streamed RKG round-two digit.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub struct ZkAmsMkheActiveRkgRoundTwoWitnessV1<'a> {
     round_one: ZkAmsMkheActiveRkgRoundOneWitnessV1<'a>,
     error_two: &'a [i64],
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheActiveRkgRoundTwoWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActiveRkgRoundTwoWitnessV1([REDACTED])")
     }
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundTwoWitnessV1<'a> {
     /// Construct the round-two witness while retaining every round-one opening.
     pub fn new(
@@ -1682,6 +1711,7 @@ impl<'a> ZkAmsMkheActiveRkgRoundTwoWitnessV1<'a> {
 }
 
 /// Borrowed exact relation for one automorphism-linked Galois-source digit.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
     public_key: ZkAmsMkheActiveCollectivePublicKeyStatementV1<'a>,
@@ -1692,6 +1722,7 @@ pub(super) struct ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
     digit_index: u32,
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
     /// Bind a verified public share and exact source ciphertext to the frozen schedule.
     pub(super) fn new(
@@ -1739,6 +1770,7 @@ fn validate_galois_source_coordinate(
 }
 
 /// Borrowed bounded witness for one automorphism-linked Galois-source digit.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "used by the private fail-closed collective Galois-key generator"
@@ -1752,6 +1784,7 @@ pub(super) struct ZkAmsMkheActiveGaloisSourceWitnessV1<'a> {
     error_one: &'a [i64],
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheActiveGaloisSourceWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActiveGaloisSourceWitnessV1([REDACTED])")
@@ -1762,6 +1795,7 @@ impl core::fmt::Debug for ZkAmsMkheActiveGaloisSourceWitnessV1<'_> {
     dead_code,
     reason = "used by the private fail-closed collective Galois-key generator"
 )]
+#[cfg(test)]
 impl<'a> ZkAmsMkheActiveGaloisSourceWitnessV1<'a> {
     /// Validate exact release dimensions and every narrow coefficient bound.
     pub(super) fn new(
@@ -2223,6 +2257,7 @@ pub fn verify_zk_ams_mkhe_active_collective_public_key_v1(
 }
 
 /// Prove and authenticate one exact streamed RKG round-one pair/digit record.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn prove_zk_ams_mkhe_active_rkg_round_one_v1<R: MaskedRelaxedRandomSourceV1>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2257,6 +2292,7 @@ pub fn prove_zk_ams_mkhe_active_rkg_round_one_v1<R: MaskedRelaxedRandomSourceV1>
 }
 
 /// Verify one exact streamed RKG round-one pair/digit proof.
+#[cfg(test)]
 pub fn verify_zk_ams_mkhe_active_rkg_round_one_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -2278,6 +2314,7 @@ pub fn verify_zk_ams_mkhe_active_rkg_round_one_v1(
 }
 
 /// Prove and authenticate one exact streamed RKG round-two pair/digit record.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn prove_zk_ams_mkhe_active_rkg_round_two_v1<R: MaskedRelaxedRandomSourceV1>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2316,6 +2353,7 @@ pub fn prove_zk_ams_mkhe_active_rkg_round_two_v1<R: MaskedRelaxedRandomSourceV1>
 }
 
 /// Verify one exact streamed RKG round-two pair/digit proof.
+#[cfg(test)]
 pub fn verify_zk_ams_mkhe_active_rkg_round_two_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -2337,6 +2375,7 @@ pub fn verify_zk_ams_mkhe_active_rkg_round_two_v1(
 }
 
 /// Prove and authenticate one exact automorphism-linked Galois-source digit.
+#[cfg(test)]
 #[allow(
     dead_code,
     reason = "used by the private fail-closed collective Galois-key generator"
@@ -2373,6 +2412,7 @@ pub(super) fn prove_zk_ams_mkhe_active_galois_source_v1<R: MaskedRelaxedRandomSo
 }
 
 /// Verify one automorphism-linked Galois-source digit against trusted context.
+#[cfg(test)]
 pub(super) fn verify_zk_ams_mkhe_active_galois_source_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -2410,9 +2450,25 @@ fn validate_collective_public_a(
     transcript_digest: [u8; 32],
     public_a: &super::ZkAmsMkheRnsPolynomialWireV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    let provided = release_wire_polynomial(profile, public_a)?;
-    if provided != derive_active_collective_public_a(profile, roster, transcript_digest)? {
+    roster.validate()?;
+    profile.validate()?;
+    public_a.encoded_len()?;
+    if transcript_digest == [0; 32] || roster.profile_digest != profile.digest()? {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    for limb in 0..profile.moduli.len() {
+        let start = limb
+            .checked_mul(profile.ring_degree)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let end = start
+            .checked_add(profile.ring_degree)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let expected =
+            derive_active_collective_public_a_limb_v1(profile, roster, transcript_digest, limb)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        if public_a.residues().get(start..end) != Some(expected.as_slice()) {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
     }
     Ok(())
 }
@@ -2444,6 +2500,7 @@ fn active_linear_context(
     Ok(context)
 }
 
+#[cfg(test)]
 fn rkg_linear_context(
     profile: &super::BgvProfile,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2500,6 +2557,7 @@ fn rkg_linear_context(
     )
 }
 
+#[cfg(test)]
 fn galois_source_linear_context(
     profile: &super::BgvProfile,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2584,6 +2642,7 @@ fn canonical_rkg_pair_index(
     Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
 }
 
+#[cfg(test)]
 fn release_wire_polynomial(
     profile: &super::BgvProfile,
     polynomial: &super::ZkAmsMkheRnsPolynomialWireV1,
@@ -2592,14 +2651,181 @@ fn release_wire_polynomial(
     super::RnsPolynomial::from_flat(profile, polynomial.residues().to_vec())
 }
 
-fn ring_one(profile: &super::BgvProfile) -> Result<super::RnsPolynomial, ZkAmsMkheErrorV1> {
-    let mut coefficients = vec![0_u64; profile.ring_degree * profile.moduli.len()];
-    for limb in 0..profile.moduli.len() {
-        coefficients[limb * profile.ring_degree] = 1;
+#[cfg(test)]
+std::thread_local! {
+    static ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn record_active_secret_table_zeroized_drop_v1(zeroized: bool) {
+    if zeroized {
+        ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1.with(|count| count.set(count.get() + 1));
     }
+}
+
+#[cfg(test)]
+fn reset_active_secret_table_zeroized_drop_count_v1() {
+    ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn active_secret_table_zeroized_drop_count_v1() -> usize {
+    ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1.with(std::cell::Cell::get)
+}
+
+struct ZeroizingActiveRnsV1(super::RnsPolynomial);
+
+impl ZeroizingActiveRnsV1 {
+    fn as_polynomial(&self) -> &super::RnsPolynomial {
+        &self.0
+    }
+
+    fn into_public(mut self) -> super::RnsPolynomial {
+        core::mem::replace(
+            &mut self.0,
+            super::RnsPolynomial {
+                coefficients: Vec::new(),
+            },
+        )
+    }
+}
+
+impl Drop for ZeroizingActiveRnsV1 {
+    fn drop(&mut self) {
+        let coefficients = core::hint::black_box(&mut self.0.coefficients);
+        coefficients.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        record_active_secret_table_zeroized_drop_v1(
+            coefficients.iter().all(|coefficient| *coefficient == 0),
+        );
+        let _ = core::hint::black_box(&mut *coefficients);
+    }
+}
+
+struct ZeroizingActiveI64V1(Vec<i64>);
+
+impl ZeroizingActiveI64V1 {
+    fn as_slice(&self) -> &[i64] {
+        &self.0
+    }
+}
+
+impl Drop for ZeroizingActiveI64V1 {
+    fn drop(&mut self) {
+        let coefficients = core::hint::black_box(&mut self.0);
+        coefficients.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        record_active_secret_table_zeroized_drop_v1(
+            coefficients.iter().all(|coefficient| *coefficient == 0),
+        );
+        let _ = core::hint::black_box(&mut *coefficients);
+    }
+}
+
+trait LinearRelationRnsV1 {
+    fn linear_relation_polynomial(&self) -> &super::RnsPolynomial;
+}
+
+impl LinearRelationRnsV1 for super::RnsPolynomial {
+    fn linear_relation_polynomial(&self) -> &super::RnsPolynomial {
+        self
+    }
+}
+
+impl LinearRelationRnsV1 for ZeroizingActiveRnsV1 {
+    fn linear_relation_polynomial(&self) -> &super::RnsPolynomial {
+        self.as_polynomial()
+    }
+}
+
+fn try_zero_active_rns_v1(
+    profile: &super::BgvProfile,
+) -> Result<super::RnsPolynomial, ZkAmsMkheErrorV1> {
+    profile.validate()?;
+    let coefficient_count = profile
+        .ring_degree
+        .checked_mul(profile.moduli.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut coefficients = Vec::new();
+    coefficients
+        .try_reserve_exact(coefficient_count)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    coefficients.resize(coefficient_count, 0);
     super::RnsPolynomial::from_flat(profile, coefficients)
 }
 
+fn zeroizing_active_rns_from_signed_v1(
+    profile: &super::BgvProfile,
+    values: &[i64],
+) -> Result<ZeroizingActiveRnsV1, ZkAmsMkheErrorV1> {
+    if values.len() != profile.ring_degree {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let mut polynomial = ZeroizingActiveRnsV1(try_zero_active_rns_v1(profile)?);
+    for (limb, coefficients) in polynomial
+        .0
+        .coefficients
+        .chunks_exact_mut(profile.ring_degree)
+        .enumerate()
+    {
+        let modulus = profile.moduli[limb];
+        for (coefficient, value) in coefficients.iter_mut().zip(values) {
+            *coefficient = super::signed_mod(*value, modulus);
+        }
+    }
+    Ok(polynomial)
+}
+
+#[cfg(test)]
+fn scaled_identity(
+    profile: &super::BgvProfile,
+    gadget_digit: Option<usize>,
+) -> Result<super::RnsPolynomial, ZkAmsMkheErrorV1> {
+    profile.validate()?;
+    if gadget_digit.is_some_and(|digit| digit >= profile.gadget_digits) {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let mut polynomial = try_zero_active_rns_v1(profile)?;
+    for limb in 0..profile.moduli.len() {
+        let modulus = profile.moduli[limb];
+        polynomial.coefficients[limb * profile.ring_degree] = match gadget_digit {
+            Some(digit) => super::mod_pow(
+                super::mod_pow(2, u64::from(profile.gadget_base_log), modulus),
+                u64::try_from(digit).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+                modulus,
+            ),
+            None => profile.plaintext_modulus.residue(modulus),
+        };
+    }
+    Ok(polynomial)
+}
+
+fn combine_rns_in_place(
+    target: &mut super::RnsPolynomial,
+    source: &super::RnsPolynomial,
+    profile: &super::BgvProfile,
+    operation: fn(u64, u64, u64) -> u64,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    target.validate(profile)?;
+    source.validate(profile)?;
+    for limb in 0..profile.moduli.len() {
+        let start = limb * profile.ring_degree;
+        let end = start + profile.ring_degree;
+        for (target, source) in target.coefficients[start..end]
+            .iter_mut()
+            .zip(&source.coefficients[start..end])
+        {
+            *target = operation(*target, *source, profile.moduli[limb]);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn push_nonzero_term(
     terms: &mut Vec<LinearRelationTermV1>,
     witness_index: usize,
@@ -2622,33 +2848,20 @@ fn collective_public_key_relation(
     profile: &super::BgvProfile,
     statement: ZkAmsMkheActiveCollectivePublicKeyStatementV1<'_>,
 ) -> Result<LinearRelationStatementV1, ZkAmsMkheErrorV1> {
-    let public_a = release_wire_polynomial(profile, statement.public_a)?;
-    let public_b = release_wire_polynomial(profile, statement.party_public_b)?;
-    let plaintext_multiplier = ring_one(profile)?.scale_plaintext_modulus(profile)?;
     let relation = LinearRelationStatementV1 {
         witness_bounds: vec![1, i64::from(profile.error_eta)],
         witness_challenge_automorphism_exponents: vec![1, 1],
-        outputs: vec![LinearRelationOutputV1 {
-            target: public_b,
-            challenge_automorphism_exponent: 1,
-            terms: vec![
-                LinearRelationTermV1 {
-                    witness_index: 0,
-                    multiplier: public_a.negate(profile)?,
-                    witness_automorphism_exponent: 1,
-                },
-                LinearRelationTermV1 {
-                    witness_index: 1,
-                    multiplier: plaintext_multiplier,
-                    witness_automorphism_exponent: 1,
-                },
-            ],
-        }],
+        outputs: Vec::new(),
+        streaming_collective_public_key: Some(StreamingCollectivePublicKeyRelationV1 {
+            public_a: statement.public_a.shared_residues(),
+            party_public_b: statement.party_public_b.shared_residues(),
+        }),
     };
     relation.validate(profile)?;
     Ok(relation)
 }
 
+#[cfg(test)]
 fn rkg_round_one_relation(
     profile: &super::BgvProfile,
     statement: ZkAmsMkheActiveRkgRoundOneStatementV1<'_>,
@@ -2664,10 +2877,13 @@ fn rkg_round_one_relation(
         .witness_challenge_automorphism_exponents
         .extend([1, 1, 1]);
     let common_a = release_wire_polynomial(profile, statement.common_a)?;
-    let plaintext_multiplier = ring_one(profile)?.scale_plaintext_modulus(profile)?;
-    let gadget_multiplier = ring_one(profile)?.scale_gadget(
-        usize::try_from(statement.digit_index).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+    let plaintext_multiplier = scaled_identity(profile, None)?;
+    let gadget_multiplier = scaled_identity(
         profile,
+        Some(
+            usize::try_from(statement.digit_index)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+        ),
     )?;
     let mut h0_terms = Vec::with_capacity(3);
     if party == statement.left {
@@ -2696,6 +2912,7 @@ fn rkg_round_one_relation(
     Ok(relation)
 }
 
+#[cfg(test)]
 fn rkg_round_two_relation(
     profile: &super::BgvProfile,
     statement: ZkAmsMkheActiveRkgRoundTwoStatementV1<'_>,
@@ -2710,7 +2927,7 @@ fn rkg_round_two_relation(
     if party == statement.round_one.right {
         secret_multiplier = secret_multiplier.add(&aggregate_h0, profile)?;
     }
-    let plaintext_multiplier = ring_one(profile)?.scale_plaintext_modulus(profile)?;
+    let plaintext_multiplier = scaled_identity(profile, None)?;
     let mut k0_terms = Vec::with_capacity(3);
     push_nonzero_term(&mut k0_terms, 0, secret_multiplier);
     push_nonzero_term(&mut k0_terms, 2, aggregate_h1);
@@ -2724,6 +2941,7 @@ fn rkg_round_two_relation(
     Ok(relation)
 }
 
+#[cfg(test)]
 fn galois_source_relation(
     profile: &super::BgvProfile,
     statement: ZkAmsMkheActiveGaloisSourceStatementV1<'_>,
@@ -2741,10 +2959,13 @@ fn galois_source_relation(
         .extend([exponent, exponent, exponent]);
     let public_a = release_wire_polynomial(profile, statement.public_key.public_a)?;
     let public_b = release_wire_polynomial(profile, statement.public_key.party_public_b)?;
-    let plaintext_multiplier = ring_one(profile)?.scale_plaintext_modulus(profile)?;
-    let gadget_multiplier = ring_one(profile)?.scale_gadget(
-        usize::try_from(statement.digit_index).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+    let plaintext_multiplier = scaled_identity(profile, None)?;
+    let gadget_multiplier = scaled_identity(
         profile,
+        Some(
+            usize::try_from(statement.digit_index)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+        ),
     )?;
     relation.outputs.extend([
         LinearRelationOutputV1 {
@@ -2807,6 +3028,7 @@ fn secret_polynomial_exact(
     })
 }
 
+#[cfg(test)]
 fn round_one_witness_polynomials(
     profile: &super::BgvProfile,
     witness: ZkAmsMkheActiveRkgRoundOneWitnessV1<'_>,
@@ -2951,21 +3173,45 @@ struct LinearRelationOutputV1 {
     terms: Vec<LinearRelationTermV1>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct StreamingCollectivePublicKeyRelationV1 {
+    public_a: Arc<Vec<u64>>,
+    party_public_b: Arc<Vec<u64>>,
+}
+
+impl core::fmt::Debug for StreamingCollectivePublicKeyRelationV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("StreamingCollectivePublicKeyRelationV1")
+            .field("public_a_residues", &self.public_a.len())
+            .field("party_public_b_residues", &self.party_public_b.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinearRelationStatementV1 {
     witness_bounds: Vec<i64>,
     witness_challenge_automorphism_exponents: Vec<usize>,
     outputs: Vec<LinearRelationOutputV1>,
+    streaming_collective_public_key: Option<StreamingCollectivePublicKeyRelationV1>,
 }
 
 impl LinearRelationStatementV1 {
+    fn output_count(&self) -> Result<usize, ZkAmsMkheErrorV1> {
+        self.outputs
+            .len()
+            .checked_add(usize::from(self.streaming_collective_public_key.is_some()))
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
+    }
+
     fn validate(&self, profile: &super::BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         profile.validate()?;
         if self.witness_bounds.is_empty()
             || self.witness_bounds.len() > RKG_LINEAR_PROOF_MAX_WITNESSES_V1
             || self.witness_challenge_automorphism_exponents.len() != self.witness_bounds.len()
-            || self.outputs.is_empty()
-            || self.outputs.len() > RKG_LINEAR_PROOF_MAX_OUTPUTS_V1
+            || self.output_count()? == 0
+            || self.output_count()? > RKG_LINEAR_PROOF_MAX_OUTPUTS_V1
             || self
                 .witness_bounds
                 .iter()
@@ -3003,6 +3249,20 @@ impl LinearRelationStatementV1 {
             }
         }
         let mut used_witnesses = vec![false; self.witness_bounds.len()];
+        if let Some(streaming) = &self.streaming_collective_public_key {
+            if self.witness_bounds.get(..2) != Some([1, i64::from(profile.error_eta)].as_slice())
+                || self.witness_challenge_automorphism_exponents.get(..2) != Some([1, 1].as_slice())
+            {
+                return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+            }
+            validate_borrowed_rns_residues_v1(profile, &streaming.public_a)?;
+            validate_borrowed_rns_residues_v1(profile, &streaming.party_public_b)?;
+            if streaming.public_a.iter().all(|residue| *residue == 0) {
+                return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+            }
+            used_witnesses[0] = true;
+            used_witnesses[1] = true;
+        }
         for output in &self.outputs {
             output.target.validate(profile)?;
             if output.challenge_automorphism_exponent == 0
@@ -3081,11 +3341,28 @@ impl LinearRelationStatementV1 {
             );
         }
         hash.update(
-            &u32::try_from(self.outputs.len())
+            &u32::try_from(self.output_count()?)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
                 .to_be_bytes(),
         );
+        let mut output_offset = 0;
+        if let Some(streaming) = &self.streaming_collective_public_key {
+            hash.update(&0_u32.to_be_bytes());
+            hash.update(&1_u32.to_be_bytes());
+            update_borrowed_rns_hash_v1(&mut hash, profile, &streaming.party_public_b, false)?;
+            hash.update(&2_u32.to_be_bytes());
+            hash.update(&0_u32.to_be_bytes());
+            hash.update(&1_u32.to_be_bytes());
+            update_borrowed_rns_hash_v1(&mut hash, profile, &streaming.public_a, true)?;
+            hash.update(&1_u32.to_be_bytes());
+            hash.update(&1_u32.to_be_bytes());
+            update_scaled_identity_rns_hash_v1(&mut hash, profile, None)?;
+            output_offset = 1;
+        }
         for (output_index, output) in self.outputs.iter().enumerate() {
+            let output_index = output_index
+                .checked_add(output_offset)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             hash.update(&(output_index as u32).to_be_bytes());
             hash.update(
                 &u32::try_from(output.challenge_automorphism_exponent)
@@ -3113,6 +3390,23 @@ impl LinearRelationStatementV1 {
             }
         }
         Ok(hash.finalize())
+    }
+
+    fn outputs_match(&self, outputs: &[super::RnsPolynomial]) -> Result<bool, ZkAmsMkheErrorV1> {
+        if outputs.len() != self.output_count()? {
+            return Ok(false);
+        }
+        let mut offset = 0;
+        if let Some(streaming) = &self.streaming_collective_public_key {
+            if outputs[0].coefficients.as_slice() != streaming.party_public_b.as_slice() {
+                return Ok(false);
+            }
+            offset = 1;
+        }
+        Ok(outputs[offset..]
+            .iter()
+            .zip(&self.outputs)
+            .all(|(actual, expected)| actual == &expected.target))
     }
 }
 
@@ -3298,23 +3592,21 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     context.validate(profile)?;
     statement.validate(profile)?;
     validate_linear_witnesses(profile, statement, witnesses)?;
-    let witness_rns = witnesses
+    let witness_slices = witnesses
         .iter()
-        .map(|witness| witness.as_rns(profile))
-        .collect::<Result<Vec<_>, _>>()?;
-    if apply_linear_relation(profile, statement, &witness_rns)?
-        != statement
-            .outputs
-            .iter()
-            .map(|output| output.target.clone())
-            .collect::<Vec<_>>()
-    {
+        .map(|witness| witness.coefficients.as_slice())
+        .collect::<Vec<_>>();
+    let applied_witness =
+        apply_linear_relation_from_signed_v1(profile, statement, &witness_slices)?;
+    if !statement.outputs_match(&applied_witness)? {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
+    drop(applied_witness);
+    drop(witness_slices);
     validate_linear_random_health(random)?;
     let challenge_weight = linear_challenge_weight(profile.ring_degree)?;
     for _ in 0..RANDOM_REJECTION_ATTEMPTS_V1 {
-        let mut masks = statement
+        let masks = statement
             .witness_bounds
             .iter()
             .map(|bound| {
@@ -3322,21 +3614,23 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
                 sample_signed_mask(profile.ring_degree, mask_bound, random)
             })
             .collect::<Result<Vec<_>, ZkAmsMkheErrorV1>>()?;
-        let mask_rns = masks
+        let mask_slices = masks
             .iter()
-            .map(|mask| super::RnsPolynomial::from_signed(profile, mask))
-            .collect::<Result<Vec<_>, _>>()?;
-        let commitments = apply_linear_relation(profile, statement, &mask_rns)?;
+            .map(|mask| mask.coefficients.as_slice())
+            .collect::<Vec<_>>();
+        let commitments = apply_linear_relation_from_signed_v1(profile, statement, &mask_slices)?;
         let challenge_seed =
             linear_commitment_challenge_seed(profile, context, statement, &commitments)?;
+        drop(commitments);
+        drop(mask_slices);
         if challenge_seed == [0; 32] {
-            for mask in &mut masks {
-                mask.fill(0);
-            }
             continue;
         }
         let challenge = derive_sparse_challenge(profile.ring_degree, challenge_seed)?;
-        let mut responses = Vec::with_capacity(witnesses.len());
+        let mut responses = Vec::new();
+        responses
+            .try_reserve_exact(witnesses.len())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         let mut accepted = true;
         for (((mask, witness), bound), challenge_exponent) in masks
             .iter()
@@ -3347,8 +3641,16 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
             let witness_challenge = automorphism_signed(&challenge, *challenge_exponent)?;
             let folded = sparse_negacyclic_mul_signed(&witness_challenge, &witness.coefficients)?;
             let (_, response_limit) = linear_response_parameters(*bound, challenge_weight)?;
-            let mut response = Vec::with_capacity(profile.ring_degree);
-            for (mask, folded) in mask.iter().copied().zip(folded) {
+            let mut response = Vec::new();
+            response
+                .try_reserve_exact(profile.ring_degree)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+            for (mask, folded) in mask
+                .coefficients
+                .iter()
+                .copied()
+                .zip(folded.as_slice().iter().copied())
+            {
                 let value = mask
                     .checked_add(folded)
                     .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -3359,9 +3661,7 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
             }
             responses.push(response);
         }
-        for mask in &mut masks {
-            mask.fill(0);
-        }
+        drop(masks);
         if !accepted {
             continue;
         }
@@ -3401,24 +3701,15 @@ fn verify_linear_relation_proof(
             challenge_weight,
         )?;
     }
-    let response_rns = proof
+    let response_slices = proof
         .responses
         .iter()
-        .map(|response| super::RnsPolynomial::from_signed(profile, response))
-        .collect::<Result<Vec<_>, _>>()?;
-    let applied = apply_linear_relation(profile, statement, &response_rns)?;
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let applied = apply_linear_relation_from_signed_v1(profile, statement, &response_slices)?;
+    drop(response_slices);
     let challenge = derive_sparse_challenge(profile.ring_degree, proof.challenge_seed)?;
-    let commitments = applied
-        .into_iter()
-        .zip(&statement.outputs)
-        .map(|(response, output)| {
-            let output_challenge =
-                automorphism_signed(&challenge, output.challenge_automorphism_exponent)?;
-            let output_challenge_rns =
-                super::RnsPolynomial::from_signed(profile, &output_challenge)?;
-            response.sub(&output.target.mul(&output_challenge_rns, profile)?, profile)
-        })
-        .collect::<Result<Vec<_>, ZkAmsMkheErrorV1>>()?;
+    let commitments = reconstruct_linear_commitments_v1(profile, statement, applied, &challenge)?;
     let expected = linear_commitment_challenge_seed(profile, context, statement, &commitments)?;
     if expected != proof.challenge_seed {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -3499,10 +3790,138 @@ fn validate_linear_witnesses(
     Ok(())
 }
 
-fn apply_linear_relation(
+fn apply_linear_relation_from_signed_v1(
     profile: &super::BgvProfile,
     statement: &LinearRelationStatementV1,
-    witnesses: &[super::RnsPolynomial],
+    witnesses: &[&[i64]],
+) -> Result<Vec<super::RnsPolynomial>, ZkAmsMkheErrorV1> {
+    if witnesses.len() != statement.witness_bounds.len()
+        || witnesses
+            .iter()
+            .any(|witness| witness.len() != profile.ring_degree)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let mut outputs = Vec::new();
+    outputs
+        .try_reserve_exact(statement.output_count()?)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if let Some(streaming) = &statement.streaming_collective_public_key {
+        outputs.push(apply_streaming_collective_public_key_relation_v1(
+            profile, streaming, witnesses,
+        )?);
+    }
+    if !statement.outputs.is_empty() {
+        let witness_rns = witnesses
+            .iter()
+            .map(|witness| zeroizing_active_rns_from_signed_v1(profile, witness))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut owned_outputs = apply_linear_relation(profile, statement, &witness_rns)?;
+        drop(witness_rns);
+        outputs.append(&mut owned_outputs);
+    }
+    Ok(outputs)
+}
+
+fn apply_streaming_collective_public_key_relation_v1(
+    profile: &super::BgvProfile,
+    relation: &StreamingCollectivePublicKeyRelationV1,
+    witnesses: &[&[i64]],
+) -> Result<super::RnsPolynomial, ZkAmsMkheErrorV1> {
+    let secret = witnesses
+        .first()
+        .copied()
+        .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let error = witnesses
+        .get(1)
+        .copied()
+        .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let mut output = ZeroizingActiveRnsV1(try_zero_active_rns_v1(profile)?);
+    super::collective::borrowed_product::accumulate_public_residues_times_signed_v1(
+        &relation.public_a,
+        secret,
+        profile,
+        true,
+        &mut output.0,
+    )?;
+    accumulate_scaled_identity_signed_v1(&mut output.0, error, profile, None)?;
+    Ok(output.into_public())
+}
+
+fn accumulate_scaled_identity_signed_v1(
+    output: &mut super::RnsPolynomial,
+    values: &[i64],
+    profile: &super::BgvProfile,
+    gadget_digit: Option<usize>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    output.validate(profile)?;
+    if values.len() != profile.ring_degree
+        || gadget_digit.is_some_and(|digit| digit >= profile.gadget_digits)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    for limb in 0..profile.moduli.len() {
+        let modulus = profile.moduli[limb];
+        let scalar = match gadget_digit {
+            Some(digit) => super::mod_pow(
+                super::mod_pow(2, u64::from(profile.gadget_base_log), modulus),
+                u64::try_from(digit).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+                modulus,
+            ),
+            None => profile.plaintext_modulus.residue(modulus),
+        };
+        let start = limb * profile.ring_degree;
+        for (output, value) in output.coefficients[start..start + profile.ring_degree]
+            .iter_mut()
+            .zip(values)
+        {
+            let contribution = super::mod_mul(super::signed_mod(*value, modulus), scalar, modulus);
+            *output = super::mod_add(*output, contribution, modulus);
+        }
+    }
+    Ok(())
+}
+
+fn reconstruct_linear_commitments_v1(
+    profile: &super::BgvProfile,
+    statement: &LinearRelationStatementV1,
+    applied: Vec<super::RnsPolynomial>,
+    challenge: &[i64],
+) -> Result<Vec<super::RnsPolynomial>, ZkAmsMkheErrorV1> {
+    if applied.len() != statement.output_count()? {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let mut applied = applied.into_iter();
+    let mut commitments = Vec::new();
+    commitments
+        .try_reserve_exact(statement.output_count()?)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if let Some(streaming) = &statement.streaming_collective_public_key {
+        let mut response = applied.next().ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        super::collective::borrowed_product::accumulate_public_residues_times_signed_v1(
+            &streaming.party_public_b,
+            challenge,
+            profile,
+            true,
+            &mut response,
+        )?;
+        commitments.push(response);
+    }
+    for (mut response, output) in applied.zip(&statement.outputs) {
+        let output_challenge =
+            automorphism_signed(challenge, output.challenge_automorphism_exponent)?;
+        let output_challenge_rns = super::RnsPolynomial::from_signed(profile, &output_challenge)?;
+        let target_product = output.target.mul(&output_challenge_rns, profile)?;
+        combine_rns_in_place(&mut response, &target_product, profile, super::mod_sub)?;
+        commitments.push(response);
+    }
+    Ok(commitments)
+}
+
+fn apply_linear_relation<T: LinearRelationRnsV1>(
+    profile: &super::BgvProfile,
+    statement: &LinearRelationStatementV1,
+    witnesses: &[T],
 ) -> Result<Vec<super::RnsPolynomial>, ZkAmsMkheErrorV1> {
     if witnesses.len() != statement.witness_bounds.len() {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -3511,15 +3930,28 @@ fn apply_linear_relation(
         .outputs
         .iter()
         .map(|output| {
-            let mut value = super::RnsPolynomial::zero(profile);
+            let mut value = ZeroizingActiveRnsV1(try_zero_active_rns_v1(profile)?);
             for term in &output.terms {
                 let witness = witnesses
                     .get(term.witness_index)
                     .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?
-                    .automorphism(term.witness_automorphism_exponent, profile)?;
-                value = value.add(&term.multiplier.mul(&witness, profile)?, profile)?;
+                    .linear_relation_polynomial();
+                let contribution = if term.witness_automorphism_exponent == 1 {
+                    ZeroizingActiveRnsV1(term.multiplier.mul(witness, profile)?)
+                } else {
+                    let transformed = ZeroizingActiveRnsV1(
+                        witness.automorphism(term.witness_automorphism_exponent, profile)?,
+                    );
+                    ZeroizingActiveRnsV1(term.multiplier.mul(transformed.as_polynomial(), profile)?)
+                };
+                combine_rns_in_place(
+                    &mut value.0,
+                    contribution.as_polynomial(),
+                    profile,
+                    super::mod_add,
+                )?;
             }
-            Ok(value)
+            Ok(value.into_public())
         })
         .collect()
 }
@@ -3562,21 +3994,28 @@ fn sample_signed_mask<R: MaskedRelaxedRandomSourceV1>(
     count: usize,
     bound: i64,
     random: &mut R,
-) -> Result<Vec<i64>, ZkAmsMkheErrorV1> {
+) -> Result<super::SecretPolynomial, ZkAmsMkheErrorV1> {
     let width = u64::try_from(bound)
         .ok()
         .and_then(|bound| bound.checked_mul(2))
         .and_then(|width| width.checked_add(1))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    (0..count)
-        .map(|_| {
-            let sample = super::sample_below(width, random)?;
+    let mut mask = super::SecretPolynomial {
+        coefficients: Vec::new(),
+    };
+    mask.coefficients
+        .try_reserve_exact(count)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    for _ in 0..count {
+        let sample = super::sample_below(width, random)?;
+        mask.coefficients.push(
             i64::try_from(sample)
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
                 .checked_sub(bound)
-                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
-        })
-        .collect()
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        );
+    }
+    Ok(mask)
 }
 
 fn validate_linear_random_health<R: MaskedRelaxedRandomSourceV1>(
@@ -3716,12 +4155,12 @@ fn derive_sparse_challenge(
 fn sparse_negacyclic_mul_signed(
     sparse: &[i64],
     dense: &[i64],
-) -> Result<Vec<i64>, ZkAmsMkheErrorV1> {
+) -> Result<ZeroizingActiveI64V1, ZkAmsMkheErrorV1> {
     if sparse.len() != dense.len() || sparse.is_empty() || !sparse.len().is_power_of_two() {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let degree = sparse.len();
-    let mut output = vec![0_i64; degree];
+    let mut output = ZeroizingActiveI64V1(vec![0_i64; degree]);
     for (shift, sign) in sparse.iter().copied().enumerate() {
         if sign == 0 {
             continue;
@@ -3740,7 +4179,7 @@ fn sparse_negacyclic_mul_signed(
                 .checked_mul(sign)
                 .and_then(|value| value.checked_mul(wrap_sign))
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-            output[destination] = output[destination]
+            output.0[destination] = output.0[destination]
                 .checked_add(term)
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         }
@@ -3806,7 +4245,7 @@ fn linear_commitment_challenge_seed(
     statement: &LinearRelationStatementV1,
     commitments: &[super::RnsPolynomial],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    if commitments.len() != statement.outputs.len() {
+    if commitments.len() != statement.output_count()? {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut hash = Keccak256::new();
@@ -3823,6 +4262,96 @@ fn linear_commitment_challenge_seed(
         update_rns_hash(&mut hash, profile, commitment)?;
     }
     Ok(hash.finalize())
+}
+
+fn validate_borrowed_rns_residues_v1(
+    profile: &super::BgvProfile,
+    residues: &[u64],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let expected = profile
+        .ring_degree
+        .checked_mul(profile.moduli.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if residues.len() != expected {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    for (limb, values) in residues.chunks_exact(profile.ring_degree).enumerate() {
+        if values.iter().any(|value| *value >= profile.moduli[limb]) {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+    }
+    Ok(())
+}
+
+fn update_borrowed_rns_hash_v1(
+    hash: &mut Keccak256,
+    profile: &super::BgvProfile,
+    residues: &[u64],
+    negate: bool,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    validate_borrowed_rns_residues_v1(profile, residues)?;
+    hash.update(
+        &u32::try_from(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    hash.update(
+        &u32::try_from(profile.moduli.len())
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    for (limb, values) in residues.chunks_exact(profile.ring_degree).enumerate() {
+        let modulus = profile.moduli[limb];
+        hash.update(&(limb as u32).to_be_bytes());
+        hash.update(&modulus.to_be_bytes());
+        for value in values {
+            let value = if negate && *value != 0 {
+                modulus - *value
+            } else {
+                *value
+            };
+            hash.update(&value.to_be_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn update_scaled_identity_rns_hash_v1(
+    hash: &mut Keccak256,
+    profile: &super::BgvProfile,
+    gadget_digit: Option<usize>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if gadget_digit.is_some_and(|digit| digit >= profile.gadget_digits) {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    hash.update(
+        &u32::try_from(profile.ring_degree)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    hash.update(
+        &u32::try_from(profile.moduli.len())
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .to_be_bytes(),
+    );
+    for limb in 0..profile.moduli.len() {
+        let modulus = profile.moduli[limb];
+        let scalar = match gadget_digit {
+            Some(digit) => super::mod_pow(
+                super::mod_pow(2, u64::from(profile.gadget_base_log), modulus),
+                u64::try_from(digit).map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+                modulus,
+            ),
+            None => profile.plaintext_modulus.residue(modulus),
+        };
+        hash.update(&(limb as u32).to_be_bytes());
+        hash.update(&modulus.to_be_bytes());
+        hash.update(&scalar.to_be_bytes());
+        for _ in 1..profile.ring_degree {
+            hash.update(&0_u64.to_be_bytes());
+        }
+    }
+    Ok(())
 }
 
 fn update_rns_hash(

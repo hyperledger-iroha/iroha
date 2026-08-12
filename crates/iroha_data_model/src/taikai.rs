@@ -701,7 +701,7 @@ pub struct CekRotationReceiptV1 {
     #[norito(default)]
     pub previous_wrap_key_label: Option<String>,
     /// HKDF salt recorded for the rotation in BLAKE3-256 form.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub hkdf_salt: [u8; 32],
     /// Segment number where the new CEK becomes active.
     pub effective_segment_sequence: u64,
@@ -728,13 +728,13 @@ pub struct ReplicationProofTokenV1 {
     /// Rendition covered by the attestation.
     pub rendition_id: TaikaiRenditionId,
     /// Digest of the GAR payload recorded for the rollout.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub gar_digest: [u8; 32],
     /// Digest of the CEK rotation receipt referenced by the rollout.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub cek_receipt_digest: [u8; 32],
     /// Digest of the rollout evidence bundle (archives/logs).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub distribution_bundle_digest: [u8; 32],
     /// Canonical telemetry labels enforced during the attested window.
     #[norito(default)]

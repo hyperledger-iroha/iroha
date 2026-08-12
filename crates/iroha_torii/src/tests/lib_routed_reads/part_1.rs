@@ -236,8 +236,12 @@
         let encoded = encode_torii_proxy_query(&params)
             .expect("query encoding should succeed")
             .expect("non-empty params should produce a query string");
-        let decoded = decode_torii_proxy_query::<routing::AccountAssetsGetParams>(Some(&encoded))
-            .expect("query decoding should succeed");
+        let plan = routed_read_test_budget()
+            .request_decode_plan()
+            .expect("request decode plan");
+        let decoded =
+            decode_torii_proxy_query::<routing::AccountAssetsGetParams>(plan, Some(&encoded))
+                .expect("query decoding should succeed");
 
         assert_eq!(decoded.limit, params.limit);
         assert_eq!(decoded.offset, params.offset);
@@ -259,7 +263,10 @@
         let encoded = encode_torii_proxy_query(&params)
             .expect("query encoding should succeed")
             .expect("non-empty params should produce a query string");
-        let decoded = decode_torii_proxy_query::<routing::ListFilterParams>(Some(&encoded))
+        let plan = routed_read_test_budget()
+            .request_decode_plan()
+            .expect("request decode plan");
+        let decoded = decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(&encoded))
             .expect("query decoding should succeed");
 
         assert_eq!(decoded.filter, params.filter);

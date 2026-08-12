@@ -8,6 +8,7 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use iroha_primitives::numeric::Quantity;
+use mv::storage::StorageReadOnly;
 
 use super::{WorldReadOnly, peer_has_live_consensus_key, public_lane_validator_record_matches_key};
 use crate::governance::manifest::{LANE_MANIFEST_MAX_VALIDATORS_V1, ManifestValidatorBinding};

@@ -338,6 +338,8 @@ thread_local! {
     static ED25519_SIGNATURE_PARSE_CALLS: RefCell<usize> = const { RefCell::new(0) };
     #[cfg(test)]
     static ED25519_UNCACHED_BATCH_VERIFY_CALLS: RefCell<usize> = const { RefCell::new(0) };
+    #[cfg(test)]
+    static PUBLIC_KEY_PARSE_CACHE_CONSULTED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -348,6 +350,11 @@ fn reset_public_key_parse_cache_for_tests() {
 #[cfg(test)]
 fn public_key_parse_cache_stats_for_tests() -> PublicKeyParseCacheStats {
     PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow().stats())
+}
+
+#[cfg(test)]
+fn public_key_parse_cache_consulted_for_tests() -> bool {
+    PUBLIC_KEY_PARSE_CACHE_CONSULTED.with(core::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -497,6 +504,8 @@ impl Ed25519Sha512 {
             ))
         })?;
 
+        #[cfg(test)]
+        PUBLIC_KEY_PARSE_CACHE_CONSULTED.with(|consulted| consulted.set(true));
         if let Some(result) = PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().get(&bytes)) {
             return result;
         }
@@ -508,6 +517,19 @@ impl Ed25519Sha512 {
         };
         PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().insert(bytes, outcome));
         result
+    }
+
+    pub(crate) fn parse_public_key_uncached_for_decode(
+        payload: &[u8],
+    ) -> Result<PublicKey, ParseError> {
+        let bytes: [u8; 32] = payload.try_into().map_err(|_| {
+            ParseError(format!(
+                "the payload size is incorrect: expected {}, but got {}",
+                32,
+                payload.len()
+            ))
+        })?;
+        Self::parse_public_key_uncached(&bytes)
     }
 
     fn parse_public_key_uncached(bytes: &[u8; 32]) -> Result<PublicKey, ParseError> {
@@ -1130,6 +1152,7 @@ mod test {
         let bytes = pk.to_bytes();
 
         let first = Ed25519Sha512::parse_public_key(&bytes).expect("first parse succeeds");
+        assert!(public_key_parse_cache_consulted_for_tests());
         assert_eq!(first.to_bytes(), bytes);
         assert_eq!(
             public_key_parse_cache_stats_for_tests(),
@@ -1150,6 +1173,25 @@ mod test {
                 inserts: 1,
             }
         );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn attacker_decode_and_bounded_reencode_never_consult_parse_cache() {
+        std::thread::spawn(|| {
+            assert!(!public_key_parse_cache_consulted_for_tests());
+            let encoded =
+                "\"ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4\"";
+            let key: CryptoPublicKey =
+                norito::json::from_str(encoded).expect("canonical public-key JSON");
+            assert!(!public_key_parse_cache_consulted_for_tests());
+            let bounded = norito::json::to_json_bounded(&key, encoded.len())
+                .expect("direct bounded public-key writer");
+            assert_eq!(bounded, encoded);
+            assert!(!public_key_parse_cache_consulted_for_tests());
+        })
+        .join()
+        .expect("fresh cache-observation thread");
     }
 
     #[test]
@@ -1586,6 +1628,27 @@ mod test {
         let err = Ed25519Sha512::parse_public_key(&ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT)
             .unwrap_err();
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn cached_and_uncached_public_key_validation_are_equivalent() {
+        let (valid, _) = key_pair_factory();
+        let mixed = mixed_torsion_public_key();
+        let cases: &[&[u8]] = &[
+            valid.as_bytes(),
+            &[],
+            &[0_u8; 32],
+            &ED25519_NON_CANONICAL_IDENTITY,
+            &ED25519_SMALL_ORDER_POINT,
+            &mixed,
+        ];
+        for payload in cases {
+            assert_eq!(
+                Ed25519Sha512::parse_public_key(payload).is_ok(),
+                Ed25519Sha512::parse_public_key_uncached_for_decode(payload).is_ok(),
+                "cached and decode-only validation diverged for {payload:02x?}"
+            );
+        }
     }
 
     #[test]

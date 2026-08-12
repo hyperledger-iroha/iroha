@@ -594,6 +594,40 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         }
     }
 
+    /// Admit a verified-source body before authentication and compilation.
+    ///
+    /// The outer admission layer owns one complete compiler slot before polling
+    /// the body, enforces an absolute body-read deadline, and hands that exact
+    /// slot to the blocking compiler worker after canonical authentication.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub(crate) fn authenticated_canonical_account_verified_source_body(
+        self,
+        app_state: SharedAppState,
+        max_body_bytes: usize,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let auth = axum::middleware::from_fn_with_state(
+            crate::CanonicalAccountBodyAuthState {
+                app: app_state.clone(),
+                max_body_bytes,
+            },
+            crate::enforce_canonical_account_body_authentication,
+        );
+        let admission = axum::middleware::from_fn_with_state(
+            app_state,
+            crate::verified_source_body_admission_middleware,
+        );
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::CanonicalAccountSignature),
+            inner: self
+                .inner
+                .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+                .layer(auth)
+                .layer(admission),
+        }
+    }
+
     /// Apply exact operator authentication and the SoraNet collector guard before body decoding.
     ///
     /// Exact NetworkId-bound operator authentication runs first. The secondary

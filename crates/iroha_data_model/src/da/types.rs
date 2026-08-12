@@ -19,7 +19,14 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BlobDigest(
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::fixed_bytes",
+            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
+        )
+    )]
+    pub [u8; 32],
 );
 
 impl BlobDigest {
@@ -88,7 +95,14 @@ pub type ChunkDigest = BlobDigest;
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct StorageTicketId(
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::fixed_bytes",
+            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
+        )
+    )]
+    pub [u8; 32],
 );
 
 impl StorageTicketId {
@@ -375,7 +389,13 @@ pub struct MetadataEntry {
     /// Metadata key (UTF-8, governance-approved).
     pub key: String,
     /// Raw metadata value bytes (Norito or application-specific encoding).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::base64_vec",
+            bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
+        )
+    )]
     pub value: Vec<u8>,
     /// Visibility scope for the entry.
     pub visibility: MetadataVisibility,

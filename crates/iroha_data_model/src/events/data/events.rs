@@ -128,6 +128,22 @@ where
         <Json as JsonSerialize>::json_serialize(&self.value, out);
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"target\":")?;
+        <Id as JsonSerialize>::json_serialize_to(&self.target, out)?;
+        out.push_str(",\"key\":")?;
+        <Name as JsonSerialize>::json_serialize_to(&self.key, out)?;
+        out.push_str(",\"value\":")?;
+        <Json as JsonSerialize>::json_serialize_to(&self.value, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -2555,6 +2571,14 @@ mod tests {
         let decoded: MetadataChanged<DomainId> =
             norito::json::from_str(&json).expect("deserialize");
         assert_eq!(changed, decoded);
+        assert_eq!(
+            norito::json::to_json_bounded(&changed, json.len()).expect("serialize at exact bound"),
+            json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&changed, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
     }
 }
 

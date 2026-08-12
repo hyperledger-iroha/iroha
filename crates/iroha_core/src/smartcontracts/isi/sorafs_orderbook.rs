@@ -59,12 +59,13 @@ use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::{
     XorQuantity,
     orderbook::{
-        BYTES_PER_GIB, OrderCancelReasonV1, OrderRequestV1, OrderSideV1, OrderTierV1,
-        OrderbookSignatureV1, TradeEventV1, bid_order_escrow_requirement_v1,
-        decode_order_cancel_v1, decode_order_request_v1, decode_settlement_receipt_v1,
-        derive_orderbook_settlement_channel_id_v1, derive_orderbook_trade_id_v1,
-        deterministic_settlement_split_v1, match_orders_v1, trade_escrow_requirement_v1,
-        trade_fee_requirement_v1, verify_order_cancel_signature_v1,
+        BYTES_PER_GIB, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1, OrderCancelReasonV1, OrderRequestV1,
+        OrderSideV1, OrderTierV1, OrderbookPayloadDecodeError, OrderbookSignatureV1, TradeEventV1,
+        bid_order_escrow_requirement_v1, decode_order_cancel_v1_with_limits,
+        decode_order_request_v1_with_limits, decode_settlement_receipt_v1_with_limits,
+        decode_trade_event_v1_with_limits, derive_orderbook_settlement_channel_id_v1,
+        derive_orderbook_trade_id_v1, deterministic_settlement_split_v1, match_orders_v1,
+        trade_escrow_requirement_v1, trade_fee_requirement_v1, verify_order_cancel_signature_v1,
         verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
     },
     provider_advert::SignatureAlgorithm,
@@ -73,6 +74,8 @@ use sorafs_manifest::{
 use super::*;
 use crate::smartcontracts::ValidSingularQuery;
 use crate::state::{StateTransaction, WorldReadOnly};
+
+mod orderbook_current_memory;
 
 const POLICY_STATE_KEY: &str = "sorafs_orderbook_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_orderbook_status_v1";
@@ -93,6 +96,7 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     STATE_MAX_BYTES * 2,
     64,
 );
+type OrderbookQueryCurrent = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation;
 
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct OrderbookPersistedEventV1 {
@@ -378,17 +382,89 @@ fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionE
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    if bytes.len() > STATE_MAX_BYTES {
-        return Err(corrupt_state(format!(
-            "{label} state exceeds {STATE_MAX_BYTES} bytes"
-        )));
-    }
-    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
-        bytes.len(),
-        STATE_LIMITS,
-    )
-    .map_err(InstructionExecutionError::Query)?;
-    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+    decode_state_measured(bytes, label).map(|(value, _)| value)
+}
+
+fn decode_orderbook_payload<T>(
+    bytes: &[u8],
+    decode: impl FnOnce(&[u8], DecodeLimits) -> Result<T, OrderbookPayloadDecodeError>,
+    legacy_error: impl FnOnce(OrderbookPayloadDecodeError) -> InstructionExecutionError,
+) -> Result<T, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
+    decode_orderbook_payload_for_current(bytes, &mut current, decode, legacy_error)
+}
+
+fn decode_orderbook_payload_for_current<T>(
+    bytes: &[u8],
+    current: &mut OrderbookQueryCurrent,
+    decode: impl FnOnce(&[u8], DecodeLimits) -> Result<T, OrderbookPayloadDecodeError>,
+    legacy_error: impl FnOnce(OrderbookPayloadDecodeError) -> InstructionExecutionError,
+) -> Result<T, InstructionExecutionError> {
+    let limits = current
+        .decode_limits(bytes.len(), ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
+        .map_err(InstructionExecutionError::Query)?;
+    let (value, usage) =
+        norito::core::with_decode_limits_measured(limits, || decode(bytes, limits));
+    let value = value.map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            legacy_error(error)
+        }
+    })?;
+    current
+        .add_nested(usage.total_allocated_bytes())
+        .map_err(InstructionExecutionError::Query)?;
+    Ok(value)
+}
+
+fn decode_state_measured<T>(
+    bytes: &[u8],
+    label: &str,
+) -> Result<(T, usize), InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    ensure_state_size(bytes, label)?;
+    let limits =
+        crate::smartcontracts::isi::query::singular_query_decode_limits(bytes.len(), STATE_LIMITS)
+            .map_err(InstructionExecutionError::Query)?;
+    decode_state_with_limits(bytes, label, limits)
+}
+
+fn decode_state_for_current<T>(
+    bytes: &[u8],
+    label: &str,
+    current: &mut OrderbookQueryCurrent,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    ensure_state_size(bytes, label)?;
+    let limits = current
+        .decode_limits(bytes.len(), STATE_LIMITS)
+        .map_err(InstructionExecutionError::Query)?;
+    let (value, allocated) = decode_state_with_limits(bytes, label, limits)?;
+    current
+        .add_nested(allocated)
+        .map_err(InstructionExecutionError::Query)?;
+    Ok(value)
+}
+
+fn decode_state_with_limits<T>(
+    bytes: &[u8],
+    label: &str,
+    limits: DecodeLimits,
+) -> Result<(T, usize), InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+        decode_from_bytes_with_limits::<T>(bytes, limits)
+    });
+    let value = value.map_err(|error| {
         if crate::smartcontracts::isi::query::singular_query_limits_active()
             && error.is_decode_resource_limit()
         {
@@ -397,13 +473,23 @@ where
             corrupt_state(format!("failed to decode {label}: {error}"))
         }
     })?;
-    let canonical = encode_state(&value, label)?;
-    if canonical != bytes {
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            corrupt_state(format!("{label} state is not exact canonical Norito"))
+        } else {
+            corrupt_state(format!("failed to encode {label}: {error}"))
+        }
+    })?;
+    Ok((value, usage.total_allocated_bytes()))
+}
+
+fn ensure_state_size(bytes: &[u8], label: &str) -> Result<(), InstructionExecutionError> {
+    if bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
-            "{label} state is not exact canonical Norito"
+            "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    Ok(value)
+    Ok(())
 }
 
 fn validate_persisted_event(
@@ -543,6 +629,15 @@ fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
 ) -> Result<Option<OrderbookPersistedEventV1>, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
+    read_persisted_event_with_current(world, sequence, &mut current)
+}
+
+fn read_persisted_event_with_current(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+    current: &mut OrderbookQueryCurrent,
+) -> Result<Option<OrderbookPersistedEventV1>, InstructionExecutionError> {
     if sequence == 0 {
         return Err(corrupt_state(
             "orderbook event sequence zero cannot be read",
@@ -551,7 +646,8 @@ fn read_persisted_event(
     let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
         return Ok(None);
     };
-    let record: OrderbookPersistedEventV1 = decode_state(bytes, "orderbook committed event")?;
+    let record: OrderbookPersistedEventV1 =
+        decode_state_for_current(bytes, "orderbook committed event", current)?;
     validate_persisted_event(&record, sequence)?;
     Ok(Some(record))
 }
@@ -559,16 +655,18 @@ fn read_persisted_event(
 fn read_event_journal_head(
     world: &impl WorldReadOnly,
 ) -> Result<Option<OrderbookEventJournalHeadV1>, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     let Some(bytes) = world.smart_contract_state().get(event_journal_head_key()) else {
         return Ok(None);
     };
-    let head: OrderbookEventJournalHeadV1 = decode_state(bytes, "orderbook event journal head")?;
+    let head: OrderbookEventJournalHeadV1 =
+        decode_state_for_current(bytes, "orderbook event journal head", &mut current)?;
     if head.last_sequence == 0 || head.last_target_block_height == 0 {
         return Err(corrupt_state(
             "stored orderbook event journal head is invalid",
         ));
     }
-    let record = read_persisted_event(world, head.last_sequence)?
+    let record = read_persisted_event_with_current(world, head.last_sequence, &mut current)?
         .ok_or_else(|| corrupt_state("orderbook event journal head references a missing event"))?;
     if record.target_block_height != head.last_target_block_height
         || record.event_index != head.last_event_index
@@ -582,11 +680,12 @@ fn read_event_journal_head(
     } else {
         let predecessor_sequence = head.last_sequence - 1;
         Some(
-            read_persisted_event(world, predecessor_sequence)?.ok_or_else(|| {
-                corrupt_state(format!(
-                    "orderbook event journal is missing terminal predecessor sequence {predecessor_sequence}"
-                ))
-            })?,
+            read_persisted_event_with_current(world, predecessor_sequence, &mut current)?
+                .ok_or_else(|| {
+                    corrupt_state(format!(
+                        "orderbook event journal is missing terminal predecessor sequence {predecessor_sequence}"
+                    ))
+                })?,
         )
     };
     validate_event_successor(predecessor.as_ref(), &record)?;
@@ -604,7 +703,7 @@ fn ensure_no_event_after_head(
         .range(prefix_start..)
         .next()
         .and_then(|(key, _)| {
-            key.to_string()
+            key.as_ref()
                 .starts_with(EVENT_STATE_KEY_PREFIX)
                 .then_some(key)
         });
@@ -627,8 +726,7 @@ fn ensure_no_event_after_head(
         |head| event_key(head.last_sequence),
     );
     for (key, _) in world.smart_contract_state().range(start..) {
-        let rendered = key.to_string();
-        if !rendered.starts_with(EVENT_STATE_KEY_PREFIX) {
+        if !key.as_ref().starts_with(EVENT_STATE_KEY_PREFIX) {
             break;
         }
         if head.is_some_and(|head| *key == event_key(head.last_sequence)) {
@@ -880,11 +978,14 @@ fn read_order(
     world: &impl WorldReadOnly,
     order_id: [u8; 32],
 ) -> Result<Option<OrderbookOrderRecord>, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     let key = order_key(order_id);
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
-    let record: OrderbookOrderRecord = decode_state(bytes, "orderbook order")?;
+    let record: OrderbookOrderRecord =
+        decode_state_for_current(bytes, "orderbook order", &mut current)?;
+    let record_resident_bytes = current.resident_bytes();
     if record.order_id != order_id
         || record.order_id == [0; 32]
         || record.admitted_policy_digest == [0; 32]
@@ -894,8 +995,12 @@ fn read_order(
     {
         return Err(corrupt_state("stored orderbook order metadata is invalid"));
     }
-    let order = decode_order_request_v1(&record.canonical_order)
-        .map_err(|error| corrupt_state(format!("invalid stored order payload: {error}")))?;
+    let order = decode_orderbook_payload_for_current(
+        &record.canonical_order,
+        &mut current,
+        decode_order_request_v1_with_limits,
+        |error| corrupt_state(format!("invalid stored order payload: {error}")),
+    )?;
     verify_order_request_signature_v1(&order)
         .map_err(|error| corrupt_state(format!("invalid stored order signature: {error}")))?;
     ensure_payload_signer(&record.owner, &order.signature).map_err(|error| {
@@ -908,13 +1013,13 @@ fn read_order(
             "stored order expiry is not later than its admission timestamp",
         ));
     }
-    let owner_literal = core::str::from_utf8(&order.owner_account)
+    core::str::from_utf8(&order.owner_account)
         .map_err(|_| corrupt_state("stored order owner is not UTF-8"))?;
-    let owner = AccountId::parse_encoded(owner_literal)
-        .map_err(|error| corrupt_state(format!("invalid stored order owner: {error}")))?;
-    if owner.canonical().as_bytes() != order.owner_account
-        || owner.account_id().subject_id() != record.owner.subject_id()
-        || order.order_id != record.order_id
+    if !orderbook_current_memory::owner_literal_matches_for_current(
+        &record.owner,
+        &order.owner_account,
+        &mut current,
+    )? || order.order_id != record.order_id
     {
         return Err(corrupt_state(
             "stored order payload does not match authoritative order metadata",
@@ -973,9 +1078,17 @@ fn read_order(
             "stored orderbook order lifecycle state is inconsistent",
         ));
     }
+    let order_nonce = order.nonce;
+    drop(order);
+    current = OrderbookQueryCurrent::new(record_resident_bytes)
+        .map_err(InstructionExecutionError::Query)?;
     if let Some(canonical_cancel) = record.canonical_cancel.as_ref() {
-        let cancel = decode_order_cancel_v1(canonical_cancel)
-            .map_err(|error| corrupt_state(format!("invalid stored cancellation: {error}")))?;
+        let cancel = decode_orderbook_payload_for_current(
+            canonical_cancel,
+            &mut current,
+            decode_order_cancel_v1_with_limits,
+            |error| corrupt_state(format!("invalid stored cancellation: {error}")),
+        )?;
         verify_order_cancel_signature_v1(&cancel).map_err(|error| {
             corrupt_state(format!("invalid stored cancellation signature: {error}"))
         })?;
@@ -984,15 +1097,14 @@ fn read_order(
                 "stored cancellation signer does not match its authoritative owner: {error}"
             ))
         })?;
-        let cancel_owner_literal = core::str::from_utf8(&cancel.owner_account)
+        core::str::from_utf8(&cancel.owner_account)
             .map_err(|_| corrupt_state("stored cancellation owner is not UTF-8"))?;
-        let cancel_owner = AccountId::parse_encoded(cancel_owner_literal).map_err(|error| {
-            corrupt_state(format!("invalid stored cancellation owner: {error}"))
-        })?;
-        if cancel_owner.canonical().as_bytes() != cancel.owner_account
-            || cancel_owner.account_id().subject_id() != record.owner.subject_id()
-            || cancel.order_id != record.order_id
-            || cancel.nonce <= order.nonce
+        if !orderbook_current_memory::owner_literal_matches_for_current(
+            &record.owner,
+            &cancel.owner_account,
+            &mut current,
+        )? || cancel.order_id != record.order_id
+            || cancel.nonce <= order_nonce
             || record
                 .cancelled_at_unix
                 .is_none_or(|cancelled_at| cancelled_at < record.admitted_at_unix)
@@ -1093,11 +1205,21 @@ fn read_trade(
     world: &impl WorldReadOnly,
     trade_id: [u8; 32],
 ) -> Result<Option<OrderbookTradeRecord>, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
+    read_trade_with_current(world, trade_id, &mut current)
+}
+
+fn read_trade_with_current(
+    world: &impl WorldReadOnly,
+    trade_id: [u8; 32],
+    current: &mut OrderbookQueryCurrent,
+) -> Result<Option<OrderbookTradeRecord>, InstructionExecutionError> {
     let key = trade_key(trade_id);
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
-    let record: OrderbookTradeRecord = decode_state(bytes, "orderbook trade")?;
+    let record: OrderbookTradeRecord = decode_state_for_current(bytes, "orderbook trade", current)?;
+    let record_resident_bytes = current.resident_bytes();
     if record.trade_id != trade_id
         || record.trade_id == [0; 32]
         || record.maker_order_id == [0; 32]
@@ -1110,7 +1232,12 @@ fn read_trade(
     {
         return Err(corrupt_state("stored orderbook trade metadata is invalid"));
     }
-    let trade: TradeEventV1 = decode_state(&record.canonical_trade, "orderbook trade payload")?;
+    let trade = decode_orderbook_payload_for_current(
+        &record.canonical_trade,
+        current,
+        decode_trade_event_v1_with_limits,
+        |error| corrupt_state(format!("invalid stored orderbook trade: {error}")),
+    )?;
     trade
         .validate()
         .map_err(|error| corrupt_state(format!("invalid stored orderbook trade: {error}")))?;
@@ -1127,6 +1254,9 @@ fn read_trade(
             "stored orderbook trade payload does not match authoritative metadata",
         ));
     }
+    drop(trade);
+    *current = OrderbookQueryCurrent::new(record_resident_bytes)
+        .map_err(InstructionExecutionError::Query)?;
     Ok(Some(record))
 }
 
@@ -1134,12 +1264,13 @@ fn read_channel(
     world: &impl WorldReadOnly,
     channel_id: [u8; 32],
 ) -> Result<Option<OrderbookSettlementChannelRecord>, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     let key = channel_key(channel_id);
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
     let record: OrderbookSettlementChannelRecord =
-        decode_state(bytes, "orderbook settlement channel")?;
+        decode_state_for_current(bytes, "orderbook settlement channel", &mut current)?;
     let lifecycle_is_consistent = match record.status {
         OrderbookSettlementChannelStatusV1::Open => {
             record.remaining_bytes > 0 && !record.remaining_xor_locked.is_zero()
@@ -1174,15 +1305,23 @@ fn read_channel(
             "stored orderbook settlement channel is inconsistent",
         ));
     }
-    let trade = read_trade(world, record.trade_id)?
+    let trade = read_trade_with_current(world, record.trade_id, &mut current)?
         .ok_or_else(|| corrupt_state("stored orderbook channel references a missing trade"))?;
     if trade.channel_id != record.channel_id {
         return Err(corrupt_state(
             "stored orderbook channel does not match its trade",
         ));
     }
-    let trade_payload: TradeEventV1 =
-        decode_state(&trade.canonical_trade, "orderbook channel trade payload")?;
+    let trade_payload = decode_orderbook_payload_for_current(
+        &trade.canonical_trade,
+        &mut current,
+        decode_trade_event_v1_with_limits,
+        |error| {
+            corrupt_state(format!(
+                "invalid stored orderbook channel trade payload: {error}"
+            ))
+        },
+    )?;
     let expected_total_bytes = trade_payload
         .filled_gib
         .checked_mul(BYTES_PER_GIB)
@@ -1205,6 +1344,8 @@ fn read_channel(
             "stored orderbook channel economics do not match its immutable trade",
         ));
     }
+    drop(trade_payload);
+    drop(trade);
     Ok(Some(record))
 }
 
@@ -1212,12 +1353,18 @@ fn read_receipt(
     world: &impl WorldReadOnly,
     receipt_id: [u8; 32],
 ) -> Result<Option<OrderbookSettlementReceiptRecord>, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     let key = receipt_key(receipt_id);
-    let Some(bytes) = world.smart_contract_state().get(&key) else {
+    let decode_record = |current: &mut OrderbookQueryCurrent| {
+        let Some(bytes) = world.smart_contract_state().get(&key) else {
+            return Ok(None);
+        };
+        decode_state_for_current(bytes, "orderbook settlement receipt", current).map(Some)
+    };
+    let Some(record): Option<OrderbookSettlementReceiptRecord> = decode_record(&mut current)?
+    else {
         return Ok(None);
     };
-    let record: OrderbookSettlementReceiptRecord =
-        decode_state(bytes, "orderbook settlement receipt")?;
     if record.receipt_id != receipt_id
         || record.receipt_id == [0; 32]
         || record.channel_id == [0; 32]
@@ -1229,18 +1376,15 @@ fn read_receipt(
             "stored orderbook settlement receipt metadata is invalid",
         ));
     }
-    let receipt = decode_settlement_receipt_v1(&record.canonical_receipt)
-        .map_err(|error| corrupt_state(format!("invalid stored settlement receipt: {error}")))?;
+    let receipt = decode_orderbook_payload_for_current(
+        &record.canonical_receipt,
+        &mut current,
+        decode_settlement_receipt_v1_with_limits,
+        |error| corrupt_state(format!("invalid stored settlement receipt: {error}")),
+    )?;
     verify_settlement_receipt_signature_v1(&receipt).map_err(|error| {
         corrupt_state(format!(
             "invalid stored settlement receipt signature: {error}"
-        ))
-    })?;
-    let channel = read_channel(world, record.channel_id)?
-        .ok_or_else(|| corrupt_state("stored settlement receipt references a missing channel"))?;
-    ensure_payload_signer(&channel.provider, &receipt.settlement_signature).map_err(|error| {
-        corrupt_state(format!(
-            "stored settlement signer does not match its channel provider: {error}"
         ))
     })?;
     if receipt.receipt_id != record.receipt_id
@@ -1251,31 +1395,80 @@ fn read_receipt(
             "stored settlement receipt payload does not match authoritative metadata",
         ));
     }
-    let index = read_receipt_index(world, record.channel_id)?.ok_or_else(|| {
+    let channel_id = record.channel_id;
+    let trade_id = record.trade_id;
+    let receipt_range = receipt.range;
+    let receipt_issued_at_unix = receipt.issued_at_unix;
+    let signer_public_key: [u8; 32] = receipt
+        .settlement_signature
+        .public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| corrupt_state("stored settlement receipt signer key is not Ed25519-sized"))?;
+    // Only compact, protocol-fixed receipt facts are needed by the related-state
+    // checks below. Release both decoded source values before reading a channel
+    // or its potentially large receipt index.
+    drop(receipt);
+    drop(record);
+    current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
+
+    let channel = read_channel(world, channel_id)?
+        .ok_or_else(|| corrupt_state("stored settlement receipt references a missing channel"))?;
+    let provider_key = channel.provider.try_signatory().ok_or_else(|| {
+        corrupt_state("stored settlement channel provider is not a single-signatory account")
+    })?;
+    let (provider_algorithm, provider_public_key) = provider_key
+        .try_to_bytes()
+        .map_err(|error| corrupt_state(format!("invalid channel provider public key: {error}")))?;
+    if provider_algorithm != Algorithm::Ed25519
+        || provider_public_key != signer_public_key.as_slice()
+    {
+        return Err(corrupt_state(
+            "stored settlement signer does not match its channel provider",
+        ));
+    }
+    drop(channel);
+
+    let index = read_receipt_index(world, channel_id)?.ok_or_else(|| {
         corrupt_state("stored settlement receipt has no authoritative channel index")
     })?;
     let indexed_range = index
         .ranges
         .iter()
-        .find(|range| range.receipt_id == record.receipt_id)
+        .find(|range| range.receipt_id == receipt_id)
+        .copied()
         .ok_or_else(|| {
             corrupt_state("stored settlement receipt is absent from its channel index")
         })?;
-    if index.trade_id != record.trade_id
-        || indexed_range.start != receipt.range.start
-        || indexed_range.end != receipt.range.end
-        || indexed_range.issued_at_unix != receipt.issued_at_unix
+    if index.trade_id != trade_id
+        || indexed_range.start != receipt_range.start
+        || indexed_range.end != receipt_range.end
+        || indexed_range.issued_at_unix != receipt_issued_at_unix
     {
         return Err(corrupt_state(
             "stored settlement receipt does not match its channel index",
         ));
     }
+    drop(index);
+
+    let record = decode_record(&mut current)?.ok_or_else(|| {
+        corrupt_state("stored settlement receipt disappeared during its immutable read")
+    })?;
     Ok(Some(record))
 }
 
 fn validate_receipt_index(
     index: &OrderbookSettlementIndexRecord,
     channel_id: [u8; 32],
+) -> Result<(), InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
+    validate_receipt_index_with_current(index, channel_id, &mut current)
+}
+
+fn validate_receipt_index_with_current(
+    index: &OrderbookSettlementIndexRecord,
+    channel_id: [u8; 32],
+    current: &mut OrderbookQueryCurrent,
 ) -> Result<(), InstructionExecutionError> {
     if index.channel_id != channel_id
         || index.channel_id == [0; 32]
@@ -1287,11 +1480,12 @@ fn validate_receipt_index(
             "stored orderbook receipt index header is invalid",
         ));
     }
+    let mut receipt_ids = current
+        .vec_with_capacity::<[u8; 32]>(index.ranges.len())
+        .map_err(InstructionExecutionError::Query)?;
     let mut previous: Option<&OrderbookSettlementRangeRecord> = None;
-    let mut receipt_ids = std::collections::BTreeSet::new();
     for range in &index.ranges {
         if range.receipt_id == [0; 32]
-            || !receipt_ids.insert(range.receipt_id)
             || range.start >= range.end
             || range.issued_at_unix == 0
             || previous.is_some_and(|prior| {
@@ -1304,7 +1498,17 @@ fn validate_receipt_index(
                 "stored orderbook receipt index is unsorted, overlapping, or malformed",
             ));
         }
+        receipt_ids
+            .push(range.receipt_id)
+            .map_err(InstructionExecutionError::Query)?;
         previous = Some(range);
+    }
+    let mut receipt_ids = receipt_ids.into_vec();
+    receipt_ids.sort_unstable();
+    if receipt_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(corrupt_state(
+            "stored orderbook receipt index is unsorted, overlapping, or malformed",
+        ));
     }
     Ok(())
 }
@@ -1313,13 +1517,14 @@ fn read_receipt_index(
     world: &impl WorldReadOnly,
     channel_id: [u8; 32],
 ) -> Result<Option<OrderbookSettlementIndexRecord>, InstructionExecutionError> {
+    let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     let key = receipt_index_key(channel_id);
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
     let index: OrderbookSettlementIndexRecord =
-        decode_state(bytes, "orderbook settlement receipt index")?;
-    validate_receipt_index(&index, channel_id)?;
+        decode_state_for_current(bytes, "orderbook settlement receipt index", &mut current)?;
+    validate_receipt_index_with_current(&index, channel_id, &mut current)?;
     Ok(Some(index))
 }
 
@@ -1367,8 +1572,11 @@ fn load_active_orders(
                 "authoritative orderbook contains duplicate admission sequences",
             ));
         }
-        let mut order = decode_order_request_v1(&record.canonical_order)
-            .map_err(|error| corrupt_state(format!("invalid stored order: {error}")))?;
+        let mut order = decode_orderbook_payload(
+            &record.canonical_order,
+            decode_order_request_v1_with_limits,
+            |error| corrupt_state(format!("invalid stored order: {error}")),
+        )?;
         order.remaining_gib = record.remaining_gib;
         active.push(WorkingLedgerOrder { record, order });
         if active.len() > ORDERBOOK_MAX_OPEN_ORDERS_V1 as usize {
@@ -1786,11 +1994,15 @@ impl Execute for SubmitSorafsOrderbookOrder {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        let order = decode_order_request_v1(&self.order_payload).map_err(|error| {
-            invalid_parameter(format!(
-                "invalid canonical orderbook order payload: {error}"
-            ))
-        })?;
+        let order = decode_orderbook_payload(
+            &self.order_payload,
+            decode_order_request_v1_with_limits,
+            |error| {
+                invalid_parameter(format!(
+                    "invalid canonical orderbook order payload: {error}"
+                ))
+            },
+        )?;
         verify_order_request_signature_v1(&order)
             .map_err(|error| invalid_parameter(format!("invalid order signature: {error}")))?;
         let (policy, now) = active_policy(state_transaction, self.policy_digest)?;
@@ -1944,11 +2156,15 @@ impl Execute for CancelSorafsOrderbookOrder {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        let cancel = decode_order_cancel_v1(&self.cancel_payload).map_err(|error| {
-            invalid_parameter(format!(
-                "invalid canonical order cancellation payload: {error}"
-            ))
-        })?;
+        let cancel = decode_orderbook_payload(
+            &self.cancel_payload,
+            decode_order_cancel_v1_with_limits,
+            |error| {
+                invalid_parameter(format!(
+                    "invalid canonical order cancellation payload: {error}"
+                ))
+            },
+        )?;
         verify_order_cancel_signature_v1(&cancel).map_err(|error| {
             invalid_parameter(format!("invalid cancellation signature: {error}"))
         })?;
@@ -2019,10 +2235,11 @@ impl Execute for CancelSorafsOrderbookOrder {
         let encoded = encode_state(&record, "orderbook order")?;
         let encoded_status = encode_status(&status)?;
         if let Some(binding) = record.bid_escrow.as_ref() {
-            let signed_order =
-                decode_order_request_v1(&record.canonical_order).map_err(|error| {
-                    corrupt_state(format!("failed to decode cancellable stored bid: {error}"))
-                })?;
+            let signed_order = decode_orderbook_payload(
+                &record.canonical_order,
+                decode_order_request_v1_with_limits,
+                |error| corrupt_state(format!("failed to decode cancellable stored bid: {error}")),
+            )?;
             let expires_at_ms = signed_order
                 .expiry_unix
                 .checked_mul(1_000)
@@ -2616,10 +2833,11 @@ impl Execute for MaintainSorafsOrderbook {
 
         for record in &expired_orders {
             if let Some(binding) = record.bid_escrow.as_ref() {
-                let signed_order =
-                    decode_order_request_v1(&record.canonical_order).map_err(|error| {
-                        corrupt_state(format!("failed to decode expiring stored bid: {error}"))
-                    })?;
+                let signed_order = decode_orderbook_payload(
+                    &record.canonical_order,
+                    decode_order_request_v1_with_limits,
+                    |error| corrupt_state(format!("failed to decode expiring stored bid: {error}")),
+                )?;
                 let expires_at_ms = signed_order
                     .expiry_unix
                     .checked_mul(1_000)
@@ -2710,9 +2928,11 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        let receipt = decode_settlement_receipt_v1(&self.receipt_payload).map_err(|error| {
-            invalid_parameter(format!("invalid canonical settlement receipt: {error}"))
-        })?;
+        let receipt = decode_orderbook_payload(
+            &self.receipt_payload,
+            decode_settlement_receipt_v1_with_limits,
+            |error| invalid_parameter(format!("invalid canonical settlement receipt: {error}")),
+        )?;
         verify_settlement_receipt_signature_v1(&receipt).map_err(|error| {
             invalid_parameter(format!("invalid settlement receipt signature: {error}"))
         })?;
@@ -3105,7 +3325,7 @@ fn resolve_query_finalized_cursor(
 
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
-    record: &OrderbookPersistedEventV1,
+    record: OrderbookPersistedEventV1,
 ) -> Result<OrderbookFinalizedEventV1, QueryExecutionFail> {
     let hash_index = record
         .target_block_height
@@ -3132,29 +3352,79 @@ fn resolve_committed_event(
             record.sequence
         )));
     }
-    crate::smartcontracts::isi::query::own_singular_query_struct::<OrderbookFinalizedEventV1, 5>(
-        [
-            &record.sequence,
-            &record.target_block_height,
-            &block_hash,
-            &record.event_index,
-            &record.event,
-        ],
-        || OrderbookFinalizedEventV1 {
+    Ok(OrderbookFinalizedEventV1 {
+        sequence: record.sequence,
+        block_height: record.target_block_height,
+        block_hash,
+        event_index: record.event_index,
+        event: record.event,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct OrderbookQueryEventPosition {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+}
+
+impl From<&OrderbookPersistedEventV1> for OrderbookQueryEventPosition {
+    fn from(record: &OrderbookPersistedEventV1) -> Self {
+        Self {
             sequence: record.sequence,
-            block_height: record.target_block_height,
-            block_hash,
+            target_block_height: record.target_block_height,
             event_index: record.event_index,
-            event: record.event.clone(),
-        },
-    )
+        }
+    }
+}
+
+fn validate_query_event_successor(
+    previous: Option<OrderbookQueryEventPosition>,
+    current: &OrderbookPersistedEventV1,
+) -> Result<(), QueryExecutionFail> {
+    let Some(previous) = previous else {
+        return (current.sequence == 1 && current.event_index == 0)
+            .then_some(())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "orderbook event journal does not begin at sequence one and block index zero"
+                        .to_owned(),
+                )
+            });
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "orderbook event journal sequence is not contiguous".to_owned(),
+        ));
+    }
+    match previous
+        .target_block_height
+        .cmp(&current.target_block_height)
+    {
+        core::cmp::Ordering::Less if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        _ => Err(QueryExecutionFail::Conversion(
+            "orderbook event journal block height/index ordering is invalid".to_owned(),
+        )),
+    }
 }
 
 fn read_event_sequence(
     state_ro: &impl crate::state::StateReadOnly,
     sequence: u64,
-    previous: Option<&OrderbookPersistedEventV1>,
-) -> Result<(OrderbookPersistedEventV1, OrderbookFinalizedEventV1), QueryExecutionFail> {
+    previous: Option<OrderbookQueryEventPosition>,
+) -> Result<(OrderbookQueryEventPosition, OrderbookFinalizedEventV1), QueryExecutionFail> {
     let record = read_persisted_event(state_ro.world(), sequence)
         .map_err(query_failure)?
         .ok_or_else(|| {
@@ -3162,9 +3432,10 @@ fn read_event_sequence(
                 "orderbook event journal is missing sequence {sequence}"
             ))
         })?;
-    validate_event_successor(previous, &record).map_err(query_failure)?;
-    let resolved = resolve_committed_event(state_ro, &record)?;
-    Ok((record, resolved))
+    validate_query_event_successor(previous, &record)?;
+    let position = OrderbookQueryEventPosition::from(&record);
+    let resolved = resolve_committed_event(state_ro, record)?;
+    Ok((position, resolved))
 }
 
 fn query_order_page(
@@ -3184,11 +3455,18 @@ fn query_order_page_with_budget(
 ) -> Result<OrderbookOrderPageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
-    let start = order_key(query.after_order_id.unwrap_or([0; 32]));
-    let mut orders = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let start_order_id = query.after_order_id.unwrap_or([0; 32]);
+    let mut selected_count = 0usize;
     let mut has_more = false;
-    for (key, payload) in world.smart_contract_state().range(start..) {
-        if !key.to_string().starts_with(ORDER_STATE_KEY_PREFIX) {
+    // Validate and filter before reserving the retained output. Recursive order
+    // validation owns the stored record and one protocol-bounded signed payload;
+    // retaining an already populated D-sized builder beside them would create a
+    // third independently admitted resident phase.
+    for (key, payload) in world
+        .smart_contract_state()
+        .range(order_key(start_order_id)..)
+    {
+        if !key.as_ref().starts_with(ORDER_STATE_KEY_PREFIX) {
             break;
         }
         scan_budget.inspect(payload.len(), "order page")?;
@@ -3209,12 +3487,51 @@ fn query_order_page_with_budget(
         if query.status.is_some_and(|status| record.status != status) {
             continue;
         }
-        if orders.len() == limit {
+        if selected_count == limit {
             drop(record);
             has_more = true;
             break;
         }
-        orders.try_push(record)?;
+        selected_count += 1;
+        drop(record);
+    }
+
+    let mut orders =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
+    if selected_count != 0 {
+        for (key, payload) in world
+            .smart_contract_state()
+            .range(order_key(start_order_id)..)
+        {
+            if !key.as_ref().starts_with(ORDER_STATE_KEY_PREFIX) {
+                break;
+            }
+            let order_id = parse_query_digest_key(key, ORDER_STATE_KEY_PREFIX, "order")?;
+            if query
+                .after_order_id
+                .is_some_and(|cursor| order_id <= cursor)
+            {
+                continue;
+            }
+            // The immutable first pass fully validated these exact bytes. This
+            // second pass performs only the canonical state decode needed to
+            // materialize the selected output beside the retained builder.
+            let record: OrderbookOrderRecord =
+                decode_state(payload, "orderbook order").map_err(query_failure)?;
+            if query.status.is_some_and(|status| record.status != status) {
+                continue;
+            }
+            orders.try_push(record)?;
+            if orders.len() == selected_count {
+                break;
+            }
+        }
+    }
+    if orders.len() != selected_count {
+        return Err(QueryExecutionFail::Conversion(
+            "immutable orderbook order page changed between validation and materialization"
+                .to_owned(),
+        ));
     }
     let next_after_order_id = if has_more {
         Some(
@@ -3232,7 +3549,7 @@ fn query_order_page_with_budget(
     };
     Ok(OrderbookOrderPageV1 {
         finalized_cursor,
-        orders: orders.into_vec(),
+        orders: orders.into_vec()?,
         has_more,
         next_after_order_id,
     })
@@ -3255,11 +3572,14 @@ fn query_receipt_page_with_budget(
 ) -> Result<OrderbookSettlementReceiptPageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
-    let start = receipt_key(query.after_receipt_id.unwrap_or([0; 32]));
-    let mut receipts = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let start_receipt_id = query.after_receipt_id.unwrap_or([0; 32]);
+    let mut selected_count = 0usize;
     let mut has_more = false;
-    for (key, payload) in world.smart_contract_state().range(start..) {
-        if !key.to_string().starts_with(RECEIPT_STATE_KEY_PREFIX) {
+    for (key, payload) in world
+        .smart_contract_state()
+        .range(receipt_key(start_receipt_id)..)
+    {
+        if !key.as_ref().starts_with(RECEIPT_STATE_KEY_PREFIX) {
             break;
         }
         scan_budget.inspect(payload.len(), "receipt page")?;
@@ -3283,12 +3603,51 @@ fn query_receipt_page_with_budget(
         {
             continue;
         }
-        if receipts.len() == limit {
+        if selected_count == limit {
             drop(record);
             has_more = true;
             break;
         }
-        receipts.try_push(record)?;
+        selected_count += 1;
+        drop(record);
+    }
+
+    let mut receipts =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
+    if selected_count != 0 {
+        for (key, payload) in world
+            .smart_contract_state()
+            .range(receipt_key(start_receipt_id)..)
+        {
+            if !key.as_ref().starts_with(RECEIPT_STATE_KEY_PREFIX) {
+                break;
+            }
+            let receipt_id = parse_query_digest_key(key, RECEIPT_STATE_KEY_PREFIX, "receipt")?;
+            if query
+                .after_receipt_id
+                .is_some_and(|cursor| receipt_id <= cursor)
+            {
+                continue;
+            }
+            let record: OrderbookSettlementReceiptRecord =
+                decode_state(payload, "orderbook settlement receipt").map_err(query_failure)?;
+            if query
+                .channel_id
+                .is_some_and(|channel_id| record.channel_id != channel_id)
+            {
+                continue;
+            }
+            receipts.try_push(record)?;
+            if receipts.len() == selected_count {
+                break;
+            }
+        }
+    }
+    if receipts.len() != selected_count {
+        return Err(QueryExecutionFail::Conversion(
+            "immutable orderbook receipt page changed between validation and materialization"
+                .to_owned(),
+        ));
     }
     let next_after_receipt_id = if has_more {
         Some(
@@ -3306,7 +3665,7 @@ fn query_receipt_page_with_budget(
     };
     Ok(OrderbookSettlementReceiptPageV1 {
         finalized_cursor,
-        receipts: receipts.into_vec(),
+        receipts: receipts.into_vec()?,
         has_more,
         next_after_receipt_id,
     })
@@ -3319,11 +3678,14 @@ fn query_trade_page(
 ) -> Result<OrderbookTradePageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
-    let start = trade_key(query.after_trade_id.unwrap_or([0; 32]));
-    let mut trades = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let start_trade_id = query.after_trade_id.unwrap_or([0; 32]);
+    let mut selected_count = 0usize;
     let mut has_more = false;
-    for (key, _payload) in world.smart_contract_state().range(start..) {
-        if !key.to_string().starts_with(TRADE_STATE_KEY_PREFIX) {
+    for (key, _payload) in world
+        .smart_contract_state()
+        .range(trade_key(start_trade_id)..)
+    {
+        if !key.as_ref().starts_with(TRADE_STATE_KEY_PREFIX) {
             break;
         }
         let trade_id = parse_query_digest_key(key, TRADE_STATE_KEY_PREFIX, "trade")?;
@@ -3340,12 +3702,45 @@ fn query_trade_page(
                     "authoritative orderbook trade disappeared during read".to_owned(),
                 )
             })?;
-        if trades.len() == limit {
+        if selected_count == limit {
             drop(record);
             has_more = true;
             break;
         }
-        trades.try_push(record)?;
+        selected_count += 1;
+        drop(record);
+    }
+
+    let mut trades =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
+    if selected_count != 0 {
+        for (key, payload) in world
+            .smart_contract_state()
+            .range(trade_key(start_trade_id)..)
+        {
+            if !key.as_ref().starts_with(TRADE_STATE_KEY_PREFIX) {
+                break;
+            }
+            let trade_id = parse_query_digest_key(key, TRADE_STATE_KEY_PREFIX, "trade")?;
+            if query
+                .after_trade_id
+                .is_some_and(|cursor| trade_id <= cursor)
+            {
+                continue;
+            }
+            let record: OrderbookTradeRecord =
+                decode_state(payload, "orderbook trade").map_err(query_failure)?;
+            trades.try_push(record)?;
+            if trades.len() == selected_count {
+                break;
+            }
+        }
+    }
+    if trades.len() != selected_count {
+        return Err(QueryExecutionFail::Conversion(
+            "immutable orderbook trade page changed between validation and materialization"
+                .to_owned(),
+        ));
     }
     let next_after_trade_id = if has_more {
         Some(
@@ -3363,7 +3758,7 @@ fn query_trade_page(
     };
     Ok(OrderbookTradePageV1 {
         finalized_cursor,
-        trades: trades.into_vec(),
+        trades: trades.into_vec()?,
         has_more,
         next_after_trade_id,
     })
@@ -3386,11 +3781,14 @@ fn query_channel_page_with_budget(
 ) -> Result<OrderbookSettlementChannelPageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
-    let start = channel_key(query.after_channel_id.unwrap_or([0; 32]));
-    let mut channels = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let start_channel_id = query.after_channel_id.unwrap_or([0; 32]);
+    let mut selected_count = 0usize;
     let mut has_more = false;
-    for (key, payload) in world.smart_contract_state().range(start..) {
-        if !key.to_string().starts_with(CHANNEL_STATE_KEY_PREFIX) {
+    for (key, payload) in world
+        .smart_contract_state()
+        .range(channel_key(start_channel_id)..)
+    {
+        if !key.as_ref().starts_with(CHANNEL_STATE_KEY_PREFIX) {
             break;
         }
         scan_budget.inspect(payload.len(), "channel page")?;
@@ -3411,12 +3809,48 @@ fn query_channel_page_with_budget(
         if query.status.is_some_and(|status| record.status != status) {
             continue;
         }
-        if channels.len() == limit {
+        if selected_count == limit {
             drop(record);
             has_more = true;
             break;
         }
-        channels.try_push(record)?;
+        selected_count += 1;
+        drop(record);
+    }
+
+    let mut channels =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
+    if selected_count != 0 {
+        for (key, payload) in world
+            .smart_contract_state()
+            .range(channel_key(start_channel_id)..)
+        {
+            if !key.as_ref().starts_with(CHANNEL_STATE_KEY_PREFIX) {
+                break;
+            }
+            let channel_id = parse_query_digest_key(key, CHANNEL_STATE_KEY_PREFIX, "channel")?;
+            if query
+                .after_channel_id
+                .is_some_and(|cursor| channel_id <= cursor)
+            {
+                continue;
+            }
+            let record: OrderbookSettlementChannelRecord =
+                decode_state(payload, "orderbook settlement channel").map_err(query_failure)?;
+            if query.status.is_some_and(|status| record.status != status) {
+                continue;
+            }
+            channels.try_push(record)?;
+            if channels.len() == selected_count {
+                break;
+            }
+        }
+    }
+    if channels.len() != selected_count {
+        return Err(QueryExecutionFail::Conversion(
+            "immutable orderbook channel page changed between validation and materialization"
+                .to_owned(),
+        ));
     }
     let next_after_channel_id = if has_more {
         Some(
@@ -3434,7 +3868,7 @@ fn query_channel_page_with_budget(
     };
     Ok(OrderbookSettlementChannelPageV1 {
         finalized_cursor,
-        channels: channels.into_vec(),
+        channels: channels.into_vec()?,
         has_more,
         next_after_channel_id,
     })
@@ -3463,7 +3897,7 @@ fn query_event_page(
                 "orderbook event journal terminal record disappeared during read".to_owned(),
             )
         })?;
-    resolve_committed_event(state_ro, &terminal)?;
+    resolve_committed_event(state_ro, terminal)?;
     let head = Some(head);
     ensure_no_event_after_head(state_ro.world(), head).map_err(query_failure)?;
     let mut previous = match query.after {
@@ -3472,14 +3906,7 @@ fn query_event_page(
             if after.sequence == 0 || after.sequence > head.last_sequence {
                 return Err(QueryExecutionFail::Expired);
             }
-            let record = read_persisted_event(state_ro.world(), after.sequence)
-                .map_err(query_failure)?
-                .ok_or(QueryExecutionFail::Expired)?;
-            let resolved = resolve_committed_event(state_ro, &record)?;
-            if resolved.cursor() != after {
-                return Err(QueryExecutionFail::Expired);
-            }
-            let predecessor = if after.sequence == 1 {
+            let predecessor_record = if after.sequence == 1 {
                 None
             } else {
                 let predecessor_sequence = after.sequence - 1;
@@ -3493,8 +3920,20 @@ fn query_event_page(
                         })?,
                 )
             };
-            validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
-            Some(record)
+            let predecessor = predecessor_record
+                .as_ref()
+                .map(OrderbookQueryEventPosition::from);
+            drop(predecessor_record);
+            let record = read_persisted_event(state_ro.world(), after.sequence)
+                .map_err(query_failure)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            validate_query_event_successor(predecessor, &record)?;
+            let position = OrderbookQueryEventPosition::from(&record);
+            let resolved = resolve_committed_event(state_ro, record)?;
+            if resolved.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            Some(position)
         }
         None => None,
     };
@@ -3502,24 +3941,31 @@ fn query_event_page(
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
     let last_sequence = head.map_or(0, |head| head.last_sequence);
-    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let available = start
+        .filter(|start| *start <= last_sequence)
+        .map_or(0, |start| {
+            last_sequence.saturating_sub(start).saturating_add(1)
+        });
+    let event_capacity = usize::try_from(available.min(u64::from(query.limit))).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "orderbook event page capacity does not fit the platform address space".to_owned(),
+        )
+    })?;
+    let mut events =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(event_capacity)?;
     let mut encoded_event_bytes = 0usize;
     let mut sequence = start;
     while let Some(current_sequence) = sequence {
         if current_sequence > last_sequence || events.len() >= limit {
             break;
         }
-        let (record, resolved) =
-            read_event_sequence(state_ro, current_sequence, previous.as_ref())?;
+        let (position, resolved) = read_event_sequence(state_ro, current_sequence, previous)?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(
-                norito::core::encoded_frame_len(&resolved)
-                    .map_err(|error| {
-                        QueryExecutionFail::Conversion(format!(
-                            "failed to size committed orderbook event: {error}"
-                        ))
-                    })?,
-            )
+            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+                QueryExecutionFail::Conversion(format!(
+                    "failed to size committed orderbook event: {error}"
+                ))
+            })?)
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
                     "committed orderbook event page byte counter overflow".to_owned(),
@@ -3530,7 +3976,7 @@ fn query_event_page(
                 "committed orderbook event page exceeds {page_bytes_limit} bytes"
             )));
         }
-        previous = Some(record);
+        previous = Some(position);
         events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
@@ -3545,7 +3991,7 @@ fn query_event_page(
     });
     let page = OrderbookFinalizedEventPageV1 {
         finalized_cursor,
-        events: events.into_vec(),
+        events: events.into_vec()?,
         has_more,
         next_after,
     };
@@ -3784,15 +4230,15 @@ mod tests {
         state::{State, World},
     };
 
-    const NOW: u64 = 10_000;
+    pub(super) const NOW: u64 = 10_000;
 
-    fn keypair(seed: u8) -> KeyPair {
+    pub(super) fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
         KeyPair::from_private_key(private).expect("derive deterministic keypair")
     }
 
-    fn account(keypair: &KeyPair) -> AccountId {
+    pub(super) fn account(keypair: &KeyPair) -> AccountId {
         AccountId::new(keypair.public_key().clone())
     }
 
@@ -3958,7 +4404,7 @@ mod tests {
         }
     }
 
-    fn receipt(
+    pub(super) fn receipt(
         keypair: &KeyPair,
         receipt_id: u8,
         _channel_id: u8,
@@ -4028,11 +4474,11 @@ mod tests {
         )
     }
 
-    fn block_header() -> BlockHeader {
+    pub(super) fn block_header() -> BlockHeader {
         block_header_at(1, NOW)
     }
 
-    fn transact(
+    pub(super) fn transact(
         state: &mut State,
         height: u64,
         now_unix: u64,
@@ -4048,7 +4494,7 @@ mod tests {
         Ok(())
     }
 
-    fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
+    pub(super) fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
         let authority = account(keypairs[0]);
         let asset_definition = settlement_asset_definition();
         let domain =
@@ -4106,7 +4552,7 @@ mod tests {
             .into_quantity()
     }
 
-    fn state_with_settlement_accounts(
+    pub(super) fn state_with_settlement_accounts(
         settlement: &KeyPair,
         buyer: &KeyPair,
         provider: &KeyPair,
@@ -4210,7 +4656,7 @@ mod tests {
         );
     }
 
-    fn seed_settlement_channel(
+    pub(super) fn seed_settlement_channel(
         state_transaction: &mut StateTransaction<'_, '_>,
         buyer: &AccountId,
         provider: &AccountId,
@@ -4317,7 +4763,7 @@ mod tests {
         assert_eq!(status.cancelled_orders, cancelled_orders);
     }
 
-    fn activate_policy(
+    pub(super) fn activate_policy(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> [u8; 32] {
@@ -5143,311 +5589,6 @@ mod tests {
             FindSorafsOrderbookEvents::new(Some(finalized_cursor), Some(tampered_event_cursor), 1,)
                 .execute(&view),
             Err(QueryExecutionFail::Expired)
-        );
-    }
-
-    #[test]
-    fn typed_queries_reject_not_found_and_invalid_limits() {
-        let operator = keypair(0x29);
-        let authority = account(&operator);
-        let mut state = state_with_accounts(&[&operator]);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-
-        assert_eq!(
-            FindSorafsOrderbookPolicy.execute(&stx),
-            Err(QueryExecutionFail::Find(FindError::SorafsOrderbookPolicy))
-        );
-        assert_eq!(
-            FindSorafsOrderbookStatus.execute(&stx),
-            Err(QueryExecutionFail::Find(FindError::SorafsOrderbookStatus))
-        );
-        assert_eq!(
-            FindSorafsOrderbookOrderById::new([0xE1; 32]).execute(&stx),
-            Err(QueryExecutionFail::Find(FindError::SorafsOrderbookOrder(
-                [0xE1; 32]
-            )))
-        );
-        assert_eq!(
-            FindSorafsOrderbookCancellationByOrderId::new([0xE2; 32]).execute(&stx),
-            Err(QueryExecutionFail::Find(
-                FindError::SorafsOrderbookCancellation([0xE2; 32])
-            ))
-        );
-        assert_eq!(
-            FindSorafsOrderbookReceiptById::new([0xE3; 32]).execute(&stx),
-            Err(QueryExecutionFail::Find(FindError::SorafsOrderbookReceipt(
-                [0xE3; 32]
-            )))
-        );
-
-        activate_policy(&mut stx, &authority);
-        stx.apply();
-        block.commit().expect("commit configured orderbook");
-        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
-        let view = state.view();
-        for limit in [0, ORDERBOOK_QUERY_MAX_ITEMS_V1 + 1] {
-            assert!(
-                FindSorafsOrderbookOrders::new(None, None, None, limit)
-                    .execute(&view)
-                    .is_err()
-            );
-            assert!(
-                FindSorafsOrderbookReceipts::new(None, None, None, limit)
-                    .execute(&view)
-                    .is_err()
-            );
-            assert!(
-                FindSorafsOrderbookTrades::new(None, None, limit)
-                    .execute(&view)
-                    .is_err()
-            );
-            assert!(
-                FindSorafsOrderbookChannels::new(None, None, None, limit)
-                    .execute(&view)
-                    .is_err()
-            );
-            assert!(
-                FindSorafsOrderbookEvents::new(None, None, limit)
-                    .execute(&view)
-                    .is_err()
-            );
-        }
-        assert!(
-            FindSorafsOrderbookOrders::new(None, None, None, 1)
-                .execute(&view)
-                .expect("empty configured orderbook query")
-                .orders
-                .is_empty()
-        );
-        let event_page = FindSorafsOrderbookEvents::new(None, None, 1)
-            .execute(&view)
-            .expect("query initial committed orderbook event");
-        assert_eq!(event_page.events.len(), 1);
-        assert_eq!(
-            event_page.events[0].event.kind,
-            SorafsOrderbookLedgerEventKind::PolicyActivated
-        );
-    }
-
-    #[test]
-    fn query_scan_budget_is_inclusive_and_fails_closed() {
-        let limits = OrderbookQueryScanLimitsV1 {
-            max_inspected_records: 2,
-            max_read_bytes: 3,
-        };
-        let mut budget = OrderbookQueryScanBudgetV1::new(limits);
-        budget
-            .inspect(1, "fixture page")
-            .expect("first inspected record is within both bounds");
-        budget
-            .inspect(2, "fixture page")
-            .expect("exact record and byte bounds are inclusive");
-        assert_eq!(
-            budget.inspect(0, "fixture page"),
-            Err(QueryExecutionFail::Conversion(
-                "SoraFS orderbook fixture page query exceeded inspected-record budget 2".to_owned()
-            ))
-        );
-
-        let mut byte_budget = OrderbookQueryScanBudgetV1::new(limits);
-        assert_eq!(
-            byte_budget.inspect(4, "fixture page"),
-            Err(QueryExecutionFail::Conversion(
-                "SoraFS orderbook fixture page query exceeded encoded-read-byte budget 3"
-                    .to_owned()
-            ))
-        );
-    }
-
-    #[test]
-    fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget() {
-        let settlement = keypair(0x2C);
-        let buyer = keypair(0x2D);
-        let provider = keypair(0x2E);
-        let authority = account(&settlement);
-        let buyer_id = account(&buyer);
-        let provider_id = account(&provider);
-        let mut state = state_with_accounts(&[&settlement, &buyer, &provider]);
-
-        transact(&mut state, 1, NOW, |transaction| {
-            let policy_digest = activate_policy(transaction, &authority);
-
-            let fixture_provider_id = ProviderId::new([0x72; 32]);
-            transaction
-                .world
-                .provider_owners
-                .insert(fixture_provider_id, authority.clone());
-            let mut orders = vec![
-                ask_order(&settlement, 1, 100, 10),
-                ask_order(&settlement, 2, 100, 10),
-            ];
-            orders.sort_unstable_by_key(|candidate| candidate.order_id);
-            for (index, candidate) in orders.into_iter().enumerate() {
-                let is_sparse_match = index == 1;
-                let record = OrderbookOrderRecord {
-                    order_id: candidate.order_id,
-                    owner: authority.clone(),
-                    canonical_order: encode(&candidate),
-                    admitted_policy_digest: policy_digest,
-                    admitted_at_unix: NOW,
-                    admission_sequence: u64::try_from(index + 1)
-                        .expect("two-record fixture sequence fits u64"),
-                    remaining_gib: if is_sparse_match {
-                        0
-                    } else {
-                        candidate.quantity_gib
-                    },
-                    bid_escrow: None,
-                    provider_id: Some(fixture_provider_id),
-                    status: if is_sparse_match {
-                        OrderbookOrderStatusV1::Filled
-                    } else {
-                        OrderbookOrderStatusV1::Open
-                    },
-                    updated_at_unix: NOW,
-                    canonical_cancel: None,
-                    cancelled_at_unix: None,
-                    cancelled_policy_digest: None,
-                };
-                transaction
-                    .world
-                    .smart_contract_state
-                    .insert(order_key(record.order_id), encode(&record));
-            }
-
-            let first_receipt = receipt(&provider, 1, 0, 8, 0, 10);
-            let second_receipt = receipt(&provider, 2, 0, 8, 10, 20);
-            let other_channel_receipt = receipt(&provider, 3, 0, 9, 0, 10);
-            seed_settlement_channel(
-                transaction,
-                &buyer_id,
-                &provider_id,
-                &authority,
-                &first_receipt,
-                1_000,
-            );
-            seed_settlement_channel(
-                transaction,
-                &buyer_id,
-                &provider_id,
-                &authority,
-                &other_channel_receipt,
-                1_000,
-            );
-
-            let mut channel_ids = [first_receipt.channel_id, other_channel_receipt.channel_id];
-            channel_ids.sort_unstable();
-            let closed_channel_id = channel_ids[1];
-            let mut closed_channel = read_channel(transaction.world(), closed_channel_id)
-                .expect("read sparse-match channel")
-                .expect("sparse-match channel exists");
-            closed_channel.remaining_bytes = 0;
-            closed_channel.remaining_xor_locked = XorQuantity::zero();
-            closed_channel.remaining_fee_xor_locked = XorQuantity::zero();
-            closed_channel.status = OrderbookSettlementChannelStatusV1::Closed;
-            closed_channel.updated_at_unix = NOW;
-            transaction
-                .world
-                .smart_contract_state
-                .insert(channel_key(closed_channel_id), encode(&closed_channel));
-
-            let receipt_index = OrderbookSettlementIndexRecord {
-                channel_id: first_receipt.channel_id,
-                trade_id: first_receipt.trade_id,
-                ranges: vec![
-                    OrderbookSettlementRangeRecord {
-                        receipt_id: first_receipt.receipt_id,
-                        start: first_receipt.range.start,
-                        end: first_receipt.range.end,
-                        issued_at_unix: first_receipt.issued_at_unix,
-                    },
-                    OrderbookSettlementRangeRecord {
-                        receipt_id: second_receipt.receipt_id,
-                        start: second_receipt.range.start,
-                        end: second_receipt.range.end,
-                        issued_at_unix: second_receipt.issued_at_unix,
-                    },
-                ],
-            };
-            transaction.world.smart_contract_state.insert(
-                receipt_index_key(first_receipt.channel_id),
-                encode(&receipt_index),
-            );
-            for candidate in [&first_receipt, &second_receipt] {
-                let record = OrderbookSettlementReceiptRecord {
-                    receipt_id: candidate.receipt_id,
-                    channel_id: candidate.channel_id,
-                    trade_id: candidate.trade_id,
-                    canonical_receipt: encode(candidate),
-                    admitted_policy_digest: policy_digest,
-                    admitted_at_unix: NOW,
-                    recorded_by: authority.clone(),
-                };
-                transaction
-                    .world
-                    .smart_contract_state
-                    .insert(receipt_key(record.receipt_id), encode(&record));
-            }
-            Ok(())
-        })
-        .expect("commit sparse filtered-query fixture");
-
-        let view = state.view();
-        let finalized_cursor =
-            resolve_finalized_cursor(&view).expect("resolve committed fixture cursor");
-        let test_limits = OrderbookQueryScanLimitsV1 {
-            max_inspected_records: 1,
-            max_read_bytes: ORDERBOOK_QUERY_MAX_READ_BYTES_V1,
-        };
-
-        let mut order_budget = OrderbookQueryScanBudgetV1::new(test_limits);
-        assert_eq!(
-            query_order_page_with_budget(
-                &FindSorafsOrderbookOrders::new(
-                    None,
-                    Some(OrderbookOrderStatusV1::Filled),
-                    None,
-                    1,
-                ),
-                &view,
-                finalized_cursor,
-                &mut order_budget,
-            ),
-            Err(QueryExecutionFail::Conversion(
-                "SoraFS orderbook order page query exceeded inspected-record budget 1".to_owned()
-            ))
-        );
-
-        let mut receipt_budget = OrderbookQueryScanBudgetV1::new(test_limits);
-        assert_eq!(
-            query_receipt_page_with_budget(
-                &FindSorafsOrderbookReceipts::new(None, Some([0xFF; 32]), None, 1),
-                &view,
-                finalized_cursor,
-                &mut receipt_budget,
-            ),
-            Err(QueryExecutionFail::Conversion(
-                "SoraFS orderbook receipt page query exceeded inspected-record budget 1".to_owned()
-            ))
-        );
-
-        let mut channel_budget = OrderbookQueryScanBudgetV1::new(test_limits);
-        assert_eq!(
-            query_channel_page_with_budget(
-                &FindSorafsOrderbookChannels::new(
-                    None,
-                    Some(OrderbookSettlementChannelStatusV1::Closed),
-                    None,
-                    1,
-                ),
-                &view,
-                finalized_cursor,
-                &mut channel_budget,
-            ),
-            Err(QueryExecutionFail::Conversion(
-                "SoraFS orderbook channel page query exceeded inspected-record budget 1".to_owned()
-            ))
         );
     }
 
@@ -6939,524 +7080,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomically() {
-        let settlement = keypair(0x53);
-        let buyer = keypair(0x54);
-        let provider = keypair(0x55);
-        let treasury = keypair(0x56);
-        let authority = account(&settlement);
-        let buyer_id = account(&buyer);
-        let provider_id = account(&provider);
-        let treasury_id = account(&treasury);
-        let state =
-            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xA6);
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let candidate = receipt(&provider, 1, 16, 17, 0, 10);
-        open_settlement_lock(
-            &mut stx,
-            &buyer_id,
-            &provider_id,
-            &authority,
-            &candidate,
-            1_000,
-        );
-        let escrow_id = orderbook_settlement_escrow_id(candidate.channel_id);
-        let custody = stx
-            .world
-            .asset_escrows
-            .get(&escrow_id)
-            .expect("settlement lock")
-            .custody
-            .clone();
-
-        let configured_asset = stx.gov.sorafs_pin_fee_asset_id.clone();
-        stx.gov.sorafs_pin_fee_asset_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("sorafs", "universal").expect("settlement domain"),
-            "not_xor".parse().expect("wrong asset name"),
-        );
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        stx.gov.sorafs_pin_fee_asset_id = configured_asset;
-
-        stx.world
-            .asset_escrows
-            .get_mut(&escrow_id)
-            .expect("settlement lock")
-            .remaining_amount = micro_quantity(999);
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-
-        stx.world
-            .asset_escrows
-            .get_mut(&escrow_id)
-            .expect("settlement lock")
-            .remaining_amount = micro_quantity(1_000);
-        stx.world
-            .asset_escrows
-            .get_mut(&escrow_id)
-            .expect("settlement lock")
-            .release_authority = Some(buyer_id.clone());
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-
-        {
-            let escrow = stx
-                .world
-                .asset_escrows
-                .get_mut(&escrow_id)
-                .expect("settlement lock");
-            escrow.release_authority = Some(authority.clone());
-            escrow.expires_at_ms = Some(NOW * 1_000);
-        }
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-
-        stx.world
-            .asset_escrows
-            .get_mut(&escrow_id)
-            .expect("settlement lock")
-            .expires_at_ms = None;
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err(),
-            "a settlement lock without the channel expiry must fail closed"
-        );
-        stx.world
-            .asset_escrows
-            .get_mut(&escrow_id)
-            .expect("settlement lock")
-            .expires_at_ms = Some((NOW + 100) * 1_000);
-
-        stx.world
-            .provider_owners
-            .remove(ProviderId::new([0x71; 32]));
-        stx.world
-            .provider_owners
-            .insert(ProviderId::new([0x72; 32]), provider_id.clone());
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err(),
-            "an unrelated provider id for the same signer must not revive a revoked channel binding"
-        );
-        stx.world
-            .provider_owners
-            .remove(ProviderId::new([0x72; 32]));
-        stx.world
-            .provider_owners
-            .insert(ProviderId::new([0x71; 32]), buyer_id.clone());
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err(),
-            "reassigning the channel provider id must revoke the original provider signer"
-        );
-        stx.world
-            .provider_owners
-            .remove(ProviderId::new([0x71; 32]));
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-
-        stx.world
-            .provider_owners
-            .insert(ProviderId::new([0x71; 32]), provider_id.clone());
-        stx.tx_call_hash = None;
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        assert_eq!(asset_balance(&stx, &provider_id), Quantity::zero());
-        assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
-        assert_eq!(asset_balance(&stx, &custody), micro_quantity(1_000));
-        assert_eq!(
-            stx.world
-                .asset_escrows
-                .get(&escrow_id)
-                .expect("settlement lock")
-                .remaining_amount,
-            micro_quantity(1_000)
-        );
-        assert!(
-            read_receipt(stx.world(), candidate.receipt_id)
-                .expect("read receipt")
-                .is_none()
-        );
-        assert!(
-            read_receipt_index(stx.world(), candidate.channel_id)
-                .expect("read index")
-                .is_none()
-        );
-        assert_no_receipt_status_mutation(&stx);
-
-        seed_test_call_hash(&mut stx, 0xA7);
-        RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-            .execute(&authority, &mut stx)
-            .expect("restored valid lock settles");
-        assert_eq!(
-            asset_balance(&stx, &provider_id),
-            candidate.provider_credit.clone().into_quantity()
-        );
-        assert_eq!(
-            asset_balance(&stx, &treasury_id),
-            candidate.fee_amount.clone().into_quantity()
-        );
-    }
-
-    #[test]
-    fn receipt_without_funded_lock_fails_closed() {
-        let settlement = keypair(0x4A);
-        let buyer = keypair(0x4B);
-        let provider = keypair(0x4C);
-        let treasury = keypair(0x4D);
-        let authority = account(&settlement);
-        let buyer_id = account(&buyer);
-        let provider_id = account(&provider);
-        let state =
-            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xA3);
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let candidate = receipt(&provider, 1, 10, 11, 0, 10);
-        seed_settlement_channel(
-            &mut stx,
-            &buyer_id,
-            &provider_id,
-            &authority,
-            &candidate,
-            1_000,
-        );
-
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        assert!(
-            read_receipt(stx.world(), candidate.receipt_id)
-                .expect("read receipt")
-                .is_none()
-        );
-        assert!(
-            read_receipt_index(stx.world(), candidate.channel_id)
-                .expect("read index")
-                .is_none()
-        );
-        assert_no_receipt_status_mutation(&stx);
-    }
-
-    #[test]
-    fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
-        let settlement = keypair(0x4B);
-        let buyer = keypair(0x4C);
-        let provider = keypair(0x4D);
-        let treasury = keypair(0x4E);
-        let authority = account(&settlement);
-        let buyer_id = account(&buyer);
-        let provider_id = account(&provider);
-        let treasury_id = account(&treasury);
-        let state = state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 50);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xA4);
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let candidate = receipt(&provider, 1, 12, 13, 0, 10);
-        open_settlement_lock(
-            &mut stx,
-            &buyer_id,
-            &provider_id,
-            &authority,
-            &candidate,
-            50,
-        );
-        let escrow_id = orderbook_settlement_escrow_id(candidate.channel_id);
-        let custody = stx
-            .world
-            .asset_escrows
-            .get(&escrow_id)
-            .expect("settlement lock")
-            .custody
-            .clone();
-
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        assert_eq!(asset_balance(&stx, &provider_id), Quantity::zero());
-        assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
-        assert_eq!(asset_balance(&stx, &custody), micro_quantity(50));
-        assert_eq!(
-            stx.world
-                .asset_escrows
-                .get(&escrow_id)
-                .expect("settlement lock")
-                .remaining_amount,
-            micro_quantity(50)
-        );
-        assert!(
-            read_receipt(stx.world(), candidate.receipt_id)
-                .expect("read receipt")
-                .is_none()
-        );
-        assert!(
-            read_receipt_index(stx.world(), candidate.channel_id)
-                .expect("read index")
-                .is_none()
-        );
-        assert_no_receipt_status_mutation(&stx);
-    }
-
-    #[test]
-    fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation() {
-        let settlement = keypair(0x4F);
-        let buyer = keypair(0x50);
-        let provider = keypair(0x51);
-        let treasury = keypair(0x52);
-        let authority = account(&settlement);
-        let buyer_id = account(&buyer);
-        let provider_id = account(&provider);
-        let treasury_id = account(&treasury);
-        let state =
-            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx, 0xA5);
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let candidate = receipt(&provider, 1, 14, 15, 0, 10);
-        open_settlement_lock(
-            &mut stx,
-            &buyer_id,
-            &provider_id,
-            &authority,
-            &candidate,
-            1_000,
-        );
-        let escrow_id = orderbook_settlement_escrow_id(candidate.channel_id);
-        let custody = stx
-            .world
-            .asset_escrows
-            .get(&escrow_id)
-            .expect("settlement lock")
-            .custody
-            .clone();
-        let mut maximum_bytes = vec![0xFF; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
-        *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7F;
-        let maximum_mantissa = BigInt::from_twos_bytes(&maximum_bytes)
-            .expect("maximum signed 512-bit positive mantissa");
-        let mut maximum_source = maximum_mantissa.to_string();
-        let decimal_index = maximum_source
-            .len()
-            .checked_sub(6)
-            .expect("maximum mantissa has at least six decimal digits");
-        maximum_source.insert(decimal_index, '.');
-        let maximum: Quantity = maximum_source
-            .parse()
-            .expect("positive maximum is a valid quantity");
-        assert!(
-            maximum
-                .checked_add(&candidate.provider_credit.clone().into_quantity())
-                .is_err()
-        );
-        let provider_asset = Asset::new(
-            AssetId::of(settlement_asset_definition(), provider_id.clone()),
-            maximum.clone(),
-        );
-        let (provider_asset_id, provider_asset_value) = provider_asset.into_key_value();
-        stx.world
-            .assets
-            .insert(provider_asset_id, provider_asset_value);
-
-        assert!(
-            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        assert_eq!(asset_balance(&stx, &provider_id), maximum);
-        assert_eq!(asset_balance(&stx, &treasury_id), Quantity::zero());
-        assert_eq!(asset_balance(&stx, &custody), micro_quantity(1_000));
-        assert_eq!(
-            stx.world
-                .asset_escrows
-                .get(&escrow_id)
-                .expect("settlement lock")
-                .remaining_amount,
-            micro_quantity(1_000)
-        );
-        assert!(
-            read_receipt(stx.world(), candidate.receipt_id)
-                .expect("read receipt")
-                .is_none()
-        );
-        assert!(
-            read_receipt_index(stx.world(), candidate.channel_id)
-                .expect("read index")
-                .is_none()
-        );
-        assert_no_receipt_status_mutation(&stx);
-    }
-
-    #[test]
-    fn corrupted_authoritative_state_fails_closed_before_new_mutation() {
-        let buyer = keypair(0x51);
-        let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let order = order(&buyer, 1);
-        stx.world
-            .smart_contract_state
-            .insert(order_key(order.order_id), vec![0xFF; 16]);
-
-        assert!(
-            SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        assert!(
-            read_nonce(stx.world(), &authority)
-                .expect("read nonce")
-                .is_none()
-        );
-        assert_eq!(
-            stx.world
-                .smart_contract_state
-                .get(&order_key(order.order_id))
-                .expect("corrupt state remains"),
-            &vec![0xFF; 16]
-        );
-        stx.apply();
-        block.commit().expect("commit corrupt order query fixture");
-        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
-        assert!(
-            FindSorafsOrderbookOrders::new(None, None, None, 10)
-                .execute(&state.view())
-                .is_err(),
-            "typed listings must fail closed on corrupt committed records"
-        );
-    }
-
-    #[test]
-    fn missing_or_corrupt_status_fails_closed_before_order_mutation() {
-        let buyer = keypair(0x57);
-        let authority = account(&buyer);
-        let state = state_with_accounts(&[&buyer]);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        let policy_digest = activate_policy(&mut stx, &authority);
-        let order = order(&buyer, 1);
-
-        stx.world.smart_contract_state.remove(status_key().clone());
-        assert!(
-            SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        assert!(
-            read_order(stx.world(), order.order_id)
-                .expect("read order")
-                .is_none()
-        );
-        assert!(
-            read_nonce(stx.world(), &authority)
-                .expect("read nonce")
-                .is_none()
-        );
-
-        let corrupt = OrderbookLedgerStatusV1 {
-            open_orders: 0,
-            partially_filled_orders: 0,
-            filled_orders: 0,
-            cancelled_orders: 0,
-            expired_orders: 0,
-            provider_revoked_orders: 0,
-            trades: 0,
-            settlement_receipts: 0,
-            settlement_channels: 1,
-            open_settlement_channels: 2,
-            book_revision: 0,
-            last_match_scan_book_revision: 0,
-            next_admission_sequence: 1,
-            next_trade_sequence: 1,
-            updated_at_unix: NOW,
-        };
-        stx.world
-            .smart_contract_state
-            .insert(status_key().clone(), encode(&corrupt));
-        assert!(FindSorafsOrderbookStatus.execute(&stx).is_err());
-        assert!(
-            SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err()
-        );
-        assert!(
-            read_order(stx.world(), order.order_id)
-                .expect("read order")
-                .is_none()
-        );
-        assert!(
-            read_nonce(stx.world(), &authority)
-                .expect("read nonce")
-                .is_none()
-        );
-
-        let saturated = OrderbookLedgerStatusV1 {
-            open_orders: u64::MAX,
-            partially_filled_orders: 0,
-            filled_orders: 0,
-            cancelled_orders: 0,
-            expired_orders: 0,
-            provider_revoked_orders: 0,
-            trades: 0,
-            settlement_receipts: 0,
-            settlement_channels: 0,
-            open_settlement_channels: 0,
-            book_revision: 0,
-            last_match_scan_book_revision: 0,
-            next_admission_sequence: 1,
-            next_trade_sequence: 1,
-            updated_at_unix: NOW,
-        };
-        stx.world
-            .smart_contract_state
-            .insert(status_key().clone(), encode(&saturated));
-        assert!(
-            SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
-                .execute(&authority, &mut stx)
-                .is_err(),
-            "saturated counters must reject rather than wrap"
-        );
-        assert!(
-            read_order(stx.world(), order.order_id)
-                .expect("read order")
-                .is_none()
-        );
-        assert!(
-            read_nonce(stx.world(), &authority)
-                .expect("read nonce")
-                .is_none()
-        );
-    }
+    include!("sorafs/orderbook_tail_tests.rs");
 }

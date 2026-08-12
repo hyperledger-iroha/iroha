@@ -165,11 +165,11 @@ pub struct DaIngestRequest {
     /// Optional pre-generated Norito manifest supplied by the caller.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::base64_vec::option")
+        norito(json = "crate::json_helpers::base64_vec::option")
     )]
     pub norito_manifest: Option<Vec<u8>>,
     /// Raw payload bytes to be chunked and replicated.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub payload: Vec<u8>,
     /// Additional metadata entries for governance/analytics.
     pub metadata: ExtraMetadata,
@@ -518,7 +518,7 @@ pub struct DaIngestReceipt {
     /// Norito-encoded PDP commitment derived from the accepted payload.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::base64_vec::option")
+        norito(json = "crate::json_helpers::base64_vec::option")
     )]
     #[norito(default)]
     pub pdp_commitment: Option<Vec<u8>>,

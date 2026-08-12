@@ -80,12 +80,19 @@ breaks ties. A remote indeterminate response is accepted only when its status,
 reject header, Norito error envelope, and transaction hash all match; malformed
 or unrelated evidence becomes `invalid_proxy_response`.
 
-Proxy and fanout response memory is admitted before route execution. Each
-cross-dataspace fanout holds one `torii.max_content_len` working-set slot from
-`torii.query_fanout_max_retained_bytes`; request decoding, one sequential route
-body, canonical accumulation, and final encoding must all fit the deterministic
-phase envelope inside that slot. Iterable fanout is therefore limited to the
-canonical Norito identity forms that Core can scan into a bounded accumulator;
+Proxy and fanout response memory is admitted before route execution.
+`torii.query_fanout_max_retained_bytes` is an aggregate pool: one quarter
+provides four bounded signed-query ingress slots, while the remaining three
+quarters admit complete fanout working sets. A promoted request acquires its
+fanout reservation before releasing ingress. Within that reservation, request
+decoding, a retained singular result, one sequential current route result,
+bounded Core builders, route bodies, and final encoding use deterministic
+phase-derived ceilings; the public listener body limit is not itself reserved
+per fanout. The singular comparison high-water divides the variable remainder
+into seven equal units: request decode, retained first result, retained Core
+builder, current result, destination frame, and two canonicalization scratch
+units. Iterable fanout is therefore limited to the canonical Norito
+identity forms that Core can scan into a bounded accumulator;
 unsupported predicates, selectors, sorting, JSON fanout, or oversized frames
 fail before exhaustive route materialization. HTTP bridge and public-dataspace
 responses are streamed under the same configured body ceiling, with the

@@ -218,6 +218,14 @@ impl OperatorSignatureError {
         )
     }
 
+    fn body_read_timeout() -> Self {
+        Self::new(
+            StatusCode::REQUEST_TIMEOUT,
+            "operator_signature_body_timeout",
+            "operator request body was not received before the configured deadline",
+        )
+    }
+
     fn random_nonce(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -289,16 +297,18 @@ pub struct OperatorSignatures {
     identity_bound_replay_cache: ReplayCache,
     torii_proxy_replay_cache: ReplayCache,
     max_body_bytes: usize,
+    body_read_timeout: Duration,
 }
 
-/// Invalid relationship between operator-request freshness and replay retention.
+/// Invalid operator-signature freshness, replay, or body-read deadline configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OperatorSignatureConfigError;
 
 impl fmt::Display for OperatorSignatureConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(
-            "operator signature nonce TTL must be greater than twice the maximum clock skew",
+            "operator signature body-read timeout must be non-zero and nonce TTL must exceed \
+             twice the maximum clock skew",
         )
     }
 }
@@ -314,8 +324,8 @@ impl OperatorSignatures {
     ///
     /// # Errors
     ///
-    /// Returns an error when nonce retention does not cover the complete
-    /// accepted timestamp-skew window.
+    /// Returns an error when the body-read timeout is zero or nonce retention
+    /// does not cover the complete accepted timestamp-skew window.
     pub fn new(
         config: ToriiOperatorSignatures,
         node_public_key: PublicKey,
@@ -330,7 +340,11 @@ impl OperatorSignatures {
         if config.nonce_ttl <= replay_window {
             return Err(OperatorSignatureConfigError);
         }
+        if config.body_read_timeout.is_zero() {
+            return Err(OperatorSignatureConfigError);
+        }
         let max_body_bytes = usize::try_from(max_body_bytes).unwrap_or(usize::MAX);
+        let body_read_timeout = config.body_read_timeout;
         let nonce_ttl = config.nonce_ttl;
         let replay_cache_capacity = config.replay_cache_capacity;
         let allowed_public_keys = config.allowed_public_keys.into_iter().collect();
@@ -345,6 +359,7 @@ impl OperatorSignatures {
             identity_bound_replay_cache: ReplayCache::new(nonce_ttl, replay_cache_capacity),
             torii_proxy_replay_cache: ReplayCache::new(nonce_ttl, replay_cache_capacity),
             max_body_bytes,
+            body_read_timeout,
         })
     }
 
@@ -669,6 +684,23 @@ impl OperatorSignatures {
     }
 }
 
+async fn collect_operator_signature_body(
+    body: Body,
+    max_body_bytes: usize,
+    body_read_timeout: Duration,
+) -> Result<axum::body::Bytes, OperatorSignatureError> {
+    match tokio::time::timeout(
+        body_read_timeout,
+        axum::body::to_bytes(body, max_body_bytes),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(_)) => Err(OperatorSignatureError::payload_too_large()),
+        Err(_) => Err(OperatorSignatureError::body_read_timeout()),
+    }
+}
+
 /// Build operator signature headers for an internal Torii request.
 pub fn signed_request_headers(
     key_pair: &KeyPair,
@@ -845,10 +877,15 @@ pub async fn enforce_operator_access(
     }
 
     let (parts, body) = req.into_parts();
-    let body_bytes = match axum::body::to_bytes(body, app.operator_signatures.max_body_bytes).await
+    let body_bytes = match collect_operator_signature_body(
+        body,
+        app.operator_signatures.max_body_bytes,
+        app.operator_signatures.body_read_timeout,
+    )
+    .await
     {
         Ok(bytes) => bytes,
-        Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
+        Err(error) => return error.into_response(),
     };
     let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
     if let Err(err) = app.operator_signatures.authorize_request(&req, &body_bytes) {
@@ -876,10 +913,15 @@ pub async fn enforce_identity_bound_signature(
     next: Next,
 ) -> Response {
     let (parts, body) = req.into_parts();
-    let body_bytes = match axum::body::to_bytes(body, app.operator_signatures.max_body_bytes).await
+    let body_bytes = match collect_operator_signature_body(
+        body,
+        app.operator_signatures.max_body_bytes,
+        app.operator_signatures.body_read_timeout,
+    )
+    .await
     {
         Ok(bytes) => bytes,
-        Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
+        Err(error) => return error.into_response(),
     };
     let req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
     if let Err(error) = app
@@ -920,7 +962,7 @@ pub async fn enforce_torii_proxy_peer_signature(
     // all-variant proxy working-set permit through handler completion; public
     // signed-query ingress and fanout have separate reservations and cannot be
     // starved by a slow or faulty peer body.
-    let proxy_memory_permit = match crate::acquire_torii_proxy_memory(&app).await {
+    let proxy_memory_permit = match crate::acquire_torii_proxy_memory(&app) {
         Ok(permit) => permit,
         Err(response) => return response,
     };
@@ -933,9 +975,15 @@ pub async fn enforce_torii_proxy_peer_signature(
     // This route wraps a configured-size inner request, so its canonical
     // signed envelope has a separate protocol-bounded framing allowance.
     let max_body_bytes = ingress_envelope.body_bytes;
-    let body_bytes = match axum::body::to_bytes(body, max_body_bytes).await {
+    let body_bytes = match collect_operator_signature_body(
+        body,
+        max_body_bytes,
+        app.operator_signatures.body_read_timeout,
+    )
+    .await
+    {
         Ok(bytes) => bytes,
-        Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
+        Err(error) => return error.into_response(),
     };
     let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
     if let Err(error) = app.operator_signatures.authorize_torii_proxy_request(
@@ -1083,6 +1131,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: true,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: Vec::new(),
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),
@@ -1126,6 +1175,25 @@ mod tests {
             crate::routing::MaybeTelemetry::disabled(),
         ) {
             Ok(_) => panic!("nonce retention must cover the full skew window"),
+            Err(error) => error,
+        };
+        assert_eq!(error, OperatorSignatureConfigError);
+    }
+
+    #[test]
+    fn operator_signatures_reject_zero_body_read_timeout() {
+        let key_pair = checked_ed25519_keypair();
+        let mut config = ToriiOperatorSignatures::default();
+        config.body_read_timeout = Duration::ZERO;
+
+        let error = match OperatorSignatures::new(
+            config,
+            key_pair.public_key().clone(),
+            test_network_id(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        ) {
+            Ok(_) => panic!("signature body reads require a positive deadline"),
             Err(error) => error,
         };
         assert_eq!(error, OperatorSignatureConfigError);
@@ -1201,6 +1269,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: true,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: Vec::new(),
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),
@@ -1617,6 +1686,102 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    #[tokio::test]
+    async fn stalled_signature_body_returns_fixed_timeout_error() {
+        let stalled = futures::stream::pending::<
+            std::result::Result<axum::body::Bytes, std::convert::Infallible>,
+        >();
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            collect_operator_signature_body(
+                Body::from_stream(stalled),
+                1024,
+                Duration::from_millis(20),
+            ),
+        )
+        .await
+        .expect("configured signature-body deadline must complete")
+        .expect_err("a stalled signature body must be rejected");
+
+        assert_eq!(error.status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(error.code, "operator_signature_body_timeout");
+    }
+
+    #[tokio::test]
+    async fn stalled_torii_proxy_body_timeout_releases_global_proxy_lane() {
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let receiver_key_pair = checked_ed25519_keypair();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique test app state");
+            state.local_peer_id = Some(PeerId::from(receiver_key_pair.public_key().clone()));
+            Arc::get_mut(&mut state.operator_signatures)
+                .expect("unique operator-signature state")
+                .body_read_timeout = Duration::from_millis(100);
+        }
+        assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
+
+        let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
+        let proxy_layer = axum::middleware::from_fn_with_state::<
+            _,
+            _,
+            (axum::extract::State<SharedAppState>, axum::extract::Request),
+        >(app.clone(), enforce_torii_proxy_peer_signature);
+        let router = axum::Router::new()
+            .route(
+                uri.path(),
+                post(|| async { StatusCode::NO_CONTENT }).layer(proxy_layer),
+            )
+            .with_state(app.clone());
+        let (body_polled_tx, body_polled_rx) = tokio::sync::oneshot::channel();
+        let stalled = futures::stream::once(async move {
+            let _ = body_polled_tx.send(());
+            std::future::pending::<
+                std::result::Result<axum::body::Bytes, std::convert::Infallible>,
+            >()
+            .await
+        });
+        let request = axum::http::Request::builder()
+            .method(crate::Method::POST)
+            .uri(uri)
+            .body(Body::from_stream(stalled))
+            .expect("stalled Torii proxy request");
+        let response_task = tokio::spawn(async move {
+            router
+                .oneshot(request)
+                .await
+                .expect("Torii proxy middleware response")
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), body_polled_rx)
+            .await
+            .expect("stalled body must be polled after acquiring proxy admission")
+            .expect("body poll signal");
+        assert_eq!(
+            app.torii_proxy_memory_inflight.available_permits(),
+            0,
+            "the stalled body must own the sole proxy lane until its deadline"
+        );
+
+        let response = tokio::time::timeout(Duration::from_secs(1), response_task)
+            .await
+            .expect("configured proxy body deadline must complete")
+            .expect("proxy middleware task must complete");
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        let response_body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bounded timeout response body");
+        assert!(
+            std::str::from_utf8(&response_body)
+                .expect("timeout response is UTF-8 JSON")
+                .contains("\"code\":\"operator_signature_body_timeout\"")
+        );
+        assert_eq!(
+            app.torii_proxy_memory_inflight.available_permits(),
+            1,
+            "timing out a stalled peer body must release the global proxy lane"
+        );
+    }
+
     #[test]
     fn bad_signature_does_not_consume_its_claimed_nonce() {
         let key_pair = checked_ed25519_keypair();
@@ -1817,6 +1982,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: false,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: vec![key_pair.public_key().clone()],
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),
@@ -1852,6 +2018,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: false,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: vec![key_pair.public_key().clone()],
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),
@@ -1887,6 +2054,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: false,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: vec![key_pair.public_key().clone()],
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),
@@ -1931,6 +2099,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: false,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: vec![key_pair.public_key().clone()],
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),
@@ -1993,6 +2162,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: false,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: vec![key_pair.public_key().clone()],
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),
@@ -2060,6 +2230,7 @@ mod tests {
         let cfg = ToriiOperatorSignatures {
             enabled: true,
             allow_node_key: true,
+            body_read_timeout: Duration::from_secs(10),
             allowed_public_keys: Vec::new(),
             max_clock_skew: Duration::from_secs(60),
             nonce_ttl: Duration::from_secs(300),

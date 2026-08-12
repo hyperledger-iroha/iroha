@@ -31,7 +31,6 @@ use mv::storage::{
     View as StorageView,
 };
 use norito::codec::{Decode, Encode};
-use norito::core::NoritoSerialize as _;
 #[cfg(feature = "json")]
 use norito::json;
 #[cfg(feature = "json")]
@@ -846,56 +845,55 @@ pub trait SetReadOnly {
             )
     }
 
-    fn bounded_original_action<F>(
+    /// Project one stored trigger through the active bounded singular-query corridor.
+    fn bounded_trigger<F>(
         &self,
+        id: &TriggerId,
         event_type: TriggeringEventType,
         action: &LoadedAction<F>,
-    ) -> core::result::Result<Option<Action>, iroha_data_model::query::error::QueryExecutionFail>
+    ) -> core::result::Result<Option<Trigger>, iroha_data_model::query::error::QueryExecutionFail>
     where
         F: norito::core::NoritoSerialize,
     {
-        let (executable_discriminant, executable): (
-            u32,
-            &dyn norito::core::NoritoSerialize,
-        ) = match &action.executable {
-            ExecutableRef::Instructions(instructions) => (0, instructions),
-            ExecutableRef::ContractCall(invocation) => (1, invocation),
-            ExecutableRef::Ivm(blob_hash) => {
-                let Some(contract) = self.get_original_contract(blob_hash) else {
-                    warn!(
-                        ?blob_hash,
-                        "missing original trigger bytecode; skipping trigger action"
-                    );
-                    return Ok(None);
-                };
-                (2, contract)
-            }
-            ExecutableRef::Batch(items) => (4, items),
-        };
-        let executable = BorrowedEnumVariant::<Executable>::new(
-            executable_discriminant,
-            executable,
-        );
+        let (executable_discriminant, executable): (u32, &dyn norito::core::NoritoSerialize) =
+            match &action.executable {
+                ExecutableRef::Instructions(instructions) => (0, instructions),
+                ExecutableRef::ContractCall(invocation) => (1, invocation),
+                ExecutableRef::Ivm(blob_hash) => {
+                    let Some(contract) = self.get_original_contract(blob_hash) else {
+                        warn!(
+                            ?blob_hash,
+                            "missing original trigger bytecode; skipping trigger action"
+                        );
+                        return Ok(None);
+                    };
+                    (2, contract)
+                }
+                ExecutableRef::Batch(items) => (4, items),
+            };
+        let executable =
+            BorrowedEnumVariant::<Executable>::new(executable_discriminant, executable);
         let filter_discriminant = match event_type {
             TriggeringEventType::Pipeline => 0,
             TriggeringEventType::Data => 1,
             TriggeringEventType::Time => 2,
             TriggeringEventType::ExecuteTrigger => 3,
         };
-        let filter = BorrowedEnumVariant::<EventFilterBox>::new(filter_discriminant, &action.filter);
-        let retry_policy =
-            crate::smartcontracts::isi::query::BorrowedSingularOption::new(
-                action.retry_policy.as_ref(),
-            );
-        crate::smartcontracts::isi::query::own_singular_query_struct::<Action, 6>(
-            [
-                &executable,
-                &action.repeats,
-                &action.authority,
-                &filter,
-                &retry_policy,
-                &action.metadata,
-            ],
+        let filter =
+            BorrowedEnumVariant::<EventFilterBox>::new(filter_discriminant, &action.filter);
+        let retry_policy = crate::smartcontracts::isi::query::BorrowedSingularOption::new(
+            action.retry_policy.as_ref(),
+        );
+        let action = crate::smartcontracts::isi::query::BorrowedSingularStruct::<Action, 6>::new([
+            &executable,
+            &action.repeats,
+            &action.authority,
+            &filter,
+            &retry_policy,
+            &action.metadata,
+        ]);
+        crate::smartcontracts::isi::query::own_singular_query_struct::<Trigger, 2>(
+            [id, &action],
             || unreachable!("bounded trigger projection requires active singular limits"),
         )
         .map(Some)
@@ -918,25 +916,25 @@ pub trait SetReadOnly {
             TriggeringEventType::Data => self
                 .data_triggers()
                 .get(id)
-                .map(|action| self.bounded_original_action(event_type, action))
+                .map(|action| self.bounded_trigger(id, event_type, action))
                 .transpose()?
                 .flatten(),
             TriggeringEventType::Pipeline => self
                 .pipeline_triggers()
                 .get(id)
-                .map(|action| self.bounded_original_action(event_type, action))
+                .map(|action| self.bounded_trigger(id, event_type, action))
                 .transpose()?
                 .flatten(),
             TriggeringEventType::Time => self
                 .time_triggers()
                 .get(id)
-                .map(|action| self.bounded_original_action(event_type, action))
+                .map(|action| self.bounded_trigger(id, event_type, action))
                 .transpose()?
                 .flatten(),
             TriggeringEventType::ExecuteTrigger => self
                 .by_call_triggers()
                 .get(id)
-                .map(|action| self.bounded_original_action(event_type, action))
+                .map(|action| self.bounded_trigger(id, event_type, action))
                 .transpose()?
                 .flatten(),
         };
@@ -947,7 +945,7 @@ pub trait SetReadOnly {
                 "trigger id missing from typed map while resolving trigger"
             );
         }
-        Ok(action.map(|action| Trigger::new(id.clone(), action)))
+        Ok(action)
     }
 
     /// Resolve one trigger by identifier.
@@ -2152,8 +2150,8 @@ mod tests {
         let authority = sample_authority();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

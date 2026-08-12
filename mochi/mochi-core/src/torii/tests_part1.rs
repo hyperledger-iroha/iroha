@@ -81,6 +81,52 @@ fn handle_bind_result<T>(result: std::io::Result<T>, context: &str) -> Option<T>
     }
 }
 
+async fn raw_chunked_response(chunks: Vec<Vec<u8>>) -> Option<(Response, JoinHandle<()>)> {
+    let listener = handle_bind_result(
+        TcpListener::bind("127.0.0.1:0").await,
+        "bind bounded response listener",
+    )?;
+    let address = listener.local_addr().expect("bounded response address");
+    let server = tokio::spawn(async move {
+        let Ok((mut socket, _)) = listener.accept().await else {
+            return;
+        };
+        let mut request = Vec::new();
+        loop {
+            let Ok(byte) = socket.read_u8().await else {
+                return;
+            };
+            request.push(byte);
+            if request.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        if socket
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+            .await
+            .is_err()
+        {
+            return;
+        }
+        for chunk in chunks {
+            let header = format!("{:X}\r\n", chunk.len());
+            if socket.write_all(header.as_bytes()).await.is_err()
+                || socket.write_all(&chunk).await.is_err()
+                || socket.write_all(b"\r\n").await.is_err()
+            {
+                return;
+            }
+        }
+        let _ = socket.write_all(b"0\r\n\r\n").await;
+    });
+    let response = Client::new()
+        .get(format!("http://{address}/bounded"))
+        .send()
+        .await
+        .expect("read raw chunked response headers");
+    Some((response, server))
+}
+
 async fn accept_canonical_norito_websocket(stream: TcpStream) -> WebSocketStream<TcpStream> {
     tokio_tungstenite::accept_hdr_async(
         stream,
@@ -264,6 +310,61 @@ fn summarizes_errors_with_kind_and_detail() {
         summary.message,
         "Failed to decode Norito payload from Torii"
     );
+
+    let summary = ToriiError::ResponseResourceLimit {
+        context: "Explorer JSON",
+        maximum: 1024,
+    }
+    .summarize();
+    assert_eq!(summary.kind, ToriiErrorKind::ResponseResourceLimit);
+    assert_eq!(
+        summary.detail.as_deref(),
+        Some("Explorer JSON response limit: 1024 bytes")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bounded_response_accepts_exact_chunked_body_and_rejects_next_byte() {
+    let Some((response, server)) = raw_chunked_response(vec![b"a".to_vec(), b"bc".to_vec()]).await
+    else {
+        return;
+    };
+    assert_eq!(
+        read_bounded_response(response, 3, "test")
+            .await
+            .expect("exact response"),
+        b"abc"
+    );
+    server.await.expect("exact response server");
+
+    let Some((response, server)) = raw_chunked_response(vec![b"abc".to_vec(), b"d".to_vec()]).await
+    else {
+        return;
+    };
+    assert!(matches!(
+        read_bounded_response(response, 3, "test")
+            .await
+            .expect_err("max + 1 response"),
+        ToriiError::ResponseResourceLimit {
+            context: "test",
+            maximum: 3,
+        }
+    ));
+    server.await.expect("overflow response server");
+}
+
+#[test]
+fn bounded_json_response_rejects_excessive_depth_before_tree_decode() {
+    let mut nested = "[".repeat(65);
+    nested.push('0');
+    nested.push_str(&"]".repeat(65));
+    assert!(matches!(
+        decode_bounded_json_response(nested.as_bytes(), "test"),
+        Err(ToriiError::Decode(_))
+    ));
+    let value = decode_bounded_json_response(br#"{"ok":true}"#, "test")
+        .expect("small bounded JSON response");
+    assert_eq!(value.get("ok").and_then(json::Value::as_bool), Some(true));
 }
 
 #[test]
@@ -834,8 +935,13 @@ async fn sumeragi_operator_read_rejects_announced_oversize_before_buffering() {
         .await
         .expect_err("oversize response must be rejected before buffering");
 
-    assert!(matches!(&error, ToriiError::Decode(_)));
-    assert!(error.to_string().contains("4194304-byte bound"));
+    assert!(matches!(
+        &error,
+        ToriiError::ResponseResourceLimit {
+            context: "Sumeragi operator",
+            maximum: MAX_SUMERAGI_OPERATOR_RESPONSE_BYTES,
+        }
+    ));
     assert_eq!(status_mock.calls(), 1);
 }
 

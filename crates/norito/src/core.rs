@@ -179,7 +179,9 @@ fn owned_bytes_from_ctx<A>(archived: &Archived<A>) -> Result<&[u8], Error> {
 }
 
 fn parse_owned_payload(bytes: &[u8]) -> Result<(&[u8], usize), Error> {
-    let (len, hdr) = read_len_from_slice(bytes)?;
+    // The wrapper decoder borrows this field directly and charges only the
+    // allocation it actually constructs (`Box`, `Rc`, or `Arc`) below.
+    let (len, hdr) = inspect_len_from_slice(bytes)?;
     let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
     if end > bytes.len() {
         return Err(Error::LengthMismatch);
@@ -641,9 +643,10 @@ pub(crate) fn active_decode_budget_context() -> Option<DecodeBudgetContext> {
     }
 }
 
+/// Return whether the current thread is inside at least one decode-limit scope.
 #[inline]
-#[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
-fn decode_budget_active() -> bool {
+#[doc(hidden)]
+pub fn decode_limits_active() -> bool {
     DECODE_BUDGET_LAYERS.with(|slot| !slot.borrow().is_empty())
 }
 
@@ -1971,7 +1974,7 @@ fn plan_binary_sequence_with_count(
     validate_header_flags(flags)?;
 
     #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
-    if !decode_budget_active()
+    if !decode_limits_active()
         && bytes.len() >= SEQUENCE_GPU_MIN_BYTES
         && count >= SEQUENCE_GPU_MIN_ELEMENTS
         && let Some(plan) = sequence_gpu::try_plan_binary_sequence(bytes, flags, layout)
@@ -2621,111 +2624,7 @@ mod sequence_gpu {
     }
 
     #[cfg(test)]
-    mod tests {
-        use super::{
-            AbiSpan, BinarySequenceLayout, HelperOutcome, RC_NO_SPACE, RC_UNAVAILABLE, call_helper,
-            load_sequence_plan_library, sequence_plan_helper_self_test,
-        };
-
-        unsafe extern "C" fn mismatched_helper(
-            _input_ptr: *const u8,
-            input_len: usize,
-            _flags: u8,
-            _layout_kind: u32,
-            out_spans: *mut AbiSpan,
-            out_capacity: usize,
-            out_count: *mut usize,
-            out_used: *mut usize,
-        ) -> i32 {
-            unsafe {
-                *out_count = 1;
-                *out_used = input_len;
-            }
-            if out_capacity == 0 {
-                return RC_NO_SPACE;
-            }
-            unsafe {
-                *out_spans = AbiSpan { start: 0, end: 0 };
-            }
-            0
-        }
-
-        unsafe extern "C" fn backend_error_helper(
-            _input_ptr: *const u8,
-            _input_len: usize,
-            _flags: u8,
-            _layout_kind: u32,
-            _out_spans: *mut AbiSpan,
-            _out_capacity: usize,
-            _out_count: *mut usize,
-            _out_used: *mut usize,
-        ) -> i32 {
-            4
-        }
-
-        unsafe extern "C" fn unavailable_helper(
-            _input_ptr: *const u8,
-            _input_len: usize,
-            _flags: u8,
-            _layout_kind: u32,
-            _out_spans: *mut AbiSpan,
-            _out_capacity: usize,
-            _out_count: *mut usize,
-            _out_used: *mut usize,
-        ) -> i32 {
-            RC_UNAVAILABLE
-        }
-
-        #[test]
-        fn sequence_plan_helper_self_test_rejects_mismatched_helper() {
-            assert!(!sequence_plan_helper_self_test(mismatched_helper));
-        }
-
-        #[test]
-        fn sequence_plan_loads_required_cuda_helper_when_requested() {
-            let lib = unsafe { load_sequence_plan_library() };
-            if std::env::var_os("JSONSTAGE1_CUDA_REQUIRE").is_some() {
-                assert!(
-                    lib.is_some(),
-                    "JSONSTAGE1_CUDA_REQUIRE requires the CUDA sequence-plan helper to load and pass self-test"
-                );
-            } else if lib.is_none() {
-                eprintln!(
-                    "sequence-plan CUDA helper unavailable; skipping required-helper assertion"
-                );
-            }
-        }
-
-        #[test]
-        fn helper_backend_errors_are_distinguished_from_bad_input() {
-            let bytes = super::make_unpacked_case(super::super::header_flags::COMPACT_LEN);
-            let outcome = unsafe {
-                call_helper(
-                    backend_error_helper,
-                    &bytes,
-                    super::super::header_flags::COMPACT_LEN,
-                    BinarySequenceLayout::LengthPrefixed,
-                )
-            };
-
-            assert!(matches!(outcome, HelperOutcome::BackendFailure));
-        }
-
-        #[test]
-        fn helper_unavailable_is_a_fallback_not_backend_failure() {
-            let bytes = super::make_unpacked_case(super::super::header_flags::COMPACT_LEN);
-            let outcome = unsafe {
-                call_helper(
-                    unavailable_helper,
-                    &bytes,
-                    super::super::header_flags::COMPACT_LEN,
-                    BinarySequenceLayout::LengthPrefixed,
-                )
-            };
-
-            assert!(matches!(outcome, HelperOutcome::BackendUnavailable));
-        }
-    }
+    include!("core/sequence_plan_helper_tests.rs");
 }
 
 /// Write a length prefix honoring `COMPACT_LEN`.
@@ -2861,13 +2760,13 @@ where
     I: IntoIterator<Item = &'a T>,
 {
     let mut lengths = Vec::new();
+    let allocation_bytes = len
+        .checked_mul(core::mem::size_of::<usize>())
+        .ok_or(Error::LengthMismatch)?;
     lengths
         .try_reserve_exact(len)
         .map_err(|_| Error::AllocationFailed {
-            bytes: limit_to_u64(
-                len.checked_mul(core::mem::size_of::<usize>())
-                    .ok_or(Error::LengthMismatch)?,
-            ),
+            bytes: limit_to_u64(allocation_bytes),
         })?;
     for item in iter {
         if lengths.len() == len {
@@ -3871,7 +3770,9 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
         let mut offset = 0usize;
         let out = try_decode_array(|| {
             let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
-            let (len, hdr) = read_len_dyn_slice(remaining)?;
+            // The fixed array is initialized directly in its final stack
+            // storage; the element decoder accounts for any owned children.
+            let (len, hdr) = inspect_len_from_slice(remaining)?;
             offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
             let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
             let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
@@ -4213,14 +4114,14 @@ where
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut entries = Vec::new();
+        let allocation_bytes = self
+            .len()
+            .checked_mul(core::mem::size_of::<(&K, &V)>())
+            .ok_or(Error::LengthMismatch)?;
         entries
             .try_reserve_exact(self.len())
             .map_err(|_| Error::AllocationFailed {
-                bytes: limit_to_u64(
-                    self.len()
-                        .checked_mul(core::mem::size_of::<(&K, &V)>())
-                        .ok_or(Error::LengthMismatch)?,
-                ),
+                bytes: limit_to_u64(allocation_bytes),
             })?;
         entries.extend(self.iter());
         entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
@@ -4308,14 +4209,14 @@ where
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut items = Vec::new();
+        let allocation_bytes = self
+            .len()
+            .checked_mul(core::mem::size_of::<&T>())
+            .ok_or(Error::LengthMismatch)?;
         items
             .try_reserve_exact(self.len())
             .map_err(|_| Error::AllocationFailed {
-                bytes: limit_to_u64(
-                    self.len()
-                        .checked_mul(core::mem::size_of::<&T>())
-                        .ok_or(Error::LengthMismatch)?,
-                ),
+                bytes: limit_to_u64(allocation_bytes),
             })?;
         items.extend(self.iter());
         items.sort();
@@ -7190,14 +7091,14 @@ where
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut items = Vec::new();
+        let allocation_bytes = self
+            .len()
+            .checked_mul(core::mem::size_of::<&T>())
+            .ok_or(Error::LengthMismatch)?;
         items
             .try_reserve_exact(self.len())
             .map_err(|_| Error::AllocationFailed {
-                bytes: limit_to_u64(
-                    self.len()
-                        .checked_mul(core::mem::size_of::<&T>())
-                        .ok_or(Error::LengthMismatch)?,
-                ),
+                bytes: limit_to_u64(allocation_bytes),
             })?;
         items.extend(self.iter());
         items.sort();
@@ -7742,6 +7643,8 @@ pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> 
         .ok_or(Error::LengthMismatch)
 }
 
+include!("core/exact_byte_vec.rs");
+
 /// Serialize one canonical frame without allowing the output buffer to grow
 /// beyond a caller-provided byte limit.
 ///
@@ -7781,11 +7684,7 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
     let header_payload_len =
         u64::try_from(expected_payload_len).map_err(|_| Error::LengthMismatch)?;
 
-    let mut out = Vec::new();
-    out.try_reserve_exact(encoded_bytes)
-        .map_err(|_| BoundedEncodeError::AllocationFailed {
-            bytes: encoded_bytes,
-        })?;
+    let mut out = exact_byte_vec_with_capacity(encoded_bytes)?;
     out.resize(headroom, 0);
 
     let encode_guard = EncodeContextGuard::enter();
@@ -7996,7 +7895,40 @@ where
     T: NoritoSerialize,
     W: Write,
 {
-    let base_flags = default_encode_flags();
+    write_frame_to_writer_with_flags(value, writer, default_encode_flags())
+}
+
+/// Serialize one Norito frame directly using the active layout flags.
+///
+/// This is the non-seekable, allocation-free-output counterpart to
+/// [`to_writer_seek`]. It preserves ambient layout selection for serializers
+/// such as nested instruction frames. Callers that require the canonical V1
+/// layout independent of ambient state must use [`write_canonical_to_writer`].
+/// Serializer-internal scratch still requires source auditing.
+///
+/// # Errors
+///
+/// Returns writer and serializer errors and rejects second-pass length,
+/// checksum, or finalized-layout drift.
+#[doc(hidden)]
+pub fn write_frame_to_writer<T, W>(value: &T, writer: &mut W) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    W: Write,
+{
+    let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    write_frame_to_writer_with_flags(value, writer, base_flags)
+}
+
+fn write_frame_to_writer_with_flags<T, W>(
+    value: &T,
+    writer: &mut W,
+    base_flags: u8,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    W: Write,
+{
     validate_header_flags(base_flags)?;
 
     let first_guard = EncodeContextGuard::enter();
@@ -9112,9 +9044,10 @@ fn decode_field_erased(
     slot: &mut dyn ErasedFieldSlot,
 ) -> Result<usize, Error> {
     if matches!(boundary, FieldDecodeBoundary::Canonical) {
-        enforce_decode_field_length(
-            u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?,
-        )?;
+        // The canonical field slice is borrowed. Check its wire-size ceiling
+        // here; concrete decoders charge only buffers and owned values they
+        // actually allocate (including any required realignment copy).
+        check_decode_field_length(u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?)?;
     }
     let _depth = DecodeDepthGuard::enter()?;
 

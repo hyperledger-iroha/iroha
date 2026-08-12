@@ -1,25 +1,35 @@
 //! `PoW` ticket helpers for the `SoraNet` admission protocol.
+//!
+//! Persistent ticket-consumption snapshots are hard-bounded, decoded under
+//! explicit Norito limits, and loaded only from stable direct regular files.
 
 use std::{
-    collections::{HashMap, HashSet},
-    fmt, fs, io,
-    io::Write as _,
+    collections::HashMap,
+    fmt, fs,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use blake3::Hasher;
+#[cfg(test)]
+use norito::to_bytes;
 use norito::{
+    DecodeLimits,
     codec::{decode_adaptive, encode_adaptive},
-    decode_from_bytes,
+    decode_canonical_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
-    to_bytes,
 };
 use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
-use super::replay_lock::ExclusiveLedgerLock;
+use super::{
+    replay_lock::ExclusiveLedgerLock,
+    snapshot_file::{
+        BoundedWriter, create_temporary_direct_regular_file, persist_temporary_snapshot,
+        read_optional_bounded_regular_file,
+    },
+};
 
 /// Domain separator used when deriving `PoW` challenges.
 pub const CHALLENGE_DOMAIN: &[u8] = b"soranet.pow.challenge.v1";
@@ -38,6 +48,12 @@ const SIGNED_TICKET_PAYLOAD_LEN: usize = SIGNING_DOMAIN.len() + TICKET_LEN + 32 
 /// Slack tolerated when validating the remaining TTL to account for second-level truncation.
 const TTL_GRACE: Duration = Duration::from_secs(1);
 const BINDING_FIELD_LEN: usize = 32;
+const REVOCATION_SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
+const REVOCATION_SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
+const REVOCATION_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
+
+/// First-release hard ceiling for persistent ticket-revocation entries.
+pub const TICKET_REVOCATION_STORE_MAX_ENTRIES_V1: usize = 65_536;
 
 /// Derive the mandatory admission transcript commitment for a serialized
 /// client hello.
@@ -346,10 +362,17 @@ impl TicketRevocationStoreLimits {
     ///
     /// # Errors
     ///
-    /// Returns [`TicketRevocationStoreError`] when `max_entries` is zero or `max_ttl` is zero.
+    /// Returns [`TicketRevocationStoreError`] when `max_entries` is zero or above
+    /// the first-release ceiling, or when `max_ttl` is zero.
     pub fn new(max_entries: usize, max_ttl: Duration) -> Result<Self, TicketRevocationStoreError> {
         if max_entries == 0 {
             return Err(TicketRevocationStoreError::CapacityZero);
+        }
+        if max_entries > TICKET_REVOCATION_STORE_MAX_ENTRIES_V1 {
+            return Err(TicketRevocationStoreError::CapacityTooLarge {
+                requested: max_entries,
+                limit: TICKET_REVOCATION_STORE_MAX_ENTRIES_V1,
+            });
         }
         if max_ttl.is_zero() {
             return Err(TicketRevocationStoreError::TtlZero);
@@ -358,6 +381,24 @@ impl TicketRevocationStoreLimits {
             max_entries,
             max_ttl,
         })
+    }
+
+    fn max_snapshot_bytes(self) -> usize {
+        self.max_entries
+            .checked_mul(REVOCATION_SNAPSHOT_ENTRY_LIMIT_BYTES)
+            .and_then(|bytes| bytes.checked_add(REVOCATION_SNAPSHOT_BASE_LIMIT_BYTES))
+            .expect("hard-bounded revocation capacity fits snapshot envelope")
+    }
+
+    fn decode_limits(self) -> DecodeLimits {
+        let max_snapshot_bytes = self.max_snapshot_bytes();
+        DecodeLimits::new(
+            TICKET_REVOCATION_STORE_MAX_ENTRIES_V1,
+            max_snapshot_bytes,
+            TICKET_REVOCATION_STORE_MAX_ENTRIES_V1.saturating_add(4),
+            max_snapshot_bytes.saturating_mul(2),
+            REVOCATION_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1,
+        )
     }
 }
 
@@ -401,9 +442,26 @@ pub enum TicketRevocationStoreError {
     /// Store capacity cannot be zero.
     #[error("revocation store capacity must be greater than zero")]
     CapacityZero,
+    /// Store capacity exceeds the first-release hard ceiling.
+    #[error("revocation store capacity {requested} exceeds first-release limit {limit}")]
+    CapacityTooLarge {
+        /// Requested entry count.
+        requested: usize,
+        /// First-release entry ceiling.
+        limit: usize,
+    },
     /// TTL bound must be non-zero.
     #[error("revocation store max_ttl must be greater than zero")]
     TtlZero,
+    /// A bounded collection could not reserve its configured capacity.
+    #[error("revocation store allocation failed while reserving {entries} entries")]
+    Allocation {
+        /// Number of entries requested from the allocator.
+        entries: usize,
+    },
+    /// Persistent revocation paths must identify a concrete file.
+    #[error("revocation store path must not be empty")]
+    PathEmpty,
     /// Filesystem error while reading or writing the store.
     #[error("revocation store io error: {0}")]
     Io(String),
@@ -476,6 +534,9 @@ impl TicketRevocationStore {
     ) -> Result<Self, TicketRevocationStoreError> {
         let limits = TicketRevocationStoreLimits::new(limits.max_entries, limits.max_ttl)?;
         let path = path.into();
+        if path.as_os_str().is_empty() {
+            return Err(TicketRevocationStoreError::PathEmpty);
+        }
         let ledger_lock = ExclusiveLedgerLock::acquire(&path)
             .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         let mut store = Self {
@@ -587,18 +648,25 @@ impl TicketRevocationStore {
     }
 
     /// Return the active fingerprints retained by the store.
-    #[must_use]
-    pub fn active_fingerprints(&self, now: SystemTime) -> Vec<[u8; 32]> {
-        self.records
-            .iter()
-            .filter_map(|(fingerprint, record)| {
-                if is_expired(record.expires_at, now) {
-                    None
-                } else {
-                    Some(*fingerprint)
-                }
-            })
-            .collect()
+    ///
+    /// # Errors
+    /// Returns [`TicketRevocationStoreError::Allocation`] if the bounded result
+    /// cannot reserve memory.
+    pub fn active_fingerprints(
+        &self,
+        now: SystemTime,
+    ) -> Result<Vec<[u8; 32]>, TicketRevocationStoreError> {
+        let active_len = self.len(now);
+        let mut fingerprints = Vec::new();
+        fingerprints.try_reserve_exact(active_len).map_err(|_| {
+            TicketRevocationStoreError::Allocation {
+                entries: active_len,
+            }
+        })?;
+        fingerprints.extend(self.records.iter().filter_map(|(fingerprint, record)| {
+            (!is_expired(record.expires_at, now)).then_some(*fingerprint)
+        }));
+        Ok(fingerprints)
     }
 
     /// Remove expired entries and persist updates.
@@ -650,6 +718,9 @@ impl TicketRevocationStore {
         }
 
         self.records
+            .try_reserve(1)
+            .map_err(|_| TicketRevocationStoreError::Allocation { entries: 1 })?;
+        self.records
             .insert(fingerprint, RevokedTicketRecord { expires_at });
         self.persist()?;
         Ok(TicketRevocationInsertOutcome::accepted())
@@ -672,11 +743,15 @@ impl TicketRevocationStore {
             fs::create_dir_all(parent)
                 .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         }
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
+        let bytes = match read_optional_bounded_regular_file(
+            path,
+            self.limits.max_snapshot_bytes(),
+            "ticket revocation snapshot",
+        ) {
+            Ok(Some(bytes)) => bytes,
             // Materialise the empty ledger immediately so startup validates
             // that replay state is actually durable before serving clients.
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return self.persist(),
+            Ok(None) => return self.persist(),
             Err(err) => return Err(TicketRevocationStoreError::Io(err.to_string())),
         };
         if bytes.is_empty() {
@@ -684,15 +759,28 @@ impl TicketRevocationStore {
                 "revocation snapshot is empty".to_owned(),
             ));
         }
-        let snapshot: TicketRevocationSnapshot = decode_from_bytes(&bytes)
-            .map_err(|err| TicketRevocationStoreError::Parse(err.to_string()))?;
-        let mut seen_fingerprints = HashSet::with_capacity(snapshot.entries.len());
+        let snapshot: TicketRevocationSnapshot =
+            decode_canonical_with_limits(&bytes, self.limits.decode_limits())
+                .map_err(|err| TicketRevocationStoreError::Parse(err.to_string()))?;
+        drop(bytes);
+        if snapshot.entries.len() > self.limits.max_entries {
+            return Err(TicketRevocationStoreError::Parse(
+                "revocation snapshot exceeds capacity".to_owned(),
+            ));
+        }
+        if snapshot.entries.windows(2).any(|pair| {
+            revocation_snapshot_entry_order(&pair[0], &pair[1]) != std::cmp::Ordering::Less
+        }) {
+            return Err(TicketRevocationStoreError::Parse(
+                "revocation snapshot entries are not in strict canonical order".to_owned(),
+            ));
+        }
+        self.records
+            .try_reserve(snapshot.entries.len())
+            .map_err(|_| TicketRevocationStoreError::Allocation {
+                entries: snapshot.entries.len(),
+            })?;
         for entry in snapshot.entries {
-            if !seen_fingerprints.insert(entry.fingerprint) {
-                return Err(TicketRevocationStoreError::Parse(
-                    "duplicate revocation fingerprint in snapshot".to_owned(),
-                ));
-            }
             let expires_at = UNIX_EPOCH
                 .checked_add(Duration::from_secs(entry.expires_at_secs))
                 .ok_or_else(|| {
@@ -701,23 +789,24 @@ impl TicketRevocationStore {
                         entry.expires_at_secs
                     ))
                 })?;
-            if is_expired(expires_at, now) {
-                continue;
+            if self
+                .records
+                .insert(entry.fingerprint, RevokedTicketRecord { expires_at })
+                .is_some()
+            {
+                return Err(TicketRevocationStoreError::Parse(
+                    "duplicate revocation fingerprint in snapshot".to_owned(),
+                ));
             }
-            if exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+            if !is_expired(expires_at, now) && exceeds_ttl(expires_at, now, self.limits.max_ttl) {
                 return Err(TicketRevocationStoreError::Parse(format!(
                     "active revocation expiry exceeds configured max_ttl of {:?}",
                     self.limits.max_ttl
                 )));
             }
-            self.records
-                .insert(entry.fingerprint, RevokedTicketRecord { expires_at });
-            if self.records.len() > self.limits.max_entries {
-                return Err(TicketRevocationStoreError::Parse(
-                    "revocation snapshot exceeds capacity".to_owned(),
-                ));
-            }
         }
+        self.records
+            .retain(|_, record| !is_expired(record.expires_at, now));
         self.persist()
     }
 
@@ -732,33 +821,44 @@ impl TicketRevocationStore {
             fs::create_dir_all(parent)
                 .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         }
-        let mut entries: Vec<_> = self.records.iter().collect();
-        entries.sort_by(|(left_fingerprint, left), (right_fingerprint, right)| {
-            left.expires_at
-                .cmp(&right.expires_at)
-                .then_with(|| left_fingerprint.cmp(right_fingerprint))
-        });
-        let snapshot = TicketRevocationSnapshot {
-            entries: entries
-                .into_iter()
-                .filter_map(|(fingerprint, record)| {
-                    let expires_secs = record.expires_at.duration_since(UNIX_EPOCH).ok()?;
-                    Some(TicketRevocationSnapshotEntry {
-                        fingerprint: *fingerprint,
-                        expires_at_secs: expires_secs.as_secs(),
-                    })
-                })
-                .collect(),
-        };
-        let buf =
-            to_bytes(&snapshot).map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        let tmp_path = path.with_extension("tmp");
-        let mut tmp = fs::File::create(&tmp_path)
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(self.records.len()).map_err(|_| {
+            TicketRevocationStoreError::Allocation {
+                entries: self.records.len(),
+            }
+        })?;
+        for (fingerprint, record) in &self.records {
+            let expires_at_secs = record
+                .expires_at
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| {
+                    TicketRevocationStoreError::Parse(
+                        "revocation expiry predates the Unix epoch".to_owned(),
+                    )
+                })?
+                .as_secs();
+            entries.push(TicketRevocationSnapshotEntry {
+                fingerprint: *fingerprint,
+                expires_at_secs,
+            });
+        }
+        entries.sort_by(revocation_snapshot_entry_order);
+        let snapshot = TicketRevocationSnapshot { entries };
+        let tmp =
+            create_temporary_direct_regular_file(path, "temporary ticket revocation snapshot")
+                .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
+        let mut bounded = BoundedWriter::new(
+            tmp,
+            self.limits.max_snapshot_bytes(),
+            "ticket revocation snapshot",
+        );
+        norito::core::write_canonical_to_writer(&snapshot, &mut bounded)
             .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        tmp.write_all(&buf)
-            .and_then(|()| tmp.sync_all())
+        let tmp = bounded.into_inner();
+        tmp.as_file()
+            .sync_all()
             .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        fs::rename(&tmp_path, path)
+        persist_temporary_snapshot(tmp, path)
             .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         #[cfg(unix)]
         if let Some(parent) = path
@@ -771,6 +871,15 @@ impl TicketRevocationStore {
         }
         Ok(())
     }
+}
+
+fn revocation_snapshot_entry_order(
+    left: &TicketRevocationSnapshotEntry,
+    right: &TicketRevocationSnapshotEntry,
+) -> std::cmp::Ordering {
+    left.expires_at_secs
+        .cmp(&right.expires_at_secs)
+        .then_with(|| left.fingerprint.cmp(&right.fingerprint))
 }
 
 /// Policy controlling `PoW` verification.
@@ -1528,8 +1637,9 @@ mod tests {
 
     fn write_revocation_snapshot(
         path: &std::path::Path,
-        entries: Vec<TicketRevocationSnapshotEntry>,
+        mut entries: Vec<TicketRevocationSnapshotEntry>,
     ) {
+        entries.sort_by(revocation_snapshot_entry_order);
         let snapshot = TicketRevocationSnapshot { entries };
         let bytes = to_bytes(&snapshot).expect("encode revocation snapshot");
         std::fs::write(path, bytes).expect("write revocation snapshot");
@@ -1634,6 +1744,34 @@ mod tests {
         assert!(
             TicketRevocationStoreLimits::new(1, Duration::ZERO).is_err(),
             "max ttl must be non-zero"
+        );
+        assert!(
+            TicketRevocationStoreLimits::new(
+                TICKET_REVOCATION_STORE_MAX_ENTRIES_V1,
+                Duration::from_secs(1),
+            )
+            .is_ok(),
+            "the exact first-release ceiling must be accepted"
+        );
+        assert_eq!(
+            TicketRevocationStoreLimits::new(
+                TICKET_REVOCATION_STORE_MAX_ENTRIES_V1 + 1,
+                Duration::from_secs(1),
+            )
+            .expect_err("capacity above the first-release ceiling"),
+            TicketRevocationStoreError::CapacityTooLarge {
+                requested: TICKET_REVOCATION_STORE_MAX_ENTRIES_V1 + 1,
+                limit: TICKET_REVOCATION_STORE_MAX_ENTRIES_V1,
+            }
+        );
+        assert_eq!(
+            TicketRevocationStore::load(
+                PathBuf::new(),
+                TicketRevocationStoreLimits::new(1, Duration::from_secs(1)).expect("limits"),
+                UNIX_EPOCH,
+            )
+            .expect_err("empty persistent path"),
+            TicketRevocationStoreError::PathEmpty
         );
     }
 
@@ -2769,6 +2907,16 @@ mod tests {
         assert!(store.is_ticket_revoked(&ticket_a, now));
         assert!(store.is_ticket_revoked(&ticket_b, now));
         assert!(!store.is_ticket_revoked(&ticket_c, now));
+        let mut active = store
+            .active_fingerprints(now)
+            .expect("collect bounded active fingerprints");
+        active.sort_unstable();
+        let mut expected = vec![
+            ticket_a.revocation_fingerprint(),
+            ticket_b.revocation_fingerprint(),
+        ];
+        expected.sort_unstable();
+        assert_eq!(active, expected);
 
         let reload_now = UNIX_EPOCH + Duration::from_secs(1_250);
         drop(store);

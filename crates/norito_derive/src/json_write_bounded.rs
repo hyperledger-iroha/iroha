@@ -2,9 +2,15 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Generics};
+use syn::{Attribute, Generics, Path, meta::ParseNestedMeta};
 
 use super::{ContainerAttr, FieldAttr, add_bound};
+
+pub(super) fn parse_helper_path(meta: &ParseNestedMeta<'_>) -> syn::Result<Path> {
+    let literal: syn::LitStr = meta.value()?.parse()?;
+    syn::parse_str(&literal.value())
+        .map_err(|error| meta.error(format!("invalid path `{}`: {error}", literal.value())))
+}
 
 #[derive(Default)]
 pub(super) struct EnumAttr {
@@ -51,6 +57,45 @@ impl VariantAttr {
 }
 
 impl FieldAttr {
+    pub(super) fn parse_with(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
+        if self.combined_json_helper {
+            return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
+        }
+        if self.with.replace(parse_helper_path(meta)?).is_some() {
+            return Err(meta.error("duplicate `with` attribute"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn parse_bounded_with(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
+        if self.combined_json_helper {
+            return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
+        }
+        if self
+            .bounded_with
+            .replace(parse_helper_path(meta)?)
+            .is_some()
+        {
+            return Err(meta.error("duplicate `bounded_with` attribute"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn parse_json_helper(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
+        if self.with.is_some() || self.bounded_with.is_some() || self.combined_json_helper {
+            return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
+        }
+        let path = parse_helper_path(meta)?;
+        let mut bounded_path = path.clone();
+        bounded_path
+            .segments
+            .push(syn::parse_quote!(serialize_bounded));
+        self.with = Some(path);
+        self.bounded_with = Some(bounded_path);
+        self.combined_json_helper = true;
+        Ok(())
+    }
+
     pub(super) fn require_json_serialize_bound(&self, generics: &mut Generics, ty: &syn::Type) {
         if self.with.is_none() {
             add_bound(generics, ty, quote!(norito::json::JsonSerialize));

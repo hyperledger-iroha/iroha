@@ -773,7 +773,7 @@ pub struct SettlementReceipt {
     /// Block timestamp (milliseconds since Unix epoch).
     pub executed_at_ms: u64,
     /// The two committed settlement legs.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_array"))]
     pub legs: [SettlementLegSnapshot; 2],
     /// Exact governed FX context, present only for native FX corridor settlements.
     pub fx_corridor: Option<FxCorridorSettlementDetails>,

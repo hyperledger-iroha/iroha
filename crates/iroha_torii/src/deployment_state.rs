@@ -364,8 +364,14 @@ pub(crate) async fn handler_contract_deployment_state(
         "contract_deployment_state_auth_required",
         "canonical signed account headers are required to read contract deployment state",
     )?;
-    let request: ContractDeploymentStateRequestDto = norito::json::from_slice(body.as_ref())
-        .map_err(|error| conversion_error(format!("invalid deployment-state request: {error}")))?;
+    let request: ContractDeploymentStateRequestDto =
+        match super::decode_current_app_routed_read_json(body.as_ref()) {
+            Some(Ok(request)) => request,
+            Some(Err(response)) => return Ok(response),
+            None => norito::json::from_slice(body.as_ref()).map_err(|error| {
+                conversion_error(format!("invalid deployment-state request: {error}"))
+            })?,
+        };
     let (authority, _) = super::parse_exact_account_id_literal(&request.authority)?;
     if caller != authority {
         return Err(Error::AppForbidden {

@@ -44,6 +44,7 @@ iroha_schema_gen = { path = "crates/iroha_schema_gen" }
 iroha_schema = { path = "crates/iroha_schema", default-features = false }
 iroha_logger = { path = "crates/iroha_logger" }
 iroha_crypto = { path = "crates/iroha_crypto", default-features = false }
+iroha_confidential_spool = { path = "crates/iroha_confidential_spool" }
 iroha_macro = { path = "crates/iroha_macro", default-features = false }
 iroha_futures = { path = "crates/iroha_futures" }
 iroha_genesis = { path = "crates/iroha_genesis" }

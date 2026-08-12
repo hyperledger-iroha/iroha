@@ -12,6 +12,10 @@
 //!   resumes its directory cursor across cycles, and canonically orders each
 //!   window instead of collecting and sorting the complete tenant population;
 //!   unscheduled locations remain in a retry queue with the same hard cap.
+//!   Registry-backed verifying-key files use the data model's 8 MiB V1 payload
+//!   ceiling and a stable direct-file read, so a corrupt key file cannot race
+//!   metadata admission and make the worker allocate an unbounded buffer;
+//!   inline registry keys are verified by reference instead of being cloned.
 //! - This module is strictly app-facing and non-forking. It must not affect consensus.
 //! - Enabled and paced via `iroha_config` (torii.zk_prover_enabled, torii.zk_prover_scan_period_secs).
 //!
@@ -49,7 +53,8 @@ use iroha_core::{
 #[cfg(test)]
 use iroha_crypto::Hash;
 use iroha_data_model::proof::{
-    ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId,
+    ProofAttachment, ProofAttachmentList, VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1, VerifyingKeyBox,
+    VerifyingKeyId,
 };
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -1221,9 +1226,14 @@ fn vk_store_path(keys_dir: &Path, id: &VerifyingKeyId) -> PathBuf {
 
 fn load_vk_bytes(keys_dir: &Path, id: &VerifyingKeyId) -> Result<Vec<u8>, String> {
     let path = vk_store_path(keys_dir, id);
-    fs::read(&path).map_err(|err| {
+    read_bounded_attachment_regular_file(
+        &path,
+        u64::try_from(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1)
+            .expect("V1 verifying-key byte ceiling fits u64"),
+    )
+    .map_err(|err| {
         format!(
-            "failed to read verifying key bytes at {}: {err}",
+            "failed to read bounded verifying key bytes at {}: {err}",
             path.display()
         )
     })
@@ -1350,7 +1360,6 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
         };
     }
 
-    let mut vk_box: Option<VerifyingKeyBox> = None;
     let state = match ctx.state.as_ref() {
         Some(state) => state,
         None => {
@@ -1367,7 +1376,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     };
     let world = state.world_view();
     let record = match world.verifying_keys().get(vk_id) {
-        Some(record) => record.clone(),
+        Some(record) => record,
         None => {
             errors.push("verifying key not found in registry".into());
             return ProofReportEntry {
@@ -1396,14 +1405,13 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
         errors.push("vk_commitment does not match registry commitment".into());
     }
     circuit_id = Some(record.circuit_id.clone());
-    if let Some(key) = record.key.clone() {
-        if key.backend.as_str() != backend_str {
+    let vk_box = match record.key.as_ref() {
+        Some(key) if key.backend.as_str() != backend_str => {
             errors.push("verifying key backend does not match proof backend".into());
-        } else {
-            vk_box = Some(key);
+            None
         }
-    } else {
-        match load_vk_bytes(&ctx.keys_dir, vk_id) {
+        Some(key) => Some(std::borrow::Cow::Borrowed(key)),
+        None => match load_vk_bytes(&ctx.keys_dir, vk_id) {
             Ok(bytes) => {
                 if record.vk_len > 0 && bytes.len() != record.vk_len as usize {
                     errors.push(format!(
@@ -1412,12 +1420,18 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
                         record.vk_len
                     ));
                 }
-                vk_box = Some(VerifyingKeyBox::new(backend.clone(), bytes));
+                Some(std::borrow::Cow::Owned(VerifyingKeyBox::new(
+                    backend.clone(),
+                    bytes,
+                )))
             }
-            Err(err) => errors.push(err),
-        }
-    }
-    if let Some(vk_box) = vk_box.as_ref() {
+            Err(err) => {
+                errors.push(err);
+                None
+            }
+        },
+    };
+    if let Some(vk_box) = vk_box.as_deref() {
         if vk_box.bytes.is_empty() {
             errors.push("verifying key bytes are empty".into());
         } else {
@@ -1437,7 +1451,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     }
 
     if errors.is_empty() {
-        match vk_box.as_ref() {
+        match vk_box.as_deref() {
             Some(vk_box) => {
                 let verified = if let Some(state) = ctx.state.as_ref() {
                     let zk = state.zk_snapshot();
@@ -2130,6 +2144,39 @@ mod tests {
     use crate::test_utils::TestDataDirGuard;
 
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn verifying_key_file_read_accepts_v1_limit_and_rejects_first_overflow_byte() {
+        let directory = tempfile::tempdir().expect("temporary verifying-key directory");
+        let id = VerifyingKeyId::new("halo2/ipa", "bounded-vk-read");
+        let path = vk_store_path(directory.path(), &id);
+        let limit = u64::try_from(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1)
+            .expect("V1 verifying-key byte ceiling fits u64");
+
+        let file = fs::File::create(&path).expect("create exact-bound sparse verifying key");
+        file.set_len(limit)
+            .expect("size exact-bound sparse verifying key");
+        drop(file);
+        let exact = load_vk_bytes(directory.path(), &id)
+            .expect("an exact-bound direct verifying-key file is accepted");
+        assert_eq!(u64::try_from(exact.len()).expect("length fits u64"), limit);
+        drop(exact);
+
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("reopen verifying key for overflow fixture");
+        file.set_len(limit.saturating_add(1))
+            .expect("size overflowing sparse verifying key");
+        drop(file);
+        let error = load_vk_bytes(directory.path(), &id)
+            .expect_err("the first byte beyond the V1 ceiling must fail before allocation");
+        assert!(
+            error.contains("bounded verifying key bytes"),
+            "unexpected overflow rejection: {error}"
+        );
+    }
 
     #[test]
     fn report_summary_lock_remains_serialized_and_usable_after_writer_panic() {

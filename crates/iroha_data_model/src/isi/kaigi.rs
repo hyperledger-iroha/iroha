@@ -18,7 +18,7 @@ isi! {
         /// Merkle root the host used when generating the proof (privacy mode only).
         pub roster_root: Option<Hash>,
         /// Proof bytes attesting ownership of the commitment (privacy mode only).
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub proof: Option<Vec<u8>>,
     }
 }
@@ -37,7 +37,7 @@ isi! {
     /// Merkle root the participant used when generating their proof (privacy mode only).
     pub roster_root: Option<Hash>,
     /// Proof bytes attesting ownership of the commitment (privacy mode only).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Option<Vec<u8>>,
     }
 }
@@ -56,7 +56,7 @@ isi! {
     /// Merkle root the participant used when generating their proof (privacy mode only).
     pub roster_root: Option<Hash>,
     /// Proof bytes attesting ownership of the commitment (privacy mode only).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Option<Vec<u8>>,
     }
 }
@@ -75,7 +75,7 @@ isi! {
         /// Merkle root the host used when generating the proof (privacy mode only).
         pub roster_root: Option<Hash>,
         /// Proof bytes attesting ownership of the commitment (privacy mode only).
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub proof: Option<Vec<u8>>,
     }
 }
@@ -92,7 +92,7 @@ isi! {
     /// Commitment to the usage tuple (privacy mode only).
     pub usage_commitment: Option<Hash>,
     /// Optional proof tying the commitment to encrypted logs (privacy mode only).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Option<Vec<u8>>,
 }
 }

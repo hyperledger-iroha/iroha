@@ -226,7 +226,7 @@ mod model {
         /// Canonical ticket identifier.
         pub ticket_id: String,
         /// Immutable task identity.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub task_id: [u8; 32],
         /// Affected provider.
         pub provider_id: crate::sorafs::capacity::ProviderId,
@@ -361,25 +361,25 @@ mod model {
         /// Affected order, when the transition is order-specific.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
+            norito(json = "crate::json_helpers::fixed_bytes::option")
         )]
         pub order_id: Option<[u8; 32]>,
         /// Affected trade, when present.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
+            norito(json = "crate::json_helpers::fixed_bytes::option")
         )]
         pub trade_id: Option<[u8; 32]>,
         /// Affected settlement channel, when present.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
+            norito(json = "crate::json_helpers::fixed_bytes::option")
         )]
         pub channel_id: Option<[u8; 32]>,
         /// Affected settlement receipt, when present.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
+            norito(json = "crate::json_helpers::fixed_bytes::option")
         )]
         pub receipt_id: Option<[u8; 32]>,
         /// Affected provider, when known.
@@ -454,11 +454,11 @@ mod model {
         /// Movement or appeal identifier, when the transition has one.
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
+            norito(json = "crate::json_helpers::fixed_bytes::option")
         )]
         pub operation_id: Option<[u8; 32]>,
         /// Active policy digest used by the transition.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Resulting provider revision, or zero for policy activation.
         pub provider_revision: u64,
@@ -507,7 +507,7 @@ mod model {
     #[getset(get = "pub")]
     pub struct SorafsReputationJournalPolicyActivatedV1 {
         /// Canonical active policy digest.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Activated policy revision.
         pub revision: u64,
@@ -549,7 +549,7 @@ mod model {
         /// Provider whose deterministic counters consume the entry.
         pub provider_id: crate::sorafs::capacity::ProviderId,
         /// Active recorder-policy digest bound into the entry.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Exact governed recorder authority.
         pub authority: crate::account::AccountId,
@@ -626,16 +626,11 @@ mod json_support {
 
     use base64::Engine as _;
     use norito::{
-        codec::{Decode, Encode},
-        json::{Error, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
+        codec::Decode,
+        json::{Error, FastJsonWrite, JsonDeserialize, Parser},
     };
 
     use super::{SorafsGarViolation, SorafsGatewayEvent};
-
-    fn encode_base64<T: Encode>(value: &T) -> String {
-        let bytes = value.encode();
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    }
 
     fn decode_from_base64<T: Decode>(encoded: &str) -> Result<T, Error> {
         let bytes = base64::engine::general_purpose::STANDARD
@@ -647,8 +642,14 @@ mod json_support {
 
     impl FastJsonWrite for SorafsGarViolation {
         fn write_json(&self, out: &mut String) {
-            let encoded = encode_base64(self);
-            JsonSerialize::json_serialize(&encoded, out);
+            norito::json::write_bare_norito_base64_json(self, out);
+        }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            norito::json::write_bare_norito_base64_json_to(self, out)
         }
     }
 
@@ -661,8 +662,14 @@ mod json_support {
 
     impl FastJsonWrite for SorafsGatewayEvent {
         fn write_json(&self, out: &mut String) {
-            let encoded = encode_base64(self);
-            JsonSerialize::json_serialize(&encoded, out);
+            norito::json::write_bare_norito_base64_json(self, out);
+        }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            norito::json::write_bare_norito_base64_json_to(self, out)
         }
     }
 
@@ -670,6 +677,54 @@ mod json_support {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let encoded = parser.parse_string()?;
             decode_from_base64(&encoded)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use base64::Engine as _;
+
+        use super::*;
+
+        fn assert_bare_base64_json<T>(value: &T)
+        where
+            T: norito::codec::Encode + norito::core::NoritoSerialize + norito::json::JsonSerialize,
+        {
+            let buffered = base64::engine::general_purpose::STANDARD.encode(value.encode());
+            let expected = norito::json::to_json(&buffered).expect("serialize buffered base64");
+            let direct = norito::json::to_json(value).expect("serialize direct base64");
+            assert_eq!(direct, expected);
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len())
+                    .expect("serialize at exact bound"),
+                expected
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(value, direct.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+
+        #[test]
+        fn gateway_event_families_stream_exact_bare_norito_base64() {
+            let violation = SorafsGarViolation {
+                policy: super::super::SorafsGarPolicy::RateLimit,
+                detail: super::super::SorafsGarPolicyDetail::RateLimitExceeded,
+                provider_id: None,
+                manifest_digest: None,
+                manifest_cid_b64: Some("cid".to_owned()),
+                client_fingerprint_hex: "ab".repeat(32),
+                remote_addr: Some("127.0.0.1:8080".to_owned()),
+                retry_after_seconds: Some(5),
+                region: None,
+                host: None,
+                policy_labels: vec!["limited".to_owned()],
+                observed_ttl_seconds: None,
+                rate_ceiling_rps: Some(10),
+                occurred_at_unix: 42,
+            };
+            assert_bare_base64_json(&violation);
+            assert_bare_base64_json(&SorafsGatewayEvent::GarViolation(violation));
         }
     }
 }

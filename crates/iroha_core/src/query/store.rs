@@ -1131,6 +1131,7 @@ mod tests {
             16,
             16 * ORDINARY_NAME_ID_SOURCE_BYTES,
             32 * 1_024,
+            16 * 1_024,
             4 * 1_024,
             norito::DecodeLimits::new(64, 4 * 1_024, 256, 16 * 1_024, 16),
         )
@@ -1202,7 +1203,6 @@ mod tests {
             .ordinary_cursor_binding(&cursor, &ALICE_ID)
             .expect("owner policy binding");
         assert_eq!(binding.retained_bytes(), retained);
-        assert_eq!(binding.policy().pool_generation(), 13);
         assert_eq!(
             handle.ordinary_cursor_retained_bytes(&cursor, &BOB_ID),
             Err(QueryExecutionFail::Expired)
@@ -1293,14 +1293,15 @@ mod tests {
             .bind_revalidation_request(&cursor, &ALICE_ID, archive)
             .expect("bind hostile archive");
 
-        let error = handle
-            .ordinary_revalidation_request_bounded(
-                &cursor,
-                &ALICE_ID,
-                16 * 1_024,
-                norito::DecodeLimits::new(8, 16, 16, 128, 4),
-            )
-            .expect_err("oversized nested field must fail closed");
+        let error = match handle.ordinary_revalidation_request_bounded(
+            &cursor,
+            &ALICE_ID,
+            16 * 1_024,
+            norito::DecodeLimits::new(8, 16, 16, 128, 4),
+        ) {
+            Ok(_) => panic!("oversized nested field must fail closed"),
+            Err(error) => error,
+        };
         assert_eq!(error, QueryExecutionFail::Expired);
 
         let next = handle

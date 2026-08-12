@@ -84,7 +84,7 @@ pub struct IrohaZkX509StarkP256StatementV1 {
 )]
 pub struct PrivacyJindoFieldElementV1 {
     /// Exact canonical little-endian residue.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub encoding: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
 }
 
@@ -114,7 +114,7 @@ impl PrivacyJindoFieldElementV1 {
 )]
 pub struct PrivacyJindoLatticeCommitmentV1 {
     /// Exact governed lattice-commitment encoding.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub encoding: Vec<u8>,
 }
 
@@ -162,7 +162,7 @@ pub struct IrohaJindoPolynomialCommitmentStatementV1 {
 )]
 pub struct BootleLanternAttributeValueV1(
     /// Exact little-endian 64-bit attribute encoding.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub [u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1],
 );
 
@@ -1059,25 +1059,25 @@ impl PrivacyValueBalanceV1 {
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyOrchardActionV1 {
     /// Canonical Pallas-base nullifier encoding.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub nullifier: [u8; 32],
     /// Canonical non-identity randomized `RedPallas` verification key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub randomized_key: [u8; 32],
     /// Canonical extracted note commitment.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub note_commitment: [u8; 32],
     /// Canonical non-identity ephemeral Pallas public key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub ephemeral_key: [u8; 32],
     /// Exact 580-byte Orchard encrypted-note ciphertext.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub encrypted_note: Vec<u8>,
     /// Exact 80-byte Orchard outgoing ciphertext.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub outgoing_ciphertext: Vec<u8>,
     /// Canonical Pallas value commitment.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub value_commitment: [u8; 32],
 }
 

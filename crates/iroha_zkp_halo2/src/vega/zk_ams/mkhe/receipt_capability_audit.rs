@@ -5,8 +5,8 @@
 //! verifier-bound RNS-Link transport are useful building blocks, but neither
 //! fact proves that every release entry point consumes the required opaque
 //! capability.  The audit therefore keeps a separate bit for each handoff and
-//! refuses every operational requirement while any corresponding handoff is
-//! open.
+//! refuses each operational requirement whose corresponding handoff remains
+//! open. Full release remains unavailable until every handoff closes.
 //!
 //! The release manifest and readiness gate consume the complete audit digest,
 //! blocker mask, and aggregate availability. This makes later implementation
@@ -41,8 +41,14 @@ const ALL_RECEIPT_CAPABILITY_BLOCKERS_V1: u16 = BLOCKER_CPK_AGGREGATE_V1
     | BLOCKER_TERMINAL_MATERIALIZATION_V1
     | BLOCKER_SPLIT_DECRYPTION_V1
     | BLOCKER_PERSISTENT_DECRYPTION_EQUALITY_V1;
+const CURRENT_OPEN_RECEIPT_CAPABILITY_BLOCKERS_V1: u16 = ALL_RECEIPT_CAPABILITY_BLOCKERS_V1
+    & !(BLOCKER_CPK_AGGREGATE_V1
+        | BLOCKER_RKG_ROUND_ONE_V1
+        | BLOCKER_RKG_ROUND_TWO_V1
+        | BLOCKER_GALOIS_KEY_V1);
 
 const _: () = assert!(ALL_RECEIPT_CAPABILITY_BLOCKERS_V1 == 0xff);
+const _: () = assert!(CURRENT_OPEN_RECEIPT_CAPABILITY_BLOCKERS_V1 == 0xf0);
 
 /// One release operation which must be authorized by opaque verified receipts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,15 +195,22 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
         version: MKHE_VERSION_V1,
         cpk_relation_receipt_sealed: true,
         cpk_party_state_admission_consumes_receipt: true,
-        // A raw active-proof aggregate remains callable without the complete
-        // persistent CPK receipt set.
-        cpk_aggregate_receipt_enforced: false,
-        // The direct single-use relation graph exists, but its verifier is
-        // intentionally unavailable and the older private generators retain a
-        // raw state/proof path.
-        rkg_round_one_receipt_enforced: false,
-        rkg_round_two_receipt_enforced: false,
-        galois_key_receipt_enforced: false,
+        // The public ceremony's sole per-party transition invokes the complete
+        // relation verifier, converts its sealed receipt into a move-only
+        // contribution, and consumes that contribution into the party-state
+        // binding plus staged admission. Finalization requires fixed arrays of
+        // all eight admissions and validates each one again; the legacy raw
+        // aggregate is test-only.
+        cpk_aggregate_receipt_enforced: true,
+        // The sole evaluated-key provider admission now consumes a sealed,
+        // move-only aggregate of every exact ordered source and CKS receipt
+        // before provider I/O, then joins every expected CKS compact output to
+        // the authenticated ZARK scan. This closes the three receipt-consumer
+        // handoffs only. It does not establish the stronger cross-set algebraic
+        // equality between accumulated source outputs and the CKS relation.
+        rkg_round_one_receipt_enforced: true,
+        rkg_round_two_receipt_enforced: true,
+        galois_key_receipt_enforced: true,
         // Canonical decoding is only structural.  It explicitly returns an
         // unverified envelope and cannot mint an algebraic receipt.
         rns_link_transport_bound: true,
@@ -245,9 +258,10 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
 /// Require one operational capability without accepting a digest shell or a
 /// structurally decoded RNS-Link envelope as a substitute.
 ///
-/// This function currently returns [`ZkAmsMkheErrorV1::ReleaseUnavailable`]
-/// for every consumer. The manifest/readiness binding records that fact but is
-/// not itself evidence that an operational consumer is wired.
+/// The collective-public-key aggregate and the three evaluated-key receipt
+/// consumers are authorized through their sealed handoffs. The independent
+/// algebraic/materialization/decryption blockers remain open, so these local
+/// successes do not make the complete release available.
 pub(super) fn require_zk_ams_mkhe_receipt_capability_v1(
     consumer: ZkAmsMkheReceiptCapabilityConsumerV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -365,8 +379,7 @@ mod tests {
         },
         collective::{
             ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
-            ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkheCollectivePublicKeyV1,
-            aggregate_zk_ams_mkhe_collective_public_key_v1,
+            ZkAmsMkheCollectivePublicKeyV1,
         },
         cpk_relation::{VerifiedZkAmsMkheCpkBindingSourceV1, VerifiedZkAmsMkheCpkContributionV1},
         decryption::{
@@ -374,14 +387,16 @@ mod tests {
             ZkAmsMkheDecryptionStatementV1, split_zk_ams_mkhe_decryption_share_v1,
         },
         manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
+        packing::ZkAmsT256PackedPlaintextV1,
         persistent_decryption_equality::{
             ZkAmsMkhePersistentDecryptionPartyUseV1,
             ZkAmsMkhePersistentDecryptionVerificationContextV1,
             prepare_zk_ams_mkhe_persistent_decryption_from_verified_cpk_v1,
         },
         phase23_encrypted::{
-            ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsPhase23PackedAccumulatorSetV1,
-            zk_ams_phase23_materialize_release_accumulators_v1,
+            ZkAmsPhase23AccumulatorShapeV1, ZkAmsPhase23MaterializedAccumulatorsV1,
+            ZkAmsPhase23PackedAccumulatorSetV1,
+            zk_ams_phase23_materialize_release_accumulator_chunks_v1,
         },
         phase23_rns_link::{
             StateOwnedRnsLinkAccumulatorOpeningsV1,
@@ -399,12 +414,6 @@ mod tests {
         [u8; 32],
         VerifiedZkAmsMkheCpkBindingSourceV1,
     ) -> Result<VerifiedPersistentWitnessBindingV1, ZkAmsMkheErrorV1>;
-    type AggregateCpkWithoutReceiptV1 =
-        fn(
-            &ZkAmsMkheGovernedActiveRosterV1,
-            [u8; 32],
-            [&ZkAmsMkheCollectivePublicKeyShareV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-        ) -> Result<ZkAmsMkheCollectivePublicKeyV1, ZkAmsMkheErrorV1>;
     type PrepareSecretFreePersistentDecryptionV1 = for<'a, 'b> fn(
         &'a ZkAmsMkheGovernedActiveRosterV1,
         ZkAmsMkheDecryptionStatementV1<'b>,
@@ -484,7 +493,8 @@ mod tests {
             [u8; 32],
             [u8; 32],
             u8,
-            &ZkAmsPhase23PackedAccumulatorSetV1,
+            ZkAmsPhase23AccumulatorShapeV1,
+            std::vec::IntoIter<Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
         ) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1>;
     type SplitWithPersistentReceiptV1 =
         for<'a, 'b, 'c> fn(
@@ -493,6 +503,15 @@ mod tests {
             &'c ZkAmsMkheAuthenticatedDecryptionShareV1,
         )
             -> Result<ZkAmsMkheDecryptionSplitTransportV1, ZkAmsMkheErrorV1>;
+
+    fn assert_source_markers_in_order_v1(mut source: &str, markers: &[&str]) {
+        for marker in markers {
+            source = source
+                .split_once(marker)
+                .unwrap_or_else(|| panic!("missing ordered source marker: {marker}"))
+                .1;
+        }
+    }
 
     #[test]
     fn source_surface_guards_distinguish_receipts_from_bypasses() {
@@ -503,7 +522,6 @@ mod tests {
         assert!(production.contains("native_bgv_opening_receipt_sealed: false"));
         assert!(!production.contains("native_bgv_opening_receipt_sealed: true"));
         let _: MintCpkBindingV1 = mint_collective_secret_binding_from_verified_cpk_v1;
-        let _: AggregateCpkWithoutReceiptV1 = aggregate_zk_ams_mkhe_collective_public_key_v1;
         let _: PrepareSecretFreePersistentDecryptionV1 =
             prepare_zk_ams_mkhe_persistent_decryption_from_verified_cpk_v1;
         let _: BindPersistentDecryptionStatementV1 =
@@ -514,8 +532,180 @@ mod tests {
         let _: BeginStateOwnedNativeBgvOpeningsV1 = begin_state_owned_native_bgv_openings_v1;
         let _: AbsorbStateOwnedNativeBgvOpeningV1 = absorb_state_owned_native_bgv_opening_v1;
         let _: FinishStateOwnedNativeBgvOpeningsV1 = finish_state_owned_native_bgv_openings_v1;
-        let _: MaterializeWithoutReceiptV1 = zk_ams_phase23_materialize_release_accumulators_v1;
+        let _: MaterializeWithoutReceiptV1 =
+            zk_ams_phase23_materialize_release_accumulator_chunks_v1::<
+                std::vec::IntoIter<Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
+            >;
         let _: SplitWithPersistentReceiptV1 = split_zk_ams_mkhe_decryption_share_v1;
+
+        let ceremony_source = include_str!("cpk_ceremony.rs");
+        assert!(ceremony_source.contains("pub struct ZkAmsMkheCpkCeremonyV1"));
+        let transition = ceremony_source
+            .split("pub fn verify_and_absorb_next_party_v1")
+            .nth(1)
+            .expect("public CPK party transition")
+            .split("pub fn finish_v1")
+            .next()
+            .expect("public CPK party transition boundary");
+        assert_source_markers_in_order_v1(
+            transition,
+            &[
+                "let receipt = verify_zk_ams_mkhe_cpk_relation_v1(",
+                "VerifiedZkAmsMkheCpkContributionV1::from_verified_relation(receipt)",
+                "builder.absorb_verified_party_v1(contribution, share, &mut state, backend)?",
+            ],
+        );
+        let finish = ceremony_source
+            .split("pub fn finish_v1")
+            .nth(1)
+            .expect("public CPK finish transition")
+            .split("/// Sealed successful CPK products")
+            .next()
+            .expect("public CPK finish boundary");
+        assert_source_markers_in_order_v1(
+            finish,
+            &[
+                "let staged = builder.finish_staging_v1()?;",
+                "staged.finalize_v1(backend)?",
+            ],
+        );
+
+        let relation_source = include_str!("cpk_relation.rs");
+        assert!(relation_source.contains("struct CpkRelationVerificationSealV1;"));
+        assert!(relation_source.contains(
+            "pub(super) struct VerifiedZkAmsMkheCpkRelationReceiptV1 {\n    _seal: CpkRelationVerificationSealV1,"
+        ));
+        assert!(relation_source.contains(
+            "pub(super) struct VerifiedZkAmsMkheCpkContributionV1 {\n    receipt: VerifiedZkAmsMkheCpkRelationReceiptV1,"
+        ));
+        assert!(relation_source.contains(
+            "pub(super) fn from_verified_relation(receipt: VerifiedZkAmsMkheCpkRelationReceiptV1)"
+        ));
+
+        let staged_source = include_str!("persistent_decryption_equality.rs");
+        let verified_absorb = staged_source
+            .split("fn absorb_verified_party_inner_v1")
+            .nth(1)
+            .expect("verified CPK absorption")
+            .split("/// Seal only after all eight ordered shares/proofs were consumed.")
+            .next()
+            .expect("verified CPK absorption boundary");
+        assert_source_markers_in_order_v1(
+            verified_absorb,
+            &[
+                ".into_compact_decryption_source(",
+                "mint_collective_secret_binding_from_verified_cpk_v1(",
+                "consume_collective_public_key_share_for_staging_v1(",
+                ".fork_for_state_and_verifier_v1()",
+                "self.admissions.push(admission);",
+                "party_state.admit_staged_verified_cpk_binding_v1(",
+                "self.next_party_index += 1;",
+            ],
+        );
+        let staging_finish = staged_source
+            .split("pub(super) fn finish_staging_v1")
+            .nth(1)
+            .expect("bounded CPK staging finish")
+            .split("fn staged_cpk_batch_digest_v1")
+            .next()
+            .expect("bounded CPK staging boundary");
+        for exact_count_guard in [
+            "self.next_party_index != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1",
+            "self.admissions.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1",
+            "self.bindings.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1",
+            "self.party_b_pointers.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1",
+            "self.verification_read_receipts.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1",
+            "self.publication_receipts.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1",
+        ] {
+            assert!(staging_finish.contains(exact_count_guard));
+        }
+        assert!(staging_finish.contains(
+            "let admissions: [VerifiedCollectivePublicKeyShareStagedAdmissionV1;\n            ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1]"
+        ));
+        let staged_batch = staged_source
+            .split("impl ZkAmsMkheStagedCpkBatchV1")
+            .nth(1)
+            .expect("sealed staged CPK batch implementation");
+        assert!(staged_batch.contains(
+            "for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {\n            let admission = &self.admissions[party_index];\n            admission.validate_for_v1"
+        ));
+        assert!(
+            staged_batch
+                .matches("for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1")
+                .count()
+                >= 2
+        );
+
+        let collective_source = include_str!("collective.rs");
+        assert_eq!(
+            collective_source
+                .matches("fn aggregate_zk_ams_mkhe_collective_public_key_v1")
+                .count(),
+            1
+        );
+        assert!(collective_source.contains(
+            "#[cfg(test)]\npub(super) fn aggregate_zk_ams_mkhe_collective_public_key_v1"
+        ));
+        let staged_aggregate = collective_source
+            .split("pub(super) fn finalize_collective_public_key_from_staged_v1")
+            .nth(1)
+            .expect("sealed staged CPK aggregate")
+            .split("fn validate_collective_public_key_share_for_verified_cpk_v1")
+            .next()
+            .expect("sealed staged CPK aggregate boundary");
+        assert!(
+            staged_aggregate.contains("for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1")
+        );
+        assert!(
+            staged_aggregate
+                .contains("admission.validate_for_v1(roster, transcript_digest, party_index)?")
+        );
+
+        for facade_source in [
+            include_str!("../mkhe.rs"),
+            include_str!("../../zk_ams.rs"),
+            include_str!("../../../vega.rs"),
+        ] {
+            assert!(facade_source.contains("ZkAmsMkheCpkCeremonyV1"));
+        }
+
+        let evaluated_key_runtime = include_str!("collective_eval_keys/runtime.rs");
+        let runtime_constructor = evaluated_key_runtime
+            .split("pub(super) fn new_from_compact_cpk_v1")
+            .nth(1)
+            .expect("evaluated-key runtime constructor")
+            .split("/// Verified aggregate collective-public-key digest.")
+            .next()
+            .expect("evaluated-key runtime constructor boundary");
+        assert!(runtime_constructor.contains(
+            "eval_key_binding: super::collective::ZkAmsMkheStreamingCollectiveEvalKeyBindingV1"
+        ));
+        assert!(
+            runtime_constructor.contains("manifest: &ZkAmsMkheCollectiveEvaluatedKeyManifestV1")
+        );
+        let provider_admission = evaluated_key_runtime
+            .split("pub fn validate_seekable_key_provider")
+            .nth(1)
+            .expect("provider admission")
+            .split("fn entry(")
+            .next()
+            .expect("provider admission boundary");
+        assert!(provider_admission.contains("ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1"));
+        let cap = provider_admission
+            .find("consume_evidence_set_before_provider_v1")
+            .expect("capability is consumed");
+        let provider = provider_admission
+            .find("validate_seekable_evaluated_key")
+            .expect("provider is scanned");
+        assert!(cap < provider);
+        let preflight = evaluated_key_runtime
+            .split("fn consume_evidence_set_before_provider_v1")
+            .nth(1)
+            .expect("private evidence preflight")
+            .split("impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1")
+            .next()
+            .expect("private evidence preflight boundary");
+        assert!(preflight.contains("consume_for_runtime_v1(expected)"));
     }
 
     #[test]
@@ -524,6 +714,10 @@ mod tests {
         audit.validate().unwrap();
         assert!(audit.cpk_relation_receipt_sealed);
         assert!(audit.cpk_party_state_admission_consumes_receipt);
+        assert!(audit.cpk_aggregate_receipt_enforced);
+        assert!(audit.rkg_round_one_receipt_enforced);
+        assert!(audit.rkg_round_two_receipt_enforced);
+        assert!(audit.galois_key_receipt_enforced);
         assert!(audit.rns_link_transport_bound);
         assert!(!audit.native_bgv_opening_receipt_sealed);
         assert!(audit.native_materialized_hyrax_receipt_sealed);
@@ -532,18 +726,28 @@ mod tests {
         assert!(!audit.rns_link_carry_quotient_responses_verifiable);
         assert!(!audit.hyrax_bgv_equality_responses_verifiable);
         assert!(audit.persistent_decryption_replay_axes_specified);
-        assert_eq!(audit.blocker_mask, ALL_RECEIPT_CAPABILITY_BLOCKERS_V1);
+        assert_eq!(
+            audit.blocker_mask,
+            CURRENT_OPEN_RECEIPT_CAPABILITY_BLOCKERS_V1
+        );
+        assert_eq!(audit.blocker_mask, 0xf0);
         assert_ne!(audit.digest, [0; 32]);
         assert!(!audit.release_available);
     }
 
     #[test]
-    fn every_operational_consumer_remains_fail_closed() {
+    fn receipt_consumers_closed_by_sealed_evidence_sets_are_authorized() {
         for consumer in [
             ZkAmsMkheReceiptCapabilityConsumerV1::CollectivePublicKeyAggregate,
             ZkAmsMkheReceiptCapabilityConsumerV1::RkgRoundOne,
             ZkAmsMkheReceiptCapabilityConsumerV1::RkgRoundTwo,
             ZkAmsMkheReceiptCapabilityConsumerV1::GaloisKey,
+        ] {
+            assert!(zk_ams_mkhe_receipt_capability_audit_v1().authorizes(consumer));
+            assert_eq!(require_zk_ams_mkhe_receipt_capability_v1(consumer), Ok(()));
+        }
+
+        for consumer in [
             ZkAmsMkheReceiptCapabilityConsumerV1::RnsLinkVerification,
             ZkAmsMkheReceiptCapabilityConsumerV1::TerminalMaterialization,
             ZkAmsMkheReceiptCapabilityConsumerV1::SplitDecryption,

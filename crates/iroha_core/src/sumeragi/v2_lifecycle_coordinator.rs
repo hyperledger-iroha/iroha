@@ -46,33 +46,42 @@ use authority::AuthenticatedEpisodeAuthority;
 pub(crate) use authority::RolloverSnapshot;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
-pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
-pub(crate) use projection::{
-    AdapterEffectAdmissionError, CertifiedServeAdmissionBoundaryError,
-    CertifiedServeAdmissionError, CertifiedServeSettlementError,
-};
+#[cfg(test)]
+pub(crate) use open::AuthenticatedLifecycleRecoveryCut;
+pub(crate) use projection::AdapterEffectAdmissionError;
+#[cfg(test)]
+use projection::CertifiedServeAdmissionError;
 pub(crate) use schema::{
     AdmissionDecision, AdmissionRejection, AdmissionRequest, CandidateAdmission, CapacityClass,
     CausalRoot, CoordinatorFault, InitialLifecycleState, LeaseId, LifecycleContext,
     LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord, LifecycleRound, LifecycleStage,
-    LifecycleStageKind, LifecycleState, LifecycleWorkClass, NonCandidateEffect, OwnerId,
-    PhysicalGeometry, PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope,
-    ProducerTurnAdmission, ReadyEvent, RetryAction, SchedulerEpisodeUniverse, SchedulerInputs,
-    SchedulerRank, SchedulerReadyInputs, TerminalOutcome, TurnLease, TurnOutcome, TurnPlan,
-    WaitSource, WaitToken,
+    LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId, PhysicalReplacement,
+    PhysicalSlot, PhysicalSlotId, PredecessorScope, ReadyEvent, SchedulerInputs, SchedulerRank,
+    TerminalOutcome, TurnLease, TurnOutcome, TurnPlan, WaitSource, WaitToken,
 };
 use schema::{
     CapacityAdmissionWait, CapacityGeometry, DurablePayloadReference, DurableRecordMetadata,
-    DurableServeNegativeOutcome, MAX_LIFECYCLE_RECORDS_PER_HEIGHT, MAX_PHYSICAL_SLOTS_PER_RECORD,
-    RecoveredLifecycleRecord, RecoverySnapshot, SchedulerEpisode, first_capacity_wait,
-    frozen_predecessors, has_lifecycle_record_capacity, lower_enter_view_ordinals,
-    serve_and_producer_keys_match,
+    DurableServeNegativeOutcome, MAX_PHYSICAL_SLOTS_PER_RECORD, RecoveredLifecycleRecord,
+    RecoverySnapshot, SchedulerEpisode, first_capacity_wait, frozen_predecessors,
+    has_lifecycle_record_capacity, lower_enter_view_ordinals, serve_and_producer_keys_match,
+};
+#[cfg(test)]
+use schema::{MAX_LIFECYCLE_RECORDS_PER_HEIGHT, producer_turn_key_for_serve};
+#[cfg(test)]
+pub(crate) use schema::{
+    NonCandidateEffect, PhysicalGeometry, ProducerTurnAdmission, RetryAction, SchedulerReadyInputs,
 };
 #[cfg(test)]
 pub(crate) use selector::CertifiedFetchReadyPublicationError;
-#[cfg_attr(not(test), allow(unused_imports))]
+#[expect(
+    unused_imports,
+    reason = "these reviewed selector types remain part of the coordinator module surface"
+)]
 pub(crate) use selector::{LifecycleIngressSelectorError, PreparedLifecycleIngressSelector};
-#[cfg_attr(not(test), allow(unused_imports))]
+#[expect(
+    unused_imports,
+    reason = "these reviewed durable-validate types remain part of the coordinator module surface"
+)]
 pub(crate) use work_registry::{
     PreparedReadyDurableValidateExecution, ReadyDurableValidateOutcomeKind,
     ReadyRejectedAdapterAuthority, ReadyValidatedAdapterAuthority,
@@ -397,7 +406,11 @@ impl LifecycleCoordinator {
         }) {
             return AdmissionDecision::Rejected(AdmissionRejection::InvalidProducerTurn);
         }
-        let ordinal_count = if producer.is_some() { 2 } else { 1 };
+        let (ordinal_count, ordinal_span) = if producer.is_some() {
+            (2_usize, 1_u128)
+        } else {
+            (1_usize, 0_u128)
+        };
         if !has_lifecycle_record_capacity(self.records.len(), ordinal_count) {
             self.admission_waits.remove(&candidate.key);
             return AdmissionDecision::Rejected(AdmissionRejection::AdmissionQueueFull);
@@ -526,7 +539,7 @@ impl LifecycleCoordinator {
         let Some(first_ordinal) = self.high_water.checked_add(1) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
-        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_count - 1) else {
+        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_span) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
         let owner = self
@@ -4611,7 +4624,8 @@ mod tests {
                 terminal,
             )
         };
-        let rejected = |records, producer_debts| {
+        let rejected = |records: Vec<RecoveredLifecycleRecord>,
+                        producer_debts: BTreeMap<u128, u128>| {
             let high_water = records
                 .iter()
                 .map(|record: &RecoveredLifecycleRecord| record.ordinal)

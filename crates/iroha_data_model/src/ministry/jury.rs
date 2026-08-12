@@ -93,7 +93,7 @@ pub struct PolicyJuryBallotCommitV1 {
     /// Stable juror identifier.
     pub juror_id: String,
     /// Blake2b commitment for the juror + choice + nonce tuple.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub commitment_blake2b_256: [u8; 32],
     /// UTC timestamp (milliseconds) when the commitment was recorded.
     pub committed_at_unix_ms: u64,
@@ -184,7 +184,7 @@ pub struct PolicyJuryBallotRevealV1 {
     /// Vote selected by the juror.
     pub choice: PolicyJuryVoteChoice,
     /// Random nonce used when generating the commitment.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub nonce: Vec<u8>,
     /// UTC timestamp (milliseconds) when the reveal was recorded.
     pub revealed_at_unix_ms: u64,
@@ -316,10 +316,10 @@ pub struct PolicyJurySortitionV1 {
     /// UTC timestamp (milliseconds) when the draw was executed.
     pub drawn_at_unix_ms: u64,
     /// Blake2b digest of the proof-of-personhood snapshot used for sortition.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub pop_snapshot_digest_blake2b_256: [u8; 32],
     /// Randomness beacon used for the draw.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub randomness_beacon: [u8; 32],
     /// Target committee size.
     pub committee_size: u32,

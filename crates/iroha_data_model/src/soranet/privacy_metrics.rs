@@ -23,7 +23,7 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoranetGarAbuseCountV1 {
     /// First eight bytes of the BLAKE3 hash for the GAR abuse category label.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub category_hash: [u8; 8],
     /// Number of reports recorded for the category within the bucket.
     pub count: u64,
@@ -45,7 +45,7 @@ impl SoranetGarAbuseCountV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoranetGarAbuseShareV1 {
     /// First eight bytes of the BLAKE3 hash for the GAR abuse category label.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub category_hash: [u8; 8],
     /// Signed share for the number of reports recorded for the category.
     pub count_share: i64,
@@ -96,6 +96,13 @@ impl json::JsonSerialize for SoranetPrivacyModeV1 {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_label(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_label(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -122,7 +129,7 @@ pub struct SoranetPrivacyPrioShareV1 {
     /// Bucket width in seconds.
     pub bucket_duration_secs: u32,
     /// Relay mode represented by this share.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::privacy_mode"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::privacy_mode"))]
     pub mode: SoranetPrivacyModeV1,
     /// Share for successfully established anonymous circuits.
     pub handshake_accept_share: i64,
@@ -372,6 +379,13 @@ impl norito::json::FastJsonWrite for SoranetPrivacySuppressionReasonV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_label(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_label(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -551,6 +565,13 @@ impl norito::json::FastJsonWrite for SoranetPowFailureReasonV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_label(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_label(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -617,6 +638,21 @@ impl norito::json::FastJsonWrite for SoranetPrivacyThrottleScopeV1 {
         };
         norito::json::write_json_string(label, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            Self::Congestion => "congestion",
+            Self::Cooldown => "cooldown",
+            Self::Emergency => "emergency",
+            Self::RemoteQuota => "remote_quota",
+            Self::DescriptorQuota => "descriptor_quota",
+            Self::DescriptorReplay => "descriptor_replay",
+        };
+        norito::json::write_json_string_to(label, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -648,6 +684,19 @@ impl norito::json::FastJsonWrite for SoranetPrivacyHandshakeFailureV1 {
         };
         norito::json::write_json_string(label, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            Self::Pow => "pow",
+            Self::Timeout => "timeout",
+            Self::Downgrade => "downgrade",
+            Self::Other => "other",
+        };
+        norito::json::write_json_string_to(label, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -663,5 +712,31 @@ impl norito::json::JsonDeserialize for SoranetPrivacyHandshakeFailureV1 {
             "other" => Ok(Self::Other),
             other => Err(norito::json::Error::unknown_field(other)),
         }
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod checked_json_tests {
+    use super::*;
+
+    fn assert_exact<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[test]
+    fn privacy_metric_scalar_families_have_exact_checked_json() {
+        assert_exact(&SoranetPrivacyModeV1::Middle);
+        assert_exact(&SoranetPrivacySuppressionReasonV1::CollectorWindowElapsed);
+        assert_exact(&SoranetPowFailureReasonV1::SignatureInvalid);
+        assert_exact(&SoranetPrivacyThrottleScopeV1::DescriptorReplay);
+        assert_exact(&SoranetPrivacyHandshakeFailureV1::Downgrade);
     }
 }

@@ -560,8 +560,8 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
-fn torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_binding() {
-    let keypair = checked_torii_test_ed25519_keypair(0xfd, "derive proxy V5 admission fixture key");
+fn torii_proxy_v6_roundtrip_and_forwarding_preserve_transaction_admission_binding() {
+    let keypair = checked_torii_test_ed25519_keypair(0xfd, "derive proxy V6 admission fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = signed_query_test_network_id();
     let transaction = iroha_data_model::transaction::TransactionEntrypoint::External(
@@ -587,7 +587,7 @@ fn torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_bindin
         authority_height: 7,
         proposal_height: 8,
         predecessor_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"proxy-v5-roundtrip-predecessor",
+            b"proxy-v6-roundtrip-predecessor",
         ))),
         routing_plan_digest: RoutingPlan::single(RoutingDecision::new(
             LaneId::new(9),
@@ -599,7 +599,7 @@ fn torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_bindin
                 RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12)),
                 iroha_core::queue::RouteLegRole::Coordinator,
             ),
-            lane_incarnation: Hash::new(b"proxy-v5-roundtrip-incarnation"),
+            lane_incarnation: Hash::new(b"proxy-v6-roundtrip-incarnation"),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&admission_authorities),
             validator_set: admission_authorities,
@@ -615,11 +615,12 @@ fn torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_bindin
             context,
             42,
         )
-        .expect("build exact V5 admission binding"),
+        .expect("build exact V6 admission binding"),
     );
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id,
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: Vec::new(),
@@ -630,22 +631,73 @@ fn torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_bindin
             admission_binding,
         },
     };
-    let encoded = norito::to_bytes(&request).expect("encode V5 proxy admission request");
-    let decoded = norito::decode_from_bytes::<ToriiProxyRequestV5>(&encoded)
-        .expect("decode V5 proxy admission request");
+    let encoded = norito::to_bytes(&request).expect("encode V6 proxy admission request");
+    let decoded = norito::decode_from_bytes::<ToriiProxyRequestV6>(&encoded)
+        .expect("decode V6 proxy admission request");
     assert_eq!(decoded, request);
 
     let forwarded = super::forwarded_torii_proxy_request(&request, &forwarding_peer);
-    assert_eq!(forwarded.schema_version, TORII_PROXY_REQUEST_VERSION_V5);
+    assert_eq!(forwarded.schema_version, TORII_PROXY_REQUEST_VERSION_V6);
     assert_eq!(forwarded.request_id, request.request_id);
+    assert_eq!(forwarded.deadline_unix_ms, request.deadline_unix_ms);
     assert_eq!(forwarded.request, request.request);
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[test]
+fn torii_proxy_authenticated_deadline_rejects_expiry_and_excess_horizon() {
+    const NOW_UNIX_MS: u64 = 1_900_000_000_000;
+    let max_horizon_ms = u64::try_from(super::TORII_PROXY_MAX_DEADLINE_HORIZON.as_millis())
+        .expect("fixed proxy deadline horizon fits u64 milliseconds");
+
+    assert_eq!(
+        super::torii_proxy_remaining_budget(NOW_UNIX_MS + 1, NOW_UNIX_MS),
+        Ok(Duration::from_millis(1))
+    );
+    assert_eq!(
+        super::torii_proxy_remaining_budget(NOW_UNIX_MS + max_horizon_ms, NOW_UNIX_MS),
+        Ok(super::TORII_PROXY_MAX_DEADLINE_HORIZON)
+    );
+    assert_eq!(
+        super::TORII_PROXY_MAX_DEADLINE_HORIZON,
+        super::TORII_PROXY_EXECUTION_BUDGET + super::TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE,
+        "the accepted future horizon must be the fixed execution budget plus the audited operator-signature skew allowance"
+    );
+    assert_eq!(
+        super::TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE,
+        Duration::from_secs(
+            iroha_config::parameters::defaults::torii::operator_signatures::MAX_CLOCK_SKEW_SECS,
+        ),
+        "proxy deadline skew must stay source-coupled to the authenticated HTTP signature contract"
+    );
+    let sender_deadline = NOW_UNIX_MS
+        + u64::try_from(super::TORII_PROXY_EXECUTION_BUDGET.as_millis())
+            .expect("fixed proxy execution budget fits u64 milliseconds");
+    let receiver_now = NOW_UNIX_MS
+        - u64::try_from(super::TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE.as_millis())
+            .expect("fixed proxy clock-skew allowance fits u64 milliseconds");
+    let skew_edge_remaining = super::torii_proxy_remaining_budget(sender_deadline, receiver_now)
+        .expect("a fresh sender at the authenticated negative-skew edge must be admitted");
+    assert_eq!(skew_edge_remaining, super::TORII_PROXY_MAX_DEADLINE_HORIZON);
+    assert_eq!(
+        skew_edge_remaining
+            .saturating_sub(super::TORII_PROXY_RESPONSE_EGRESS_RESERVE)
+            .min(super::TORII_PROXY_EXECUTION_BUDGET),
+        super::TORII_PROXY_EXECUTION_BUDGET,
+        "clock-skew admission must not extend the receiver's local monotonic execution lifetime"
+    );
+    assert!(super::torii_proxy_remaining_budget(NOW_UNIX_MS, NOW_UNIX_MS).is_err());
+    assert!(super::torii_proxy_remaining_budget(NOW_UNIX_MS - 1, NOW_UNIX_MS).is_err());
+    assert!(
+        super::torii_proxy_remaining_budget(NOW_UNIX_MS + max_horizon_ms + 1, NOW_UNIX_MS).is_err()
+    );
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn incoming_proxy_submit_fixture(
     seed: u8,
     admission: ToriiProxyTransactionAdmissionV2,
-) -> (SharedAppState, ToriiProxyRequestV5) {
+) -> (SharedAppState, ToriiProxyRequestV6) {
     let keypair =
         checked_torii_test_ed25519_keypair(seed, "derive incoming proxy Submit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
@@ -710,9 +762,10 @@ fn incoming_proxy_submit_fixture(
         )
         .expect("strict proxy fixture admission binding"),
     );
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id,
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: vec![ingress_peer_id],
@@ -765,7 +818,7 @@ fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn accepted_queue_hash_for_proxy_submit(
     app: &SharedAppState,
-    request: &ToriiProxyRequestV5,
+    request: &ToriiProxyRequestV6,
 ) -> HashOf<SignedTransaction> {
     let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &request.request else {
         panic!("proxy Submit fixture must contain a transaction");
@@ -785,7 +838,7 @@ fn accepted_queue_hash_for_proxy_submit(
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn exact_queue_plan_synced_acceptance_snapshot(
     app: &SharedAppState,
-    request: &ToriiProxyRequestV5,
+    request: &ToriiProxyRequestV6,
 ) -> ToriiProxyHttpResponseV1 {
     let journal_dir =
         tempfile::tempdir().expect("create exact strict acceptance journal directory");
@@ -827,7 +880,7 @@ fn sign_queue_plan_synced_test_receipt(
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn bind_queue_plan_synced_test_authorities(
-    request: &mut ToriiProxyRequestV5,
+    request: &mut ToriiProxyRequestV6,
     signers: &[KeyPair],
 ) -> Vec<PeerId> {
     let authorities = signers
@@ -876,7 +929,7 @@ fn bind_queue_plan_synced_test_authorities(
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn exact_queue_plan_synced_test_receipt(
-    request: &ToriiProxyRequestV5,
+    request: &ToriiProxyRequestV6,
     signer: &KeyPair,
     _enqueue_timestamp_ms: u64,
 ) -> QueuePlanAdmissionAttestationV2 {
@@ -900,7 +953,7 @@ fn exact_queue_plan_synced_test_receipt(
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_test_certificate_snapshot(
-    request: &ToriiProxyRequestV5,
+    request: &ToriiProxyRequestV6,
     mut receipts: Vec<QueuePlanAdmissionAttestationV2>,
 ) -> ToriiProxyHttpResponseV1 {
     receipts.sort_by_key(|attestation| attestation.validator_index);
@@ -1670,7 +1723,7 @@ async fn queue_plan_synced_admission_context_rejects_height_plan_leg_incarnation
     let (app, request) =
         incoming_proxy_submit_fixture(0xd6, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
     let mutate_context =
-        |mut request: ToriiProxyRequestV5,
+        |mut request: ToriiProxyRequestV6,
          mutation: fn(&mut queue::QueuePlanAdmissionContextV2)| {
             let ToriiProxyRequestKindV4::SubmitTransaction {
                 admission_binding, ..
@@ -2066,7 +2119,7 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
 
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
-async fn incoming_torii_proxy_rejects_malformed_v4_hop_chain_before_dispatch() {
+async fn incoming_torii_proxy_rejects_malformed_v6_hop_chain_before_dispatch() {
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
     let sender = PeerId::new(
         checked_torii_test_ed25519_keypair(
@@ -2085,9 +2138,10 @@ async fn incoming_torii_proxy_rejects_malformed_v4_hop_chain_before_dispatch() {
         .expect("malformed-hop fixture app must be uniquely owned")
         .local_peer_id = Some(local_peer.clone());
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    let base_request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
-        request_id: Hash::new(b"malformed-v4-hop-chain"),
+    let base_request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+        request_id: Hash::new(b"malformed-v6-hop-chain"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
         visited_peer_ids: vec![sender.clone()],
@@ -2702,10 +2756,29 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
     let signed_query = signed_find_triggers_query_for_test(authority.clone(), &key_pair);
     let query_bytes = iroha_version::codec::EncodeVersioned::encode_versioned(&signed_query);
     let admission = signed_query_test_admission();
+    let limits =
+        super::QueryFanoutMemoryEnvelope::decode_limits_for(query_bytes.len(), 1024 * 1024)
+            .expect("test proxy decode limits");
 
-    let verified =
-        super::decode_verified_proxy_signed_query(&query_bytes, "test proxy", admission.as_ref())
-            .expect("the original signed query should verify");
+    let Err(capacity_response) = super::decode_verified_proxy_signed_query(
+        &query_bytes,
+        "test proxy",
+        admission.as_ref(),
+        norito::DecodeLimits::new(0, 0, 0, 0, 0),
+        super::ProxySignedQueryReplayScope::Client,
+    ) else {
+        panic!("a proxy signed query must obey its decode allocation ceiling");
+    };
+    assert_eq!(capacity_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let verified = super::decode_verified_proxy_signed_query(
+        &query_bytes,
+        "test proxy",
+        admission.as_ref(),
+        limits,
+        super::ProxySignedQueryReplayScope::Client,
+    )
+    .expect("the original signed query should verify");
     assert_eq!(verified.authority, authority);
 
     let mut forged_authority =
@@ -2724,6 +2797,8 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
             &iroha_version::codec::EncodeVersioned::encode_versioned(&forged_authority),
             "test proxy",
             admission.as_ref(),
+            limits,
+            super::ProxySignedQueryReplayScope::Client,
         )
         .is_err(),
         "a peer cannot replace the client authority after signing",
@@ -2738,6 +2813,8 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
             &iroha_version::codec::EncodeVersioned::encode_versioned(&forged_request),
             "test proxy",
             admission.as_ref(),
+            limits,
+            super::ProxySignedQueryReplayScope::Client,
         )
         .is_err(),
         "a peer cannot replace the signed query payload",
@@ -2745,9 +2822,13 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
 
     let mut trailing = query_bytes;
     trailing.push(0);
-    let Err(response) =
-        super::decode_verified_proxy_signed_query(&trailing, "test proxy", admission.as_ref())
-    else {
+    let Err(response) = super::decode_verified_proxy_signed_query(
+        &trailing,
+        "test proxy",
+        admission.as_ref(),
+        limits,
+        super::ProxySignedQueryReplayScope::Client,
+    ) else {
         panic!("trailing proxy query bytes must fail exact decoding");
     };
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -2770,10 +2851,16 @@ fn signed_proxy_route_scan_rejects_client_continuations_and_route_tampering() {
     )
     .sign(&key_pair);
     let admission = signed_query_test_admission();
+    let continuation_bytes = iroha_version::codec::EncodeVersioned::encode_versioned(&continuation);
+    let limits =
+        super::QueryFanoutMemoryEnvelope::decode_limits_for(continuation_bytes.len(), 1024 * 1024)
+            .expect("test route-scan decode limits");
     let request = super::decode_verified_proxy_signed_query(
-        &iroha_version::codec::EncodeVersioned::encode_versioned(&continuation),
+        &continuation_bytes,
         "test route scan",
         admission.as_ref(),
+        limits,
+        super::ProxySignedQueryReplayScope::RouteScanDeferred,
     )
     .expect("the client continuation signature should be valid");
     let response = super::reject_proxy_client_continuation(&request, "signed route scan")
@@ -2813,9 +2900,10 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
             .clone(),
     );
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"signed-query-ambiguous-dispatch"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: Vec::new(),
@@ -2877,81 +2965,4 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
             .and_then(|value| value.to_str().ok()),
         Some("signed_query_outcome_unknown")
     );
-}
-
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[tokio::test]
-async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
-    let first_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x93, "derive hedged first proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
-    let second_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x94, "derive hedged second proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
-    let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2));
-    let request = ToriiProxyRequestV5 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V5,
-        request_id: Hash::new(b"signed-query-pre-dispatch-fallback"),
-        hop_count: 1,
-        max_hops: 3,
-        visited_peer_ids: Vec::new(),
-        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
-            query_bytes: Vec::new(),
-            expected_route: ToriiRouteHintV1::from(route),
-            response_format: ToriiProxyResponseFormatV1::Norito,
-        },
-    };
-    let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let attempts_ref = attempts.clone();
-    let first_peer_id_for_closure = first_peer_id.clone();
-
-    let response = super::execute_torii_proxy_request_across_candidates(
-        vec![
-            ToriiProxyCandidate::P2p(first_peer_id.clone()),
-            ToriiProxyCandidate::P2p(second_peer_id.clone()),
-        ],
-        route,
-        request,
-        Duration::from_millis(20),
-        move |candidate, _request| {
-            let attempts = attempts_ref.clone();
-            let first_peer_id = first_peer_id_for_closure.clone();
-            async move {
-                let peer_id = candidate.peer_id().clone();
-                attempts
-                    .lock()
-                    .expect("attempt tracker should lock")
-                    .push(peer_id.clone());
-                if peer_id == first_peer_id {
-                    return Err(ToriiProxyAttemptError::before_dispatch(
-                        "request encoding failed before transport dispatch",
-                    ));
-                }
-                Ok(ToriiProxyHttpResponseV1 {
-                    status_code: StatusCode::OK.as_u16(),
-                    headers: Vec::new(),
-                    body: b"pre-dispatch-fallback-ok".to_vec(),
-                })
-            }
-        },
-        |_request_id| async move {},
-    )
-    .await;
-
-    assert_eq!(
-        attempts
-            .lock()
-            .expect("attempt tracker should lock")
-            .as_slice(),
-        &[first_peer_id, second_peer_id]
-    );
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
-    assert_eq!(body.as_ref(), b"pre-dispatch-fallback-ok");
 }

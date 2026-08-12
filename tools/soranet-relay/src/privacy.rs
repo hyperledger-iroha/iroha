@@ -8,7 +8,7 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    fmt::Write as _,
+    fmt::{self, Write as _},
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -24,7 +24,10 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use norito::json;
 
-use crate::config::{PrivacyTelemetryConfig, RelayMode};
+use crate::config::{
+    PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1, PRIVACY_MAX_COMPLETED_BUCKETS_V1,
+    PRIVACY_MAX_OPEN_BUCKETS_V1, PrivacyTelemetryConfig, RelayMode,
+};
 
 /// Percentiles captured in RTT exports.
 const RTT_PERCENTILES: &[f64] = &[0.5, 0.9, 0.99];
@@ -32,6 +35,83 @@ const RTT_PERCENTILES: &[f64] = &[0.5, 0.9, 0.99];
 const RTT_BUCKET_BOUNDS_MS: &[u64] = &[
     10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1_000, 1_500, 2_000, 2_500, 3_000,
 ];
+/// Maximum copied detail retained in one first-release privacy event.
+const PRIVACY_EVENT_DETAIL_MAX_BYTES_V1: usize = 256;
+/// Maximum encoded JSON retained transiently for one privacy event.
+const PRIVACY_EVENT_JSON_MAX_BYTES_V1: usize = 2 * 1024;
+/// Maximum distinct privacy-preserving GAR hashes retained in one bucket.
+const PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1: usize = 256;
+/// Conservative Prometheus output allowance for one completed bucket.
+const PRIVACY_PROMETHEUS_MAX_BYTES_PER_BUCKET_V1: usize = 128 * 1024;
+
+struct BoundedText {
+    inner: String,
+    maximum: usize,
+    failed: bool,
+}
+
+impl BoundedText {
+    fn new(maximum: usize) -> Self {
+        Self {
+            inner: String::new(),
+            maximum,
+            failed: false,
+        }
+    }
+
+    fn into_string(self) -> String {
+        if self.failed {
+            String::new()
+        } else {
+            self.inner
+        }
+    }
+}
+
+impl fmt::Write for BoundedText {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let Some(next) = self.inner.len().checked_add(value.len()) else {
+            self.failed = true;
+            return Err(fmt::Error);
+        };
+        if next > self.maximum || self.inner.try_reserve(value.len()).is_err() {
+            self.failed = true;
+            return Err(fmt::Error);
+        }
+        self.inner.push_str(value);
+        Ok(())
+    }
+}
+
+fn bounded_event_queue(requested: usize) -> (usize, VecDeque<SoranetPrivacyEventV1>) {
+    let capacity = requested.max(1).min(PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1);
+    let mut events = VecDeque::new();
+    if events.try_reserve_exact(capacity).is_err() {
+        return (0, events);
+    }
+    (capacity, events)
+}
+
+fn drain_event_ndjson(events: &mut VecDeque<SoranetPrivacyEventV1>) -> String {
+    let mut body = String::new();
+    while let Some(event) = events.pop_front() {
+        let line = match json::to_json_bounded(&event, PRIVACY_EVENT_JSON_MAX_BYTES_V1) {
+            Ok(line) => line,
+            Err(error) => {
+                eprintln!("failed to serialise bounded privacy event: {error}");
+                continue;
+            }
+        };
+        let additional = line.len().saturating_add(1);
+        if body.try_reserve(additional).is_err() {
+            events.clear();
+            break;
+        }
+        body.push_str(&line);
+        body.push('\n');
+    }
+    body
+}
 
 /// Aggregator configuration knobs used by the privacy telemetry layer.
 #[derive(Debug, Clone, Copy)]
@@ -125,10 +205,10 @@ pub struct ProxyPolicyEventBuffer {
 impl PrivacyEventBuffer {
     /// Construct a new buffer retaining up to `max_events` entries.
     pub fn new(max_events: usize) -> Self {
-        let capacity = max_events.max(1);
+        let (capacity, events) = bounded_event_queue(max_events);
         Self {
             max_events: capacity,
-            events: Mutex::new(VecDeque::with_capacity(capacity)),
+            events: Mutex::new(events),
         }
     }
 
@@ -240,23 +320,7 @@ impl PrivacyEventBuffer {
             .events
             .lock()
             .expect("privacy event buffer mutex poisoned");
-        let drained: Vec<_> = guard.drain(..).collect();
-        drop(guard);
-
-        let mut body = String::new();
-        for event in drained {
-            match json::to_value(&event).and_then(|value| json::to_string(&value)) {
-                Ok(line) => {
-                    body.push_str(&line);
-                    body.push('\n');
-                }
-                Err(error) => {
-                    // Logging here would risk deadlocks; best-effort skip the malformed entry.
-                    eprintln!("failed to serialise privacy event: {error}");
-                }
-            }
-        }
-        body
+        drain_event_ndjson(&mut guard)
     }
 
     /// Return the number of buffered privacy events without draining them.
@@ -273,6 +337,9 @@ impl PrivacyEventBuffer {
             .events
             .lock()
             .expect("privacy event buffer mutex poisoned");
+        if self.max_events == 0 {
+            return;
+        }
         if guard.len() == self.max_events {
             guard.pop_front();
         }
@@ -283,10 +350,10 @@ impl PrivacyEventBuffer {
 impl ProxyPolicyEventBuffer {
     /// Construct a downgrade buffer retaining up to `max_events` entries.
     pub fn new(max_events: usize) -> Self {
-        let capacity = max_events.max(1);
+        let (capacity, events) = bounded_event_queue(max_events);
         Self {
             max_events: capacity,
-            events: Mutex::new(VecDeque::with_capacity(capacity)),
+            events: Mutex::new(events),
         }
     }
 
@@ -313,6 +380,9 @@ impl ProxyPolicyEventBuffer {
             .events
             .lock()
             .expect("proxy policy buffer mutex poisoned");
+        if self.max_events == 0 {
+            return;
+        }
         if guard.len() == self.max_events {
             guard.pop_front();
         }
@@ -325,20 +395,7 @@ impl ProxyPolicyEventBuffer {
             .events
             .lock()
             .expect("proxy policy buffer mutex poisoned");
-        let drained: Vec<_> = guard.drain(..).collect();
-        drop(guard);
-
-        let mut body = String::new();
-        for event in drained {
-            match json::to_value(&event).and_then(|value| json::to_string(&value)) {
-                Ok(line) => {
-                    body.push_str(&line);
-                    body.push('\n');
-                }
-                Err(error) => eprintln!("failed to serialise proxy policy event: {error}"),
-            }
-        }
-        body
+        drain_event_ndjson(&mut guard)
     }
 
     /// Current number of downgrade events awaiting proxy remediation.
@@ -357,7 +414,14 @@ fn detail_to_string(detail: Option<&str>) -> Option<String> {
         if trimmed.is_empty() {
             None
         } else {
-            Some(trimmed.to_string())
+            let mut end = trimmed.len().min(PRIVACY_EVENT_DETAIL_MAX_BYTES_V1);
+            while !trimmed.is_char_boundary(end) {
+                end = end.saturating_sub(1);
+            }
+            let mut retained = String::new();
+            retained.try_reserve_exact(end).ok()?;
+            retained.push_str(&trimmed[..end]);
+            Some(retained)
         }
     })
 }
@@ -507,7 +571,7 @@ impl ActiveAccumulator {
     }
 }
 impl CompletedBucket {
-    fn render_prometheus(&self, output: &mut String, mode: RelayMode, bucket_secs: u64) {
+    fn render_prometheus(&self, output: &mut impl fmt::Write, mode: RelayMode, bucket_secs: u64) {
         let bucket_start_secs = self.start_bucket.saturating_mul(bucket_secs);
         let bucket_label = bucket_start_secs.to_string();
         if self.stats.suppressed {
@@ -636,10 +700,18 @@ impl CompletedBucket {
 impl PrivacyAggregator {
     /// Create a new privacy aggregator using the supplied configuration.
     pub fn new(config: PrivacyConfig) -> Self {
-        let config = normalize_config(config);
+        let mut config = normalize_config(config);
+        let mut state = PrivacyState::default();
+        if state
+            .completed
+            .try_reserve_exact(config.max_completed_buckets)
+            .is_err()
+        {
+            config.max_completed_buckets = 0;
+        }
         Self {
             config,
-            state: Mutex::new(PrivacyState::default()),
+            state: Mutex::new(state),
         }
     }
 
@@ -714,14 +786,19 @@ impl PrivacyAggregator {
             .expect("soranet privacy aggregator mutex poisoned");
         let current_idx = bucket_index(now, bucket_secs);
         state.flush_ready(current_idx, &self.config);
-        let completed: Vec<_> = state.completed.iter().cloned().collect();
-        drop(state);
-
-        let mut output = String::new();
-        for bucket in completed {
+        let maximum = match state
+            .completed
+            .len()
+            .checked_mul(PRIVACY_PROMETHEUS_MAX_BYTES_PER_BUCKET_V1)
+        {
+            Some(maximum) => maximum,
+            None => return String::new(),
+        };
+        let mut output = BoundedText::new(maximum);
+        for bucket in &state.completed {
             bucket.render_prometheus(&mut output, mode, bucket_secs);
         }
-        output
+        output.into_string()
     }
 
     fn with_bucket<F>(&self, when: SystemTime, mut update: F)
@@ -733,6 +810,12 @@ impl PrivacyAggregator {
             .lock()
             .expect("soranet privacy aggregator mutex poisoned");
         let bucket_idx = bucket_index(when, self.config.bucket_secs);
+        if !state.open.contains_key(&bucket_idx)
+            && state.open.len()
+                >= usize::try_from(PRIVACY_MAX_OPEN_BUCKETS_V1).unwrap_or(usize::MAX)
+        {
+            return;
+        }
         let bucket = state.open.entry(bucket_idx).or_default();
         update(bucket);
         state.flush_ready(bucket_idx, &self.config);
@@ -745,6 +828,9 @@ impl PrivacyState {
             return;
         }
         let mut ready = Vec::new();
+        if ready.try_reserve_exact(self.open.len()).is_err() {
+            return;
+        }
         for (&bucket_idx, stats) in self.open.iter() {
             let age = current_idx.saturating_sub(bucket_idx);
             let meets_delay = age >= config.flush_delay_buckets;
@@ -776,10 +862,15 @@ impl PrivacyState {
         if max_completed == 0 {
             return;
         }
-        self.completed.push_back(bucket);
-        while self.completed.len() > max_completed {
+        while self.completed.len() >= max_completed {
             self.completed.pop_front();
         }
+        if self.completed.len() == self.completed.capacity()
+            && self.completed.try_reserve_exact(1).is_err()
+        {
+            return;
+        }
+        self.completed.push_back(bucket);
     }
 }
 
@@ -860,8 +951,11 @@ impl BucketStats {
     }
 
     fn record_gar_category(&mut self, hash: String) {
-        let entry = self.gar_counts.entry(hash).or_insert(0);
-        *entry = entry.saturating_add(1);
+        if let Some(entry) = self.gar_counts.get_mut(&hash) {
+            *entry = entry.saturating_add(1);
+        } else if self.gar_counts.len() < PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1 {
+            self.gar_counts.insert(hash, 1);
+        }
     }
 
     fn handshake_events(&self) -> u64 {
@@ -959,12 +1053,20 @@ fn normalize_config(mut config: PrivacyConfig) -> PrivacyConfig {
     if config.max_completed_buckets == 0 {
         config.max_completed_buckets = PrivacyConfig::default().max_completed_buckets;
     }
+    config.max_completed_buckets = config
+        .max_completed_buckets
+        .min(PRIVACY_MAX_COMPLETED_BUCKETS_V1);
     if config.expected_shares == 0 {
         config.expected_shares = PrivacyConfig::default().expected_shares;
     }
     if config.event_buffer_capacity == 0 {
         config.event_buffer_capacity = PrivacyConfig::default().event_buffer_capacity;
     }
+    config.event_buffer_capacity = config
+        .event_buffer_capacity
+        .min(PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1);
+    config.flush_delay_buckets = config.flush_delay_buckets.min(PRIVACY_MAX_OPEN_BUCKETS_V1);
+    config.force_flush_buckets = config.force_flush_buckets.min(PRIVACY_MAX_OPEN_BUCKETS_V1);
     if config.force_flush_buckets < config.flush_delay_buckets {
         config.force_flush_buckets = config.flush_delay_buckets;
     }
@@ -1200,5 +1302,75 @@ mod tests {
         assert_eq!(config.max_completed_buckets, 20);
         assert_eq!(config.expected_shares, 3);
         assert_eq!(config.event_buffer_capacity, 2_048);
+    }
+
+    #[test]
+    fn programmatic_privacy_limits_are_clamped_before_allocation() {
+        let aggregator = PrivacyAggregator::new(PrivacyConfig {
+            flush_delay_buckets: u64::MAX,
+            force_flush_buckets: u64::MAX,
+            max_completed_buckets: usize::MAX,
+            event_buffer_capacity: usize::MAX,
+            ..PrivacyConfig::default()
+        });
+        assert_eq!(
+            aggregator.config.max_completed_buckets,
+            PRIVACY_MAX_COMPLETED_BUCKETS_V1
+        );
+        assert_eq!(
+            aggregator.config.event_buffer_capacity,
+            PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1
+        );
+        assert_eq!(
+            aggregator.config.flush_delay_buckets,
+            PRIVACY_MAX_OPEN_BUCKETS_V1
+        );
+        assert_eq!(
+            aggregator.config.force_flush_buckets,
+            PRIVACY_MAX_OPEN_BUCKETS_V1
+        );
+
+        let buffer = PrivacyEventBuffer::new(usize::MAX);
+        assert!(
+            buffer.max_events == 0 || buffer.max_events == PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1
+        );
+        let proxy = ProxyPolicyEventBuffer::new(usize::MAX);
+        assert!(proxy.max_events == 0 || proxy.max_events == PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1);
+    }
+
+    #[test]
+    fn privacy_detail_and_category_retention_are_bounded() {
+        let detail = "é".repeat(PRIVACY_EVENT_DETAIL_MAX_BYTES_V1);
+        let retained = detail_to_string(Some(&detail)).expect("bounded detail");
+        assert_eq!(retained.len(), PRIVACY_EVENT_DETAIL_MAX_BYTES_V1);
+        assert!(retained.is_char_boundary(retained.len()));
+
+        let mut bucket = BucketStats::default();
+        for index in 0..=PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1 {
+            bucket.record_gar_category(format!("{index:016x}"));
+        }
+        assert_eq!(
+            bucket.gar_counts.len(),
+            PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1
+        );
+    }
+
+    #[test]
+    fn open_bucket_retention_stops_at_the_first_release_limit() {
+        let aggregator = PrivacyAggregator::new(PrivacyConfig {
+            bucket_secs: 1,
+            min_handshakes: u64::MAX,
+            flush_delay_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
+            force_flush_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
+            ..PrivacyConfig::default()
+        });
+        for bucket in (0..=PRIVACY_MAX_OPEN_BUCKETS_V1).rev() {
+            aggregator.record_capacity_reject(UNIX_EPOCH + Duration::from_secs(bucket));
+        }
+        let state = aggregator.state.lock().expect("privacy state");
+        assert_eq!(
+            state.open.len(),
+            usize::try_from(PRIVACY_MAX_OPEN_BUCKETS_V1).expect("fixed limit fits usize")
+        );
     }
 }

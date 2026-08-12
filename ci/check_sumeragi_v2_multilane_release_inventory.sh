@@ -19,6 +19,7 @@ readonly closure_ledger="specs/sumeragi_v2_multilane_closure_ledger.md"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
 readonly release_receipt_component="scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"
 readonly release_receipt_corridor_component="scripts/write_sumeragi_v2_release_receipt_corridor_log.py"
+readonly release_receipt_publish_component="scripts/write_sumeragi_v2_release_receipt_publish_helpers.py"
 readonly prebuilt_bundle_shell="scripts/sumeragi_v2_prebuilt_bundle.sh"
 readonly prebuilt_bundle_helper="scripts/sumeragi_v2_prebuilt_bundle.py"
 readonly process_policy="scripts/sumeragi_v2_release_process_policy.sh"
@@ -128,6 +129,10 @@ if [[ ! -f "$release_receipt_component" || -L "$release_receipt_component" ]]; t
 fi
 if [[ ! -f "$release_receipt_corridor_component" || -L "$release_receipt_corridor_component" ]]; then
   echo "release receipt corridor-log component must be a regular non-symlink file" >&2
+  exit 1
+fi
+if [[ ! -f "$release_receipt_publish_component" || -L "$release_receipt_publish_component" ]]; then
+  echo "release receipt publish-helper component must be a regular non-symlink file" >&2
   exit 1
 fi
 if [[ ! -f "$cargo_proxy" || -L "$cargo_proxy" ]]; then
@@ -286,6 +291,7 @@ python3 -I -S - \
   "$release_receipt_writer" \
   "$release_receipt_component" \
   "$release_receipt_corridor_component" \
+  "$release_receipt_publish_component" \
   "$canonical_production_test_count" \
   "$process_policy" <<'PY'
 from __future__ import annotations
@@ -306,8 +312,10 @@ receipt_component = Path(sys.argv[3])
 receipt_component_source = receipt_component.read_text(encoding="utf-8")
 receipt_corridor_component = Path(sys.argv[4])
 receipt_corridor_component_source = receipt_corridor_component.read_text(encoding="utf-8")
-canonical_production_test_count = int(sys.argv[5])
-process_policy = Path(sys.argv[6])
+receipt_publish_component = Path(sys.argv[5])
+receipt_publish_component_source = receipt_publish_component.read_text(encoding="utf-8")
+canonical_production_test_count = int(sys.argv[6])
+process_policy = Path(sys.argv[7])
 process_policy_source = process_policy.read_text(encoding="utf-8")
 
 if "_prebuilt_workspace_target" in receipt_source:
@@ -415,6 +423,7 @@ for node in receipt_tree.body:
 expected_receipt_components = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
     "write_sumeragi_v2_release_receipt_corridor_log.py",
+    "write_sumeragi_v2_release_receipt_publish_helpers.py",
 )
 if (
     receipt_assignments.get("_RELEASE_RECEIPT_COMPONENT_FILES")
@@ -433,6 +442,10 @@ expected_receipt_corridor_component_symbols = (
     "_prebuilt_release_roots",
     "_prebuilt_directory",
 )
+expected_receipt_publish_component_symbols = (
+    "_complete_write",
+    "_owned_unlink_name",
+)
 parent_component_symbols = tuple(
     node.name
     for node in receipt_tree.body
@@ -440,6 +453,7 @@ parent_component_symbols = tuple(
     and node.name
     in expected_receipt_component_symbols
     + expected_receipt_corridor_component_symbols
+    + expected_receipt_publish_component_symbols
 )
 if parent_component_symbols:
     reject("receipt writer formal-artifact functions are not source-isolated")
@@ -464,6 +478,17 @@ corridor_component_symbols = tuple(
 )
 if corridor_component_symbols != expected_receipt_corridor_component_symbols:
     reject("receipt writer corridor-log component symbol inventory is not exact")
+receipt_publish_component_tree = ast.parse(
+    receipt_publish_component_source,
+    filename=str(receipt_publish_component),
+)
+publish_component_symbols = tuple(
+    node.name
+    for node in receipt_publish_component_tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+)
+if publish_component_symbols != expected_receipt_publish_component_symbols:
+    reject("receipt writer publish-helper component symbol inventory is not exact")
 if (
     receipt_assignments.get("_PRODUCTION_TEST_COUNT")
     != canonical_production_test_count

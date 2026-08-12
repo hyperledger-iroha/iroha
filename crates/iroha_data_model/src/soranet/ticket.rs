@@ -88,7 +88,7 @@ pub enum TicketScopeV1 {
 )]
 pub struct TicketBodyV1 {
     /// Blinded content identifier protected by the `SoraNet` salt schedule.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub blinded_cid: Digest32,
     /// Capability scope granted to the holder.
     pub scope: TicketScopeV1,
@@ -132,15 +132,15 @@ pub struct TicketEnvelopeV1 {
     /// Canonical ticket body.
     pub body: TicketBodyV1,
     /// Commitment over ticket fields (exact hash computed in host runtime).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub commitment: Digest32,
     /// Halo2 proof bytes verifying the commitment/nullifier constraints.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub zk_proof: Vec<u8>,
     /// Issuer signature sealing the ticket body + commitment.
     pub signature: Signature,
     /// Nullifier used to detect replay; actual validation occurs host-side.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub nullifier: Digest32,
 }
 

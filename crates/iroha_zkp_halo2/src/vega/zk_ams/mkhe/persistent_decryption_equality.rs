@@ -21,6 +21,12 @@
 //! readiness stays closed until that short-solution/SIS assumption has an
 //! independently pinned certificate and a replacement release-size KAT.
 
+#[path = "persistent_decryption_direct_equality_v1.rs"]
+mod persistent_decryption_direct_equality_v1;
+
+#[path = "persistent_decryption_response_link.rs"]
+mod persistent_decryption_response_link;
+
 use super::{
     ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -30,14 +36,19 @@ use super::{
         persistent_commitment_set_digest,
     },
     collective::{
+        VerifiedCollectivePublicKeyShareStagedAdmissionV1, ZeroizingRns,
         ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
-        collective_public_key_digest_from_bounded_cpk_v1, cpk_party_b_payload_blake3_v1,
+        ZkAmsMkheCollectivePublicKeyV1, ZkAmsMkhePreparedCollectivePublicAV1,
+        ZkAmsMkheStagedCollectivePublicKeyAdmissionV1, cks_staged_residue_digests_v1,
+        consume_collective_public_key_share_for_staging_v1, cpk_party_b_payload_blake3_v1,
+        finalize_collective_public_key_from_staged_v1, prepare_zk_ams_mkhe_collective_public_a_v1,
         validate_collective_public_key_share_for_verified_cpk_compact_v1,
     },
+    collective_eval_keys::ZkAmsMkheTrustedCksContextV1,
     cpk_relation::{VerifiedZkAmsMkheCpkContributionV1, ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1},
     decryption::{
-        ZkAmsMkheDecryptionStatementV1, decryption_key_context_digest_from_bounded_cpk_v1,
-        decryption_statement_binding_digest_from_axes_v1, decryption_wire_ciphertext_digest_v1,
+        DecryptionCiphertextAxesV1, decryption_key_context_digest_from_bounded_cpk_v1,
+        decryption_statement_binding_digest_from_axes_v1,
     },
     direct_object_transport::{
         ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1, ZkAmsMkheDirectObjectCasPublicationV1,
@@ -49,13 +60,15 @@ use super::{
     manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
     mod_add,
     persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
-    wire::{
-        ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
-        ZkAmsMkheRnsPolynomialWireV1,
-    },
+    wire::{ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheRnsPolynomialWireV1},
     zk_ams_mkhe_security_certificate_v1,
 };
 use crate::vega::{VegaT256PointV1 as Point, sponge::Keccak256};
+
+#[cfg(test)]
+use super::decryption::ZkAmsMkheDecryptionStatementV1;
+#[cfg(test)]
+use super::direct_object_transport::validate_zk_ams_mkhe_direct_object_v1;
 
 const TRANSITIVE_EQUATION_CONTRACT_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.persistent-decryption-equations:b_i=-a*s_i+t*e_i;share_i=c_1*s_i+t*z_i;same-secret-response";
 const SHORT_SOLUTION_ASSUMPTION_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.persistent-decryption-short-solution-assumption:shared-cpk-equation:ternary-s:centered-binomial-e:sis-binding:certificate-required";
@@ -67,6 +80,10 @@ const PARTY_USE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.persistent-decryption-
 const PROOF_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.persistent-decryption-proof-binding";
 const STREAMING_AUTHORITY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.persistent-decryption-streaming-authority";
+const STAGED_CPK_BATCH_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.collective-public-key.staged-batch";
+const CKS_RNS_NATIVE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial-digest";
+const CKS_RNS_WIRE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-polynomial";
 struct PersistentDecryptionPartyAuthorityV1 {
     party_index: u8,
     party: ZkAmsMkhePartyIdV1,
@@ -166,10 +183,10 @@ impl ZkAmsMkheStreamingDecryptionAuthorityMaterialV1 {
 pub(super) struct ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
     roster: ZkAmsMkheGovernedActiveRosterV1,
     cpk_transcript_digest: [u8; 32],
+    prepared_public_a: ZkAmsMkhePreparedCollectivePublicAV1,
     next_party_index: usize,
     failed: bool,
-    aggregate_b: Vec<u64>,
-    share_digests: Vec<[u8; 32]>,
+    admissions: Vec<VerifiedCollectivePublicKeyShareStagedAdmissionV1>,
     bindings: Vec<VerifiedPersistentWitnessBindingV1>,
     party_b_pointers: Vec<ZkAmsMkheDirectObjectPointerV1>,
     verification_read_receipts: Vec<ZkAmsMkheDirectObjectReadReceiptV1>,
@@ -177,6 +194,65 @@ pub(super) struct ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
     provider_identity: Option<[u8; 32]>,
     snapshot_identity: Option<[u8; 32]>,
     publication_identity: Option<[u8; 32]>,
+}
+
+struct StagedCpkBatchSealV1;
+
+/// Sealed first-stage output retaining no party `b_i` or proof owner.
+///
+/// Common `a` is the exact allocation unwrapped from the builder-owned
+/// prepared context. All party-sized objects are represented only by sealed
+/// admissions, immutable pointers, and complete read/publication receipts.
+// TODO: Remove the targeted dead-code expectations in this staged corridor
+// when the fail-closed CPK release gate wires its production consumer.
+pub(super) struct ZkAmsMkheStagedCpkBatchV1 {
+    _seal: StagedCpkBatchSealV1,
+    roster: ZkAmsMkheGovernedActiveRosterV1,
+    cpk_transcript_digest: [u8; 32],
+    common_public_a: ZeroizingRns,
+    admissions:
+        [VerifiedCollectivePublicKeyShareStagedAdmissionV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    bindings: [VerifiedPersistentWitnessBindingV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    party_b_pointers: [ZkAmsMkheDirectObjectPointerV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    verification_read_receipts:
+        [ZkAmsMkheDirectObjectReadReceiptV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    publication_receipts:
+        [ZkAmsMkheDirectObjectPublicationReceiptV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+    provider_identity: [u8; 32],
+    snapshot_identity: [u8; 32],
+    publication_identity: [u8; 32],
+    batch_digest: [u8; 32],
+    failed: bool,
+}
+
+/// Exact successful second-stage products. No constructor accepts raw digests.
+pub(super) struct ZkAmsMkheFinalizedStagedCpkV1 {
+    collective_public_key: ZkAmsMkheCollectivePublicKeyV1,
+    collective_public_key_admission: ZkAmsMkheStagedCollectivePublicKeyAdmissionV1,
+    trusted_cks_context: ZkAmsMkheTrustedCksContextV1,
+    persistent_context: ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    streaming_decryption_authority: ZkAmsMkheStreamingDecryptionAuthorityV1,
+}
+
+impl ZkAmsMkheFinalizedStagedCpkV1 {
+    #[allow(clippy::type_complexity)]
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        ZkAmsMkheCollectivePublicKeyV1,
+        ZkAmsMkheStagedCollectivePublicKeyAdmissionV1,
+        ZkAmsMkheTrustedCksContextV1,
+        ZkAmsMkhePersistentDecryptionVerificationContextV1,
+        ZkAmsMkheStreamingDecryptionAuthorityV1,
+    ) {
+        (
+            self.collective_public_key,
+            self.collective_public_key_admission,
+            self.trusted_cks_context,
+            self.persistent_context,
+            self.streaming_decryption_authority,
+        )
+    }
 }
 
 /// Secret-free verified CPK authority retained by an independent decryption verifier.
@@ -222,13 +298,12 @@ impl core::fmt::Debug for ZkAmsMkhePersistentDecryptionVerificationContextV1 {
 
 /// Move-only authority for one exact governed party and ciphertext statement.
 ///
-/// It is neither `Clone` nor serializable. Each invocation of
-/// [`ZkAmsMkhePersistentDecryptionVerificationContextV1::bind_statement_v1`]
-/// can issue a fresh set for the exact statement; replay rejection therefore
-/// rests on the bound ciphertext, record, sample, and admission state rather
-/// than on pretending the retained context is a one-shot token. The public
-/// prover still consumes each issued use, and there is no omitted-capability
-/// or raw-digest proving overload.
+/// It is neither `Clone` nor serializable. Each compact statement binding can
+/// issue a fresh set for the exact statement; replay rejection therefore rests
+/// on the bound ciphertext, record, sample, and admission state rather than on
+/// pretending the retained context is a one-shot token. The public prover still
+/// consumes each issued use, and there is no omitted-capability or raw-digest
+/// proving overload.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ZkAmsMkhePersistentDecryptionPartyUseV1 {
     binding_set_root: [u8; 32],
@@ -258,6 +333,10 @@ pub struct ZkAmsMkhePersistentDecryptionPartyUseV1 {
 
 impl ZkAmsMkhePersistentDecryptionPartyUseV1 {
     #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "axis corruption seam retained for native capability reference tests"
+    )]
     pub(super) fn corrupt_axis_for_test(&mut self, axis: usize, other_party: ZkAmsMkhePartyIdV1) {
         match axis {
             0 => self.binding_set_root[0] ^= 1,
@@ -314,9 +393,13 @@ impl PersistentDecryptionProofBindingV1 {
     }
 }
 
-#[allow(dead_code)]
 impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
-    /// Begin the exact bounded ceremony before borrowing any public share.
+    /// Begin the exact bounded ceremony before generating any party secret.
+    ///
+    /// This transition allocates the sole prepared common-`a` backing and all
+    /// bounded metadata capacity. It deliberately does not allocate the
+    /// aggregate polynomial; generation and proof validation can therefore
+    /// never coexist with that second `P`-sized owner.
     pub(super) fn new(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         cpk_transcript_digest: [u8; 32],
@@ -327,22 +410,15 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
         if cpk_transcript_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-        let coefficient_count = profile
-            .ring_degree
-            .checked_mul(profile.moduli.len())
-            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let mut aggregate_b = Vec::new();
-        aggregate_b
-            .try_reserve_exact(coefficient_count)
-            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        aggregate_b.resize(coefficient_count, 0);
-        let mut share_digests = Vec::new();
+        let prepared_public_a =
+            prepare_zk_ams_mkhe_collective_public_a_v1(roster, cpk_transcript_digest)?;
+        let mut admissions = Vec::new();
         let mut bindings = Vec::new();
         let mut party_b_pointers = Vec::new();
         let mut verification_read_receipts = Vec::new();
         let mut publication_receipts = Vec::new();
         for reserve in [
-            share_digests.try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1),
+            admissions.try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1),
             bindings.try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1),
             party_b_pointers.try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1),
             verification_read_receipts.try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1),
@@ -353,10 +429,10 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
         Ok(Self {
             roster: *roster,
             cpk_transcript_digest,
+            prepared_public_a,
             next_party_index: 0,
             failed: false,
-            aggregate_b,
-            share_digests,
+            admissions,
             bindings,
             party_b_pointers,
             verification_read_receipts,
@@ -367,6 +443,23 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
         })
     }
 
+    /// Borrow the builder-owned common `a` for the sole next party generator.
+    /// Cloning this prepared context causes `finish_staging_v1` to fail closed:
+    /// sealing requires unique ownership of its `Arc<Vec<u64>>` backing.
+    pub(super) const fn prepared_public_a_v1(&self) -> &ZkAmsMkhePreparedCollectivePublicAV1 {
+        &self.prepared_public_a
+    }
+
+    /// Trusted roster retained by the public single-party ceremony facade.
+    pub(super) const fn roster_v1(&self) -> &ZkAmsMkheGovernedActiveRosterV1 {
+        &self.roster
+    }
+
+    /// Exact transcript retained by the public single-party ceremony facade.
+    pub(super) const fn cpk_transcript_digest_v1(&self) -> [u8; 32] {
+        self.cpk_transcript_digest
+    }
+
     /// Consume and publish the sole next governed CPK contribution.
     ///
     /// The transition is poisoned before any fallible or backend-controlled
@@ -375,7 +468,8 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
     pub(super) fn absorb_verified_party_v1<P>(
         &mut self,
         contribution: VerifiedZkAmsMkheCpkContributionV1,
-        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        share: ZkAmsMkheCollectivePublicKeyShareV1,
+        party_state: &mut ZkAmsMkheCollectivePartyStateV1,
         publisher: &mut P,
     ) -> Result<(), ZkAmsMkheErrorV1>
     where
@@ -386,28 +480,136 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
         self.failed = true;
-        let result = self.absorb_verified_party_inner_v1(contribution, share, publisher);
+        let result =
+            self.absorb_verified_party_inner_v1(contribution, share, party_state, publisher);
         if result.is_ok() {
             self.failed = false;
         }
         result
     }
 
-    fn absorb_verified_party_inner_v1<P>(
+    /// Test-only bounded stand-in for the complete CPK relation verifier.
+    ///
+    /// It preserves the production ownership topology: one share is published,
+    /// independently reread, consumed into a compact admission, and dropped
+    /// before the next party is generated. No array of shares is accepted.
+    #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "synthetic CPK party admission retained for bounded builder reference tests"
+    )]
+    pub(super) fn absorb_test_party_v1<P>(
         &mut self,
-        contribution: VerifiedZkAmsMkheCpkContributionV1,
-        share: &ZkAmsMkheCollectivePublicKeyShareV1,
+        share: ZkAmsMkheCollectivePublicKeyShareV1,
+        party_state: &mut ZkAmsMkheCollectivePartyStateV1,
+        publisher: &mut P,
+    ) -> Result<(), ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
+    {
+        if self.failed || self.next_party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+            self.failed = true;
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        self.failed = true;
+        let result = self.absorb_test_party_inner_v1(share, party_state, publisher);
+        if result.is_ok() {
+            self.failed = false;
+        }
+        result
+    }
+
+    #[cfg(test)]
+    fn absorb_test_party_inner_v1<P>(
+        &mut self,
+        share: ZkAmsMkheCollectivePublicKeyShareV1,
+        party_state: &mut ZkAmsMkheCollectivePartyStateV1,
         publisher: &mut P,
     ) -> Result<(), ZkAmsMkheErrorV1>
     where
         P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
     {
         let party_index = self.next_party_index;
+        let prepared_owner = self.prepared_public_a.public_a().shared_residues();
+        let share_owner = share.public_a().shared_residues();
+        if !std::sync::Arc::ptr_eq(&prepared_owner, &share_owner) {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        drop((prepared_owner, share_owner));
         let share_digest = validate_collective_public_key_share_for_verified_cpk_compact_v1(
             &self.roster,
             self.cpk_transcript_digest,
             party_index,
+            &share,
+        )?;
+        let (state_binding, verifier_binding) =
+            party_state.test_state_owned_cpk_bindings_v1(&self.roster, &share)?;
+        let publication_receipt = publish_canonical_party_b_v1(share.party_public_b(), publisher)?;
+        let expected_pointer = publication_receipt.pointer();
+        let verification_read_receipt = validate_zk_ams_mkhe_direct_object_v1(
+            ZkAmsMkheDirectObjectKindV1::CpkPartyB,
+            expected_pointer,
+            publisher,
+        )?;
+        validate_compact_publication_provenance_v1(
+            expected_pointer,
+            &verification_read_receipt,
+            &publication_receipt,
+            self.provider_identity,
+            self.snapshot_identity,
+            self.publication_identity,
+            &self.publication_receipts,
+        )?;
+        let verification_snapshot = verification_read_receipt.snapshot();
+        let admission = consume_collective_public_key_share_for_staging_v1(
+            &self.roster,
+            self.cpk_transcript_digest,
+            party_index,
             share,
+        )?;
+        if admission.share_digest() != share_digest {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        party_state.admit_staged_verified_cpk_binding_v1(
+            &self.roster,
+            &admission,
+            state_binding,
+        )?;
+        self.provider_identity = Some(verification_snapshot.provider_identity());
+        self.snapshot_identity = Some(verification_snapshot.snapshot_identity());
+        self.publication_identity = Some(publication_receipt.publication_identity());
+        self.admissions.push(admission);
+        self.bindings.push(verifier_binding);
+        self.party_b_pointers.push(expected_pointer);
+        self.verification_read_receipts
+            .push(verification_read_receipt);
+        self.publication_receipts.push(publication_receipt);
+        self.next_party_index += 1;
+        Ok(())
+    }
+
+    fn absorb_verified_party_inner_v1<P>(
+        &mut self,
+        contribution: VerifiedZkAmsMkheCpkContributionV1,
+        share: ZkAmsMkheCollectivePublicKeyShareV1,
+        party_state: &mut ZkAmsMkheCollectivePartyStateV1,
+        publisher: &mut P,
+    ) -> Result<(), ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
+    {
+        let party_index = self.next_party_index;
+        let prepared_owner = self.prepared_public_a.public_a().shared_residues();
+        let share_owner = share.public_a().shared_residues();
+        if !std::sync::Arc::ptr_eq(&prepared_owner, &share_owner) {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        drop((prepared_owner, share_owner));
+        let share_digest = validate_collective_public_key_share_for_verified_cpk_compact_v1(
+            &self.roster,
+            self.cpk_transcript_digest,
+            party_index,
+            &share,
         )?;
         let compact_source = contribution
             .into_compact_decryption_source(&self.roster, self.cpk_transcript_digest, party_index)
@@ -443,57 +645,49 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
             &self.publication_receipts,
         )?;
         let verification_snapshot = verification_read_receipt.snapshot();
+        let admission = consume_collective_public_key_share_for_staging_v1(
+            &self.roster,
+            self.cpk_transcript_digest,
+            party_index,
+            share,
+        )?;
+        if admission.share_digest() != share_digest {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let (state_binding, verifier_binding) = binding.fork_for_state_and_verifier_v1();
         self.provider_identity = Some(verification_snapshot.provider_identity());
         self.snapshot_identity = Some(verification_snapshot.snapshot_identity());
         self.publication_identity = Some(publication_receipt.publication_identity());
-
-        let profile = release_profile_v1();
-        for (limb, residues) in share
-            .party_public_b()
-            .residues()
-            .chunks_exact(profile.ring_degree)
-            .enumerate()
-        {
-            let start = limb
-                .checked_mul(profile.ring_degree)
-                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-            let modulus = profile.moduli[limb];
-            for (offset, residue) in residues.iter().copied().enumerate() {
-                let aggregate = self
-                    .aggregate_b
-                    .get_mut(start + offset)
-                    .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
-                *aggregate = mod_add(*aggregate, residue, modulus);
-            }
-        }
-        self.share_digests.push(share_digest);
-        self.bindings.push(binding);
+        self.admissions.push(admission);
+        self.bindings.push(verifier_binding);
         self.party_b_pointers.push(expected_pointer);
         self.verification_read_receipts
             .push(verification_read_receipt);
         self.publication_receipts.push(publication_receipt);
+        let staged_admission = self
+            .admissions
+            .last()
+            .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        party_state.admit_staged_verified_cpk_binding_v1(
+            &self.roster,
+            staged_admission,
+            state_binding,
+        )?;
         self.next_party_index += 1;
         Ok(())
     }
 
-    /// Finish only after all eight ordered capabilities and publications exist.
-    pub(super) fn finish<P>(
+    /// Seal only after all eight ordered shares/proofs were consumed.
+    ///
+    /// `Arc::try_unwrap` is a structural residency guard: a caller that kept a
+    /// prepared/share backing owner cannot advance to aggregation. No
+    /// release-sized allocation occurs in this transition.
+    pub(super) fn finish_staging_v1(
         mut self,
-        publisher: &mut P,
-    ) -> Result<
-        (
-            ZkAmsMkhePersistentDecryptionVerificationContextV1,
-            ZkAmsMkheStreamingDecryptionAuthorityV1,
-            [VerifiedPersistentWitnessBindingV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
-        ),
-        ZkAmsMkheErrorV1,
-    >
-    where
-        P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
-    {
+    ) -> Result<ZkAmsMkheStagedCpkBatchV1, ZkAmsMkheErrorV1> {
         if self.failed
             || self.next_party_index != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
-            || self.share_digests.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+            || self.admissions.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
             || self.bindings.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
             || self.party_b_pointers.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
             || self.verification_read_receipts.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
@@ -512,23 +706,214 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
         let publication_identity = self
             .publication_identity
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-        let share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] = self
-            .share_digests
+        let profile = release_profile_v1();
+        profile.validate()?;
+        let common_public_a = self.prepared_public_a.public_a().shared_residues();
+        drop(self.prepared_public_a);
+        let common_public_a = std::sync::Arc::try_unwrap(common_public_a)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let common_public_a = ZeroizingRns::from_canonical_flat_v1(&profile, common_public_a)?;
+        let admissions: [VerifiedCollectivePublicKeyShareStagedAdmissionV1;
+            ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] = self
+            .admissions
             .try_into()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
+        let bindings: [VerifiedPersistentWitnessBindingV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+            self.bindings
+                .try_into()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
         let party_b_pointers: [ZkAmsMkheDirectObjectPointerV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
             self.party_b_pointers
                 .try_into()
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
-        let collective_public_key_digest = collective_public_key_digest_from_bounded_cpk_v1(
-            &self.roster,
+        let verification_read_receipts: [ZkAmsMkheDirectObjectReadReceiptV1;
+            ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] = self
+            .verification_read_receipts
+            .try_into()
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
+        let publication_receipts: [ZkAmsMkheDirectObjectPublicationReceiptV1;
+            ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] = self
+            .publication_receipts
+            .try_into()
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
+        let mut batch = ZkAmsMkheStagedCpkBatchV1 {
+            _seal: StagedCpkBatchSealV1,
+            roster: self.roster,
+            cpk_transcript_digest: self.cpk_transcript_digest,
+            common_public_a,
+            admissions,
+            bindings,
+            party_b_pointers,
+            verification_read_receipts,
+            publication_receipts,
+            provider_identity,
+            snapshot_identity,
+            publication_identity,
+            batch_digest: [0; 32],
+            failed: false,
+        };
+        batch.batch_digest = staged_cpk_batch_digest_v1(&batch);
+        batch.validate_v1()?;
+        Ok(batch)
+    }
+}
+
+fn staged_cpk_batch_digest_v1(batch: &ZkAmsMkheStagedCpkBatchV1) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(STAGED_CPK_BATCH_DOMAIN_V1);
+    hash.update(&batch.roster.profile_digest());
+    hash.update(&batch.roster.roster_digest());
+    hash.update(&batch.roster.key_material_digest());
+    hash.update(&batch.roster.epoch().to_be_bytes());
+    hash.update(&batch.cpk_transcript_digest);
+    for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+        hash.update(&u32::try_from(party_index).unwrap_or(u32::MAX).to_be_bytes());
+        hash.update(&batch.admissions[party_index].admission_digest());
+        hash.update(&batch.party_b_pointers[party_index].pointer_digest());
+        hash.update(&batch.verification_read_receipts[party_index].receipt_digest());
+        hash.update(&batch.publication_receipts[party_index].receipt_digest());
+    }
+    hash.update(&batch.provider_identity);
+    hash.update(&batch.snapshot_identity);
+    hash.update(&batch.publication_identity);
+    hash.finalize()
+}
+
+impl ZkAmsMkheStagedCpkBatchV1 {
+    fn validate_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
+        self.roster.validate()?;
+        let profile = release_profile_v1();
+        profile.validate()?;
+        if self.cpk_transcript_digest == [0; 32]
+            || self.provider_identity == [0; 32]
+            || self.snapshot_identity == [0; 32]
+            || self.publication_identity == [0; 32]
+            || self.batch_digest == [0; 32]
+            || self.batch_digest != staged_cpk_batch_digest_v1(self)
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let common_public_a_digests =
+            cks_staged_residue_digests_v1(&profile, self.common_public_a.coefficients())?;
+        for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+            let admission = &self.admissions[party_index];
+            admission.validate_for_v1(&self.roster, self.cpk_transcript_digest, party_index)?;
+            let pointer = self.party_b_pointers[party_index];
+            let verification_receipt = &self.verification_read_receipts[party_index];
+            let verification_snapshot = verification_receipt.snapshot();
+            let publication_receipt = &self.publication_receipts[party_index];
+            let publication_read_receipt = publication_receipt.post_publish_read_receipt();
+            let publication_snapshot = publication_read_receipt.snapshot();
+            if admission.public_a_digests() != common_public_a_digests
+                || pointer.kind() != ZkAmsMkheDirectObjectKindV1::CpkPartyB
+                || pointer.payload_bytes() != ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1 as u64
+                || self.party_b_pointers[..party_index].contains(&pointer)
+                || verification_snapshot.pointer() != pointer
+                || verification_snapshot.provider_identity() != self.provider_identity
+                || verification_snapshot.snapshot_identity() != self.snapshot_identity
+                || verification_receipt.canonical_bytes() != pointer.payload_bytes()
+                || verification_receipt.payload_blake3() != pointer.payload_blake3()
+                || publication_receipt.pointer() != pointer
+                || publication_receipt.publication_identity() != self.publication_identity
+                || publication_snapshot.pointer() != pointer
+                || publication_snapshot.provider_identity() != self.provider_identity
+                || publication_snapshot.snapshot_identity() != self.snapshot_identity
+                || publication_read_receipt.canonical_bytes() != pointer.payload_bytes()
+                || publication_read_receipt.payload_blake3() != pointer.payload_blake3()
+                || verification_receipt.receipt_digest()
+                    != publication_read_receipt.receipt_digest()
+                || self.verification_read_receipts[..party_index]
+                    .iter()
+                    .any(|prior| prior.receipt_digest() == verification_receipt.receipt_digest())
+                || self.publication_receipts[..party_index]
+                    .iter()
+                    .any(|prior| prior.receipt_digest() == publication_receipt.receipt_digest())
+            {
+                return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+            }
+        }
+        Ok(())
+    }
+
+    /// Consume the sealed stage and build every compact authority.
+    ///
+    /// Major release payload for the direct aggregation pass is
+    /// `2P + 8 KiB = 79_699_968 B` (`P = 39_845_888`): common `a`, one
+    /// zeroizing aggregate, and one direct-I/O chunk. The sealed admissions and
+    /// witness bindings retain only fixed digests and eight curve commitments
+    /// per party; allocator/struct metadata is excluded from this equation. No
+    /// current `P`-sized party `b_i` is decoded. The complete finalization
+    /// corridor peaks later at `2P + L = 80_740_352 B` (exactly `77 MiB`),
+    /// while one `L = 1 MiB` common-`a` limb is re-derived beside both final
+    /// key polynomials; that limb does not overlap the 8-KiB direct-I/O chunk.
+    pub(super) fn finalize_v1<P>(
+        mut self,
+        provider: &mut P,
+    ) -> Result<ZkAmsMkheFinalizedStagedCpkV1, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+    {
+        if self.failed {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        // Poison before validation, allocation, or provider-controlled work.
+        self.failed = true;
+        self.finalize_inner_v1(provider)
+    }
+
+    fn finalize_inner_v1<P>(
+        self,
+        provider: &mut P,
+    ) -> Result<ZkAmsMkheFinalizedStagedCpkV1, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+    {
+        self.validate_v1()?;
+        let profile = release_profile_v1();
+        profile.validate()?;
+        // The sole fallible ring allocation precedes the first provider call.
+        let mut aggregate_b = ZeroizingRns::zero_exact_v1(&profile)?;
+        let mut party_public_b_native_digests = [[0_u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1];
+        let mut party_public_b_wire_digests = [[0_u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1];
+        for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+            let (native_digest, wire_digest) = aggregate_staged_party_b_v1(
+                self.party_b_pointers[party_index],
+                self.provider_identity,
+                self.snapshot_identity,
+                &self.verification_read_receipts[party_index],
+                &self.publication_receipts[party_index],
+                provider,
+                &mut aggregate_b,
+            )?;
+            party_public_b_native_digests[party_index] = native_digest;
+            party_public_b_wire_digests[party_index] = wire_digest;
+        }
+        let share_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+            core::array::from_fn(|party_index| self.admissions[party_index].share_digest());
+        let (public_key_a_native_digest, public_key_a_wire_digest) =
+            self.admissions[0].public_a_digests();
+        let (collective_public_key, collective_public_key_admission) =
+            finalize_collective_public_key_from_staged_v1(
+                &self.roster,
+                self.cpk_transcript_digest,
+                self.common_public_a,
+                aggregate_b,
+                self.admissions,
+                party_public_b_native_digests,
+                party_public_b_wire_digests,
+            )?;
+        let collective_public_key_digest = collective_public_key.digest();
+        let trusted_cks_context = ZkAmsMkheTrustedCksContextV1::from_staged_verified_digests(
+            self.roster.to_wire_roster()?,
+            self.roster.key_material_digest(),
             self.cpk_transcript_digest,
-            &self.aggregate_b,
+            collective_public_key_digest,
             share_digests,
+            public_key_a_native_digest,
+            public_key_a_wire_digest,
+            party_public_b_native_digests,
+            party_public_b_wire_digests,
         )?;
-        // The sole full-RNS construction buffer is no longer live during any
-        // direct-object reread or common-`a` limb derivation below.
-        drop(self.aggregate_b);
 
         let key_context_digest = decryption_key_context_digest_from_bounded_cpk_v1(
             &self.roster,
@@ -537,10 +922,10 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
             share_digests,
             |party_index, hash| {
                 stream_canonical_party_b_into_hash_v1(
-                    party_b_pointers[party_index],
-                    provider_identity,
-                    snapshot_identity,
-                    publisher,
+                    self.party_b_pointers[party_index],
+                    self.provider_identity,
+                    self.snapshot_identity,
+                    provider,
                     hash,
                 )
             },
@@ -550,17 +935,12 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
             key_context_digest,
             collective_public_key_digest,
             share_digests,
-            party_b_pointers,
-            provider_identity,
-            snapshot_identity,
-            publisher,
+            self.party_b_pointers,
+            self.provider_identity,
+            self.snapshot_identity,
+            provider,
         )?;
-
-        let bindings: [VerifiedPersistentWitnessBindingV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
-            self.bindings
-                .try_into()
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
-        let binding_refs = core::array::from_fn(|index| &bindings[index]);
+        let binding_refs = core::array::from_fn(|index| &self.bindings[index]);
         let binding_set = VerifiedPersistentWitnessBindingSetV1::new(
             &self.roster,
             self.cpk_transcript_digest,
@@ -585,19 +965,19 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
             share_digests,
             key_context_digest,
             public_contribution_set_digest,
-            party_b_pointers,
+            party_b_pointers: self.party_b_pointers,
             verification_read_receipt_digests,
             publication_receipt_digests,
-            provider_identity,
-            snapshot_identity,
-            publication_identity,
+            provider_identity: self.provider_identity,
+            snapshot_identity: self.snapshot_identity,
+            publication_identity: self.publication_identity,
             authority_digest: [0; 32],
         };
         streaming_authority.authority_digest =
             streaming_decryption_authority_digest_v1(&streaming_authority)?;
         validate_streaming_decryption_authority_v1(&self.roster, &streaming_authority)?;
         let context_authority_digest = streaming_authority.authority_digest;
-        let context = ZkAmsMkhePersistentDecryptionVerificationContextV1 {
+        let persistent_context = ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             roster: self.roster,
             authority,
             streaming_authority: Some(streaming_authority),
@@ -605,13 +985,122 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
             equation_contract_digest: digest_literal(TRANSITIVE_EQUATION_CONTRACT_V1),
             short_solution_assumption_digest: digest_literal(SHORT_SOLUTION_ASSUMPTION_V1),
         };
-        context.validate_streaming_context_v1()?;
-        let compact_authority = ZkAmsMkheStreamingDecryptionAuthorityV1 {
+        persistent_context.validate_streaming_context_v1()?;
+        let streaming_decryption_authority = ZkAmsMkheStreamingDecryptionAuthorityV1 {
             _seal: StreamingDecryptionAuthoritySealV1,
             context_authority_digest,
         };
-        Ok((context, compact_authority, bindings))
+        Ok(ZkAmsMkheFinalizedStagedCpkV1 {
+            collective_public_key,
+            collective_public_key_admission,
+            trusted_cks_context,
+            persistent_context,
+            streaming_decryption_authority,
+        })
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aggregate_staged_party_b_v1<P>(
+    pointer: ZkAmsMkheDirectObjectPointerV1,
+    expected_provider_identity: [u8; 32],
+    expected_snapshot_identity: [u8; 32],
+    staged_verification_receipt: &ZkAmsMkheDirectObjectReadReceiptV1,
+    staged_publication_receipt: &ZkAmsMkheDirectObjectPublicationReceiptV1,
+    provider: &mut P,
+    aggregate_b: &mut ZeroizingRns,
+) -> Result<([u8; 32], [u8; 32]), ZkAmsMkheErrorV1>
+where
+    P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+{
+    let profile = release_profile_v1();
+    profile.validate()?;
+    let coefficient_count = profile
+        .ring_degree
+        .checked_mul(profile.moduli.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if pointer.kind() != ZkAmsMkheDirectObjectKindV1::CpkPartyB
+        || pointer.payload_bytes() != ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1 as u64
+        || aggregate_b.coefficients().len() != coefficient_count
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let encoded_count = u32::try_from(coefficient_count)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+        .to_be_bytes();
+    let mut native_hash = Keccak256::new();
+    native_hash.update(CKS_RNS_NATIVE_DIGEST_DOMAIN_V1);
+    native_hash.update(&encoded_count);
+    let mut wire_hash = Keccak256::new();
+    wire_hash.update(CKS_RNS_WIRE_DIGEST_DOMAIN_V1);
+    wire_hash.update(&encoded_count);
+    let mut transaction = ZkAmsMkheDirectObjectReadTransactionV1::begin(
+        ZkAmsMkheDirectObjectKindV1::CpkPartyB,
+        pointer,
+        provider,
+    )?;
+    let mut observed_count = [0_u8; 4];
+    if transaction.read_next(provider, &mut observed_count)? != observed_count.len()
+        || observed_count != encoded_count
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let mut coefficient_index = 0_usize;
+    let mut buffer = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
+    while transaction.remaining_bytes() != 0 {
+        let read = transaction.read_next(provider, &mut buffer)?;
+        if read == 0 || read % core::mem::size_of::<u64>() != 0 {
+            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+        }
+        native_hash.update(&buffer[..read]);
+        wire_hash.update(&buffer[..read]);
+        for encoded in buffer[..read].chunks_exact(core::mem::size_of::<u64>()) {
+            let residue = u64::from_be_bytes(
+                encoded
+                    .try_into()
+                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
+            );
+            let limb = coefficient_index / profile.ring_degree;
+            let modulus = *profile
+                .moduli
+                .get(limb)
+                .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+            if residue >= modulus {
+                return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+            }
+            let aggregate = aggregate_b
+                .coefficients_mut()
+                .get_mut(coefficient_index)
+                .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+            *aggregate = mod_add(*aggregate, residue, modulus);
+            coefficient_index = coefficient_index
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        }
+    }
+    if coefficient_index != coefficient_count {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let receipt = transaction.finish(provider)?;
+    let snapshot = receipt.snapshot();
+    if snapshot.pointer() != pointer
+        || snapshot.provider_identity() != expected_provider_identity
+        || snapshot.snapshot_identity() != expected_snapshot_identity
+        || receipt.canonical_bytes() != pointer.payload_bytes()
+        || receipt.payload_blake3() != pointer.payload_blake3()
+        || receipt.receipt_digest() != staged_verification_receipt.receipt_digest()
+        || receipt.receipt_digest()
+            != staged_publication_receipt
+                .post_publish_read_receipt()
+                .receipt_digest()
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    let digests = (native_hash.finalize(), wire_hash.finalize());
+    if digests.0 == [0; 32] || digests.1 == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(digests)
 }
 
 /// Start the sole allocation-bounded compact-authority ceremony.
@@ -884,16 +1373,11 @@ fn validate_streaming_decryption_authority_v1(
 
 /// Consume all eight complete, secret-free CPK verifier capabilities.
 ///
-/// This is the production ceremony boundary. Every contribution is rebound to
-/// the exact ordered public share and direct-object `b_i` payload before an
-/// opaque verifier context or party-use capability is returned. The third
-/// return value is the same ordered set of move-only bindings, emitted
-/// atomically for admission into the eight party states; callers never need to
-/// clone or re-verify a CPK contribution.
-#[allow(
-    dead_code,
-    reason = "retained by the private CPK ceremony until the fail-closed release gate opens"
-)]
+/// This is the test-only native-reference bridge. The bounded production
+/// boundary is [`crate::vega::ZkAmsMkheCpkCeremonyV1`], which admits and drops
+/// exactly one full share at a time. This bridge retains the old all-eight
+/// native statement shape only for small-profile reference coverage.
+#[cfg(test)]
 pub(super) fn prepare_zk_ams_mkhe_persistent_decryption_from_verified_cpk_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -945,6 +1429,7 @@ pub(super) fn prepare_zk_ams_mkhe_persistent_decryption_from_verified_cpk_v1(
     Ok((context, uses, bindings))
 }
 
+#[cfg(test)]
 fn context_from_verified_binding_set(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -997,6 +1482,10 @@ fn persistent_decryption_authority_from_binding_set_v1(
 ///
 /// Every state must already retain the cfg(test)-only synthetic CPK admission.
 #[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "state-owned native authority fixture retained for downstream reference tests"
+)]
 pub(super) fn prepare_zk_ams_mkhe_persistent_decryption_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1033,6 +1522,7 @@ pub(super) fn prepare_zk_ams_mkhe_persistent_decryption_v1(
     context_from_verified_binding_set(roster, statement, binding_set)
 }
 
+#[cfg(test)]
 fn build_context(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1064,6 +1554,11 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         (&self.roster, self.authority.cpk_transcript_digest)
     }
 
+    /// Exact collective-key digest admitted by the same complete CPK ceremony.
+    pub(super) const fn streaming_collective_key_digest_v1(&self) -> [u8; 32] {
+        self.authority.collective_public_key_digest
+    }
+
     fn validate_streaming_context_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.roster.validate()?;
         let streaming = self
@@ -1091,7 +1586,9 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     pub(super) fn consume_streaming_authority_v1(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
-        ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+        ciphertext: DecryptionCiphertextAxesV1,
+        ciphertext_provider_identity: [u8; 32],
+        ciphertext_snapshot_identity: [u8; 32],
         authority: ZkAmsMkheStreamingDecryptionAuthorityV1,
     ) -> Result<ZkAmsMkheStreamingDecryptionAuthorityMaterialV1, ZkAmsMkheErrorV1> {
         self.validate_streaming_context_v1()?;
@@ -1099,14 +1596,20 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             .streaming_authority
             .as_ref()
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        validate_exact_streaming_provider_snapshot_axes_v1(
+            ciphertext_provider_identity,
+            ciphertext_snapshot_identity,
+            streaming.provider_identity,
+            streaming.snapshot_identity,
+        )?;
         if authority.context_authority_digest == [0; 32]
             || authority.context_authority_digest != streaming.authority_digest
             || self.roster.to_wire_roster()? != *roster
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-        let profile = release_profile_v1();
-        let ciphertext_digest = decryption_wire_ciphertext_digest_v1(&profile, roster, ciphertext)?;
+        ciphertext.validate_for_roster_v1(roster)?;
+        let ciphertext_digest = ciphertext.ciphertext_digest();
         let statement_digest = decryption_statement_binding_digest_from_axes_v1(
             roster,
             ciphertext,
@@ -1123,7 +1626,6 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             let party_use = self.mint_party_use_from_compact_axes_v1(
                 roster,
                 ciphertext,
-                ciphertext_digest,
                 streaming.key_context_digest,
                 statement_digest,
                 party_index,
@@ -1150,14 +1652,26 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     pub(super) fn bind_streaming_statement_party_uses_v1(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
-        ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
-        ciphertext_digest: [u8; 32],
+        ciphertext: DecryptionCiphertextAxesV1,
+        ciphertext_provider_identity: [u8; 32],
+        ciphertext_snapshot_identity: [u8; 32],
         key_context_digest: [u8; 32],
     ) -> Result<
         [ZkAmsMkhePersistentDecryptionPartyUseV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
         ZkAmsMkheErrorV1,
     > {
         self.validate_streaming_context_v1()?;
+        let streaming = self
+            .streaming_authority
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        validate_exact_streaming_provider_snapshot_axes_v1(
+            ciphertext_provider_identity,
+            ciphertext_snapshot_identity,
+            streaming.provider_identity,
+            streaming.snapshot_identity,
+        )?;
+        ciphertext.validate_for_roster_v1(roster)?;
         let statement_digest = decryption_statement_binding_digest_from_axes_v1(
             roster,
             ciphertext,
@@ -1173,7 +1687,6 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             uses.push(self.mint_party_use_from_compact_axes_v1(
                 roster,
                 ciphertext,
-                ciphertext_digest,
                 key_context_digest,
                 statement_digest,
                 party_index,
@@ -1189,14 +1702,26 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     pub(super) fn consume_streaming_party_use_v1(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
-        ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
-        ciphertext_digest: [u8; 32],
+        ciphertext: DecryptionCiphertextAxesV1,
+        ciphertext_provider_identity: [u8; 32],
+        ciphertext_snapshot_identity: [u8; 32],
         key_context_digest: [u8; 32],
         party_index: usize,
         party_use: ZkAmsMkhePersistentDecryptionPartyUseV1,
         party_state: &ZkAmsMkheCollectivePartyStateV1,
     ) -> Result<PersistentDecryptionProofBindingV1, ZkAmsMkheErrorV1> {
         self.validate_streaming_context_v1()?;
+        let streaming = self
+            .streaming_authority
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        validate_exact_streaming_provider_snapshot_axes_v1(
+            ciphertext_provider_identity,
+            ciphertext_snapshot_identity,
+            streaming.provider_identity,
+            streaming.snapshot_identity,
+        )?;
+        ciphertext.validate_for_roster_v1(roster)?;
         let statement_digest = decryption_statement_binding_digest_from_axes_v1(
             roster,
             ciphertext,
@@ -1205,7 +1730,6 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         let expected = self.mint_party_use_from_compact_axes_v1(
             roster,
             ciphertext,
-            ciphertext_digest,
             key_context_digest,
             statement_digest,
             party_index,
@@ -1228,7 +1752,9 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     pub(super) fn validate_streaming_statement_axes_if_present_v1(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
-        ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+        ciphertext: DecryptionCiphertextAxesV1,
+        ciphertext_provider_identity: [u8; 32],
+        ciphertext_snapshot_identity: [u8; 32],
         key_context_digest: [u8; 32],
         party_b_pointers: [ZkAmsMkheDirectObjectPointerV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1236,13 +1762,19 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             return Ok(());
         };
         self.validate_streaming_context_v1()?;
+        validate_exact_streaming_provider_snapshot_axes_v1(
+            ciphertext_provider_identity,
+            ciphertext_snapshot_identity,
+            streaming.provider_identity,
+            streaming.snapshot_identity,
+        )?;
         if self.roster.to_wire_roster()? != *roster
             || key_context_digest != streaming.key_context_digest
             || party_b_pointers != streaming.party_b_pointers
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-        decryption_wire_ciphertext_digest_v1(&release_profile_v1(), roster, ciphertext)?;
+        ciphertext.validate_for_roster_v1(roster)?;
         Ok(())
     }
 
@@ -1253,6 +1785,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     }
 
     /// Bind a fresh exact eight-party use set to a later validated ciphertext.
+    #[cfg(test)]
     pub fn bind_statement_v1(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1270,6 +1803,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)
     }
 
+    #[cfg(test)]
     fn validate_statement(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1315,6 +1849,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn mint_party_use(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1363,8 +1898,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     fn mint_party_use_from_compact_axes_v1(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
-        ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
-        ciphertext_digest: [u8; 32],
+        ciphertext: DecryptionCiphertextAxesV1,
         key_context_digest: [u8; 32],
         statement_digest: [u8; 32],
         party_index: usize,
@@ -1376,8 +1910,6 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         if self.roster.to_wire_roster()? != *roster
             || key_context_digest != streaming.key_context_digest
-            || ciphertext_digest
-                != decryption_wire_ciphertext_digest_v1(&release_profile_v1(), roster, ciphertext)?
             || statement_digest
                 != decryption_statement_binding_digest_from_axes_v1(
                     roster,
@@ -1387,6 +1919,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
+        ciphertext.validate_for_roster_v1(roster)?;
         let authority = self
             .authority
             .parties
@@ -1406,10 +1939,10 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
             commitment_set_digest: authority.commitment_set_digest,
             commitments: authority.commitments,
             key_context_digest,
-            ciphertext_digest,
-            ciphertext_record_index: ciphertext.binding().record_index(),
+            ciphertext_digest: ciphertext.ciphertext_digest(),
+            ciphertext_record_index: ciphertext.ciphertext_record_index(),
             sample_index: ciphertext.sample_index(),
-            level: ciphertext.binding().level(),
+            level: ciphertext.level(),
             statement_digest,
             public_contribution_set_digest: self.public_contribution_set_digest,
             commitment_context_digest: commitment_context_digest(
@@ -1425,6 +1958,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         Ok(party_use)
     }
 
+    #[cfg(test)]
     pub(super) fn consume_party_use(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1448,6 +1982,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         self.proof_binding_from_use(statement, party_use)
     }
 
+    #[cfg(test)]
     pub(super) fn proof_binding(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1457,6 +1992,7 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         self.proof_binding_from_use(statement, party_use)
     }
 
+    #[cfg(test)]
     fn proof_binding_from_use(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1499,6 +2035,25 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     }
 }
 
+pub(super) fn validate_exact_streaming_provider_snapshot_axes_v1(
+    observed_provider_identity: [u8; 32],
+    observed_snapshot_identity: [u8; 32],
+    expected_provider_identity: [u8; 32],
+    expected_snapshot_identity: [u8; 32],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if observed_provider_identity == [0; 32]
+        || observed_snapshot_identity == [0; 32]
+        || expected_provider_identity == [0; 32]
+        || expected_snapshot_identity == [0; 32]
+        || observed_provider_identity != expected_provider_identity
+        || observed_snapshot_identity != expected_snapshot_identity
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn validate_roster_statement(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1518,6 +2073,7 @@ fn validate_roster_statement(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_party_state_axes(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1544,6 +2100,20 @@ fn validate_party_state_axes(
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "explicit native axis validation seam retained for negative reference tests"
+)]
+pub(super) fn validate_party_state_axes_for_test(
+    roster: &ZkAmsMkheGovernedActiveRosterV1,
+    statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    party_index: usize,
+    state: &ZkAmsMkheCollectivePartyStateV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    validate_party_state_axes(roster, statement, party_index, state)
 }
 
 fn validate_streaming_party_state_axes_v1(
@@ -1627,6 +2197,7 @@ fn validate_party_use(
     Ok(())
 }
 
+#[cfg(test)]
 fn public_contribution_set_digest(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {

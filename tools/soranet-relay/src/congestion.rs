@@ -14,7 +14,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::config::CongestionConfig;
+use crate::config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, CongestionConfig};
 
 #[derive(Debug)]
 /// Per-remote circuit accounting state.
@@ -23,20 +23,36 @@ struct ClientState {
     last_attempt: Instant,
 }
 
+#[derive(Debug, Default)]
+struct CongestionState {
+    clients: HashMap<SocketAddr, ClientState>,
+    active_circuits: usize,
+}
+
 #[derive(Debug)]
 struct CongestionInner {
     limits: CongestionConfig,
     cooldown: Duration,
-    state: Mutex<HashMap<SocketAddr, ClientState>>,
+    state: Mutex<CongestionState>,
 }
 
 impl CongestionInner {
-    fn new(config: CongestionConfig) -> Self {
+    fn new(mut config: CongestionConfig) -> Self {
+        // RelayConfig rejects invalid values. Clamp direct programmatic callers
+        // as a second line of defense so this constructor can never recreate
+        // an unbounded pre-admission map.
+        config.apply_defaults();
+        config.max_active_circuits = config
+            .max_active_circuits
+            .min(CONGESTION_MAX_ACTIVE_CIRCUITS_V1);
+        config.max_circuits_per_client = config
+            .max_circuits_per_client
+            .min(u32::try_from(config.max_active_circuits).unwrap_or(u32::MAX));
         let cooldown = Duration::from_millis(config.handshake_cooldown_millis);
         Self {
             limits: config,
             cooldown,
-            state: Mutex::new(HashMap::new()),
+            state: Mutex::new(CongestionState::default()),
         }
     }
 
@@ -46,10 +62,37 @@ impl CongestionInner {
         now: Instant,
     ) -> Result<Reservation, CongestionError> {
         let mut guard = self.state.lock().expect("congestion state poisoned");
-        let entry = guard.entry(remote).or_insert_with(|| ClientState {
-            active: 0,
-            last_attempt: now.checked_sub(self.cooldown).unwrap_or(now),
-        });
+        if guard.active_circuits >= self.limits.max_active_circuits {
+            return Err(CongestionError::GlobalCircuitCapacity {
+                limit: self.limits.max_active_circuits,
+            });
+        }
+        if !guard.clients.contains_key(&remote) {
+            guard
+                .clients
+                .try_reserve(1)
+                .map_err(|_| CongestionError::GlobalCircuitCapacity {
+                    limit: self.limits.max_active_circuits,
+                })?;
+            guard.clients.insert(
+                remote,
+                ClientState {
+                    active: 1,
+                    last_attempt: now,
+                },
+            );
+            guard.active_circuits += 1;
+            drop(guard);
+            return Ok(Reservation {
+                inner: Arc::clone(self),
+                remote,
+                active: true,
+            });
+        }
+        let entry = guard
+            .clients
+            .get_mut(&remote)
+            .expect("client inserted before congestion checks");
 
         if entry.active >= self.limits.max_circuits_per_client {
             return Err(CongestionError::TooManyCircuits {
@@ -69,7 +112,8 @@ impl CongestionInner {
         }
 
         entry.last_attempt = now;
-        entry.active = entry.active.saturating_add(1);
+        entry.active += 1;
+        guard.active_circuits += 1;
 
         drop(guard);
 
@@ -82,13 +126,20 @@ impl CongestionInner {
 
     fn release(self: &Arc<Self>, remote: SocketAddr) {
         let mut guard = self.state.lock().expect("congestion state poisoned");
-        if let Some(entry) = guard.get_mut(&remote) {
+        let (released, remove) = if let Some(entry) = guard.clients.get_mut(&remote) {
+            let released = entry.active > 0;
             if entry.active > 0 {
                 entry.active -= 1;
             }
-            if entry.active == 0 {
-                guard.remove(&remote);
-            }
+            (released, entry.active == 0)
+        } else {
+            (false, false)
+        };
+        if released {
+            guard.active_circuits = guard.active_circuits.saturating_sub(1);
+        }
+        if remove {
+            guard.clients.remove(&remote);
         }
     }
 }
@@ -184,6 +235,9 @@ impl Drop for CongestionLease {
 /// Errors returned when a handshake is throttled by congestion control.
 #[derive(Debug, Error)]
 pub enum CongestionError {
+    /// The relay reached its global active-circuit memory corridor.
+    #[error("maximum simultaneous relay circuits exceeded (limit: {limit})")]
+    GlobalCircuitCapacity { limit: usize },
     /// The remote attempted to exceed the configured maximum number of active circuits.
     #[error("maximum simultaneous circuits per client exceeded (limit: {limit})")]
     TooManyCircuits { limit: u32 },
@@ -195,4 +249,76 @@ pub enum CongestionError {
         cooldown_millis: u64,
         observed_gap_millis: u64,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::*;
+
+    fn controller(max_active_circuits: usize) -> CongestionController {
+        CongestionController::new(CongestionConfig {
+            max_circuits_per_client: 2,
+            max_active_circuits,
+            handshake_cooldown_millis: 1,
+        })
+    }
+
+    #[test]
+    fn global_capacity_rejects_before_map_overshoot_and_recovers_on_release() {
+        let controller = controller(2);
+        let now = Instant::now();
+        let first = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_001);
+        let second = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_002);
+        let overflow = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_003);
+
+        let first_reservation = controller.reserve(first, now).expect("first slot");
+        let _second_reservation = controller.reserve(second, now).expect("second slot");
+        assert!(matches!(
+            controller.reserve(overflow, now),
+            Err(CongestionError::GlobalCircuitCapacity { limit: 2 })
+        ));
+        {
+            let state = controller.inner.state.lock().expect("congestion state");
+            assert_eq!(state.active_circuits, 2);
+            assert_eq!(state.clients.len(), 2);
+            assert!(!state.clients.contains_key(&overflow));
+        }
+
+        drop(first_reservation);
+        let _replacement = controller
+            .reserve(overflow, now)
+            .expect("released capacity is reusable");
+        let state = controller.inner.state.lock().expect("congestion state");
+        assert_eq!(state.active_circuits, 2);
+        assert_eq!(state.clients.len(), 2);
+        assert!(state.clients.contains_key(&overflow));
+    }
+
+    #[test]
+    fn programmatic_configuration_is_clamped_to_memory_corridor() {
+        let controller = CongestionController::new(CongestionConfig {
+            max_circuits_per_client: u32::MAX,
+            max_active_circuits: usize::MAX,
+            handshake_cooldown_millis: u64::MAX,
+        });
+        assert_eq!(
+            controller.inner.limits.max_active_circuits,
+            CONGESTION_MAX_ACTIVE_CIRCUITS_V1
+        );
+        assert_eq!(
+            usize::try_from(controller.inner.limits.max_circuits_per_client)
+                .expect("u32 fits usize on supported targets"),
+            CONGESTION_MAX_ACTIVE_CIRCUITS_V1
+        );
+
+        let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_004);
+        let _reservation = controller
+            .reserve(remote, Instant::now())
+            .expect("a first attempt must not be retained as an inactive cooldown entry");
+        let state = controller.inner.state.lock().expect("congestion state");
+        assert_eq!(state.active_circuits, 1);
+        assert_eq!(state.clients.len(), 1);
+    }
 }

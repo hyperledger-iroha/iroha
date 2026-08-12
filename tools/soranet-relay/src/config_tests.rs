@@ -5,7 +5,14 @@ use hex::FromHex;
 use tempfile::NamedTempFile;
 
 use super::*;
-use crate::vpn::VpnOverlay;
+use crate::{
+    incentive_log::IncentiveLogError,
+    incentives::{
+        INCENTIVE_DEFAULT_ACTIVE_EPOCHS, INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH,
+        INCENTIVE_MAX_ACTIVE_EPOCHS_V1, INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1,
+    },
+    vpn::VpnOverlay,
+};
 
 fn write_config(json: &str) -> PathBuf {
     let file = NamedTempFile::new().expect("create temp file");
@@ -17,6 +24,262 @@ fn write_manifest(json: &str) -> NamedTempFile {
     let file = NamedTempFile::new().expect("create manifest file");
     std::fs::write(file.path(), json).expect("write manifest");
     file
+}
+
+fn assert_config_json_admission_rejected(bytes: &[u8]) {
+    let file = NamedTempFile::new().expect("create admission input");
+    std::fs::write(file.path(), bytes).expect("write admission input");
+    let error = RelayConfig::load(file.path()).expect_err("JSON admission must reject input");
+    assert!(
+        matches!(error, ConfigError::JsonAdmission(_)),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relay_config_file_limit_accepts_exact_and_rejects_plus_one() {
+    let exact = NamedTempFile::new().expect("create exact config");
+    let mut valid = br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#.to_vec();
+    valid.resize(RELAY_CONFIG_JSON_MAX_BYTES_V1, b' ');
+    std::fs::write(exact.path(), &valid).expect("write exact config");
+    let loaded = RelayConfig::load(exact.path()).expect("exact-limit config must load");
+    assert_eq!(loaded.mode, RelayMode::Entry);
+
+    let plus_one = NamedTempFile::new().expect("create oversized config");
+    plus_one
+        .as_file()
+        .set_len(
+            u64::try_from(RELAY_CONFIG_JSON_MAX_BYTES_V1 + 1).expect("fixed config limit fits u64"),
+        )
+        .expect("size oversized config");
+    let error = RelayConfig::load(plus_one.path()).expect_err("limit + 1 must fail");
+    assert!(
+        matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::InvalidData),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn relay_config_rejects_symlink_input() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let target = directory.path().join("relay-target.json");
+    let link = directory.path().join("relay-link.json");
+    std::fs::write(&target, br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#).expect("write target");
+    symlink(&target, &link).expect("create symlink");
+
+    let error = RelayConfig::load(&link).expect_err("symlink config must fail");
+    assert!(
+        matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::InvalidData),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn relay_config_rejects_path_replacement_race() {
+    let directory = tempfile::tempdir().expect("create temp directory");
+    let configured = directory.path().join("relay.json");
+    let replacement = directory.path().join("replacement.json");
+    std::fs::write(&configured, br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#)
+        .expect("write configured file");
+    std::fs::write(&replacement, br#"{"mode":"Middle","listen":"127.0.0.1:1"}"#)
+        .expect("write replacement file");
+    *BOUNDED_FILE_READ_REPLACEMENT
+        .lock()
+        .expect("race hook lock") = Some((configured.clone(), replacement));
+
+    let error = RelayConfig::load(&configured).expect_err("path replacement must fail");
+    assert!(
+        matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::InvalidData),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn relay_config_preflight_rejects_depth_count_and_string_budgets() {
+    let mut deep = "[".repeat(RELAY_CONFIG_JSON_MAX_DEPTH_V1 + 1);
+    deep.push('0');
+    deep.push_str(&"]".repeat(RELAY_CONFIG_JSON_MAX_DEPTH_V1 + 1));
+    assert_config_json_admission_rejected(deep.as_bytes());
+
+    let too_many = format!(
+        "[{}]",
+        std::iter::repeat_n("0", RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1 + 1)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    assert_config_json_admission_rejected(too_many.as_bytes());
+
+    let oversized_string = format!(
+        "\"{}\"",
+        "a".repeat(RELAY_CONFIG_JSON_MAX_FIELD_BYTES_V1 + 1)
+    );
+    assert_config_json_admission_rejected(oversized_string.as_bytes());
+
+    let aggregate_strings = format!(
+        "[{}]",
+        std::iter::repeat_n(
+            format!("\"{}\"", "b".repeat(97)),
+            RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+        )
+        .collect::<Vec<_>>()
+        .join(",")
+    );
+    assert!(aggregate_strings.len() < RELAY_CONFIG_JSON_MAX_BYTES_V1);
+    assert_config_json_admission_rejected(aggregate_strings.as_bytes());
+}
+
+#[test]
+fn descriptor_manifest_file_limit_accepts_exact_and_rejects_plus_one() {
+    let exact = NamedTempFile::new().expect("create exact manifest");
+    let mut manifest = format!(
+        r#"{{"identity":{{"ed25519_private_key_hex":"{}"}}}}"#,
+        "11".repeat(32)
+    )
+    .into_bytes();
+    manifest.resize(DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1, b' ');
+    std::fs::write(exact.path(), manifest).expect("write exact manifest");
+    let mut policy = HandshakePolicy::default();
+    policy.descriptor_manifest_path = Some(exact.path().to_path_buf());
+    assert_eq!(
+        policy
+            .identity_private_key_from_manifest()
+            .expect("exact-limit manifest must load"),
+        Some([0x11; 32])
+    );
+
+    let plus_one = NamedTempFile::new().expect("create oversized manifest");
+    plus_one
+        .as_file()
+        .set_len(
+            u64::try_from(DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1 + 1)
+                .expect("fixed manifest limit fits u64"),
+        )
+        .expect("size oversized manifest");
+    policy.descriptor_manifest_path = Some(plus_one.path().to_path_buf());
+    let error = policy
+        .manifest_secrets()
+        .expect_err("manifest limit + 1 must fail");
+    assert!(
+        matches!(error, ConfigError::DescriptorManifest { ref message, .. } if message.contains("first-release limit")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn descriptor_manifest_preflight_bounds_recursive_lookup() {
+    let mut deep = "[".repeat(DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1 + 1);
+    deep.push_str("null");
+    deep.push_str(&"]".repeat(DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1 + 1));
+    let manifest = write_manifest(&deep);
+    let mut policy = HandshakePolicy::default();
+    policy.descriptor_manifest_path = Some(manifest.path().to_path_buf());
+
+    let error = policy
+        .manifest_secrets()
+        .expect_err("deep manifest must fail before Value allocation");
+    assert!(
+        matches!(error, ConfigError::DescriptorManifest { ref message, .. } if message.contains("JSON admission failed")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn certificate_bundle_protocol_limit_accepts_exact_and_rejects_plus_one() {
+    let exact = NamedTempFile::new().expect("create exact bundle");
+    exact
+        .as_file()
+        .set_len(u64::try_from(SRC_V2_MAX_BUNDLE_BYTES).expect("SRCv2 limit fits u64"))
+        .expect("size exact bundle");
+    let certificate = CertificateConfig {
+        bundle_path: exact.path().to_path_buf(),
+        issuer_ed25519_hex: "11".repeat(32),
+        issuer_mldsa_hex: "22".repeat(MlDsaSuite::MlDsa65.public_key_len()),
+    };
+    let exact_error = certificate
+        .load_bundle()
+        .expect_err("zero-filled exact bundle is not CBOR");
+    assert!(
+        matches!(exact_error, ConfigError::Certificate { ref message, .. } if message.contains("failed to parse")),
+        "exact limit should reach the parser: {exact_error:?}"
+    );
+
+    let plus_one = NamedTempFile::new().expect("create oversized bundle");
+    plus_one
+        .as_file()
+        .set_len(u64::try_from(SRC_V2_MAX_BUNDLE_BYTES + 1).expect("SRCv2 limit + 1 fits u64"))
+        .expect("size oversized bundle");
+    let oversized = CertificateConfig {
+        bundle_path: plus_one.path().to_path_buf(),
+        ..certificate
+    };
+    let error = oversized
+        .load_bundle()
+        .expect_err("bundle limit + 1 must fail");
+    assert!(
+        matches!(error, ConfigError::Certificate { ref message, .. } if message.contains("first-release limit")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn certificate_issuer_fields_are_length_checked_before_hex_decode() {
+    let mut certificate = CertificateConfig {
+        bundle_path: PathBuf::from("unused.cbor"),
+        issuer_ed25519_hex: "11".repeat(32),
+        issuer_mldsa_hex: "22".repeat(MlDsaSuite::MlDsa65.public_key_len()),
+    };
+    certificate
+        .validate()
+        .expect("exact protocol key lengths must validate");
+
+    certificate.issuer_ed25519_hex.push_str("00");
+    let error = certificate
+        .validate()
+        .expect_err("Ed25519 hex length + 1 byte must fail");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message) if message.contains("issuer_ed25519_hex") && message.contains("exactly")),
+        "unexpected error: {error:?}"
+    );
+
+    certificate.issuer_ed25519_hex.truncate(64);
+    certificate.issuer_mldsa_hex.push_str("00");
+    let error = certificate
+        .validate()
+        .expect_err("ML-DSA hex length + 1 byte must fail");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message) if message.contains("issuer_mldsa_hex") && message.contains("exactly")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn handshake_validation_enforces_producer_collection_limit() {
+    let mut policy = HandshakePolicy::default();
+    policy.kem = std::iter::repeat_with(|| KemPolicyEntry {
+        id: "ml-kem-768".to_string(),
+        required: true,
+    })
+    .take(RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1)
+    .collect();
+    policy
+        .validate()
+        .expect("producer collection at exact limit must validate");
+    policy.kem.push(KemPolicyEntry {
+        id: "ml-kem-768".to_string(),
+        required: true,
+    });
+
+    let error = policy
+        .validate()
+        .expect_err("producer list limit + 1 must fail");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message) if message.contains("first-release limit")),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -147,6 +410,7 @@ fn load_self_signed_config() {
         PaddingConfig::default_burst_bytes()
     );
     assert_eq!(cfg.congestion_config().max_circuits_per_client, 8);
+    assert_eq!(cfg.congestion_config().max_active_circuits, 4_096);
     assert_eq!(cfg.congestion_config().handshake_cooldown_millis, 200);
     assert!(!cfg.compliance_config().enable);
     assert_eq!(cfg.compliance_config().max_log_bytes, 64 * 1024 * 1024);
@@ -154,6 +418,14 @@ fn load_self_signed_config() {
     assert!(cfg.compliance_config().pipeline_spool_dir().is_none());
     assert!(!cfg.incentive_log_config().enable);
     assert!(cfg.incentive_log_config().spool_dir.is_none());
+    assert_eq!(
+        cfg.incentive_log_config().max_active_epochs,
+        INCENTIVE_DEFAULT_ACTIVE_EPOCHS
+    );
+    assert_eq!(
+        cfg.incentive_log_config().max_measurements_per_epoch,
+        INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH
+    );
 }
 
 fn assert_vpn_config_error(config_json: &str, expected: &str) {
@@ -451,6 +723,8 @@ fn incentive_log_defaults_when_enabled() {
         incentives: Some(IncentiveLogConfig {
             enable: true,
             spool_dir: None,
+            max_active_epochs: 0,
+            max_measurements_per_epoch: 0,
         }),
         exit_routing: ExitRoutingConfig::default(),
         vpn: None,
@@ -463,6 +737,35 @@ fn incentive_log_defaults_when_enabled() {
     let incentives = cfg.incentive_log_config();
     assert!(incentives.enable);
     assert!(incentives.spool_dir.is_some());
+    assert_eq!(
+        incentives.max_active_epochs,
+        INCENTIVE_DEFAULT_ACTIVE_EPOCHS
+    );
+    assert_eq!(
+        incentives.max_measurements_per_epoch,
+        INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH
+    );
+}
+
+#[test]
+fn incentive_memory_geometry_accepts_exact_aggregate_and_rejects_max_plus_one() {
+    let mut exact = IncentiveLogConfig {
+        enable: false,
+        spool_dir: None,
+        max_active_epochs: INCENTIVE_MAX_ACTIVE_EPOCHS_V1,
+        max_measurements_per_epoch: INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1
+            / INCENTIVE_MAX_ACTIVE_EPOCHS_V1,
+    };
+    exact.validate().expect("exact aggregate limit");
+
+    let mut overflow = IncentiveLogConfig {
+        max_measurements_per_epoch: exact.max_measurements_per_epoch + 1,
+        ..exact
+    };
+    assert!(matches!(
+        overflow.validate(),
+        Err(IncentiveLogError::Config(message)) if message.contains("aggregate")
+    ));
 }
 
 #[test]
@@ -525,6 +828,30 @@ fn pow_defaults_match_first_release_admission_policy() {
         pow.puzzle.as_ref().is_some_and(|puzzle| puzzle.enabled),
         "the default Argon2 gate must be enabled"
     );
+}
+
+#[test]
+fn pow_revocation_store_capacity_enforces_first_release_ceiling() {
+    let mut exact = PowConfig {
+        revocation_store_capacity: u64::try_from(pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1)
+            .expect("fixed limit fits u64"),
+        ..PowConfig::default()
+    };
+    exact
+        .apply_defaults()
+        .expect("exact first-release capacity validates");
+
+    let mut excessive = PowConfig {
+        revocation_store_capacity: u64::try_from(pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1 + 1)
+            .expect("fixed limit plus one fits u64"),
+        ..PowConfig::default()
+    };
+    assert!(matches!(
+        excessive.apply_defaults(),
+        Err(ConfigError::TicketReplayStore(message))
+            if message.contains("revocation_store_capacity")
+                && message.contains("first-release limit")
+    ));
 }
 
 #[test]
@@ -711,6 +1038,48 @@ fn quotas_for_mode_honours_overrides() {
     assert_eq!(exit.cooldown_secs, QuotaConfig::default_cooldown_secs());
     assert_eq!(exit.max_entries, QuotaConfig::default_max_entries());
     assert_eq!(exit.per_descriptor_burst, 20);
+}
+
+#[test]
+fn quota_tracker_capacity_accepts_exact_limit_and_rejects_plus_one() {
+    let exact = QuotaConfig {
+        max_entries: QUOTA_TRACKER_MAX_ENTRIES_V1,
+        ..QuotaConfig::default()
+    };
+    exact.validate().expect("exact tracker limit must validate");
+
+    let mut base_overflow = PowConfig {
+        quotas: QuotaConfig {
+            max_entries: QUOTA_TRACKER_MAX_ENTRIES_V1 + 1,
+            ..QuotaConfig::default()
+        },
+        ..PowConfig::default()
+    };
+    let error = base_overflow
+        .apply_defaults()
+        .expect_err("base tracker limit + 1 must fail");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas.max_entries")),
+        "unexpected error: {error:?}"
+    );
+
+    let mut override_overflow = PowConfig {
+        quotas_per_mode: Some(HopQuotaOverrides {
+            middle: Some(QuotaConfig {
+                max_entries: QUOTA_TRACKER_MAX_ENTRIES_V1 + 1,
+                ..QuotaConfig::default()
+            }),
+            ..HopQuotaOverrides::default()
+        }),
+        ..PowConfig::default()
+    };
+    let error = override_overflow
+        .apply_defaults()
+        .expect_err("per-mode tracker limit + 1 must fail");
+    assert!(
+        matches!(error, ConfigError::Quota(ref message) if message.contains("quotas_per_mode.middle.max_entries")),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -1040,6 +1409,7 @@ fn custom_congestion_config_validates() {
                 "listen": "127.0.0.1:0",
                 "congestion": {
                     "max_circuits_per_client": 4,
+                    "max_active_circuits": 32,
                     "handshake_cooldown_millis": 750
                 }
             }
@@ -1047,7 +1417,37 @@ fn custom_congestion_config_validates() {
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     assert_eq!(cfg.congestion_config().max_circuits_per_client, 4);
+    assert_eq!(cfg.congestion_config().max_active_circuits, 32);
     assert_eq!(cfg.congestion_config().handshake_cooldown_millis, 750);
+}
+
+#[test]
+fn congestion_capacity_accepts_exact_limit_and_rejects_overflow() {
+    let mut exact = CongestionConfig {
+        max_circuits_per_client: 8,
+        max_active_circuits: CONGESTION_MAX_ACTIVE_CIRCUITS_V1,
+        handshake_cooldown_millis: 200,
+    };
+    exact.validate().expect("exact global limit must validate");
+
+    let mut overflow = CongestionConfig {
+        max_active_circuits: CONGESTION_MAX_ACTIVE_CIRCUITS_V1 + 1,
+        ..CongestionConfig::default()
+    };
+    assert!(matches!(
+        overflow.validate(),
+        Err(ConfigError::Congestion(message)) if message.contains("max_active_circuits")
+    ));
+
+    let mut inconsistent = CongestionConfig {
+        max_circuits_per_client: 9,
+        max_active_circuits: 8,
+        handshake_cooldown_millis: 200,
+    };
+    assert!(matches!(
+        inconsistent.validate(),
+        Err(ConfigError::Congestion(message)) if message.contains("max_circuits_per_client")
+    ));
 }
 
 #[test]
@@ -1373,6 +1773,28 @@ fn token_config_rejects_overflowing_replay_retention_window() {
 }
 
 #[test]
+fn token_replay_store_capacity_enforces_first_release_ceiling() {
+    let exact = TokenConfig {
+        replay_store_capacity: TOKEN_STORE_MAX_ENTRIES_V1,
+        ..TokenConfig::default()
+    };
+    exact
+        .validate()
+        .expect("exact first-release capacity validates");
+
+    let excessive = TokenConfig {
+        replay_store_capacity: TOKEN_STORE_MAX_ENTRIES_V1 + 1,
+        ..TokenConfig::default()
+    };
+    assert!(matches!(
+        excessive.validate(),
+        Err(ConfigError::Token(message))
+            if message.contains("replay_store_capacity")
+                && message.contains("first-release limit")
+    ));
+}
+
+#[test]
 fn token_replay_retention_covers_both_clock_skew_edges() {
     let cfg = TokenConfig {
         max_ttl_secs: 900,
@@ -1451,6 +1873,39 @@ fn privacy_config_validates_force_flush_ordering() {
         }
         other => panic!("unexpected error {other:?}"),
     }
+}
+
+#[test]
+fn privacy_config_enforces_first_release_memory_limits() {
+    let mut exact = PrivacyTelemetryConfig {
+        flush_delay_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
+        force_flush_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
+        max_completed_buckets: PRIVACY_MAX_COMPLETED_BUCKETS_V1,
+        event_buffer_capacity: PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1,
+        ..PrivacyTelemetryConfig::default()
+    };
+    exact.apply_defaults().expect("exact privacy limits");
+
+    let mut overflow = exact.clone();
+    overflow.max_completed_buckets = PRIVACY_MAX_COMPLETED_BUCKETS_V1 + 1;
+    assert!(matches!(
+        overflow.apply_defaults(),
+        Err(ConfigError::Privacy(message)) if message.contains("max_completed_buckets")
+    ));
+
+    let mut overflow = exact.clone();
+    overflow.event_buffer_capacity = PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1 + 1;
+    assert!(matches!(
+        overflow.apply_defaults(),
+        Err(ConfigError::Privacy(message)) if message.contains("event_buffer_capacity")
+    ));
+
+    let mut overflow = exact;
+    overflow.force_flush_buckets = PRIVACY_MAX_OPEN_BUCKETS_V1 + 1;
+    assert!(matches!(
+        overflow.apply_defaults(),
+        Err(ConfigError::Privacy(message)) if message.contains("flush windows")
+    ));
 }
 
 #[test]
@@ -1563,6 +2018,28 @@ fn vpn_helper_ticket_replay_store_preserves_operator_settings() {
         cfg.helper_ticket_replay_store_path,
         PathBuf::from("/var/lib/soranet/vpn-helper-replays.norito")
     );
+}
+
+#[test]
+fn vpn_helper_ticket_replay_capacity_enforces_first_release_ceiling() {
+    let mut exact = VpnConfig {
+        helper_ticket_replay_store_capacity: REPLAY_LEDGER_MAX_ENTRIES_V1,
+        ..VpnConfig::default()
+    };
+    exact
+        .validate()
+        .expect("exact first-release capacity validates");
+
+    let mut excessive = VpnConfig {
+        helper_ticket_replay_store_capacity: REPLAY_LEDGER_MAX_ENTRIES_V1 + 1,
+        ..VpnConfig::default()
+    };
+    assert!(matches!(
+        excessive.validate(),
+        Err(ConfigError::Vpn(message))
+            if message.contains("helper_ticket_replay_store_capacity")
+                && message.contains("first-release limit")
+    ));
 }
 
 #[test]

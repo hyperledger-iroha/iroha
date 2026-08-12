@@ -1,15 +1,17 @@
 //! Canonical encrypted evaluation for the ZK-AMS Phase-II/III fold.
 //!
-//! This module owns the bounded CSR representation of the public `A`, `B`,
-//! `C`, and module-commitment maps and the compact packed-ciphertext evaluator
-//! shared by Equations (6), (7), and (9)--(11).  The evaluator never decodes a
-//! ciphertext and never substitutes a plaintext calculation.  Plaintext
-//! calculations appear only in tests as an independent oracle.
+//! This module owns the bounded external CSR representation, the compact
+//! canonical A/B/C manifest, the allocation-free paper-order view of the shared
+//! relation shape, and the packed-ciphertext evaluator shared by Equations (6),
+//! (7), and (9)--(11). The evaluator never decodes a ciphertext and never
+//! substitutes a plaintext calculation. Plaintext calculations appear only in
+//! tests as an independent oracle.
 //!
 //! The frozen release certificate deliberately remains open.  A small-profile
 //! KAT exercises the complete native path, but it is not evidence for the
 //! release degree, roster, memory ceiling, or wall-clock budget.
 
+use core::fmt;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -38,7 +40,8 @@ use super::{
     Scalar, ZkAmsMkheErrorV1, keccak256,
     manifest::release_profile_v1,
     packing::{
-        ZkAmsT256PackedPlaintextV1, decode_zk_ams_t256_packed_plaintext_v1,
+        T256PackedPlaintextDecodeWorkspaceV1, ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
+        visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1,
         zk_ams_t256_packing_layout_v1,
     },
 };
@@ -53,8 +56,8 @@ use crate::vega::{
     sponge::Keccak256,
 };
 
-const PHASE23_ENCRYPTED_VERSION_V1: u8 = 1;
-const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
+pub(super) const PHASE23_ENCRYPTED_VERSION_V1: u8 = 1;
+pub(super) const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
 const PHASE23_MAX_ROWS_V1: u32 = 1_048_576;
 const PHASE23_MAX_COLUMNS_V1: u32 = 1_048_576;
 const PHASE23_MAX_ACCUMULATOR_VALUES_V1: usize = 4_194_304;
@@ -68,7 +71,7 @@ pub const ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1: usize = 512;
 /// Exact Hyrax point count in one release error or cross-term commitment.
 pub const ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1: usize = 1_024;
 const PHASE23_SPARSE_MAP_WIRE_HEADER_BYTES_V1: usize = 18;
-const PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1: usize = 186;
+pub(super) const PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1: usize = 186;
 const PHASE23_SPARSE_MAP_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.sparse-map";
 const PHASE23_ENCRYPTED_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.encrypted-binding";
 #[cfg(test)]
@@ -99,14 +102,14 @@ const PHASE23_ENCRYPTED_ALGEBRA_V1: &[u8] = b"A/B/C:canonical-csr:packed-diagona
 
 type CommitmentPreimageLayoutDigestsV1 = ([u8; 32], [u8; 32], [u8; 32]);
 
-static PHASE23_RELEASE_MAPS_V1: Lazy<Result<ZkAmsPhase23ReleaseMapsV1, ZkAmsMkheErrorV1>> =
-    Lazy::new(compile_release_maps_v1);
+static PHASE23_RELEASE_MAP_MANIFEST_V1: Lazy<
+    Result<ZkAmsPhase23ReleaseMapManifestV1, ZkAmsMkheErrorV1>,
+> = Lazy::new(compile_release_map_manifest_v1);
 
 /// Maximum number of nonzero entries admitted by one canonical sparse map.
 ///
-/// This is an allocation ceiling, not a claim about the compiled relation.
-/// The exact encrypted work ceiling is checked again from the number of unique
-/// packed diagonals before any ciphertext output is allocated.
+/// The Shape-backed canonical view checks this as a streaming work ceiling;
+/// decoded/external maps additionally check it before allocating CSR storage.
 pub const ZK_AMS_PHASE23_MAX_CANONICAL_SPARSE_ENTRIES_V1: u32 = 8_388_608;
 /// Deterministic release KAT digest of canonical A/B/C and the Hyrax G/H
 /// commitment-preimage layout.
@@ -114,6 +117,8 @@ pub const ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1: [u8; 32] = [
     50, 223, 102, 25, 53, 242, 201, 62, 35, 225, 87, 33, 238, 138, 181, 190, 252, 179, 254, 190,
     130, 190, 137, 137, 72, 81, 106, 187, 199, 149, 22, 169,
 ];
+// TODO: Record isolated release-harness RSS and wall-clock evidence for the
+// Shape-streaming manifest compiler before closing the release KAT gate.
 
 /// Domain tag for one canonical public linear map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -263,42 +268,103 @@ impl ZkAmsPhase23CommitmentPreimageLayoutV1 {
     }
 }
 
-/// Sole canonical release A/B/C maps and Hyrax G/H preimage layout.
+/// Compact identity of one canonical release relation map.
 ///
-/// The fields are intentionally private.  Release entrypoints obtain this
-/// immutable static value and never accept caller-authoritative alternatives.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ZkAmsPhase23ReleaseMapsV1 {
-    a: ZkAmsPhase23SparseMapV1,
-    b: ZkAmsPhase23SparseMapV1,
-    c: ZkAmsPhase23SparseMapV1,
+/// This manifest deliberately contains no CSR buffers. The canonical entries
+/// remain owned exactly once by the shared `Shape` and are exposed internally
+/// through a bounded paper-order row stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkAmsPhase23SparseMapManifestV1 {
+    version: u8,
+    kind: ZkAmsPhase23MapKindV1,
+    row_count: u32,
+    column_count: u32,
+    max_row_fan_in: u32,
+    nonzero_count: u32,
+    digest: [u8; 32],
+}
+
+impl ZkAmsPhase23SparseMapManifestV1 {
+    /// Encoding version of the identified sparse map.
+    #[must_use]
+    pub const fn version(self) -> u8 {
+        self.version
+    }
+
+    /// Protocol role of the identified sparse map.
+    #[must_use]
+    pub const fn kind(self) -> ZkAmsPhase23MapKindV1 {
+        self.kind
+    }
+
+    /// Exact output dimension.
+    #[must_use]
+    pub const fn row_count(self) -> u32 {
+        self.row_count
+    }
+
+    /// Exact paper-order input dimension.
+    #[must_use]
+    pub const fn column_count(self) -> u32 {
+        self.column_count
+    }
+
+    /// Exact maximum number of nonzero entries in one row.
+    #[must_use]
+    pub const fn max_row_fan_in(self) -> u32 {
+        self.max_row_fan_in
+    }
+
+    /// Exact total number of nonzero entries.
+    #[must_use]
+    pub const fn nonzero_count(self) -> u32 {
+        self.nonzero_count
+    }
+
+    /// Digest of the exact canonical CSR wire fields and entries.
+    #[must_use]
+    pub const fn digest(self) -> [u8; 32] {
+        self.digest
+    }
+}
+
+/// Compact manifest for the sole canonical release A/B/C relation and Hyrax
+/// G/H preimage layout.
+///
+/// Release entrypoints share the canonical `Shape` and this constant-size
+/// manifest. They never construct or retain a second paper-order CSR copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkAmsPhase23ReleaseMapManifestV1 {
+    a: ZkAmsPhase23SparseMapManifestV1,
+    b: ZkAmsPhase23SparseMapManifestV1,
+    c: ZkAmsPhase23SparseMapManifestV1,
     commitment_preimage_layout: ZkAmsPhase23CommitmentPreimageLayoutV1,
     digest: [u8; 32],
 }
 
-impl ZkAmsPhase23ReleaseMapsV1 {
-    /// Canonical paper-order `A` map.
+impl ZkAmsPhase23ReleaseMapManifestV1 {
+    /// Compact identity of the canonical paper-order `A` map.
     #[must_use]
-    pub const fn a(&self) -> &ZkAmsPhase23SparseMapV1 {
-        &self.a
+    pub const fn a(self) -> ZkAmsPhase23SparseMapManifestV1 {
+        self.a
     }
 
-    /// Canonical paper-order `B` map.
+    /// Compact identity of the canonical paper-order `B` map.
     #[must_use]
-    pub const fn b(&self) -> &ZkAmsPhase23SparseMapV1 {
-        &self.b
+    pub const fn b(self) -> ZkAmsPhase23SparseMapManifestV1 {
+        self.b
     }
 
-    /// Canonical paper-order `C` map.
+    /// Compact identity of the canonical paper-order `C` map.
     #[must_use]
-    pub const fn c(&self) -> &ZkAmsPhase23SparseMapV1 {
-        &self.c
+    pub const fn c(self) -> ZkAmsPhase23SparseMapManifestV1 {
+        self.c
     }
 
-    /// Canonical paper-order map references in exact `A`, `B`, `C` order.
+    /// Compact map identities in exact `A`, `B`, `C` order.
     #[must_use]
-    pub const fn abc(&self) -> [&ZkAmsPhase23SparseMapV1; 3] {
-        [&self.a, &self.b, &self.c]
+    pub const fn abc(self) -> [ZkAmsPhase23SparseMapManifestV1; 3] {
+        [self.a, self.b, self.c]
     }
 
     /// Canonical Hyrax `G`/`H` commitment-preimage row layout.
@@ -315,38 +381,63 @@ impl ZkAmsPhase23ReleaseMapsV1 {
     }
 }
 
-/// Return the sole deterministic release A/B/C maps and Hyrax G/H preimage
-/// layout compiled from the canonical ZK-AMS relation.
-pub fn zk_ams_phase23_release_maps_v1()
--> Result<&'static ZkAmsPhase23ReleaseMapsV1, ZkAmsMkheErrorV1> {
-    match &*PHASE23_RELEASE_MAPS_V1 {
-        Ok(maps) => Ok(maps),
+/// Return the compact deterministic release A/B/C and Hyrax G/H manifest.
+///
+/// The returned static contains no row offsets, columns, coefficients, or
+/// other storage proportional to the release relation.
+pub fn zk_ams_phase23_release_map_manifest_v1()
+-> Result<&'static ZkAmsPhase23ReleaseMapManifestV1, ZkAmsMkheErrorV1> {
+    match &*PHASE23_RELEASE_MAP_MANIFEST_V1 {
+        Ok(manifest) => Ok(manifest),
         Err(error) => Err(*error),
     }
 }
 
+/// Shared canonical release relation used by native terminal entrypoints.
+///
+/// Constructing this value clones only an `Arc`; the matrices remain uniquely
+/// owned by the canonical shape.
+pub(super) struct ZkAmsPhase23ReleaseRelationV1 {
+    shape: Arc<Shape>,
+    manifest: &'static ZkAmsPhase23ReleaseMapManifestV1,
+}
+
+impl ZkAmsPhase23ReleaseRelationV1 {
+    /// Shared immutable canonical shape.
+    pub(super) const fn shape(&self) -> &Arc<Shape> {
+        &self.shape
+    }
+
+    /// Constant-size release map manifest.
+    pub(super) const fn manifest(&self) -> &'static ZkAmsPhase23ReleaseMapManifestV1 {
+        self.manifest
+    }
+}
+
+/// Borrow the canonical release relation without constructing paper-order CSR
+/// buffers.
+pub(super) fn zk_ams_phase23_release_relation_v1()
+-> Result<ZkAmsPhase23ReleaseRelationV1, ZkAmsMkheErrorV1> {
+    let manifest = zk_ams_phase23_release_map_manifest_v1()?;
+    let shape = super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    validate_release_shape_manifest_geometry_v1(&shape, *manifest)?;
+    Ok(ZkAmsPhase23ReleaseRelationV1 { shape, manifest })
+}
+
 /// Return the digest of the sole canonical release map set.
 pub fn zk_ams_phase23_release_map_set_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    Ok(zk_ams_phase23_release_maps_v1()?.digest())
+    Ok(zk_ams_phase23_release_map_manifest_v1()?.digest())
 }
 
 /// Require exact structural identity with the sole canonical A/B/C release
 /// maps.  Semantic equivalence or alternate CSR metadata is not admitted.
+#[cfg(test)]
 pub(super) fn require_release_relation_maps_v1(
     maps: [&ZkAmsPhase23SparseMapV1; 3],
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    for map in maps {
-        validate_sparse_map(map)?;
-    }
-    let canonical = zk_ams_phase23_release_maps_v1()?.abc();
-    if maps
-        .into_iter()
-        .zip(canonical)
-        .any(|(provided, expected)| provided != expected)
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    Ok(())
+    let shape = super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let manifest = *zk_ams_phase23_release_map_manifest_v1()?;
+    require_relation_maps_matching_manifest_v1(maps, &shape, manifest)
 }
 
 /// Canonical public relaxed instance retained for fold-history replay.
@@ -1583,58 +1674,130 @@ impl ZkAmsPhase23AccumulatorShapeV1 {
 }
 
 /// Canonical release-packed input to six-family materialization.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ZkAmsPhase23PackedAccumulatorSetV1 {
+#[cfg_attr(test, derive(Clone))]
+#[derive(PartialEq, Eq)]
+pub(super) struct ZkAmsPhase23PackedAccumulatorSetV1 {
     /// Complete accumulator shape.
     pub shape: ZkAmsPhase23AccumulatorShapeV1,
-    /// Packed chunks for `x`.
     pub x: Vec<ZkAmsT256PackedPlaintextV1>,
     /// Packed chunks for `u`, repeated in every one of the `shape.e` used
     /// slots. Materialization rejects any non-identical replica.
     pub u: Vec<ZkAmsT256PackedPlaintextV1>,
-    /// Packed chunks for `E`.
     pub e: Vec<ZkAmsT256PackedPlaintextV1>,
-    /// Packed chunks for `r_E`.
     pub r_e: Vec<ZkAmsT256PackedPlaintextV1>,
-    /// Packed chunks for `W`.
     pub w: Vec<ZkAmsT256PackedPlaintextV1>,
-    /// Packed chunks for `r_W`.
     pub r_w: Vec<ZkAmsT256PackedPlaintextV1>,
 }
 
 /// Canonical, padding-free materialization of all six accumulator families.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
+#[derive(PartialEq, Eq)]
 pub struct ZkAmsPhase23MaterializedAccumulatorsV1 {
     /// Materialization version.
-    pub version: u8,
+    pub(super) version: u8,
     /// Exact release profile digest.
-    pub profile_digest: [u8; 32],
+    pub(super) profile_digest: [u8; 32],
     /// Exact fixed-roster digest.
-    pub roster_digest: [u8; 32],
+    pub(super) roster_digest: [u8; 32],
     /// Transcript digest from which shares were released.
-    pub transcript_digest: [u8; 32],
+    pub(super) transcript_digest: [u8; 32],
     /// Batch identifier.
-    pub batch_id: [u8; 32],
+    pub(super) batch_id: [u8; 32],
     /// Ordered settlement-input digest.
-    pub ordered_batch_input_digest: [u8; 32],
+    pub(super) ordered_batch_input_digest: [u8; 32],
     /// Number of completed folds represented by this state.
-    pub fold_count: u8,
+    pub(super) fold_count: u8,
     /// Complete accumulator shape.
-    pub shape: ZkAmsPhase23AccumulatorShapeV1,
+    pub(super) shape: ZkAmsPhase23AccumulatorShapeV1,
     /// Materialized `x`.
-    pub x: Vec<[u8; 32]>,
+    pub(super) x: Vec<Scalar>,
     /// Materialized scalar `u`, always length one.
-    pub u: Vec<[u8; 32]>,
+    pub(super) u: Vec<Scalar>,
     /// Materialized `E`.
-    pub e: Vec<[u8; 32]>,
+    pub(super) e: Vec<Scalar>,
     /// Materialized `r_E`.
-    pub r_e: Vec<[u8; 32]>,
+    pub(super) r_e: Vec<Scalar>,
     /// Materialized `W`.
-    pub w: Vec<[u8; 32]>,
+    pub(super) w: Vec<Scalar>,
     /// Materialized `r_W`.
-    pub r_w: Vec<[u8; 32]>,
+    pub(super) r_w: Vec<Scalar>,
     /// Digest of the complete canonical padding-free representation.
-    pub digest: [u8; 32],
+    pub(super) digest: [u8; 32],
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static MATERIALIZED_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn materialized_zeroized_drop_count_v1() -> usize {
+    MATERIALIZED_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+impl Drop for ZkAmsPhase23MaterializedAccumulatorsV1 {
+    fn drop(&mut self) {
+        let mut families = [
+            &mut self.x,
+            &mut self.u,
+            &mut self.e,
+            &mut self.r_e,
+            &mut self.w,
+            &mut self.r_w,
+        ];
+        let families = core::hint::black_box(&mut families);
+        #[cfg(test)]
+        let owned_values = families.iter().any(|family| !family.is_empty());
+        for family in families.iter_mut() {
+            for value in family.iter_mut() {
+                value.clear_secret();
+            }
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if owned_values
+            && families
+                .iter()
+                .all(|family| family.iter().all(|value| value.is_zero()))
+        {
+            let _ = MATERIALIZED_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        let _ = core::hint::black_box(&mut *families);
+    }
+}
+
+impl fmt::Debug for ZkAmsPhase23MaterializedAccumulatorsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ZkAmsPhase23MaterializedAccumulatorsV1")
+            .field("version", &self.version)
+            .field("fold_count", &self.fold_count)
+            .field("shape", &self.shape)
+            .field("digest", &self.digest)
+            .finish()
+    }
+}
+
+struct ZeroizingMaterializedScalarEncodingV1([u8; 32]);
+
+impl ZeroizingMaterializedScalarEncodingV1 {
+    fn new(value: Scalar) -> Self {
+        Self(value.to_be_bytes())
+    }
+}
+
+impl Drop for ZeroizingMaterializedScalarEncodingV1 {
+    fn drop(&mut self) {
+        let bytes = core::hint::black_box(&mut self.0);
+        bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *bytes);
+    }
 }
 
 /// Digestible implementation status for this encrypted slice.
@@ -1676,144 +1839,65 @@ pub fn zk_ams_phase23_encrypted_implementation_v1() -> ZkAmsPhase23EncryptedImpl
     implementation
 }
 
-impl ZkAmsPhase23MaterializedAccumulatorsV1 {
-    /// Encode all six families without padding or implicit dimensions.
-    pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
-        validate_materialized(self)?;
-        let length = materialized_wire_length(self.shape)?;
-        let mut bytes = Vec::with_capacity(length);
-        bytes.push(self.version);
-        bytes.extend_from_slice(&self.profile_digest);
-        bytes.extend_from_slice(&self.roster_digest);
-        bytes.extend_from_slice(&self.transcript_digest);
-        bytes.extend_from_slice(&self.batch_id);
-        bytes.extend_from_slice(&self.ordered_batch_input_digest);
-        bytes.push(self.fold_count);
-        for value in [
-            self.shape.x,
-            1,
-            self.shape.e,
-            self.shape.r_e,
-            self.shape.w,
-            self.shape.r_w,
-        ] {
-            bytes.extend_from_slice(&value.to_be_bytes());
-        }
-        for family in [
-            self.x.as_slice(),
-            self.u.as_slice(),
-            self.e.as_slice(),
-            self.r_e.as_slice(),
-            self.w.as_slice(),
-            self.r_w.as_slice(),
-        ] {
-            for value in family {
-                bytes.extend_from_slice(value);
-            }
-        }
-        bytes.extend_from_slice(&self.digest);
-        debug_assert_eq!(bytes.len(), length);
-        Ok(bytes)
-    }
-
-    /// Decode only after the exact six lengths pass every global bound and the
-    /// resulting byte length is proven equal to the input length.
-    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
-        if bytes.len() < PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 + 32 {
-            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-        }
-        let version = bytes[0];
-        let mut cursor = 1;
-        let profile_digest = read_array_32(bytes, &mut cursor)?;
-        let roster_digest = read_array_32(bytes, &mut cursor)?;
-        let transcript_digest = read_array_32(bytes, &mut cursor)?;
-        let batch_id = read_array_32(bytes, &mut cursor)?;
-        let ordered_batch_input_digest = read_array_32(bytes, &mut cursor)?;
-        let fold_count = *bytes
-            .get(cursor)
-            .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-        cursor += 1;
-        let lengths = (0..6)
-            .map(|_| {
-                let value = read_u32(bytes, cursor)?;
-                cursor += 4;
-                Ok(value)
-            })
-            .collect::<Result<Vec<_>, ZkAmsMkheErrorV1>>()?;
-        if lengths[1] != 1 {
-            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-        }
-        let shape = ZkAmsPhase23AccumulatorShapeV1 {
-            x: lengths[0],
-            e: lengths[2],
-            r_e: lengths[3],
-            w: lengths[4],
-            r_w: lengths[5],
-        };
-        validate_accumulator_shape(shape).map_err(|error| match error {
-            ZkAmsMkheErrorV1::ResourceCeilingExceeded => error,
-            _ => ZkAmsMkheErrorV1::InvalidWireEncoding,
-        })?;
-        if bytes.len() != materialized_wire_length(shape)? {
-            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-        }
-        let mut decode_family = |length: u32| -> Result<Vec<[u8; 32]>, ZkAmsMkheErrorV1> {
-            let length =
-                usize::try_from(length).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-            let mut output = Vec::with_capacity(length);
-            for _ in 0..length {
-                output.push(read_array_32(bytes, &mut cursor)?);
-            }
-            Ok(output)
-        };
-        let x = decode_family(shape.x)?;
-        let u = decode_family(1)?;
-        let e = decode_family(shape.e)?;
-        let r_e = decode_family(shape.r_e)?;
-        let w = decode_family(shape.w)?;
-        let r_w = decode_family(shape.r_w)?;
-        let digest = read_array_32(bytes, &mut cursor)?;
-        if cursor != bytes.len() {
-            return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
-        }
-        let materialized = Self {
-            version,
-            profile_digest,
-            roster_digest,
-            transcript_digest,
-            batch_id,
-            ordered_batch_input_digest,
-            fold_count,
-            shape,
-            x,
-            u,
-            e,
-            r_e,
-            w,
-            r_w,
-            digest,
-        };
-        validate_materialized(&materialized).map_err(|error| match error {
-            ZkAmsMkheErrorV1::ResourceCeilingExceeded => error,
-            _ => ZkAmsMkheErrorV1::InvalidWireEncoding,
-        })?;
-        Ok(materialized)
-    }
-}
-
-/// Decode release-packed, padding-checked chunks into the sole canonical six-
-/// family accumulator representation.
+/// Consume owned chunks in exact `X/U/E/rE/W/rW` order with one retained `U`.
 #[allow(clippy::too_many_arguments)]
-pub fn zk_ams_phase23_materialize_release_accumulators_v1(
+pub fn zk_ams_phase23_materialize_release_accumulator_chunks_v1<I>(
     profile_digest: [u8; 32],
     roster_digest: [u8; 32],
     transcript_digest: [u8; 32],
     batch_id: [u8; 32],
     ordered_batch_input_digest: [u8; 32],
     fold_count: u8,
-    packed: &ZkAmsPhase23PackedAccumulatorSetV1,
-) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1> {
-    validate_accumulator_shape(packed.shape)?;
+    shape: ZkAmsPhase23AccumulatorShapeV1,
+    packed_chunks: I,
+) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1>
+where
+    I: IntoIterator<Item = Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
+{
+    let mut workspace = T256PackedPlaintextDecodeWorkspaceV1::try_new_v1()?;
+    materialize_release_accumulator_chunk_stream_with_decoder_v1(
+        profile_digest,
+        roster_digest,
+        transcript_digest,
+        batch_id,
+        ordered_batch_input_digest,
+        fold_count,
+        shape,
+        packed_chunks,
+        &mut |layout: ZkAmsT256PackingLayoutV1,
+              packed: &ZkAmsT256PackedPlaintextV1,
+              visit: &mut dyn FnMut(&[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>| {
+            visit_zk_ams_t256_packed_plaintext_used_slots_with_workspace_v1(
+                layout,
+                packed,
+                &mut workspace,
+                visit,
+            )
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn materialize_release_accumulator_chunk_stream_with_decoder_v1<I, D>(
+    profile_digest: [u8; 32],
+    roster_digest: [u8; 32],
+    transcript_digest: [u8; 32],
+    batch_id: [u8; 32],
+    ordered_batch_input_digest: [u8; 32],
+    fold_count: u8,
+    shape: ZkAmsPhase23AccumulatorShapeV1,
+    packed_chunks: I,
+    decoder: &mut D,
+) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1>
+where
+    I: IntoIterator<Item = Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
+    D: FnMut(
+        ZkAmsT256PackingLayoutV1,
+        &ZkAmsT256PackedPlaintextV1,
+        &mut dyn FnMut(&[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+    ) -> Result<(), ZkAmsMkheErrorV1>,
+{
+    validate_accumulator_shape(shape)?;
     if profile_digest != release_profile_v1().digest()?
         || [
             profile_digest,
@@ -1828,30 +1912,101 @@ pub fn zk_ams_phase23_materialize_release_accumulators_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    let x = decode_release_family(packed.shape.x, &packed.x)?;
-    let u = collapse_replicated_u_values(
-        decode_release_family(packed.shape.e, &packed.u)?,
-        packed.shape.e,
-    )?;
-    let e = decode_release_family(packed.shape.e, &packed.e)?;
-    let r_e = decode_release_family(packed.shape.r_e, &packed.r_e)?;
-    let w = decode_release_family(packed.shape.w, &packed.w)?;
-    let r_w = decode_release_family(packed.shape.r_w, &packed.r_w)?;
-    materialized_from_values(
+    let retained_lengths = [shape.x, 1, shape.e, shape.r_e, shape.w, shape.r_w];
+    let layouts = [
+        zk_ams_t256_packing_layout_v1(shape.x)?,
+        zk_ams_t256_packing_layout_v1(shape.e)?,
+        zk_ams_t256_packing_layout_v1(shape.e)?,
+        zk_ams_t256_packing_layout_v1(shape.r_e)?,
+        zk_ams_t256_packing_layout_v1(shape.w)?,
+        zk_ams_t256_packing_layout_v1(shape.r_w)?,
+    ];
+    let mut materialized = ZkAmsPhase23MaterializedAccumulatorsV1 {
+        version: PHASE23_ENCRYPTED_VERSION_V1,
         profile_digest,
         roster_digest,
         transcript_digest,
         batch_id,
         ordered_batch_input_digest,
         fold_count,
-        packed.shape,
-        x,
-        u,
-        e,
-        r_e,
-        w,
-        r_w,
-    )
+        shape,
+        x: Vec::new(),
+        u: Vec::new(),
+        e: Vec::new(),
+        r_e: Vec::new(),
+        w: Vec::new(),
+        r_w: Vec::new(),
+        digest: [0; 32],
+    };
+    for (output, length) in [
+        &mut materialized.x,
+        &mut materialized.u,
+        &mut materialized.e,
+        &mut materialized.r_e,
+        &mut materialized.w,
+        &mut materialized.r_w,
+    ]
+    .into_iter()
+    .zip(retained_lengths)
+    {
+        output
+            .try_reserve_exact(length as usize)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    }
+    let mut chunks = packed_chunks.into_iter();
+    for (family, layout) in layouts.into_iter().enumerate() {
+        let output = match family {
+            0 => &mut materialized.x,
+            1 => &mut materialized.u,
+            2 => &mut materialized.e,
+            3 => &mut materialized.r_e,
+            4 => &mut materialized.w,
+            5 => &mut materialized.r_w,
+            _ => return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold),
+        };
+        let mut decoded_values = 0_usize;
+        for expected_index in 0..layout.chunk_count {
+            let chunk = chunks
+                .next()
+                .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)??;
+            if chunk.chunk_index != expected_index {
+                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+            }
+            decoder(layout, &chunk, &mut |value| {
+                decoded_values = decoded_values
+                    .checked_add(1)
+                    .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+                let value = scalar_from_canonical_bytes(*value)?;
+                if family == 1 {
+                    if let Some(canonical) = output.first() {
+                        if *canonical != value {
+                            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+                        }
+                    } else {
+                        output.push(value);
+                    }
+                } else if output.len() < retained_lengths[family] as usize {
+                    output.push(value);
+                } else {
+                    return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+                }
+                Ok(())
+            })?;
+        }
+        if decoded_values != layout.logical_value_count as usize
+            || output.len() != retained_lengths[family] as usize
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+    }
+    if let Some(extra) = chunks.next() {
+        extra?;
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    validate_materialized_fields(&materialized)?;
+    materialized.digest = materialized_digest(&materialized)?;
+    validate_materialized(&materialized)?;
+    Ok(materialized)
 }
 
 fn validate_sparse_map_structure(map: &ZkAmsPhase23SparseMapV1) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1956,126 +2111,392 @@ fn sparse_map_digest(map: &ZkAmsPhase23SparseMapV1) -> Result<[u8; 32], ZkAmsMkh
     Ok(hash.finalize())
 }
 
-fn compile_release_maps_v1() -> Result<ZkAmsPhase23ReleaseMapsV1, ZkAmsMkheErrorV1> {
+#[cfg(test)]
+fn sparse_map_manifest_from_owned_v1(
+    map: &ZkAmsPhase23SparseMapV1,
+) -> Result<ZkAmsPhase23SparseMapManifestV1, ZkAmsMkheErrorV1> {
+    validate_sparse_map(map)?;
+    let manifest = ZkAmsPhase23SparseMapManifestV1 {
+        version: map.version,
+        kind: map.kind,
+        row_count: map.row_count,
+        column_count: map.column_count,
+        max_row_fan_in: map.max_row_fan_in,
+        nonzero_count: u32::try_from(map.column_indices.len())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        digest: map.digest,
+    };
+    validate_sparse_map_manifest_v1(manifest)?;
+    Ok(manifest)
+}
+
+fn validate_sparse_map_manifest_v1(
+    manifest: ZkAmsPhase23SparseMapManifestV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if manifest.version != PHASE23_ENCRYPTED_VERSION_V1
+        || !matches!(
+            manifest.kind,
+            ZkAmsPhase23MapKindV1::A | ZkAmsPhase23MapKindV1::B | ZkAmsPhase23MapKindV1::C
+        )
+        || manifest.row_count == 0
+        || manifest.row_count > PHASE23_MAX_ROWS_V1
+        || manifest.column_count == 0
+        || manifest.column_count > PHASE23_MAX_COLUMNS_V1
+        || manifest.max_row_fan_in == 0
+        || manifest.max_row_fan_in > manifest.column_count
+        || manifest.nonzero_count < manifest.max_row_fan_in
+        || manifest.nonzero_count > ZK_AMS_PHASE23_MAX_CANONICAL_SPARSE_ENTRIES_V1
+        || manifest.digest == [0; 32]
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn validate_release_map_manifest_v1(
+    manifest: ZkAmsPhase23ReleaseMapManifestV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let maps = manifest.abc();
+    for (map, expected_kind) in maps.into_iter().zip([
+        ZkAmsPhase23MapKindV1::A,
+        ZkAmsPhase23MapKindV1::B,
+        ZkAmsPhase23MapKindV1::C,
+    ]) {
+        validate_sparse_map_manifest_v1(map)?;
+        if map.kind != expected_kind {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+    }
+    if maps[1..]
+        .iter()
+        .any(|map| map.row_count != maps[0].row_count || map.column_count != maps[0].column_count)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    validate_commitment_preimage_layout(manifest.commitment_preimage_layout)?;
+    if manifest.commitment_preimage_layout.message_value_count != maps[0].row_count
+        || manifest.digest
+            != release_map_set_digest_v1(
+                maps[0],
+                maps[1],
+                maps[2],
+                manifest.commitment_preimage_layout,
+            )?
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn validate_release_shape_manifest_geometry_v1(
+    shape: &Shape,
+    manifest: ZkAmsPhase23ReleaseMapManifestV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    validate_release_map_manifest_v1(manifest)?;
+    let views = [
+        PaperOrderRelationMapViewV1::new(
+            ZkAmsPhase23MapKindV1::A,
+            &shape.a,
+            shape.variable_count(),
+            shape.public_input_count(),
+        )?,
+        PaperOrderRelationMapViewV1::new(
+            ZkAmsPhase23MapKindV1::B,
+            &shape.b,
+            shape.variable_count(),
+            shape.public_input_count(),
+        )?,
+        PaperOrderRelationMapViewV1::new(
+            ZkAmsPhase23MapKindV1::C,
+            &shape.c,
+            shape.variable_count(),
+            shape.public_input_count(),
+        )?,
+    ];
+    if views.iter().zip(manifest.abc()).any(|(view, expected)| {
+        view.kind != expected.kind
+            || view.row_count != expected.row_count
+            || view.column_count != expected.column_count
+    }) {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn sparse_map_matches_paper_view_v1(
+    provided: &ZkAmsPhase23SparseMapV1,
+    view: &PaperOrderRelationMapViewV1<'_>,
+    expected: ZkAmsPhase23SparseMapManifestV1,
+) -> Result<bool, ZkAmsMkheErrorV1> {
+    if sparse_map_manifest_from_owned_v1(provided)? != expected
+        || view.kind != expected.kind
+        || view.row_count != expected.row_count
+        || view.column_count != expected.column_count
+    {
+        return Ok(false);
+    }
+    for row in 0..view.matrix.rows() {
+        let start = usize::try_from(provided.row_offsets[row])
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let end = usize::try_from(provided.row_offsets[row + 1])
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let mut cursor = start;
+        let mut exact = true;
+        view.for_each_paper_row_entry(row, |column, coefficient| {
+            if cursor >= end
+                || provided.column_indices.get(cursor) != Some(&column)
+                || provided.coefficients.get(cursor) != Some(&coefficient.to_be_bytes())
+            {
+                exact = false;
+            }
+            cursor = cursor
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+            Ok(())
+        })?;
+        if !exact || cursor != end {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+fn require_relation_maps_matching_manifest_v1(
+    maps: [&ZkAmsPhase23SparseMapV1; 3],
+    shape: &Shape,
+    manifest: ZkAmsPhase23ReleaseMapManifestV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    validate_release_shape_manifest_geometry_v1(shape, manifest)?;
+    let views = [
+        PaperOrderRelationMapViewV1::new(
+            ZkAmsPhase23MapKindV1::A,
+            &shape.a,
+            shape.variable_count(),
+            shape.public_input_count(),
+        )?,
+        PaperOrderRelationMapViewV1::new(
+            ZkAmsPhase23MapKindV1::B,
+            &shape.b,
+            shape.variable_count(),
+            shape.public_input_count(),
+        )?,
+        PaperOrderRelationMapViewV1::new(
+            ZkAmsPhase23MapKindV1::C,
+            &shape.c,
+            shape.variable_count(),
+            shape.public_input_count(),
+        )?,
+    ];
+    for ((provided, view), expected) in maps.into_iter().zip(&views).zip(manifest.abc()) {
+        if !sparse_map_matches_paper_view_v1(provided, view, expected)? {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+    }
+    Ok(())
+}
+
+/// Borrowed paper-order view of one matrix in the shared canonical shape.
+///
+/// A row is emitted as `W`, then `x`, then the single postponed `u` entry.
+/// The view owns no row buffer and performs no sorting or allocation.
+struct PaperOrderRelationMapViewV1<'a> {
+    kind: ZkAmsPhase23MapKindV1,
+    matrix: &'a SparseMatrix,
+    variable_count: usize,
+    public_input_count: usize,
+    row_count: u32,
+    column_count: u32,
+}
+
+impl<'a> PaperOrderRelationMapViewV1<'a> {
+    fn new(
+        kind: ZkAmsPhase23MapKindV1,
+        matrix: &'a SparseMatrix,
+        variable_count: usize,
+        public_input_count: usize,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        if !matches!(
+            kind,
+            ZkAmsPhase23MapKindV1::A | ZkAmsPhase23MapKindV1::B | ZkAmsPhase23MapKindV1::C
+        ) {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        let column_count = variable_count
+            .checked_add(public_input_count)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if variable_count == 0
+            || public_input_count == 0
+            || matrix.rows() == 0
+            || matrix.columns() != column_count
+            || matrix.rows() > PHASE23_MAX_ROWS_V1 as usize
+            || column_count > PHASE23_MAX_COLUMNS_V1 as usize
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        Ok(Self {
+            kind,
+            matrix,
+            variable_count,
+            public_input_count,
+            row_count: u32::try_from(matrix.rows())
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+            column_count: u32::try_from(column_count)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        })
+    }
+
+    fn for_each_paper_row_entry(
+        &self,
+        row: usize,
+        mut emit: impl FnMut(u32, Scalar) -> Result<(), ZkAmsMkheErrorV1>,
+    ) -> Result<u32, ZkAmsMkheErrorV1> {
+        let entries = self
+            .matrix
+            .row_entries(row)
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let mut postponed_u = None;
+        let mut previous_paper_column = None;
+        let mut count = 0_u32;
+        for (internal_column, coefficient) in entries {
+            if coefficient.is_zero() {
+                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+            }
+            let paper_column = internal_to_paper_column_v1(
+                internal_column,
+                self.variable_count,
+                self.public_input_count,
+            )?;
+            if internal_column == self.variable_count {
+                if postponed_u.replace((paper_column, coefficient)).is_some() {
+                    return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+                }
+                continue;
+            }
+            if previous_paper_column.is_some_and(|previous| previous >= paper_column) {
+                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+            }
+            emit(paper_column, coefficient)?;
+            previous_paper_column = Some(paper_column);
+            count = count
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        }
+        if let Some((paper_column, coefficient)) = postponed_u {
+            if previous_paper_column.is_some_and(|previous| previous >= paper_column) {
+                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+            }
+            emit(paper_column, coefficient)?;
+            count = count
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        }
+        Ok(count)
+    }
+}
+
+fn compile_release_map_manifest_v1() -> Result<ZkAmsPhase23ReleaseMapManifestV1, ZkAmsMkheErrorV1> {
     let shape = super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     let variable_count = shape.variable_count();
     let public_input_count = shape.public_input_count();
-    let a = compile_paper_order_relation_map_v1(
+    let a = compile_paper_order_map_manifest_v1(PaperOrderRelationMapViewV1::new(
         ZkAmsPhase23MapKindV1::A,
         &shape.a,
         variable_count,
         public_input_count,
-    )?;
-    let b = compile_paper_order_relation_map_v1(
+    )?)?;
+    let b = compile_paper_order_map_manifest_v1(PaperOrderRelationMapViewV1::new(
         ZkAmsPhase23MapKindV1::B,
         &shape.b,
         variable_count,
         public_input_count,
-    )?;
-    let c = compile_paper_order_relation_map_v1(
+    )?)?;
+    let c = compile_paper_order_map_manifest_v1(PaperOrderRelationMapViewV1::new(
         ZkAmsPhase23MapKindV1::C,
         &shape.c,
         variable_count,
         public_input_count,
-    )?;
+    )?)?;
     let message_value_count = u32::try_from(shape.constraint_count())
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     if message_value_count != PHASE23_MAX_ROWS_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
     let commitment_preimage_layout = canonical_release_commitment_preimage_layout_v1()?;
-    let digest = release_map_set_digest_v1(&a, &b, &c, commitment_preimage_layout)?;
+    let digest = release_map_set_digest_v1(a, b, c, commitment_preimage_layout)?;
     if digest != ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
-    Ok(ZkAmsPhase23ReleaseMapsV1 {
+    let manifest = ZkAmsPhase23ReleaseMapManifestV1 {
         a,
         b,
         c,
         commitment_preimage_layout,
         digest,
-    })
+    };
+    validate_release_map_manifest_v1(manifest)?;
+    Ok(manifest)
 }
 
-fn compile_paper_order_relation_map_v1(
-    kind: ZkAmsPhase23MapKindV1,
-    matrix: &SparseMatrix,
-    variable_count: usize,
-    public_input_count: usize,
-) -> Result<ZkAmsPhase23SparseMapV1, ZkAmsMkheErrorV1> {
-    if !matches!(
-        kind,
-        ZkAmsPhase23MapKindV1::A | ZkAmsPhase23MapKindV1::B | ZkAmsPhase23MapKindV1::C
-    ) {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    let column_count = variable_count
-        .checked_add(public_input_count)
-        .and_then(|value| value.checked_add(1))
-        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    if matrix.rows() == 0
-        || matrix.columns() != column_count
-        || matrix.rows() > PHASE23_MAX_ROWS_V1 as usize
-        || column_count > PHASE23_MAX_COLUMNS_V1 as usize
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-
-    let mut row_offsets = Vec::with_capacity(
-        matrix
-            .rows()
-            .checked_add(1)
-            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-    );
-    let mut column_indices = Vec::new();
-    let mut coefficients = Vec::new();
-    let mut row = Vec::new();
-    let mut max_row_fan_in = 0_usize;
-    row_offsets.push(0);
-    for row_index in 0..matrix.rows() {
-        row.clear();
-        let entries = matrix
-            .row_entries(row_index)
-            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        for (internal_column, coefficient) in entries {
-            let paper_column =
-                internal_to_paper_column_v1(internal_column, variable_count, public_input_count)?;
-            row.push((paper_column, coefficient.to_be_bytes()));
-        }
-        row.sort_unstable_by_key(|(column, _)| *column);
-        if row.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        max_row_fan_in = max_row_fan_in.max(row.len());
-        let prospective_entries = column_indices
-            .len()
-            .checked_add(row.len())
+fn compile_paper_order_map_manifest_v1(
+    view: PaperOrderRelationMapViewV1<'_>,
+) -> Result<ZkAmsPhase23SparseMapManifestV1, ZkAmsMkheErrorV1> {
+    let mut max_row_fan_in = 0_u32;
+    let mut nonzero_count = 0_u32;
+    for row in 0..view.matrix.rows() {
+        let row_fan_in = view.for_each_paper_row_entry(row, |_, _| Ok(()))?;
+        max_row_fan_in = max_row_fan_in.max(row_fan_in);
+        nonzero_count = nonzero_count
+            .checked_add(row_fan_in)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        if prospective_entries
-            > usize::try_from(ZK_AMS_PHASE23_MAX_CANONICAL_SPARSE_ENTRIES_V1)
-                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
-        {
+        if nonzero_count > ZK_AMS_PHASE23_MAX_CANONICAL_SPARSE_ENTRIES_V1 {
             return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
         }
-        column_indices.extend(row.iter().map(|(column, _)| *column));
-        coefficients.extend(row.iter().map(|(_, coefficient)| *coefficient));
-        row_offsets.push(
-            u32::try_from(prospective_entries)
-                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-        );
     }
     if max_row_fan_in == 0 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    ZkAmsPhase23SparseMapV1::new(
-        kind,
-        u32::try_from(matrix.rows()).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-        u32::try_from(column_count).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-        u32::try_from(max_row_fan_in).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-        row_offsets,
-        column_indices,
-        coefficients,
-    )
+
+    let mut hash = Keccak256::new();
+    hash.update(PHASE23_SPARSE_MAP_DOMAIN_V1);
+    hash.update(&[PHASE23_ENCRYPTED_VERSION_V1, view.kind.tag()]);
+    hash.update(&view.row_count.to_be_bytes());
+    hash.update(&view.column_count.to_be_bytes());
+    hash.update(&max_row_fan_in.to_be_bytes());
+    hash.update(&nonzero_count.to_be_bytes());
+
+    let mut offset = 0_u32;
+    hash.update(&offset.to_be_bytes());
+    for row in 0..view.matrix.rows() {
+        let row_fan_in = view.for_each_paper_row_entry(row, |_, _| Ok(()))?;
+        offset = offset
+            .checked_add(row_fan_in)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        hash.update(&offset.to_be_bytes());
+    }
+    if offset != nonzero_count {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    for row in 0..view.matrix.rows() {
+        view.for_each_paper_row_entry(row, |column, coefficient| {
+            hash.update(&column.to_be_bytes());
+            hash.update(&coefficient.to_be_bytes());
+            Ok(())
+        })?;
+    }
+    let manifest = ZkAmsPhase23SparseMapManifestV1 {
+        version: PHASE23_ENCRYPTED_VERSION_V1,
+        kind: view.kind,
+        row_count: view.row_count,
+        column_count: view.column_count,
+        max_row_fan_in,
+        nonzero_count,
+        digest: hash.finalize(),
+    };
+    validate_sparse_map_manifest_v1(manifest)?;
+    Ok(manifest)
 }
 
 fn internal_to_paper_column_v1(
@@ -2254,9 +2675,9 @@ fn compile_commitment_preimage_layout_without_validation_v1(
 }
 
 fn release_map_set_digest_v1(
-    a: &ZkAmsPhase23SparseMapV1,
-    b: &ZkAmsPhase23SparseMapV1,
-    c: &ZkAmsPhase23SparseMapV1,
+    a: ZkAmsPhase23SparseMapManifestV1,
+    b: ZkAmsPhase23SparseMapManifestV1,
+    c: ZkAmsPhase23SparseMapManifestV1,
     layout: ZkAmsPhase23CommitmentPreimageLayoutV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     for (map, kind) in [
@@ -2264,7 +2685,7 @@ fn release_map_set_digest_v1(
         (b, ZkAmsPhase23MapKindV1::B),
         (c, ZkAmsPhase23MapKindV1::C),
     ] {
-        validate_sparse_map(map)?;
+        validate_sparse_map_manifest_v1(map)?;
         if map.kind != kind {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
@@ -2362,7 +2783,7 @@ fn encrypted_binding_digest(binding: ZkAmsPhase23EncryptedBindingV1) -> [u8; 32]
     keccak256(&frame)
 }
 
-fn validate_accumulator_shape(
+pub(super) fn validate_accumulator_shape(
     shape: ZkAmsPhase23AccumulatorShapeV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     if [shape.x, shape.e, shape.r_e, shape.w, shape.r_w].contains(&0)
@@ -2379,6 +2800,7 @@ fn validate_accumulator_shape(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn materialized_from_values(
     profile_digest: [u8; 32],
     roster_digest: [u8; 32],
@@ -2387,12 +2809,12 @@ fn materialized_from_values(
     ordered_batch_input_digest: [u8; 32],
     fold_count: u8,
     shape: ZkAmsPhase23AccumulatorShapeV1,
-    x: Vec<[u8; 32]>,
-    u: Vec<[u8; 32]>,
-    e: Vec<[u8; 32]>,
-    r_e: Vec<[u8; 32]>,
-    w: Vec<[u8; 32]>,
-    r_w: Vec<[u8; 32]>,
+    x: Vec<Scalar>,
+    u: Vec<Scalar>,
+    e: Vec<Scalar>,
+    r_e: Vec<Scalar>,
+    w: Vec<Scalar>,
+    r_w: Vec<Scalar>,
 ) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1> {
     let mut materialized = ZkAmsPhase23MaterializedAccumulatorsV1 {
         version: PHASE23_ENCRYPTED_VERSION_V1,
@@ -2441,25 +2863,10 @@ fn validate_materialized_fields(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    for family in [
-        materialized.x.as_slice(),
-        materialized.u.as_slice(),
-        materialized.e.as_slice(),
-        materialized.r_e.as_slice(),
-        materialized.w.as_slice(),
-        materialized.r_w.as_slice(),
-    ] {
-        if family
-            .iter()
-            .any(|value| Scalar::from_be_bytes_exact(*value).is_err())
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-    }
     Ok(())
 }
 
-fn validate_materialized(
+pub(super) fn validate_materialized(
     materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
     validate_materialized_fields(materialized)?;
@@ -2509,13 +2916,14 @@ fn materialized_digest(
         materialized.r_w.as_slice(),
     ] {
         for value in family {
-            hash.update(value);
+            let encoded = ZeroizingMaterializedScalarEncodingV1::new(*value);
+            hash.update(&encoded.0);
         }
     }
     Ok(hash.finalize())
 }
 
-fn materialized_wire_length(
+pub(super) fn materialized_wire_length(
     shape: ZkAmsPhase23AccumulatorShapeV1,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
     validate_accumulator_shape(shape)?;
@@ -2526,41 +2934,18 @@ fn materialized_wire_length(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
-fn decode_release_family(
-    logical_value_count: u32,
-    chunks: &[ZkAmsT256PackedPlaintextV1],
-) -> Result<Vec<[u8; 32]>, ZkAmsMkheErrorV1> {
-    let layout = zk_ams_t256_packing_layout_v1(logical_value_count)?;
-    if chunks.len() != layout.chunk_count as usize {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    let mut values = Vec::with_capacity(logical_value_count as usize);
-    for (expected_index, chunk) in chunks.iter().enumerate() {
-        if chunk.chunk_index != expected_index as u32 {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        let decoded = decode_zk_ams_t256_packed_plaintext_v1(layout, chunk)?;
-        values.extend_from_slice(&decoded[..chunk.used_slots as usize]);
-    }
-    if values.len() != logical_value_count as usize {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    Ok(values)
-}
-
+#[cfg(test)]
 fn collapse_replicated_u_values(
-    values: Vec<[u8; 32]>,
+    values: Vec<Scalar>,
     expected_row_count: u32,
-) -> Result<Vec<[u8; 32]>, ZkAmsMkheErrorV1> {
+) -> Result<Vec<Scalar>, ZkAmsMkheErrorV1> {
     let expected_row_count = usize::try_from(expected_row_count)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     if expected_row_count == 0 || values.len() != expected_row_count {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     let scalar = values[0];
-    if Scalar::from_be_bytes_exact(scalar).is_err()
-        || values[1..].iter().any(|replica| *replica != scalar)
-    {
+    if values[1..].iter().any(|replica| *replica != scalar) {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     Ok(vec![scalar])
@@ -2574,16 +2959,6 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ZkAmsMkheErrorV1> {
             .try_into()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
     ))
-}
-
-fn read_array_32(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    let value = bytes
-        .get(*cursor..*cursor + 32)
-        .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?
-        .try_into()
-        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
-    *cursor += 32;
-    Ok(value)
 }
 
 #[cfg(test)]

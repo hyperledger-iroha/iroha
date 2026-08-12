@@ -346,7 +346,7 @@ mod model {
     )]
     pub struct GovernanceParliamentApprovalRecorded {
         /// Proposal id receiving an approval.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub proposal_id: [u8; 32],
         /// Epoch of the approving council.
         pub epoch: u64,
@@ -364,7 +364,7 @@ mod model {
     )]
     pub struct GovernanceParliamentBallotRecorded {
         /// Proposal id receiving a ballot.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub proposal_id: [u8; 32],
         /// Epoch of the Parliament roster.
         pub epoch: u64,

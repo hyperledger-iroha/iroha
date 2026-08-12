@@ -15,6 +15,14 @@ use iroha_data_model::soranet::vpn::VpnSessionReceiptV1;
 
 use crate::{config::RelayMode, scheduler::CellClass};
 
+/// Maximum retained dynamic label series for each first-release metric family.
+const DYNAMIC_METRIC_SERIES_MAX_V1: usize = 256;
+/// Maximum bytes inspected while normalizing an untrusted metric label.
+const DYNAMIC_METRIC_LABEL_INPUT_MAX_BYTES_V1: usize = 512;
+/// Maximum bytes retained in one normalized metric label.
+const DYNAMIC_METRIC_LABEL_MAX_BYTES_V1: usize = 64;
+const DYNAMIC_METRIC_OVERFLOW_LABEL: &str = "other";
+
 fn store_f64(atom: &AtomicU64, value: f64) {
     atom.store(value.to_bits(), Ordering::Relaxed);
 }
@@ -403,7 +411,17 @@ impl Metrics {
             .downgrade_counts
             .lock()
             .expect("metrics downgrade mutex poisoned");
-        *guard.entry(normalized).or_insert(0) += 1;
+        if let Some(count) = guard.get_mut(&normalized) {
+            *count = count.saturating_add(1);
+            return;
+        }
+        let retained = if guard.len() < DYNAMIC_METRIC_SERIES_MAX_V1 {
+            normalized
+        } else {
+            DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned()
+        };
+        let count = guard.entry(retained).or_insert(0);
+        *count = count.saturating_add(1);
     }
 
     pub fn record_handshake_bytes(&self, bytes: u64) {
@@ -432,11 +450,25 @@ impl Metrics {
             .lock()
             .expect("token outcomes mutex poisoned");
         let key = TokenOutcomeKey {
-            issuer: issuer_hex.trim().to_owned(),
-            relay: relay_hex.trim().to_owned(),
-            outcome: outcome.trim().to_owned(),
+            issuer: bounded_metric_label(issuer_hex),
+            relay: bounded_metric_label(relay_hex),
+            outcome: bounded_metric_label(outcome),
         };
-        *guard.entry(key).or_insert(0) += 1;
+        if let Some(count) = guard.get_mut(&key) {
+            *count = count.saturating_add(1);
+            return;
+        }
+        let retained = if guard.len() < DYNAMIC_METRIC_SERIES_MAX_V1 {
+            key
+        } else {
+            TokenOutcomeKey {
+                issuer: DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned(),
+                relay: DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned(),
+                outcome: DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned(),
+            }
+        };
+        let count = guard.entry(retained).or_insert(0);
+        *count = count.saturating_add(1);
     }
 
     pub fn set_vpn_meter_labels(&self, session_label: &str, byte_label: &str) {
@@ -1428,7 +1460,7 @@ impl Metrics {
 }
 
 pub(crate) fn normalize_downgrade_reason(input: &str) -> String {
-    let trimmed = input.trim();
+    let trimmed = bounded_utf8_prefix(input.trim(), DYNAMIC_METRIC_LABEL_INPUT_MAX_BYTES_V1);
     if trimmed.is_empty() {
         return "unknown".to_string();
     }
@@ -1461,7 +1493,7 @@ pub(crate) fn normalize_downgrade_reason(input: &str) -> String {
 }
 
 fn sanitize_reason(input: &str) -> String {
-    let mut slug = String::with_capacity(input.len().min(64));
+    let mut slug = String::with_capacity(input.len().min(DYNAMIC_METRIC_LABEL_MAX_BYTES_V1));
     let mut last_was_sep = false;
     for ch in input.chars() {
         let mapped = match ch {
@@ -1475,12 +1507,12 @@ fn sanitize_reason(input: &str) -> String {
             }
             last_was_sep = true;
         } else {
-            if slug.len() < 64 {
+            if slug.len() < DYNAMIC_METRIC_LABEL_MAX_BYTES_V1 {
                 slug.push(mapped);
             }
             last_was_sep = false;
         }
-        if slug.len() >= 64 {
+        if slug.len() >= DYNAMIC_METRIC_LABEL_MAX_BYTES_V1 {
             break;
         }
     }
@@ -1492,6 +1524,27 @@ fn sanitize_reason(input: &str) -> String {
     } else {
         slug
     }
+}
+
+fn bounded_metric_label(input: &str) -> String {
+    let trimmed = input.trim();
+    let bounded = bounded_utf8_prefix(trimmed, DYNAMIC_METRIC_LABEL_MAX_BYTES_V1);
+    if bounded.is_empty() {
+        DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned()
+    } else {
+        bounded.to_owned()
+    }
+}
+
+fn bounded_utf8_prefix(input: &str, maximum_bytes: usize) -> &str {
+    if input.len() <= maximum_bytes {
+        return input;
+    }
+    let mut end = maximum_bytes;
+    while !input.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    &input[..end]
 }
 
 /// Snapshot of counters for logging or telemetry export.
@@ -1688,6 +1741,34 @@ mod tests {
         assert_eq!(
             normalize_downgrade_reason("Unexpected reason: Foo Bar"),
             "unexpected_reason_foo_bar"
+        );
+        let unicode = "界".repeat(DYNAMIC_METRIC_LABEL_INPUT_MAX_BYTES_V1);
+        assert_eq!(normalize_downgrade_reason(&unicode), "unknown");
+        assert!(
+            normalize_downgrade_reason(&format!(
+                "{} no overlapping handshake suite",
+                "x".repeat(DYNAMIC_METRIC_LABEL_INPUT_MAX_BYTES_V1)
+            ))
+            .len()
+                <= DYNAMIC_METRIC_LABEL_MAX_BYTES_V1
+        );
+    }
+
+    #[test]
+    fn dynamic_downgrade_series_roll_over_at_first_release_limit() {
+        let metrics = Metrics::new();
+        for index in 0..DYNAMIC_METRIC_SERIES_MAX_V1 + 8 {
+            metrics.record_downgrade(&format!("dynamic downgrade {index}"));
+        }
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(
+            snapshot.downgrade_counts.len(),
+            DYNAMIC_METRIC_SERIES_MAX_V1 + 1
+        );
+        assert_eq!(
+            snapshot.downgrade_counts.get(DYNAMIC_METRIC_OVERFLOW_LABEL),
+            Some(&8)
         );
     }
 
@@ -1982,6 +2063,32 @@ mod tests {
         };
         assert_eq!(snapshot.token_outcomes.get(&accepted_key), Some(&2));
         assert_eq!(snapshot.token_outcomes.get(&replay_key), Some(&1));
+    }
+
+    #[test]
+    fn token_outcome_series_and_labels_are_bounded() {
+        let metrics = Metrics::new();
+        for index in 0..DYNAMIC_METRIC_SERIES_MAX_V1 + 8 {
+            metrics.record_token_outcome(&format!("issuer-{index}"), "relay", "accepted");
+        }
+        metrics.record_token_outcome(&"界".repeat(128), "relay", "accepted");
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(
+            snapshot.token_outcomes.len(),
+            DYNAMIC_METRIC_SERIES_MAX_V1 + 1
+        );
+        let overflow = TokenOutcomeKey {
+            issuer: DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned(),
+            relay: DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned(),
+            outcome: DYNAMIC_METRIC_OVERFLOW_LABEL.to_owned(),
+        };
+        assert_eq!(snapshot.token_outcomes.get(&overflow), Some(&9));
+        assert!(snapshot.token_outcomes.keys().all(|key| {
+            key.issuer.len() <= DYNAMIC_METRIC_LABEL_MAX_BYTES_V1
+                && key.relay.len() <= DYNAMIC_METRIC_LABEL_MAX_BYTES_V1
+                && key.outcome.len() <= DYNAMIC_METRIC_LABEL_MAX_BYTES_V1
+        }));
     }
 
     #[test]

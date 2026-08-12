@@ -182,18 +182,25 @@ pub struct GarPolicyPayloadV1 {
     #[norito(default)]
     pub telemetry_labels: Vec<String>,
     /// Digest of the latest Replication Proof Token bundle, when available.
-    #[cfg_attr(feature = "json", norito(with = "crate::sorafs::gar::rpt_digest_json"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::sorafs::gar::rpt_digest_json"))]
     #[norito(default)]
     pub rpt_digest: Option<[u8; 32]>,
 }
 
 #[cfg(feature = "json")]
 mod rpt_digest_json {
-    use norito::json::{Error, Parser};
+    use norito::json::{BoundedJsonError, Error, JsonWriteSink, Parser};
 
     #[allow(clippy::ref_option)]
     pub fn serialize(value: &Option<[u8; 32]>, out: &mut String) {
         crate::json_helpers::fixed_bytes::option::serialize(value, out);
+    }
+
+    pub fn serialize_bounded(
+        value: &Option<[u8; 32]>,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        crate::json_helpers::fixed_bytes::option::serialize_bounded(value, out)
     }
 
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<Option<[u8; 32]>, Error> {
@@ -357,10 +364,20 @@ mod tests {
             }),
             metrics_policy: None,
             telemetry_labels: vec!["cdn".to_string()],
-            rpt_digest: None,
+            rpt_digest: Some([0xCD; 32]),
         };
 
         let encoded = norito::json::to_vec(&payload).expect("encode policy");
+        let compact = norito::json::to_json(&payload).expect("encode compact policy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&payload, compact.len())
+                .expect("encode policy at exact JSON limit"),
+            compact
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&payload, compact.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let decoded: GarPolicyPayloadV1 =
             norito::json::from_slice(&encoded).expect("decode policy");
         assert_eq!(payload, decoded);

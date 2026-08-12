@@ -164,6 +164,28 @@ fn singular_fanout_retains_only_the_first_matching_result() {
 }
 
 #[test]
+fn singular_fanout_drops_decoded_template_before_route_loop() {
+    let source = include_str!("../../lib.rs");
+    let singular = source
+        .split_once("async fn execute_torii_singular_query_via_fanout_for_routes_admitted")
+        .expect("singular fanout function remains present")
+        .1
+        .split_once("async fn execute_torii_query_via_fanout_for_routes_admitted")
+        .expect("generic fanout function follows the singular implementation")
+        .0;
+    let template_drop = singular
+        .find("drop(verified_query);")
+        .expect("decoded singular template is explicitly dropped");
+    let route_loop = singular
+        .find("for route in routes")
+        .expect("singular fanout remains sequential");
+
+    assert!(template_drop < route_loop);
+    assert!(singular.contains("decode_verified_singular_fanout_request_bounded"));
+    assert!(!singular.contains("clone_verified_query_request_bounded"));
+}
+
+#[test]
 fn outer_accumulator_rejects_a_wrong_first_route_variant_before_pinning() {
     let mut accumulator =
         iroha_core::smartcontracts::isi::query::CanonicalQueryOutputAccumulator::new(
@@ -297,7 +319,7 @@ fn fanout_envelope_charges_exact_signed_and_verified_request_frames() {
         })
         .expect("fanout exact boundary fits usize");
     let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(working_set, unit, unit)
-        .expect("seven signed frames, one verified frame, and six phases fit exactly");
+        .expect("seven signed frames, one verified frame, and seven phases fit exactly");
     assert_eq!(envelope.request_bytes, unit * 8);
     assert_eq!(envelope.accumulator_retained_bytes, unit);
     assert_eq!(envelope.final_body_bytes, unit * 2);
@@ -334,10 +356,18 @@ fn fanout_envelope_covers_outer_and_local_core_accumulators() {
     let final_encode = checked_sum([
         envelope.decode_allocated_bytes,
         envelope.final_body_bytes,
-        envelope.candidate_encoded_bytes,
+        envelope.final_body_bytes,
     ])
     .expect("test final phase accounting fits usize");
     assert!(final_encode <= admitted);
+    assert_eq!(
+        envelope.final_body_bytes,
+        envelope
+            .decode_allocated_bytes
+            .checked_mul(2)
+            .expect("two decode units fit usize"),
+        "the final phase must reserve two units for cache-free identifier encoding scratch"
+    );
     assert_eq!(
         iroha_core::smartcontracts::isi::query::canonical_query_candidate_allocation_bytes(
             u64::try_from(envelope.candidate_encoded_bytes).expect("candidate cap fits u64"),
@@ -370,12 +400,16 @@ fn fanout_envelope_covers_outer_and_local_core_accumulators() {
 fn fanout_envelope_covers_retain_first_singular_comparison() {
     let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(64_000_000, 4_096, 8_192)
         .expect("test envelope should fit");
+    let retained_first_route = envelope.decode_allocated_bytes;
+    let retained_core_builder = envelope.decode_allocated_bytes;
+    let current_source_or_decode = envelope.decode_allocated_bytes;
     let singular_compare = checked_sum([
         envelope.request_decode_allocated_bytes,
-        envelope.decode_allocated_bytes,
-        envelope.decode_allocated_bytes,
-        envelope.decode_allocated_bytes,
-        envelope.candidate_allocation_bytes,
+        retained_first_route,
+        retained_core_builder,
+        current_source_or_decode,
+        envelope.candidate_encoded_bytes,
+        envelope.candidate_encoded_bytes,
         envelope.candidate_encoded_bytes,
     ])
     .expect("singular comparison phase fits usize");
@@ -389,6 +423,10 @@ fn fanout_envelope_covers_retain_first_singular_comparison() {
         })
         .expect("admitted phase bytes fit checked subtraction");
     assert!(singular_compare <= admitted);
+    assert_eq!(
+        retained_core_builder, current_source_or_decode,
+        "one retained builder and exactly one maximum current share distinct resident phases"
+    );
 
     let limits = envelope.singular_output_limits();
     assert_eq!(
@@ -548,8 +586,8 @@ fn fanout_request_representation_depth_is_named_and_checked() {
     assert_eq!(QUERY_FANOUT_P2P_SIGNED_REQUEST_REPRESENTATIONS, 7);
     assert_eq!(QUERY_FANOUT_SIGNED_REQUEST_REPRESENTATIONS, 7);
     assert_eq!(QUERY_FANOUT_VERIFIED_REQUEST_REPRESENTATIONS, 1);
-    assert_eq!(QUERY_FANOUT_PHASE_COUNT, 6);
-    assert_eq!(QUERY_FANOUT_PREBODY_UNITS, 14);
+    assert_eq!(QUERY_FANOUT_PHASE_COUNT, 7);
+    assert_eq!(QUERY_FANOUT_PREBODY_UNITS, 15);
 
     let signed = 3_usize;
     let verified = 5_usize;
@@ -577,7 +615,7 @@ fn fanout_prebody_exact_boundary_and_checked_phase_overflow() {
         .expect("pre-body envelope should fit");
     let unit = provisional.route_body_bytes;
     QueryFanoutMemoryEnvelope::for_request_lengths(working_set, unit, unit)
-        .expect("the exact 7Q + E + 6P boundary must make progress");
+        .expect("the exact 7Q + E + 7P boundary must make progress");
     assert!(
         QueryFanoutMemoryEnvelope::for_request_lengths(working_set, unit + 1, unit).is_err(),
         "one signed-query byte above the pre-body unit must fail before decode"
@@ -870,7 +908,7 @@ async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let ingress_before = app.query_ingress_inflight.available_permits();
     let fanout_before = app.query_fanout_inflight.available_permits();
-    for content_type in [Some("application/json"), Some("text/plain"), None] {
+    for content_type in [Some("text/plain"), None] {
         let mut builder = axum::extract::Request::builder();
         if let Some(content_type) = content_type {
             builder = builder.header(axum::http::header::CONTENT_TYPE, content_type);
@@ -905,6 +943,30 @@ async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
             "media-type rejection must not consume fanout execution memory"
         );
     }
+}
+
+#[tokio::test]
+async fn bounded_json_signed_query_remains_supported() {
+    let key_pair = checked_torii_test_ed25519_keypair(0xe7, "derive JSON signed-query fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let signed_query = signed_find_triggers_query_for_test(authority, &key_pair);
+    let body = norito::json::to_json(&signed_query).expect("encode signed query as JSON");
+    let mut request = axum::extract::Request::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .expect("JSON signed-query request");
+    request
+        .extensions_mut()
+        .insert(crate::loopback_connect_info());
+
+    let admitted =
+        <AdmittedSignedQuery as axum::extract::FromRequest<SharedAppState>>::from_request(
+            request, &app,
+        )
+        .await
+        .expect("bounded JSON signed-query ingress remains supported");
+    assert_eq!(admitted.query, signed_query);
 }
 
 #[tokio::test]
@@ -989,6 +1051,50 @@ async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
     assert_eq!(
         app.query_ingress_inflight.available_permits(),
         ingress_before
+    );
+}
+
+#[tokio::test]
+async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
+    let authority = routed_read_test_account(0xea);
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    Arc::get_mut(&mut app)
+        .expect("test app state has one owner")
+        .signed_query_admission = Arc::new(
+        routing::SignedQueryAdmission::new(
+            signed_query_test_network_id(),
+            Duration::ZERO,
+            Duration::from_millis(5),
+            NonZeroUsize::new(1).expect("nonzero replay capacity"),
+        )
+        .expect("five-millisecond signed-query body window"),
+    );
+    let ingress_before = app.query_ingress_inflight.available_permits();
+    let mut request = axum::extract::Request::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/x-norito")
+        .body(Body::from_stream(futures::stream::pending::<
+            Result<Bytes, std::convert::Infallible>,
+        >()))
+        .expect("pending signed-query request");
+    request
+        .extensions_mut()
+        .insert(crate::loopback_connect_info());
+
+    let response = tokio::time::timeout(
+        Duration::from_millis(100),
+        <AdmittedSignedQuery as axum::extract::FromRequest<SharedAppState>>::from_request(
+            request, &app,
+        ),
+    )
+    .await
+    .expect("signature-derived body timeout must complete")
+    .expect_err("a stalled signed-query body must time out");
+
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(
+        app.query_ingress_inflight.available_permits(),
+        ingress_before,
+        "timing out a stalled body must release its complete ingress slot"
     );
 }
 

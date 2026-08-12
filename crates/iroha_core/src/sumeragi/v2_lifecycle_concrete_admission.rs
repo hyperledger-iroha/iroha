@@ -744,7 +744,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: "sumeragi-v2-concrete-admission-test".into(),
+                network_id: crate::sumeragi::synthetic_network_id(
+                    "sumeragi-v2-concrete-admission-test",
+                ),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 7,
                 epoch: 1,
@@ -908,7 +910,7 @@ mod tests {
         let outcome = coordinator.admit_concrete_adapter_effect(
             &mut registry,
             &fixture.verified,
-            effect,
+            effect.clone(),
             pending,
         );
         let AdapterEffectAdmissionTransaction::Failed {

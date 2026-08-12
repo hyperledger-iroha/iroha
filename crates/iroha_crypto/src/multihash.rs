@@ -118,6 +118,112 @@ pub fn decode_public_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseError
     }
 }
 
+/// Borrowed, allocation-free canonical public-key multihash components.
+#[cfg(not(feature = "ffi_import"))]
+pub(crate) struct BorrowedPublicKeyHex<'a> {
+    pub(crate) algorithm: Algorithm,
+    pub(crate) payload_hex: &'a str,
+}
+
+/// Longest canonical public-key literal accepted by the current protocol.
+#[cfg(not(feature = "ffi_import"))]
+pub(crate) const MAX_PUBLIC_KEY_LITERAL_BYTES: usize =
+    28 + 1 + 2 * (2 + 2 + crate::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+
+/// Parse canonical public-key multihash text without allocating payload or diagnostics.
+#[cfg(not(feature = "ffi_import"))]
+pub(crate) fn decode_public_key_str_borrowed(s: &str) -> Option<BorrowedPublicKeyHex<'_>> {
+    if s.len() > MAX_PUBLIC_KEY_LITERAL_BYTES {
+        return None;
+    }
+    let (prefix, encoded) = match s.split_once(':') {
+        Some((prefix, encoded)) if !encoded.contains(':') => {
+            (Some(prefix.parse::<Algorithm>().ok()?), encoded)
+        }
+        Some(_) => return None,
+        None => (None, s),
+    };
+    if encoded.len() < 4 || encoded.len() % 2 != 0 {
+        return None;
+    }
+    let mut cursor = 0;
+    let digest_function = decode_canonical_header_varint(encoded, &mut cursor)?;
+    let payload_len =
+        usize::try_from(decode_canonical_header_varint(encoded, &mut cursor)?).ok()?;
+    if payload_len > crate::MAX_PUBLIC_KEY_PAYLOAD_BYTES
+        || encoded.len().checked_sub(cursor)? != payload_len.checked_mul(2)?
+    {
+        return None;
+    }
+    let algorithm = digest_function_public::decode_option(digest_function)?;
+    if prefix.is_some_and(|prefix| prefix != algorithm) {
+        return None;
+    }
+    let payload_hex = encoded.get(cursor..)?;
+    if !payload_hex
+        .as_bytes()
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(byte))
+    {
+        return None;
+    }
+    Some(BorrowedPublicKeyHex {
+        algorithm,
+        payload_hex,
+    })
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn decode_canonical_header_varint(encoded: &str, cursor: &mut usize) -> Option<u64> {
+    let mut value = 0_u64;
+    let mut shift = 0_u32;
+    for index in 0..10 {
+        let end = cursor.checked_add(2)?;
+        let pair = encoded.as_bytes().get(*cursor..end)?;
+        let byte = decode_hex_pair(pair, false)?;
+        *cursor = end;
+        let low = u64::from(byte & 0x7f);
+        if shift == 63 && low > 1 {
+            return None;
+        }
+        value |= low.checked_shl(shift)?;
+        if byte & 0x80 == 0 {
+            if index != 0 && low == 0 {
+                return None;
+            }
+            return Some(value);
+        }
+        shift = shift.checked_add(7)?;
+    }
+    None
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn decode_hex_pair(pair: &[u8], uppercase: bool) -> Option<u8> {
+    if pair.len() != 2 {
+        return None;
+    }
+    let nibble = |byte| match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' if uppercase => Some(byte - b'A' + 10),
+        b'a'..=b'f' if !uppercase => Some(byte - b'a' + 10),
+        _ => None,
+    };
+    Some((nibble(pair[0])? << 4) | nibble(pair[1])?)
+}
+
+/// Decode one canonical uppercase public-key payload byte.
+#[cfg(not(feature = "ffi_import"))]
+pub(crate) fn decode_public_key_payload_byte(pair: &[u8]) -> Option<u8> {
+    decode_hex_pair(pair, true)
+}
+
+/// Return the public-key multicodec value without constructing a multihash.
+#[cfg(not(feature = "ffi_import"))]
+pub(crate) fn public_key_digest_function(algorithm: Algorithm) -> u64 {
+    digest_function_public::encode(algorithm)
+}
+
 /// Decode a private key from either a bare multihash hex string or an
 /// algorithm-prefixed form like "ml-dsa:<multihash-hex>".
 /// Input must be canonical multihash hex (varint bytes lowercase, payload uppercase);
@@ -203,8 +309,8 @@ mod digest_function_public {
     // Provisional multicodec assignment; replace once canonical code is allocated.
     const SM2_PUB: DigestFunction = 0x1306;
 
-    pub fn decode(digest_function: DigestFunction) -> Result<Algorithm, ParseError> {
-        let algorithm = match digest_function {
+    pub fn decode_option(digest_function: DigestFunction) -> Option<Algorithm> {
+        Some(match digest_function {
             ED_25519 => Algorithm::Ed25519,
             SECP_256_K1 => Algorithm::Secp256k1,
             #[cfg(feature = "bls")]
@@ -224,9 +330,12 @@ mod digest_function_public {
             GOST_3410_2012_512_B => Algorithm::Gost3410_2012_512ParamSetB,
             #[cfg(feature = "sm")]
             SM2_PUB => Algorithm::Sm2,
-            _ => return Err(ParseError(String::from("No such algorithm"))),
-        };
-        Ok(algorithm)
+            _ => return None,
+        })
+    }
+
+    pub fn decode(digest_function: DigestFunction) -> Result<Algorithm, ParseError> {
+        decode_option(digest_function).ok_or_else(|| ParseError(String::from("No such algorithm")))
     }
 
     pub fn encode(algorithm: Algorithm) -> u64 {
@@ -424,6 +533,29 @@ mod tests {
             hex_decode("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4")
                 .unwrap();
         assert_eq!(encode_public_key(algorithm, &payload).unwrap(), multihash);
+    }
+
+    #[cfg(not(feature = "ffi_import"))]
+    #[test]
+    fn borrowed_public_key_decoder_matches_owned_and_rejects_noncanonical_text() {
+        let encoded = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let borrowed = decode_public_key_str_borrowed(encoded).expect("borrowed decode");
+        let (algorithm, payload) = decode_public_key_str(encoded).expect("owned decode");
+        assert_eq!(borrowed.algorithm, algorithm);
+        assert_eq!(
+            borrowed.payload_hex,
+            "1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+        );
+        assert_eq!(hex::encode_upper(payload), borrowed.payload_hex);
+
+        for invalid in [
+            "ED01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+            "ed8120001509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+            "ed01201509a611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+            "secp256k1:ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+        ] {
+            assert!(decode_public_key_str_borrowed(invalid).is_none());
+        }
     }
 
     #[cfg(feature = "sm")]

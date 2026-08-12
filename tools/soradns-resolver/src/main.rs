@@ -13,6 +13,11 @@ use soradns_resolver::{
     ResolverDaemon,
     config::ResolverConfig,
     directory::{parse_directory_listing, signing_payload_bytes},
+    limits::{
+        MAX_DIRECTORY_JSON_BYTES, MAX_DIRECTORY_RECORD_BYTES, MAX_RAD_ENTRIES,
+        MAX_RAD_SNAPSHOT_BYTES, directory_record_decode_limits, preflight_json, read_bounded_file,
+        read_http_body_bounded,
+    },
     rad::{compute_rad_digest, decode_rad_entries, validate_rad},
 };
 use tracing_subscriber::EnvFilter;
@@ -152,17 +157,28 @@ fn run_rad_verify(paths: Vec<PathBuf>) -> Result<()> {
     if paths.is_empty() {
         bail!("supply at least one RAD file to verify");
     }
+    if paths.len() > MAX_RAD_ENTRIES {
+        bail!(
+            "RAD verify received {} files; the limit is {MAX_RAD_ENTRIES}",
+            paths.len()
+        );
+    }
 
     let mut verified = 0usize;
     for path in paths {
-        let bytes =
-            fs::read(&path).wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
+        let bytes = read_bounded_file(&path, MAX_RAD_SNAPSHOT_BYTES, "RAD input")?;
         let entries = decode_rad_entries(&bytes).wrap_err_with(|| {
             format!("failed to decode resolver attestation `{}`", path.display())
         })?;
         if entries.is_empty() {
             bail!("no RAD entries were found in `{}`", path.display());
         }
+        verified = verified
+            .checked_add(entries.len())
+            .filter(|count| *count <= MAX_RAD_ENTRIES)
+            .ok_or_else(|| {
+                eyre::eyre!("RAD verify inputs exceed the aggregate {MAX_RAD_ENTRIES}-entry limit")
+            })?;
         for entry in entries {
             validate_rad(&entry)
                 .wrap_err_with(|| format!("RAD validation failed for `{}`", entry.fqdn))?;
@@ -175,7 +191,6 @@ fn run_rad_verify(paths: Vec<PathBuf>) -> Result<()> {
                 entry.valid_until_unix,
                 hex_encode(digest),
             );
-            verified += 1;
         }
     }
 
@@ -193,11 +208,22 @@ async fn run_directory_fetch(
         .build()
         .wrap_err("failed to build HTTP client")?;
 
-    let record_bytes = read_source(&client, &record_source).await?;
-    let record: ResolverDirectoryRecordV1 = norito::json::from_slice(&record_bytes)
-        .wrap_err("failed to decode resolver directory record")?;
+    let record_bytes = read_source(
+        &client,
+        &record_source,
+        MAX_DIRECTORY_RECORD_BYTES,
+        "resolver directory record",
+    )
+    .await?;
+    let record = decode_directory_record(&record_bytes)?;
 
-    let directory_bytes = read_source(&client, &directory_source).await?;
+    let directory_bytes = read_source(
+        &client,
+        &directory_source,
+        MAX_DIRECTORY_JSON_BYTES,
+        "resolver directory listing",
+    )
+    .await?;
     let (listing, digest) =
         parse_directory_listing(&directory_bytes).wrap_err("failed to parse directory.json")?;
 
@@ -242,13 +268,18 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
     let directory_path = bundle_root.join("directory.json");
     let rad_root = bundle_root.join("rad");
 
-    let record_bytes = fs::read(&record_path)
-        .wrap_err_with(|| format!("failed to read `{}`", record_path.display()))?;
-    let record: ResolverDirectoryRecordV1 = norito::json::from_slice(&record_bytes)
-        .wrap_err("failed to decode resolver directory record")?;
+    let record_bytes = read_bounded_file(
+        &record_path,
+        MAX_DIRECTORY_RECORD_BYTES,
+        "resolver directory record",
+    )?;
+    let record = decode_directory_record(&record_bytes)?;
 
-    let directory_bytes = fs::read(&directory_path)
-        .wrap_err_with(|| format!("failed to read `{}`", directory_path.display()))?;
+    let directory_bytes = read_bounded_file(
+        &directory_path,
+        MAX_DIRECTORY_JSON_BYTES,
+        "resolver directory listing",
+    )?;
     let (listing, digest) =
         parse_directory_listing(&directory_bytes).wrap_err("failed to parse directory.json")?;
 
@@ -284,11 +315,13 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
         );
     }
 
-    let mut leaves = Vec::with_capacity(listing.entry_count());
+    let mut leaves = Vec::new();
+    leaves
+        .try_reserve_exact(listing.entry_count())
+        .wrap_err("failed to reserve bounded directory Merkle leaf table")?;
     for entry in &listing.rad {
         let rad_path = bundle_root.join(Path::new(&entry.file));
-        let bytes = fs::read(&rad_path)
-            .wrap_err_with(|| format!("failed to read RAD `{}`", rad_path.display()))?;
+        let bytes = read_bounded_file(&rad_path, MAX_RAD_SNAPSHOT_BYTES, "directory RAD")?;
         let mut decoded = decode_rad_entries(&bytes).wrap_err_with(|| {
             format!(
                 "failed to decode resolver attestation `{}`",
@@ -339,7 +372,8 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
         bail!("directory bundle does not contain any RAD entries");
     }
 
-    let computed_root = compute_merkle_root(&leaves);
+    let leaf_count = leaves.len();
+    let computed_root = compute_merkle_root(leaves)?;
     if computed_root != record.root_hash {
         bail!(
             "computed Merkle root {} differs from record {}",
@@ -350,39 +384,57 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
 
     println!(
         "Verified {} RAD entries in `{}`",
-        leaves.len(),
+        leaf_count,
         bundle_root.display()
     );
     println!("Directory root {}", hex_encode(record.root_hash));
     Ok(())
 }
 
-async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+async fn fetch_bytes(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>> {
     let response = client
         .get(url)
         .send()
         .await
         .wrap_err_with(|| format!("failed to fetch `{url}`"))?;
-    if !response.status().is_success() {
-        bail!(
-            "request to `{url}` failed with status {}",
-            response.status()
-        );
-    }
-    Ok(response
-        .bytes()
-        .await
-        .wrap_err_with(|| format!("failed to read body from `{url}`"))?
-        .to_vec())
+    read_http_body_bounded(response, max_bytes, label).await
 }
 
-async fn read_source(client: &reqwest::Client, source: &FetchSource) -> Result<Vec<u8>> {
+async fn read_source(
+    client: &reqwest::Client,
+    source: &FetchSource,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>> {
     match source {
-        FetchSource::Url(url) => fetch_bytes(client, url).await,
-        FetchSource::File(path) => {
-            fs::read(path).wrap_err_with(|| format!("failed to read `{}`", path.display()))
-        }
+        FetchSource::Url(url) => fetch_bytes(client, url, max_bytes, label).await,
+        FetchSource::File(path) => read_bounded_file(path, max_bytes, label),
     }
+}
+
+fn decode_directory_record(bytes: &[u8]) -> Result<ResolverDirectoryRecordV1> {
+    let decode_limits = directory_record_decode_limits();
+    preflight_json(
+        bytes,
+        MAX_DIRECTORY_RECORD_BYTES,
+        decode_limits,
+        "resolver directory record",
+    )?;
+    let record: ResolverDirectoryRecordV1 =
+        norito::with_decode_limits_scope(decode_limits, || norito::json::from_slice(bytes))
+            .wrap_err("failed to decode resolver directory record")?;
+    if record.rad_count as usize > MAX_RAD_ENTRIES {
+        bail!(
+            "resolver directory record declares {} RAD entries; the limit is {MAX_RAD_ENTRIES}",
+            record.rad_count
+        );
+    }
+    Ok(record)
 }
 
 fn init_tracing() {
@@ -433,11 +485,14 @@ fn hash_branch(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn compute_merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
-    assert!(!leaves.is_empty(), "at least one leaf is required");
-    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+fn compute_merkle_root(mut level: Vec<[u8; 32]>) -> Result<[u8; 32]> {
+    if level.is_empty() {
+        bail!("at least one Merkle leaf is required");
+    }
     while level.len() > 1 {
-        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut next = Vec::new();
+        next.try_reserve_exact(level.len().div_ceil(2))
+            .wrap_err("failed to reserve bounded Merkle level")?;
         for chunk in level.chunks(2) {
             let branch = match chunk {
                 [left, right] => hash_branch(left, right),
@@ -448,5 +503,5 @@ fn compute_merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
         }
         level = next;
     }
-    level[0]
+    Ok(level[0])
 }

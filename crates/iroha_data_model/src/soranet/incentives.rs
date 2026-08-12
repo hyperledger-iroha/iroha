@@ -32,10 +32,10 @@ pub type MeasurementId = Digest32;
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RelayBandwidthProofPayloadV1 {
     /// Relay fingerprint for which the bandwidth was measured.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Identifier of the blinded measurement flow.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub measurement_id: MeasurementId,
     /// Epoch against which the measurement is recorded.
     pub epoch: u32,
@@ -109,7 +109,7 @@ impl RelayBondPolicyV1 {
 )]
 pub struct RelayBondLedgerEntryV1 {
     /// Relay fingerprint as advertised in the directory.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Total bond locked for the relay.
     pub bonded_amount: Quantity,
@@ -179,10 +179,10 @@ impl BandwidthConfidenceV1 {
 )]
 pub struct RelayBandwidthProofV1 {
     /// Relay fingerprint for which the bandwidth was measured.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Identifier of the blinded measurement flow.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub measurement_id: MeasurementId,
     /// Epoch against which the measurement is recorded.
     pub epoch: u32,
@@ -317,6 +317,13 @@ impl JsonSerialize for RelayComplianceStatusV1 {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.label(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.label(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -347,7 +354,7 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
 )]
 pub struct RelayEpochMetricsV1 {
     /// Relay fingerprint as advertised in the directory consensus.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Epoch identifier associated with this metrics record.
     pub epoch: u32,
@@ -405,7 +412,7 @@ impl RelayEpochMetricsV1 {
 )]
 pub struct RelayRewardInstructionV1 {
     /// Relay fingerprint for which the payout is being issued.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Epoch for which the payout applies.
     pub epoch: u32,
@@ -420,7 +427,7 @@ pub struct RelayRewardInstructionV1 {
     /// Governance approval artefact emitted by the Sora Parliament budgeting flow.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     #[norito(default)]
     pub budget_approval_id: Option<Digest32>,
@@ -480,6 +487,18 @@ impl JsonSerialize for RelayRewardDisputeStatusV1 {
         };
         JsonSerialize::json_serialize(&variant, out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let variant = match self {
+            Self::Pending => "Pending",
+            Self::Accepted => "Accepted",
+            Self::Rejected => "Rejected",
+        };
+        JsonSerialize::json_serialize_to(&variant, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -510,7 +529,7 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
 )]
 pub struct RelayRewardDisputeV1 {
     /// Relay fingerprint associated with the disputed payout.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Epoch identifier for which the payout was calculated.
     pub epoch: u32,
@@ -587,6 +606,26 @@ mod tests {
 
     fn quantity(value: u64) -> Quantity {
         Quantity::from(value)
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: JsonSerialize>(value: &T) {
+        let legacy = json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(value, legacy.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn relay_status_json_families_have_exact_checked_bounds() {
+        assert_exact_json(&RelayComplianceStatusV1::Warning);
+        assert_exact_json(&RelayRewardDisputeStatusV1::Accepted);
     }
 
     fn sample_keypair(seed: u8) -> KeyPair {

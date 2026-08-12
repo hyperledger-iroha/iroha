@@ -4,26 +4,37 @@
 //! admission. Each token binds to a specific relay identity and handshake
 //! transcript hash and is signed with an ML-DSA key managed by the relay or a
 //! delegated issuer.
+//!
+//! Persistent token-consumption snapshots are hard-bounded, decoded under
+//! explicit Norito limits, and loaded only from stable direct regular files.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
-    io::{self, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use blake3::Hasher;
+#[cfg(test)]
+use norito::codec::encode_adaptive;
 use norito::{
-    codec::{decode_adaptive, encode_adaptive},
+    DecodeLimits,
+    codec::{decode_exact_from_slice_with_limits, encode_adaptive_into},
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
-use super::replay_lock::ExclusiveLedgerLock;
+use super::{
+    replay_lock::ExclusiveLedgerLock,
+    snapshot_file::{
+        BoundedWriter, create_temporary_direct_regular_file, persist_temporary_snapshot,
+        read_optional_bounded_regular_file,
+    },
+};
 
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
 const BODY_DOMAIN: &[u8; 21] = b"soranet.token.body.v1";
@@ -38,6 +49,12 @@ const SIGNING_BODY_LEN: usize = BODY_DOMAIN.len() + BODY_LEN - 1;
 const MIN_FRAME_LEN: usize = TOKEN_MAGIC.len() + 1 + BODY_LEN + 2;
 /// Flags defined for v1 tokens (all bits reserved).
 const TOKEN_FLAG_MASK: u8 = 0;
+const TOKEN_STORE_SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
+const TOKEN_STORE_SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
+const TOKEN_STORE_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
+
+/// First-release hard ceiling for persistent admission-token replay entries.
+pub const TOKEN_STORE_MAX_ENTRIES_V1: usize = 65_536;
 
 /// Admission token issued by a relay operator or delegated gateway.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -569,14 +586,21 @@ pub struct TokenStoreLimits {
 }
 
 impl TokenStoreLimits {
-    /// Create new limits, rejecting zero capacity so callers avoid silent disablement.
+    /// Create new limits, rejecting zero or excessive capacity.
     ///
     /// # Errors
-    /// Returns [`TokenStoreError::CapacityZero`] when `max_entries` is zero or
-    /// [`TokenStoreError::TtlZero`] when `max_ttl` is zero.
+    /// Returns [`TokenStoreError::CapacityZero`] when `max_entries` is zero,
+    /// [`TokenStoreError::CapacityTooLarge`] above the first-release ceiling,
+    /// or [`TokenStoreError::TtlZero`] when `max_ttl` is zero.
     pub fn new(max_entries: usize, max_ttl: Duration) -> Result<Self, TokenStoreError> {
         if max_entries == 0 {
             return Err(TokenStoreError::CapacityZero);
+        }
+        if max_entries > TOKEN_STORE_MAX_ENTRIES_V1 {
+            return Err(TokenStoreError::CapacityTooLarge {
+                requested: max_entries,
+                limit: TOKEN_STORE_MAX_ENTRIES_V1,
+            });
         }
         if max_ttl.is_zero() {
             return Err(TokenStoreError::TtlZero);
@@ -585,6 +609,24 @@ impl TokenStoreLimits {
             max_entries,
             max_ttl,
         })
+    }
+
+    fn max_snapshot_bytes(self) -> usize {
+        self.max_entries
+            .checked_mul(TOKEN_STORE_SNAPSHOT_ENTRY_LIMIT_BYTES)
+            .and_then(|bytes| bytes.checked_add(TOKEN_STORE_SNAPSHOT_BASE_LIMIT_BYTES))
+            .expect("hard-bounded token-store capacity fits snapshot envelope")
+    }
+
+    fn decode_limits(self) -> DecodeLimits {
+        let max_snapshot_bytes = self.max_snapshot_bytes();
+        DecodeLimits::new(
+            TOKEN_STORE_MAX_ENTRIES_V1,
+            max_snapshot_bytes,
+            TOKEN_STORE_MAX_ENTRIES_V1.saturating_add(4),
+            max_snapshot_bytes.saturating_mul(2),
+            TOKEN_STORE_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1,
+        )
     }
 }
 
@@ -628,9 +670,26 @@ pub enum TokenStoreError {
     /// Store was configured with zero capacity.
     #[error("token store capacity must be greater than zero")]
     CapacityZero,
+    /// Store capacity exceeds the first-release hard ceiling.
+    #[error("token store capacity {requested} exceeds first-release limit {limit}")]
+    CapacityTooLarge {
+        /// Requested entry count.
+        requested: usize,
+        /// First-release entry ceiling.
+        limit: usize,
+    },
     /// Store was configured with a zero TTL.
     #[error("token store max_ttl must be greater than zero")]
     TtlZero,
+    /// A bounded collection could not reserve its configured capacity.
+    #[error("token store allocation failed while reserving {entries} entries")]
+    Allocation {
+        /// Number of entries requested from the allocator.
+        entries: usize,
+    },
+    /// Persistent replay paths must identify a concrete file.
+    #[error("token replay store path must not be empty")]
+    PathEmpty,
     /// Store rejected an insertion attempt.
     #[error("token store insertion failed: {status:?}")]
     InsertFailed {
@@ -687,6 +746,7 @@ struct TokenStoreEntry {
 }
 
 #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
+#[norito(decode_from_slice)]
 struct TokenStoreSnapshot {
     entries: Vec<TokenStoreEntry>,
 }
@@ -703,12 +763,15 @@ pub struct InMemoryTokenStore {
 }
 
 impl InMemoryTokenStore {
-    /// Create a new store with the provided limits.
-    pub fn new(limits: TokenStoreLimits) -> Self {
-        Self {
-            limits,
+    /// Create a new store with validated limits.
+    ///
+    /// # Errors
+    /// Returns [`TokenStoreError`] when a limit is zero or exceeds the first-release ceiling.
+    pub fn new(limits: TokenStoreLimits) -> Result<Self, TokenStoreError> {
+        Ok(Self {
+            limits: TokenStoreLimits::new(limits.max_entries, limits.max_ttl)?,
             records: HashMap::new(),
-        }
+        })
     }
 
     fn prune_expired(&mut self, now: SystemTime) {
@@ -737,6 +800,9 @@ impl TokenStore for InMemoryTokenStore {
         if self.records.len() >= self.limits.max_entries {
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Capacity));
         }
+        self.records
+            .try_reserve(1)
+            .map_err(|_| TokenStoreError::Allocation { entries: 1 })?;
         self.records.insert(token_id, TokenRecord { expires_at });
         Ok(TokenInsertOutcome::accepted())
     }
@@ -788,6 +854,9 @@ impl PersistentTokenStore {
     ) -> Result<Self, TokenStoreError> {
         let limits = TokenStoreLimits::new(limits.max_entries, limits.max_ttl)?;
         let path = path.into();
+        if path.as_os_str().is_empty() {
+            return Err(TokenStoreError::PathEmpty);
+        }
         let ledger_lock = ExclusiveLedgerLock::acquire(&path)
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         let mut store = Self {
@@ -808,11 +877,15 @@ impl PersistentTokenStore {
     }
 
     fn load_from_disk(&mut self, now: SystemTime) -> Result<(), TokenStoreError> {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
+        let bytes = match read_optional_bounded_regular_file(
+            &self.path,
+            self.limits.max_snapshot_bytes(),
+            "token replay snapshot",
+        ) {
+            Ok(Some(bytes)) => bytes,
             // Materialise the empty ledger immediately so startup validates
             // that replay state is actually durable before serving clients.
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return self.persist(),
+            Ok(None) => return self.persist(),
             Err(err) => return Err(TokenStoreError::Io(err.to_string())),
         };
         if bytes.is_empty() {
@@ -821,9 +894,14 @@ impl PersistentTokenStore {
             ));
         }
 
-        let snapshot = decode_adaptive::<TokenStoreSnapshot>(&bytes).map_err(|decode_err| {
+        let snapshot = decode_exact_from_slice_with_limits::<TokenStoreSnapshot>(
+            &bytes,
+            self.limits.decode_limits(),
+        )
+        .map_err(|decode_err| {
             TokenStoreError::Parse(format!("norito decode failed: {decode_err}"))
         })?;
+        drop(bytes);
         self.ingest_snapshot(snapshot, now)?;
 
         self.prune_expired(now);
@@ -835,13 +913,26 @@ impl PersistentTokenStore {
         snapshot: TokenStoreSnapshot,
         now: SystemTime,
     ) -> Result<(), TokenStoreError> {
-        let mut seen_ids = HashSet::with_capacity(snapshot.entries.len());
+        if snapshot.entries.len() > self.limits.max_entries {
+            return Err(TokenStoreError::Parse(
+                "token replay snapshot exceeds capacity".to_string(),
+            ));
+        }
+        if snapshot
+            .entries
+            .windows(2)
+            .any(|pair| token_store_entry_order(&pair[0], &pair[1]) != std::cmp::Ordering::Less)
+        {
+            return Err(TokenStoreError::Parse(
+                "token replay snapshot entries are not in strict canonical order".to_string(),
+            ));
+        }
+        self.records
+            .try_reserve(snapshot.entries.len())
+            .map_err(|_| TokenStoreError::Allocation {
+                entries: snapshot.entries.len(),
+            })?;
         for entry in snapshot.entries {
-            if !seen_ids.insert(entry.id) {
-                return Err(TokenStoreError::Parse(
-                    "duplicate token id in snapshot".to_string(),
-                ));
-            }
             let expires_at = UNIX_EPOCH
                 .checked_add(Duration::from_secs(entry.expires_at_secs))
                 .ok_or_else(|| {
@@ -850,22 +941,23 @@ impl PersistentTokenStore {
                         entry.expires_at_secs
                     ))
                 })?;
-            if is_expired(expires_at, now) {
-                continue;
+            if self
+                .records
+                .insert(entry.id, TokenRecord { expires_at })
+                .is_some()
+            {
+                return Err(TokenStoreError::Parse(
+                    "duplicate token id in snapshot".to_string(),
+                ));
             }
-            if exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+            if !is_expired(expires_at, now) && exceeds_ttl(expires_at, now, self.limits.max_ttl) {
                 return Err(TokenStoreError::Parse(format!(
                     "active token expiry exceeds configured max_ttl of {:?}",
                     self.limits.max_ttl
                 )));
             }
-            let _ = self.records.insert(entry.id, TokenRecord { expires_at });
-            if self.records.len() > self.limits.max_entries {
-                return Err(TokenStoreError::Parse(
-                    "token replay snapshot exceeds capacity".to_string(),
-                ));
-            }
         }
+        self.prune_expired(now);
         Ok(())
     }
 
@@ -882,32 +974,43 @@ impl PersistentTokenStore {
         {
             fs::create_dir_all(parent).map_err(|err| TokenStoreError::Io(err.to_string()))?;
         }
-        let mut entries: Vec<_> = self.records.iter().collect();
-        entries.sort_by(|(left_id, left), (right_id, right)| {
-            left.expires_at
-                .cmp(&right.expires_at)
-                .then_with(|| left_id.cmp(right_id))
-        });
-        let snapshot = TokenStoreSnapshot {
-            entries: entries
-                .into_iter()
-                .filter_map(|(id, record)| {
-                    let expires_secs = record.expires_at.duration_since(UNIX_EPOCH).ok()?;
-                    Some(TokenStoreEntry {
-                        id: *id,
-                        expires_at_secs: expires_secs.as_secs(),
-                    })
-                })
-                .collect(),
-        };
-        let buf = encode_adaptive(&snapshot);
-        let tmp_path = self.path.with_extension("tmp");
-        let mut tmp =
-            fs::File::create(&tmp_path).map_err(|err| TokenStoreError::Io(err.to_string()))?;
-        tmp.write_all(&buf)
-            .and_then(|()| tmp.sync_all())
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(self.records.len())
+            .map_err(|_| TokenStoreError::Allocation {
+                entries: self.records.len(),
+            })?;
+        for (id, record) in &self.records {
+            let expires_at_secs = record
+                .expires_at
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| {
+                    TokenStoreError::Parse("token expiry predates the Unix epoch".to_owned())
+                })?
+                .as_secs();
+            entries.push(TokenStoreEntry {
+                id: *id,
+                expires_at_secs,
+            });
+        }
+        entries.sort_by(token_store_entry_order);
+        let snapshot = TokenStoreSnapshot { entries };
+        let tmp =
+            create_temporary_direct_regular_file(&self.path, "temporary token replay snapshot")
+                .map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        let mut bounded = BoundedWriter::new(
+            tmp,
+            self.limits.max_snapshot_bytes(),
+            "token replay snapshot",
+        );
+        encode_adaptive_into(&snapshot, &mut bounded)
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
-        fs::rename(&tmp_path, &self.path).map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        let tmp = bounded.into_inner();
+        tmp.as_file()
+            .sync_all()
+            .map_err(|err| TokenStoreError::Io(err.to_string()))?;
+        persist_temporary_snapshot(tmp, &self.path)
+            .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         #[cfg(unix)]
         if let Some(parent) = self
             .path
@@ -942,6 +1045,9 @@ impl TokenStore for PersistentTokenStore {
         if self.records.len() >= self.limits.max_entries {
             return Ok(TokenInsertOutcome::rejected(TokenInsertStatus::Capacity));
         }
+        self.records
+            .try_reserve(1)
+            .map_err(|_| TokenStoreError::Allocation { entries: 1 })?;
         self.records.insert(token_id, TokenRecord { expires_at });
         self.persist()?;
         Ok(TokenInsertOutcome::accepted())
@@ -969,6 +1075,12 @@ impl TokenStore for PersistentTokenStore {
         }
         Ok(removed)
     }
+}
+
+fn token_store_entry_order(left: &TokenStoreEntry, right: &TokenStoreEntry) -> std::cmp::Ordering {
+    left.expires_at_secs
+        .cmp(&right.expires_at_secs)
+        .then_with(|| left.id.cmp(&right.id))
 }
 
 fn is_expired(expires_at: SystemTime, now: SystemTime) -> bool {
@@ -1215,7 +1327,8 @@ mod tests {
     const RELAY_ID: [u8; 32] = [0xAB; 32];
     const TRANSCRIPT: [u8; 32] = [0xCD; 32];
 
-    fn write_token_store_snapshot(path: &std::path::Path, entries: Vec<TokenStoreEntry>) {
+    fn write_token_store_snapshot(path: &std::path::Path, mut entries: Vec<TokenStoreEntry>) {
+        entries.sort_by(token_store_entry_order);
         let snapshot = TokenStoreSnapshot { entries };
         let content = encode_adaptive(&snapshot);
         std::fs::write(path, content).expect("write token store snapshot");
@@ -1923,7 +2036,7 @@ mod tests {
     #[test]
     fn token_store_rejects_expired_and_ttl_overflow() {
         let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
-        let mut store = InMemoryTokenStore::new(limits);
+        let mut store = InMemoryTokenStore::new(limits).expect("store");
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
         let expired = now - Duration::from_secs(1);
         let too_far = now + Duration::from_secs(301);
@@ -1938,9 +2051,39 @@ mod tests {
     }
 
     #[test]
+    fn token_store_limits_enforce_first_release_ceiling() {
+        let ttl = Duration::from_secs(1);
+        assert!(TokenStoreLimits::new(TOKEN_STORE_MAX_ENTRIES_V1, ttl).is_ok());
+        assert_eq!(
+            TokenStoreLimits::new(TOKEN_STORE_MAX_ENTRIES_V1 + 1, ttl)
+                .expect_err("capacity above the first-release ceiling"),
+            TokenStoreError::CapacityTooLarge {
+                requested: TOKEN_STORE_MAX_ENTRIES_V1 + 1,
+                limit: TOKEN_STORE_MAX_ENTRIES_V1,
+            }
+        );
+        assert!(matches!(
+            InMemoryTokenStore::new(TokenStoreLimits {
+                max_entries: TOKEN_STORE_MAX_ENTRIES_V1 + 1,
+                max_ttl: ttl,
+            }),
+            Err(TokenStoreError::CapacityTooLarge { .. })
+        ));
+        assert_eq!(
+            PersistentTokenStore::load(
+                PathBuf::new(),
+                TokenStoreLimits::new(1, ttl).expect("limits"),
+                UNIX_EPOCH,
+            )
+            .expect_err("empty persistent path"),
+            TokenStoreError::PathEmpty
+        );
+    }
+
+    #[test]
     fn token_store_fails_closed_without_evicting_active_records() {
         let limits = TokenStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
-        let mut store = InMemoryTokenStore::new(limits);
+        let mut store = InMemoryTokenStore::new(limits).expect("store");
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
         let a_exp = now + Duration::from_secs(60);
         let b_exp = now + Duration::from_secs(90);
@@ -1982,7 +2125,7 @@ mod tests {
         .expect("mint");
 
         let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
-        let store = Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let store = Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
@@ -2025,7 +2168,7 @@ mod tests {
 
         let limits =
             TokenStoreLimits::new(4, Duration::from_secs(70)).expect("replay store limits");
-        let store = Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let store = Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
@@ -2077,7 +2220,7 @@ mod tests {
 
         let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
         let store: Arc<Mutex<dyn TokenStore + Send>> =
-            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
@@ -2142,7 +2285,7 @@ mod tests {
         bad_public_key.pop();
         let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
         let store: Arc<Mutex<dyn TokenStore + Send>> =
-            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::new(
             suite,
             bad_public_key,
@@ -2184,7 +2327,7 @@ mod tests {
 
         let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
         let store: Arc<Mutex<dyn TokenStore + Send>> =
-            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::new(
             suite,
             keypair.public_key().to_vec(),
@@ -2226,7 +2369,7 @@ mod tests {
 
         let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
         let store: Arc<Mutex<dyn TokenStore + Send>> =
-            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::new(
             suite,
             keypair.public_key().to_vec(),
@@ -2267,7 +2410,7 @@ mod tests {
 
         let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
         let store: Arc<Mutex<dyn TokenStore + Send>> =
-            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::new(
             suite,
             keypair.public_key().to_vec(),

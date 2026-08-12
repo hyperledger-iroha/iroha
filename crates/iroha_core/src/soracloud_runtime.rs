@@ -739,6 +739,11 @@ pub struct SoracloudHostedHttpRuntimeStateV1 {
 
 /// Schema version for [`SoracloudApartmentAutonomyExecutionSummaryV1`].
 pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
+/// Maximum canonical JSON bytes persisted for one V1 apartment autonomy summary.
+///
+/// Runtime writers and every local control-plane reader share this ceiling so
+/// corrupted state cannot turn a status read into an unbounded allocation.
+pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1: u64 = 16 * 1024 * 1024;
 
 /// One successful service step executed inside a generated apartment autonomy workflow.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]

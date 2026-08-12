@@ -550,6 +550,39 @@ pub(super) struct VerifiedPersistentWitnessBindingV1 {
 }
 
 impl VerifiedPersistentWitnessBindingV1 {
+    /// Split one verified fact into its two purpose-bound ceremony successors.
+    ///
+    /// This is deliberately not a `Clone` implementation: staged CPK is the
+    /// only production corridor allowed to retain one successor in the party
+    /// state while the verifier retains the other. The binding is compact and
+    /// immutable; no polynomial, witness, or proof owner is duplicated.
+    pub(super) fn fork_for_state_and_verifier_v1(self) -> (Self, Self) {
+        let verifier = Self {
+            version: self.version,
+            profile_digest: self.profile_digest,
+            security_certificate_digest: self.security_certificate_digest,
+            roster_digest: self.roster_digest,
+            key_material_digest: self.key_material_digest,
+            epoch: self.epoch,
+            cpk_transcript_digest: self.cpk_transcript_digest,
+            party_index: self.party_index,
+            party: self.party,
+            cpk_share_digest: self.cpk_share_digest,
+            role: self.role,
+            record_index: self.record_index,
+            generator_basis_digest: self.generator_basis_digest,
+            commitments: self.commitments,
+            commitment_set_digest: self.commitment_set_digest,
+            membership_proof_digest: self.membership_proof_digest,
+            verifier_transcript_digest: self.verifier_transcript_digest,
+            cpk_relation_verification_digest: self.cpk_relation_verification_digest,
+            consumer_mask: self.consumer_mask,
+            identity_digest: self.identity_digest,
+            verification_digest: self.verification_digest,
+        };
+        (self, verifier)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn from_verified_membership(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2297,6 +2330,29 @@ mod tests {
             receipt,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn staged_binding_fork_preserves_both_validated_successors() {
+        let (roster, _secrets) = governed_roster_fixture(b"exact-binding-fork-roster");
+        let transcript = keccak256(b"exact-binding-fork-transcript");
+        let share = keccak256(b"exact-binding-fork-share");
+        let binding =
+            verified_binding_fixture(&roster, transcript, 0, share, b"exact-binding-fork", 1);
+        let identity = binding.identity_digest();
+        let (state, verifier) = binding.fork_for_state_and_verifier_v1();
+        for successor in [&state, &verifier] {
+            successor
+                .validate_for(
+                    &roster,
+                    transcript,
+                    0,
+                    share,
+                    PersistentWitnessConsumerV1::Decryption,
+                )
+                .unwrap();
+            assert_eq!(successor.identity_digest(), identity);
+        }
     }
 
     #[test]

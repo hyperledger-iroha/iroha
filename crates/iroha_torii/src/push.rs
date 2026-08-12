@@ -1260,7 +1260,7 @@ fn read_bounded_stable_file_with(
         .unwrap_or(maximum)
         .min(maximum);
     let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(maximum_u64.saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() > maximum {

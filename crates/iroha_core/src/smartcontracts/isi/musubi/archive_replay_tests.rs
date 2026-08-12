@@ -2316,19 +2316,59 @@ fn availability_refresh_preflights_location_validation_and_identity() {
 }
 
 #[test]
-fn archive_retention_finalized_time_requires_the_exact_snapshot_block() {
-    let snapshot = MusubiRegistrySnapshotV1 {
-        finalized_height: 7,
-        finalized_block_hash: [0x71; 32],
-        index_revision: 9,
-    };
-    assert_eq!(
-        validated_finalized_block_time(&snapshot, 7, [0x71; 32], 1_700_000_000_000)
-            .expect("exact finalized block"),
-        1_700_000_000_000
+fn archive_retention_uses_cached_finalized_time_for_the_exact_snapshot() {
+    const FINALIZED_TIME_MS: u64 = 1_700_000_000_000;
+
+    let header = iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(1).expect("nonzero finalized height"),
+        None,
+        None,
+        None,
+        FINALIZED_TIME_MS,
+        0,
     );
-    assert!(validated_finalized_block_time(&snapshot, 8, [0x71; 32], 1).is_err());
-    assert!(validated_finalized_block_time(&snapshot, 7, [0x72; 32], 1).is_err());
+    let header_hash = header.hash();
+    let state = State::new_with_chain_and_network_id_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        iroha_data_model::ChainId::from("retention-finalized-time-test"),
+        iroha_data_model::NetworkId::from_genesis_hash(header_hash),
+    );
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(header_hash);
+        block_hashes.commit_for_tests();
+    }
+    state.update_latest_block_header_cache_for_tests(header);
+    let snapshot = MusubiRegistrySnapshotV1 {
+        finalized_height: 1,
+        finalized_block_hash: *header_hash.as_ref(),
+        index_revision: state.view().world().musubi_resolver_index_revision(),
+    };
+    let query = |expected_snapshot| {
+        FindMusubiArchiveRetentionV1::new(MusubiArchiveRetentionQueryV1 {
+            archive_ids: vec![ArchiveId::new([0x73; 32])],
+            expected_snapshot,
+        })
+    };
+    let response = ValidSingularQuery::execute(&query(Some(snapshot)), &state.view())
+        .expect("exact finalized snapshot");
+    assert_eq!(response.snapshot, snapshot);
+    assert_eq!(response.finalized_time_ms, FINALIZED_TIME_MS);
+
+    let mut mismatched_height = snapshot;
+    mismatched_height.finalized_height += 1;
+    assert!(matches!(
+        ValidSingularQuery::execute(&query(Some(mismatched_height)), &state.view()),
+        Err(QueryExecutionFail::Expired)
+    ));
+    let mut mismatched_hash = snapshot;
+    mismatched_hash.finalized_block_hash = [0x72; 32];
+    assert!(matches!(
+        ValidSingularQuery::execute(&query(Some(mismatched_hash)), &state.view()),
+        Err(QueryExecutionFail::Expired)
+    ));
 }
 
 #[test]
@@ -2803,14 +2843,155 @@ fn pagination_preserves_exact_cursor_failure_reasons() {
     );
 }
 
+include!("archive_replay_hash_tests.rs");
+
 #[test]
-fn query_hash_is_domain_separated() {
-    assert_ne!(
-        query_hash(b"versions", b"same"),
-        query_hash(b"maintainers", b"same")
+fn owned_borrowed_musubi_page_sources_preserve_exact_wire_bytes() {
+    let snapshot = snapshot(19);
+    let archive = retention_archive(0x41);
+    let network_id = archive.staging_receipt.payload.binding.network_id;
+
+    let resolver_query = MusubiResolverIndexQueryV1 {
+        package: package("bounded-resolver-page"),
+        requirement: Some("^1.2.3".parse().expect("version requirement")),
+        page: MusubiPageRequestV1 {
+            limit: 7,
+            cursor: None,
+        },
+    };
+    assert_eq!(
+        MusubiResolverIndexPageSource {
+            query: &resolver_query,
+            network_id,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode(),
+        MusubiResolverIndexPageV1 {
+            query: resolver_query,
+            network_id,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode()
     );
-    assert_ne!(
-        query_hash(b"versions", b"same"),
-        query_hash(b"versions", b"different")
+
+    let package_query = MusubiPackagePageQueryV1 {
+        package: package("bounded-package-page"),
+        page: MusubiPageRequestV1 {
+            limit: 11,
+            cursor: None,
+        },
+    };
+    assert_eq!(
+        MusubiVersionPageSource {
+            query: &package_query,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode(),
+        MusubiVersionPageV1 {
+            query: package_query.clone(),
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode()
+    );
+    assert_eq!(
+        MusubiMaintainerPageSource {
+            query: &package_query,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode(),
+        MusubiMaintainerPageV1 {
+            query: package_query,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode()
+    );
+
+    assert_eq!(
+        MusubiArchiveLocationPageSource {
+            network_id,
+            archive: &archive,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode(),
+        MusubiArchiveLocationPageV1 {
+            network_id,
+            archive: archive.clone(),
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode()
+    );
+
+    let alias_query = MusubiAliasQueryV1 {
+        alias: "bounded-page".parse().expect("alias"),
+        page: MusubiPageRequestV1 {
+            limit: 13,
+            cursor: None,
+        },
+    };
+    assert_eq!(
+        MusubiAliasHistoryPageSource {
+            query: &alias_query,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode(),
+        MusubiAliasHistoryPageV1 {
+            query: alias_query,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode()
+    );
+
+    let ordered_query = MusubiOrderedPrefixQueryV1 {
+        prefix: MusubiOrderedPrefixV1::new("sora/bounded-").expect("ordered prefix"),
+        page: MusubiPageRequestV1 {
+            limit: 17,
+            cursor: None,
+        },
+    };
+    let namespace_binding = MusubiNamespaceBindingV1 {
+        namespace: "sora".parse().expect("namespace"),
+        home_dataspace: DataSpaceId::new(7),
+        scope: MusubiPackageScopeV1::DataspaceRoot,
+        generation: 1,
+    };
+    assert_eq!(
+        MusubiOrderedPackagePageSource {
+            query: &ordered_query,
+            network_id,
+            namespace_binding: &namespace_binding,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode(),
+        MusubiOrderedPackagePageV1 {
+            query: ordered_query,
+            network_id,
+            namespace_binding,
+            items: Vec::new(),
+            next_cursor: None,
+            snapshot,
+        }
+        .encode()
     );
 }

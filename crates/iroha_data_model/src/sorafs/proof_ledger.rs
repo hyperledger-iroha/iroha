@@ -43,20 +43,20 @@ pub struct ProofOutcomeSignerPolicyV1 {
     /// Digest of the previous canonical policy, absent only at revision one.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_digest: Option<[u8; 32]>,
     /// Active council-verified admission envelope identity.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub admission_envelope_digest: [u8; 32],
     /// Admission-governed PDP Ed25519 public key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub pdp_public_key: [u8; 32],
     /// Admission-governed `PoTR` ML-DSA public key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub potr_mldsa_public_key: Vec<u8>,
     /// Governed gateway Ed25519 public key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub gateway_public_key: [u8; 32],
     /// Inclusive Unix timestamp at which this key set becomes active.
     pub valid_from_unix: u64,
@@ -74,7 +74,7 @@ pub struct ProofOutcomeSignerPolicyRecordV1 {
     /// Canonical governed key policy.
     pub policy: ProofOutcomeSignerPolicyV1,
     /// BLAKE3 digest of the exact canonical policy bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Governance authority that activated this revision.
     pub activated_by: AccountId,
@@ -170,10 +170,10 @@ pub enum PotrOutcomeStatusV1 {
 )]
 pub struct ProofOutcomeEd25519AttestationV1 {
     /// Admission-governed provider public key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub public_key: [u8; 32],
     /// Strict Ed25519 signature from the canonical PDP proof.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub signature: [u8; 64],
 }
 
@@ -194,7 +194,7 @@ pub struct PdpOutcomeProjectionV1 {
     /// evidence was retained.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub proof_digest: Option<[u8; 32]>,
     /// Detached provider attestation, present exactly when `proof_digest` is present.
@@ -237,13 +237,13 @@ pub struct PotrOutcomeProjectionV1 {
     /// Inclusive range end.
     pub range_end: u64,
     /// Runtime-governed gateway Ed25519 public key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub gateway_public_key: [u8; 32],
     /// Digest of the runtime-governed provider ML-DSA public key.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub governed_provider_key_digest: [u8; 32],
     /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_signed_receipt: Vec<u8>,
 }
 
@@ -282,17 +282,17 @@ pub struct ProofOutcomeRecordV1 {
     /// Projection schema version.
     pub version: u16,
     /// Protocol-scoped exactly-once identity: challenge ID for PDP and request scope for `PoTR`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub identity_digest: [u8; 32],
     /// Digest of the canonical governance archive or final signed receipt.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub outcome_digest: [u8; 32],
     /// Provider named by the canonical proof material.
     pub provider_id: ProviderId,
     /// Manifest named by the canonical proof material.
     pub manifest_digest: ManifestDigest,
     /// Active council-verified admission envelope captured during runtime validation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub admission_envelope_digest: [u8; 32],
     /// Transaction authority that committed the validated projection.
     pub submitted_by: AccountId,
@@ -320,7 +320,7 @@ pub struct ProofOutcomeFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same immutable state view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -349,7 +349,7 @@ pub struct ProofOutcomeFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Finalized block hash resolved only after the block commits.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Proof-outcome event index within the committing block.
     pub event_index: u32,
@@ -367,7 +367,7 @@ pub struct ProofOutcomeFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash resolved from finalized state.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Proof-outcome event index within the committing block.
     pub event_index: u32,

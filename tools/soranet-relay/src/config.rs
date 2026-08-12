@@ -1,7 +1,9 @@
 //! Configuration handling for the SoraNet relay daemon.
 
 use std::{
-    fmt, fs,
+    fmt,
+    fs::{self, File, Metadata as FsMetadata, OpenOptions},
+    io::{self, Read as _},
     net::SocketAddr,
     num::NonZeroU32,
     path::{Path, PathBuf},
@@ -13,15 +15,20 @@ use std::{
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
 use iroha_crypto::soranet::{
-    certificate::{CertificateValidationPhase, RelayCertificateBundleV2},
+    certificate::{CertificateValidationPhase, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
     pow, puzzle,
-    token::{AdmissionTokenVerifier, PersistentTokenStore, TokenStore, TokenStoreLimits},
+    replay::REPLAY_LEDGER_MAX_ENTRIES_V1,
+    token::{
+        AdmissionTokenVerifier, PersistentTokenStore, TOKEN_STORE_MAX_ENTRIES_V1, TokenStore,
+        TokenStoreLimits,
+    },
 };
 use iroha_data_model::soranet::{
     privacy_metrics::SoranetPrivacyModeV1,
     vpn::{VPN_CELL_LEN, VpnExitClassV1, VpnRouteV1},
 };
 use norito::{
+    DecodeLimits,
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -40,6 +47,344 @@ const DEFAULT_SELF_SIGNED_SUBJECT: &str = "soranet-relay.local";
 const ML_KEM_768_PUBLIC_LEN: usize = 1_184;
 const ML_KEM_768_SECRET_LEN: usize = 2_400;
 
+// First-release admission limits for operator-controlled relay artifacts. The
+// 1 MiB config corridor fits 8,192 inline 32-byte revocations (the existing
+// replay-store capacity) plus the rest of the config. Its 128 KiB field limit
+// admits the largest legal GREASE value: u16::MAX bytes as 131,070 hex bytes.
+const RELAY_CONFIG_JSON_MAX_BYTES_V1: usize = 1024 * 1024;
+const RELAY_CONFIG_JSON_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
+const RELAY_CONFIG_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 768 * 1024;
+pub(crate) const RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 8_192;
+const RELAY_CONFIG_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 32_768;
+const RELAY_CONFIG_JSON_MAX_ALLOCATED_BYTES_V1: usize = 8 * 1024 * 1024;
+const RELAY_CONFIG_JSON_MAX_DEPTH_V1: usize = 32;
+
+// RelayDescriptorManifestV1 carries 7,232 hex bytes of mandatory Ed25519 and
+// ML-KEM-768 secret material. A 64 KiB document, 8 KiB field, and depth 16
+// leave ample room for its versioned metadata while bounding the recursive
+// compatibility lookup below.
+const DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1: usize = 64 * 1024;
+const DESCRIPTOR_MANIFEST_JSON_MAX_FIELD_BYTES_V1: usize = 8 * 1024;
+const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 48 * 1024;
+const DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 1_024;
+const DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4_096;
+const DESCRIPTOR_MANIFEST_JSON_MAX_ALLOCATED_BYTES_V1: usize = 1024 * 1024;
+const DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1: usize = 16;
+
+const RELAY_CONFIG_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+    RELAY_CONFIG_JSON_MAX_FIELD_BYTES_V1,
+    RELAY_CONFIG_JSON_MAX_TOTAL_ELEMENTS_V1,
+    RELAY_CONFIG_JSON_MAX_ALLOCATED_BYTES_V1,
+    RELAY_CONFIG_JSON_MAX_DEPTH_V1,
+);
+
+const DESCRIPTOR_MANIFEST_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+    DESCRIPTOR_MANIFEST_JSON_MAX_FIELD_BYTES_V1,
+    DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1,
+    DESCRIPTOR_MANIFEST_JSON_MAX_ALLOCATED_BYTES_V1,
+    DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1,
+);
+
+const fn relay_config_json_preflight_limits_v1() -> json::JsonPreflightLimits {
+    json::JsonPreflightLimits::new(
+        RELAY_CONFIG_JSON_MAX_BYTES_V1,
+        RELAY_CONFIG_JSON_MAX_TOTAL_ELEMENTS_V1.saturating_add(1),
+        RELAY_CONFIG_JSON_MAX_BYTES_V1,
+        RELAY_CONFIG_JSON_MAX_FIELD_BYTES_V1,
+        RELAY_CONFIG_JSON_MAX_TOTAL_STRING_BYTES_V1,
+        RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+        RELAY_CONFIG_JSON_MAX_TOTAL_ELEMENTS_V1,
+        RELAY_CONFIG_JSON_MAX_TOTAL_ELEMENTS_V1,
+        RELAY_CONFIG_JSON_MAX_TOTAL_ELEMENTS_V1,
+        RELAY_CONFIG_JSON_MAX_DEPTH_V1,
+    )
+}
+
+const fn descriptor_manifest_json_preflight_limits_v1() -> json::JsonPreflightLimits {
+    json::JsonPreflightLimits::new(
+        DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1.saturating_add(1),
+        DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_FIELD_BYTES_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_STRING_BYTES_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_SEQUENCE_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_TOTAL_ELEMENTS_V1,
+        DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1,
+    )
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("soranet-relay requires a defined no-follow open flag on this Unix target");
+
+#[cfg(unix)]
+type ConfigFileIdentity = (u64, u64);
+#[cfg(windows)]
+type ConfigFileIdentity = (Option<u32>, Option<u64>);
+#[cfg(not(any(unix, windows)))]
+type ConfigFileIdentity = ();
+
+#[cfg(unix)]
+fn config_file_identity(metadata: &FsMetadata) -> ConfigFileIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn config_file_identity(metadata: &FsMetadata) -> ConfigFileIdentity {
+    use std::os::windows::fs::MetadataExt as _;
+
+    (metadata.volume_serial_number(), metadata.file_index())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn config_file_identity(_metadata: &FsMetadata) -> ConfigFileIdentity {}
+
+#[cfg(unix)]
+const fn config_file_identity_available(_identity: ConfigFileIdentity) -> bool {
+    true
+}
+
+#[cfg(windows)]
+const fn config_file_identity_available(identity: ConfigFileIdentity) -> bool {
+    identity.0.is_some() && identity.1.is_some()
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn config_file_identity_available(_identity: ConfigFileIdentity) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn config_file_is_reparse_point(metadata: &FsMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn config_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
+    false
+}
+
+fn validate_direct_regular_file(metadata: &FsMetadata, artifact: &str) -> io::Result<()> {
+    if metadata.file_type().is_symlink()
+        || config_file_is_reparse_point(metadata)
+        || !metadata.file_type().is_file()
+        || !config_file_identity_available(config_file_identity(metadata))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{artifact} must be a direct regular file with a stable identity"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_direct_regular_file(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(O_NOFOLLOW_FLAG);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn open_direct_regular_file(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_direct_regular_file(_path: &Path) -> io::Result<File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "stable direct-file opens are unavailable on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn config_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    config_file_identity(left) == config_file_identity(right)
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+        && left.mode() == right.mode()
+}
+
+#[cfg(windows)]
+fn config_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    config_file_identity_available(config_file_identity(left))
+        && config_file_identity(left) == config_file_identity(right)
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+        && left.file_attributes() == right.file_attributes()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn config_file_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
+    false
+}
+
+#[cfg(test)]
+static BOUNDED_FILE_READ_REPLACEMENT: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+
+#[cfg(test)]
+fn replace_bounded_file_for_test(path: &Path) -> io::Result<()> {
+    let replacement = {
+        let mut hook = BOUNDED_FILE_READ_REPLACEMENT
+            .lock()
+            .expect("bounded file race hook lock");
+        if hook.as_ref().is_some_and(|(expected, _)| expected == path) {
+            hook.take().map(|(_, replacement)| replacement)
+        } else {
+            None
+        }
+    };
+    if let Some(replacement) = replacement {
+        fs::rename(replacement, path)?;
+    }
+    Ok(())
+}
+
+/// Read one immutable snapshot without trusting path metadata or allocating
+/// from a changing file length. Reading exactly the descriptor length and one
+/// growth byte supplies the max+1 probe without a collect-before-cap step.
+pub fn read_bounded_direct_regular_file(
+    path: &Path,
+    maximum: usize,
+    artifact: &str,
+) -> io::Result<Vec<u8>> {
+    let before = fs::symlink_metadata(path)?;
+    validate_direct_regular_file(&before, artifact)?;
+    let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
+    if before.len() > maximum_u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{artifact} is {} bytes; first-release limit is {maximum} bytes",
+                before.len()
+            ),
+        ));
+    }
+
+    #[cfg(test)]
+    replace_bounded_file_for_test(path)?;
+
+    let mut file = open_direct_regular_file(path)?;
+    let opened = file.metadata()?;
+    validate_direct_regular_file(&opened, artifact)?;
+    if !config_file_metadata_unchanged(&before, &opened) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{artifact} changed between inspection and open"),
+        ));
+    }
+    let expected_len = usize::try_from(opened.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{artifact} length is not representable on this host"),
+        )
+    })?;
+    if expected_len > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{artifact} exceeds the first-release {maximum}-byte limit"),
+        ));
+    }
+
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(expected_len).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            format!("failed to reserve {expected_len} bytes for {artifact}: {error}"),
+        )
+    })?;
+    bytes.resize(expected_len, 0);
+    file.read_exact(&mut bytes).map_err(|error| {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{artifact} changed length while being read"),
+            )
+        } else {
+            error
+        }
+    })?;
+    let mut growth_probe = [0_u8; 1];
+    if file.read(&mut growth_probe)? != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{artifact} grew while being read or exceeds its {maximum}-byte limit"),
+        ));
+    }
+
+    let after_file = file.metadata()?;
+    let after_path = fs::symlink_metadata(path)?;
+    validate_direct_regular_file(&after_file, artifact)?;
+    validate_direct_regular_file(&after_path, artifact)?;
+    if !config_file_metadata_unchanged(&opened, &after_file)
+        || !config_file_metadata_unchanged(&opened, &after_path)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{artifact} changed while being read"),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validate_config_list_len(field: &str, length: usize) -> Result<(), String> {
+    if length > RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1 {
+        return Err(format!(
+            "{field} contains {length} entries; first-release limit is {RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1}"
+        ));
+    }
+    Ok(())
+}
+
 const DEFAULT_PRIVACY_BUCKET_SECS: u64 = 60;
 const DEFAULT_VPN_BACKEND_ENDPOINT: &str = "unix:/tmp/sora-vpn-backend.sock";
 const DEFAULT_PRIVACY_MIN_HANDSHAKES: u64 = 12;
@@ -48,6 +393,16 @@ const DEFAULT_PRIVACY_FORCE_FLUSH_BUCKETS: u64 = 6;
 const DEFAULT_PRIVACY_MAX_COMPLETED_BUCKETS: usize = 60;
 const DEFAULT_PRIVACY_EXPECTED_SHARES: u16 = 2;
 const DEFAULT_PRIVACY_EVENT_BUFFER_CAPACITY: usize = 4_096;
+/// Maximum first-release age, in buckets, of open privacy aggregates.
+pub const PRIVACY_MAX_OPEN_BUCKETS_V1: u64 = 256;
+/// Maximum first-release number of completed privacy buckets retained in memory.
+pub const PRIVACY_MAX_COMPLETED_BUCKETS_V1: usize = 256;
+/// Maximum first-release capacity of either in-memory privacy event queue.
+pub const PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1: usize = 16_384;
+/// Maximum first-release entries retained by either admission quota tracker.
+pub const QUOTA_TRACKER_MAX_ENTRIES_V1: usize = 65_536;
+/// Maximum first-release number of simultaneously active relay circuits.
+pub const CONGESTION_MAX_ACTIVE_CIRCUITS_V1: usize = 65_536;
 const DEFAULT_VPN_CELL_SIZE_BYTES: u16 = 1_024;
 const DEFAULT_VPN_PACING_MILLIS: u64 = 25;
 const DEFAULT_VPN_PADDING_BUDGET_MS: u16 = 15;
@@ -243,6 +598,12 @@ impl PrivacyTelemetryConfig {
                 "privacy.max_completed_buckets must be greater than zero".to_string(),
             ));
         }
+        if self.max_completed_buckets > PRIVACY_MAX_COMPLETED_BUCKETS_V1 {
+            return Err(ConfigError::Privacy(format!(
+                "privacy.max_completed_buckets ({}) exceeds the first-release limit of {PRIVACY_MAX_COMPLETED_BUCKETS_V1}",
+                self.max_completed_buckets
+            )));
+        }
         if self.expected_shares == 0 {
             return Err(ConfigError::Privacy(
                 "privacy.expected_shares must be greater than zero".to_string(),
@@ -250,6 +611,19 @@ impl PrivacyTelemetryConfig {
         }
         if self.event_buffer_capacity == 0 {
             self.event_buffer_capacity = DEFAULT_PRIVACY_EVENT_BUFFER_CAPACITY;
+        }
+        if self.event_buffer_capacity > PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1 {
+            return Err(ConfigError::Privacy(format!(
+                "privacy.event_buffer_capacity ({}) exceeds the first-release limit of {PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1}",
+                self.event_buffer_capacity
+            )));
+        }
+        if self.flush_delay_buckets > PRIVACY_MAX_OPEN_BUCKETS_V1
+            || self.force_flush_buckets > PRIVACY_MAX_OPEN_BUCKETS_V1
+        {
+            return Err(ConfigError::Privacy(format!(
+                "privacy flush windows must not exceed the first-release {PRIVACY_MAX_OPEN_BUCKETS_V1}-bucket limit"
+            )));
         }
         if self.force_flush_buckets < self.flush_delay_buckets {
             return Err(ConfigError::Privacy(format!(
@@ -520,7 +894,7 @@ pub struct VpnConfig {
     /// Optional 32-byte shared secret (hex) used to verify helper-authenticated VPN tickets.
     #[norito(default)]
     pub helper_ticket_secret_hex: Option<String>,
-    /// Maximum number of active helper-ticket consumptions retained durably.
+    /// Maximum active helper-ticket consumptions retained durably (65,536 in v1).
     #[norito(default = "default_vpn_helper_ticket_replay_store_capacity")]
     pub helper_ticket_replay_store_capacity: usize,
     /// On-disk path for the mandatory consumed helper-ticket replay ledger.
@@ -609,6 +983,15 @@ impl VpnConfig {
         self.apply_defaults();
         self.cover.validate()?;
         self.billing.validate()?;
+        validate_config_list_len("vpn.route_push", self.route_push.len())
+            .map_err(ConfigError::Vpn)?;
+        validate_config_list_len("vpn.dns_overrides", self.dns_overrides.len())
+            .map_err(ConfigError::Vpn)?;
+        if self.helper_ticket_replay_store_capacity > REPLAY_LEDGER_MAX_ENTRIES_V1 {
+            return Err(ConfigError::Vpn(format!(
+                "vpn.helper_ticket_replay_store_capacity must not exceed the first-release limit of {REPLAY_LEDGER_MAX_ENTRIES_V1}"
+            )));
+        }
         if self.flow_label_bits != 24 {
             return Err(ConfigError::Vpn(
                 "vpn.flow_label_bits must be 24 for the v1 helper/relay flow-label derivation"
@@ -1092,7 +1475,7 @@ pub struct PowConfig {
     /// Minimum time-to-live accepted for PoW tickets.
     #[norito(default)]
     pub min_ticket_ttl_secs: u64,
-    /// Capacity of the persistent replay store for spent tickets.
+    /// Capacity of the persistent replay store for spent tickets (at most 65,536 in v1).
     #[norito(default = "PowConfig::default_revocation_store_capacity")]
     pub revocation_store_capacity: u64,
     /// TTL (seconds) for PoW ticket revocations.
@@ -1202,6 +1585,15 @@ impl PowConfig {
         if self.revocation_store_capacity == 0 {
             self.revocation_store_capacity = Self::default_revocation_store_capacity();
         }
+        if self.revocation_store_capacity
+            > u64::try_from(pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1)
+                .expect("fixed first-release revocation limit fits u64")
+        {
+            return Err(ConfigError::TicketReplayStore(format!(
+                "pow.revocation_store_capacity must not exceed the first-release limit of {}",
+                pow::TICKET_REVOCATION_STORE_MAX_ENTRIES_V1
+            )));
+        }
         if self.revocation_store_ttl_secs == 0 {
             self.revocation_store_ttl_secs = Self::default_revocation_store_ttl();
         }
@@ -1211,8 +1603,10 @@ impl PowConfig {
         self.adaptive.apply_defaults();
         self.adaptive.validate()?;
         self.quotas.apply_defaults();
+        self.quotas.validate_named("quotas")?;
         if let Some(overrides) = self.quotas_per_mode.as_mut() {
             overrides.apply_defaults();
+            overrides.validate()?;
         }
         self.slowloris.apply_defaults();
         let puzzle = self.puzzle.get_or_insert_with(PuzzleConfig::default);
@@ -1534,7 +1928,7 @@ pub struct TokenConfig {
     /// Allowed clock skew when validating token timestamps.
     #[norito(default = "TokenConfig::default_clock_skew_secs")]
     pub clock_skew_secs: u64,
-    /// Capacity of the replay filter used to reject reused tokens.
+    /// Capacity of the replay filter used to reject reused tokens (at most 65,536 in v1).
     #[norito(default = "TokenConfig::default_replay_store_capacity")]
     pub replay_store_capacity: usize,
     /// On-disk path for the mandatory consumed-token replay ledger.
@@ -1589,6 +1983,16 @@ impl TokenConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        validate_config_list_len(
+            "pow.token.revocation_list_hex",
+            self.revocation_list_hex.len(),
+        )
+        .map_err(ConfigError::Token)?;
+        if self.replay_store_capacity > TOKEN_STORE_MAX_ENTRIES_V1 {
+            return Err(ConfigError::Token(format!(
+                "pow.token.replay_store_capacity must not exceed the first-release limit of {TOKEN_STORE_MAX_ENTRIES_V1}"
+            )));
+        }
         if !self.enabled {
             return Ok(());
         }
@@ -1604,6 +2008,11 @@ impl TokenConfig {
             ));
         }
         for (idx, value) in self.revocation_list_hex.iter().enumerate() {
+            if value.len() != 64 {
+                return Err(ConfigError::Token(format!(
+                    "pow.token.revocation_list_hex[{idx}] must contain exactly 64 hex characters"
+                )));
+            }
             match hex::decode(value) {
                 Ok(bytes) if bytes.len() == 32 => {}
                 Ok(_) => {
@@ -1767,7 +2176,17 @@ impl EmergencyThrottleConfig {
         if self.refresh_secs == 0 {
             self.refresh_secs = Self::default_refresh_secs();
         }
+        validate_config_list_len(
+            "pow.emergency_throttle.descriptor_commit_hex",
+            self.descriptor_commit_hex.len(),
+        )
+        .map_err(ConfigError::EmergencyThrottle)?;
         for (idx, hex_value) in self.descriptor_commit_hex.iter().enumerate() {
+            if hex_value.len() != 64 {
+                return Err(ConfigError::EmergencyThrottle(format!(
+                    "descriptor_commit_hex[{idx}] must contain exactly 64 hex characters"
+                )));
+            }
             capability::parse_descriptor_commit_hex(hex_value).map_err(|_| {
                 ConfigError::EmergencyThrottle(format!(
                     "descriptor_commit_hex[{idx}] must decode to 32 bytes"
@@ -2024,6 +2443,21 @@ impl QuotaConfig {
             self.max_entries = Self::default_max_entries();
         }
     }
+
+    /// Validate the first-release quota-tracker memory corridor.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_named("quotas")
+    }
+
+    fn validate_named(&self, path: &str) -> Result<(), ConfigError> {
+        if self.max_entries > QUOTA_TRACKER_MAX_ENTRIES_V1 {
+            return Err(ConfigError::Quota(format!(
+                "{path}.max_entries ({}) exceeds the first-release limit of {QUOTA_TRACKER_MAX_ENTRIES_V1}",
+                self.max_entries
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Optional overrides for quota configuration per relay hop.
@@ -2051,6 +2485,19 @@ impl HopQuotaOverrides {
         if let Some(exit) = self.exit.as_mut() {
             exit.apply_defaults();
         }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (path, quota) in [
+            ("quotas_per_mode.entry", self.entry.as_ref()),
+            ("quotas_per_mode.middle", self.middle.as_ref()),
+            ("quotas_per_mode.exit", self.exit.as_ref()),
+        ] {
+            if let Some(quota) = quota {
+                quota.validate_named(path)?;
+            }
+        }
+        Ok(())
     }
 
     fn for_mode(&self, mode: RelayMode) -> Option<QuotaConfig> {
@@ -2263,6 +2710,9 @@ pub struct CongestionConfig {
     /// Maximum concurrent circuits permitted from a single client.
     #[norito(default = "CongestionConfig::default_max_circuits")]
     pub max_circuits_per_client: u32,
+    /// Maximum concurrent circuits retained across all clients.
+    #[norito(default = "CongestionConfig::default_max_active_circuits")]
+    pub max_active_circuits: usize,
     /// Cooldown applied between circuit creations to avoid bursts.
     #[norito(default = "CongestionConfig::default_handshake_cooldown_millis")]
     pub handshake_cooldown_millis: u64,
@@ -2272,6 +2722,7 @@ impl Default for CongestionConfig {
     fn default() -> Self {
         Self {
             max_circuits_per_client: Self::default_max_circuits(),
+            max_active_circuits: Self::default_max_active_circuits(),
             handshake_cooldown_millis: Self::default_handshake_cooldown_millis(),
         }
     }
@@ -2282,6 +2733,10 @@ impl CongestionConfig {
         8
     }
 
+    const fn default_max_active_circuits() -> usize {
+        4_096
+    }
+
     const fn default_handshake_cooldown_millis() -> u64 {
         200
     }
@@ -2290,9 +2745,30 @@ impl CongestionConfig {
         if self.max_circuits_per_client == 0 {
             self.max_circuits_per_client = Self::default_max_circuits();
         }
+        if self.max_active_circuits == 0 {
+            self.max_active_circuits = Self::default_max_active_circuits();
+        }
         if self.handshake_cooldown_millis == 0 {
             self.handshake_cooldown_millis = Self::default_handshake_cooldown_millis();
         }
+    }
+
+    fn validate(&mut self) -> Result<(), ConfigError> {
+        self.apply_defaults();
+        if self.max_active_circuits > CONGESTION_MAX_ACTIVE_CIRCUITS_V1 {
+            return Err(ConfigError::Congestion(format!(
+                "congestion.max_active_circuits ({}) exceeds the first-release limit of {CONGESTION_MAX_ACTIVE_CIRCUITS_V1}",
+                self.max_active_circuits
+            )));
+        }
+        let per_client = usize::try_from(self.max_circuits_per_client).unwrap_or(usize::MAX);
+        if per_client > self.max_active_circuits {
+            return Err(ConfigError::Congestion(format!(
+                "congestion.max_circuits_per_client ({}) must not exceed congestion.max_active_circuits ({})",
+                self.max_circuits_per_client, self.max_active_circuits
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -2457,6 +2933,12 @@ pub struct CertificateConfig {
 
 impl CertificateConfig {
     fn validate(&self) -> Result<(), ConfigError> {
+        let expected_ed25519_hex_len = 32 * 2;
+        if self.issuer_ed25519_hex.len() != expected_ed25519_hex_len {
+            return Err(ConfigError::Handshake(format!(
+                "handshake.certificate.issuer_ed25519_hex must contain exactly {expected_ed25519_hex_len} hex characters"
+            )));
+        }
         let _ = hex::decode(&self.issuer_ed25519_hex).map_err(|kind| ConfigError::Hex {
             field: "handshake.certificate.issuer_ed25519_hex".to_string(),
             kind,
@@ -2467,12 +2949,18 @@ impl CertificateConfig {
                     .to_string(),
             ));
         }
+        let expected_mldsa_len = MlDsaSuite::MlDsa65.public_key_len();
+        let expected_mldsa_hex_len = expected_mldsa_len * 2;
+        if self.issuer_mldsa_hex.len() != expected_mldsa_hex_len {
+            return Err(ConfigError::Handshake(format!(
+                "handshake.certificate.issuer_mldsa_hex must contain exactly {expected_mldsa_hex_len} hex characters"
+            )));
+        }
         let issuer_mldsa =
             hex::decode(&self.issuer_mldsa_hex).map_err(|kind| ConfigError::Hex {
                 field: "handshake.certificate.issuer_mldsa_hex".to_string(),
                 kind,
             })?;
-        let expected_mldsa_len = MlDsaSuite::MlDsa65.public_key_len();
         if issuer_mldsa.len() != expected_mldsa_len {
             return Err(ConfigError::Handshake(format!(
                 "handshake.certificate.issuer_mldsa_hex must decode to an ML-DSA-65 public key ({expected_mldsa_len} bytes)"
@@ -2482,7 +2970,12 @@ impl CertificateConfig {
     }
 
     fn load_bundle(&self) -> Result<RelayCertificateBundleV2, ConfigError> {
-        let bytes = fs::read(&self.bundle_path).map_err(|err| ConfigError::Certificate {
+        let bytes = read_bounded_direct_regular_file(
+            &self.bundle_path,
+            SRC_V2_MAX_BUNDLE_BYTES,
+            "SRCv2 certificate bundle",
+        )
+        .map_err(|err| ConfigError::Certificate {
             path: self.bundle_path.clone(),
             message: format!("failed to read certificate bundle: {err}"),
         })?;
@@ -2578,6 +3071,12 @@ impl HandshakePolicy {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        validate_config_list_len("handshake.kem", self.kem.len())
+            .map_err(ConfigError::Handshake)?;
+        validate_config_list_len("handshake.signatures", self.signatures.len())
+            .map_err(ConfigError::Handshake)?;
+        validate_config_list_len("handshake.grease", self.grease.len())
+            .map_err(ConfigError::Handshake)?;
         if self.kem.is_empty() {
             return Err(ConfigError::Handshake(
                 "handshake.kem list cannot be empty".to_string(),
@@ -2605,6 +3104,11 @@ impl HandshakePolicy {
             }
         }
         if let Some(hex) = &self.descriptor_commit_hex {
+            if hex.len() != 64 {
+                return Err(ConfigError::Handshake(
+                    "descriptor_commit_hex must contain exactly 64 hex characters".to_string(),
+                ));
+            }
             let _ = capability::parse_descriptor_commit_hex(hex).map_err(|_| {
                 ConfigError::Handshake("descriptor_commit_hex must decode to 32 bytes".to_string())
             })?;
@@ -2616,6 +3120,14 @@ impl HandshakePolicy {
                     grease.typ
                 )));
             }
+            let maximum_hex_len = usize::from(u16::MAX) * 2;
+            if grease.value_hex.len() > maximum_hex_len {
+                return Err(ConfigError::Handshake(format!(
+                    "GREASE type {:04x} encoded value length {} exceeds {maximum_hex_len}",
+                    grease.typ,
+                    grease.value_hex.len()
+                )));
+            }
             hex::decode(&grease.value_hex)
                 .map_err(|err| ConfigError::Hex {
                     field: format!("handshake.grease[{:#06x}]", grease.typ),
@@ -2624,6 +3136,11 @@ impl HandshakePolicy {
                 .and_then(|value| validate_grease_value_len(grease.typ, value.len()))?;
         }
         if let Some(identity_hex) = &self.identity_private_key_hex {
+            if identity_hex.len() != 64 {
+                return Err(ConfigError::Handshake(
+                    "identity_private_key_hex must contain exactly 64 hex characters".to_string(),
+                ));
+            }
             let decoded = hex::decode(identity_hex).map_err(|err| ConfigError::Hex {
                 field: "handshake.identity_private_key_hex".to_string(),
                 kind: err,
@@ -2726,16 +3243,32 @@ impl HandshakePolicy {
             return Ok(None);
         };
 
-        let bytes = fs::read(path).map_err(|err| {
+        let bytes = read_bounded_direct_regular_file(
+            path,
+            DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1,
+            "RelayDescriptorManifestV1 JSON",
+        )
+        .map_err(|err| {
             manifest_error(path, format!("failed to read descriptor manifest: {err}"))
         })?;
 
-        let value: norito::json::Value = norito::json::from_slice(&bytes).map_err(|err| {
-            manifest_error(
-                path,
-                format!("failed to parse descriptor manifest JSON: {err}"),
-            )
-        })?;
+        norito::json::preflight_slice(&bytes, descriptor_manifest_json_preflight_limits_v1())
+            .map_err(|err| {
+                manifest_error(
+                    path,
+                    format!("descriptor manifest JSON admission failed: {err}"),
+                )
+            })?;
+        let value: norito::json::Value =
+            norito::with_decode_limits_scope(DESCRIPTOR_MANIFEST_JSON_DECODE_LIMITS_V1, || {
+                norito::json::from_slice(&bytes)
+            })
+            .map_err(|err| {
+                manifest_error(
+                    path,
+                    format!("failed to parse descriptor manifest JSON: {err}"),
+                )
+            })?;
 
         let identity_private_key = extract_manifest_identity_private_key(&value)
             .map(|hex| {
@@ -2813,6 +3346,12 @@ fn manifest_error(path: &Path, message: impl Into<String>) -> ConfigError {
 }
 
 fn decode_manifest_identity_seed(hex_value: &str) -> Result<[u8; 32], String> {
+    if hex_value.len() != 64 {
+        return Err(format!(
+            "identity private key hex must contain exactly 64 hex characters (got {})",
+            hex_value.len()
+        ));
+    }
     let decoded =
         hex::decode(hex_value).map_err(|err| format!("identity private key hex invalid: {err}"))?;
     if decoded.len() != 32 {
@@ -2831,6 +3370,13 @@ fn decode_manifest_ml_kem_key(
     expected_len: usize,
     field: &str,
 ) -> Result<Vec<u8>, String> {
+    let expected_hex_len = expected_len.saturating_mul(2);
+    if hex_value.len() != expected_hex_len {
+        return Err(format!(
+            "{field} must contain exactly {expected_hex_len} hex characters (got {})",
+            hex_value.len()
+        ));
+    }
     let decoded = hex::decode(hex_value).map_err(|err| format!("{field} invalid: {err}"))?;
     if decoded.len() != expected_len {
         return Err(format!(
@@ -2979,8 +3525,17 @@ pub struct RelayConfig {
 
 impl RelayConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
-        let data = fs::read(path.as_ref())?;
-        let mut config: RelayConfig = json::from_slice(&data)?;
+        let data = read_bounded_direct_regular_file(
+            path.as_ref(),
+            RELAY_CONFIG_JSON_MAX_BYTES_V1,
+            "relay configuration JSON",
+        )?;
+        json::preflight_slice(&data, relay_config_json_preflight_limits_v1())
+            .map_err(|error| ConfigError::JsonAdmission(error.to_string()))?;
+        let mut config: RelayConfig =
+            norito::with_decode_limits_scope(RELAY_CONFIG_JSON_DECODE_LIMITS_V1, || {
+                json::from_slice(&data)
+            })?;
         config.validate()?;
         Ok(config)
     }
@@ -3031,7 +3586,7 @@ impl RelayConfig {
             self.congestion = Some(CongestionConfig::default());
         }
         if let Some(congestion) = self.congestion.as_mut() {
-            congestion.apply_defaults();
+            congestion.validate()?;
         }
         if self.compliance.is_none() {
             self.compliance = Some(ComplianceConfig::default());
@@ -3043,7 +3598,9 @@ impl RelayConfig {
             self.incentives = Some(IncentiveLogConfig::default());
         }
         if let Some(incentives) = self.incentives.as_mut() {
-            incentives.apply_defaults();
+            incentives
+                .validate()
+                .map_err(|error| ConfigError::Incentive(error.to_string()))?;
         }
         if self.handshake.is_none() {
             self.handshake = Some(HandshakePolicy::default());
@@ -3236,6 +3793,8 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("failed to parse configuration JSON: {0}")]
     Json(#[from] json::Error),
+    #[error("configuration JSON admission failed: {0}")]
+    JsonAdmission(String),
     #[error("invalid socket address for `{0}`: `{1}`")]
     InvalidAddress(String, String),
     #[error("invalid admin listener configuration: {0}")]
@@ -3254,6 +3813,8 @@ pub enum ConfigError {
     Compliance(String),
     #[error("puzzle configuration error: {0}")]
     Puzzle(String),
+    #[error("admission quota configuration error: {0}")]
+    Quota(String),
     #[error("token configuration error: {0}")]
     Token(String),
     #[error("exit routing configuration error: {0}")]
@@ -3270,6 +3831,10 @@ pub enum ConfigError {
     Padding(String),
     #[error("constant-rate capability configuration error: {0}")]
     ConstantRateCapability(String),
+    #[error("congestion configuration error: {0}")]
+    Congestion(String),
+    #[error("incentive configuration error: {0}")]
+    Incentive(String),
     #[error("guard directory configuration error: {0}")]
     GuardDirectory(String),
     #[error("vpn configuration error: {0}")]

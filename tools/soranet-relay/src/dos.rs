@@ -2,10 +2,10 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fmt, fs,
+    fmt,
     hash::Hash,
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicU8, AtomicU64, Ordering},
@@ -20,7 +20,7 @@ use iroha_crypto::soranet::{
     puzzle,
     token::{AdmissionToken, AdmissionTokenVerifier, VerifyError as TokenVerifyError},
 };
-use norito::{derive::JsonDeserialize, json};
+use norito::{DecodeLimits, derive::JsonDeserialize, json};
 use thiserror::Error;
 use tracing::warn;
 
@@ -28,10 +28,50 @@ use crate::{
     capability,
     config::{
         AdaptiveDifficultyConfig, ConfigError, EmergencyThrottleConfig, PowConfig, QuotaConfig,
-        RelayMode, SlowlorisConfig, TokenPolicySource,
+        RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1, RelayMode, SlowlorisConfig, TokenPolicySource,
+        read_bounded_direct_regular_file,
     },
     metrics::Metrics,
 };
+
+// First-release bounds for the operator-reloadable emergency descriptor set.
+// The entry ceiling is shared with the inline relay-config list. A fully
+// escaped 64-byte descriptor string can occupy 386 source bytes, so 4 MiB
+// admits all 8,192 descriptors while keeping both lexical and owned decode
+// allocation finite before the retained HashSet is built.
+const EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1: usize = RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1;
+const EMERGENCY_THROTTLE_DESCRIPTOR_HEX_BYTES: usize = 64;
+const EMERGENCY_THROTTLE_MAX_ENCODED_STRING_BYTES_V1: usize =
+    EMERGENCY_THROTTLE_DESCRIPTOR_HEX_BYTES * 6 + 2;
+const EMERGENCY_THROTTLE_MAX_TOTAL_STRING_BYTES_V1: usize =
+    EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1 * EMERGENCY_THROTTLE_DESCRIPTOR_HEX_BYTES + 128;
+const EMERGENCY_THROTTLE_DOCUMENT_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+const EMERGENCY_THROTTLE_MAX_TOTAL_ELEMENTS_V1: usize = EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1 + 2;
+const EMERGENCY_THROTTLE_MAX_DEPTH_V1: usize = 4;
+const EMERGENCY_THROTTLE_MAX_ALLOCATED_BYTES_V1: usize = 2 * 1024 * 1024;
+
+const EMERGENCY_THROTTLE_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1,
+    EMERGENCY_THROTTLE_DESCRIPTOR_HEX_BYTES,
+    EMERGENCY_THROTTLE_MAX_TOTAL_ELEMENTS_V1,
+    EMERGENCY_THROTTLE_MAX_ALLOCATED_BYTES_V1,
+    EMERGENCY_THROTTLE_MAX_DEPTH_V1,
+);
+
+const fn emergency_throttle_preflight_limits_v1() -> json::JsonPreflightLimits {
+    json::JsonPreflightLimits::new(
+        EMERGENCY_THROTTLE_DOCUMENT_MAX_BYTES_V1,
+        EMERGENCY_THROTTLE_MAX_TOTAL_ELEMENTS_V1 + 1,
+        EMERGENCY_THROTTLE_MAX_ENCODED_STRING_BYTES_V1,
+        EMERGENCY_THROTTLE_DESCRIPTOR_HEX_BYTES,
+        EMERGENCY_THROTTLE_MAX_TOTAL_STRING_BYTES_V1,
+        EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1,
+        EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1,
+        2,
+        EMERGENCY_THROTTLE_MAX_TOTAL_ELEMENTS_V1,
+        EMERGENCY_THROTTLE_MAX_DEPTH_V1,
+    )
+}
 
 /// Aggregated controls applied to inbound handshakes.
 pub struct DoSControls {
@@ -101,7 +141,8 @@ impl DoSControls {
         };
         let emergency = config
             .emergency_throttle()
-            .map(|cfg| EmergencyThrottle::new(cfg.clone()));
+            .map(|cfg| EmergencyThrottle::new(cfg.clone()))
+            .transpose()?;
 
         Ok(Self {
             adaptive,
@@ -505,8 +546,9 @@ struct EmergencyThrottleState {
 }
 
 impl EmergencyThrottle {
-    fn new(config: EmergencyThrottleConfig) -> Self {
-        let static_descriptors = Self::decode_descriptor_list(&config.descriptor_commit_hex);
+    fn new(config: EmergencyThrottleConfig) -> Result<Self, ConfigError> {
+        let static_descriptors = Self::decode_descriptor_list(config.descriptor_commit_hex.iter())
+            .map_err(ConfigError::EmergencyThrottle)?;
         let refresh = Duration::from_secs(config.refresh_secs);
         let mut cooldown_secs = config.cooldown_secs.max(1);
 
@@ -533,13 +575,13 @@ impl EmergencyThrottle {
             dynamic_descriptors,
         };
 
-        Self {
+        Ok(Self {
             cooldown_millis: AtomicU64::new(cooldown_millis),
             refresh,
             file_path: config.file_path.clone(),
             static_descriptors,
             state: RwLock::new(state),
-        }
+        })
     }
 
     fn should_throttle(&self, descriptor_commit: &[u8]) -> Option<Duration> {
@@ -608,14 +650,26 @@ impl EmergencyThrottle {
         }
     }
 
-    fn decode_descriptor_list(hex_values: &[String]) -> HashSet<[u8; 16]> {
-        let mut set = HashSet::with_capacity(hex_values.len());
+    fn decode_descriptor_list<I, S>(hex_values: I) -> Result<HashSet<[u8; 16]>, String>
+    where
+        I: ExactSizeIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let descriptor_count = hex_values.len();
+        if descriptor_count > EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1 {
+            return Err(format!(
+                "emergency throttle contains {descriptor_count} descriptors; first-release limit is {EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1}"
+            ));
+        }
+        let mut set = HashSet::new();
+        set.try_reserve(descriptor_count)
+            .map_err(|_| "failed to reserve the bounded emergency descriptor set".to_owned())?;
         for value in hex_values {
-            if let Some(key) = Self::decode_descriptor(value) {
+            if let Some(key) = Self::decode_descriptor(value.as_ref()) {
                 set.insert(key);
             }
         }
-        set
+        Ok(set)
     }
 
     fn decode_descriptor(hex_value: &str) -> Option<[u8; 16]> {
@@ -636,12 +690,22 @@ impl EmergencyThrottle {
         }
     }
 
-    fn load_document(path: &PathBuf) -> Result<LoadedEmergencyThrottle, String> {
-        let bytes = fs::read(path)
-            .map_err(|err| format!("failed to read emergency throttle file {path:?}: {err}"))?;
-        let document: EmergencyThrottleDocument = json::from_slice(&bytes)
-            .map_err(|err| format!("failed to parse emergency throttle file {path:?}: {err}"))?;
-        let descriptors = Self::decode_descriptor_list(&document.descriptor_commit_hex);
+    fn load_document(path: &Path) -> Result<LoadedEmergencyThrottle, String> {
+        let bytes = read_bounded_direct_regular_file(
+            path,
+            EMERGENCY_THROTTLE_DOCUMENT_MAX_BYTES_V1,
+            "emergency throttle JSON",
+        )
+        .map_err(|err| format!("failed to read emergency throttle file {path:?}: {err}"))?;
+        json::preflight_slice(&bytes, emergency_throttle_preflight_limits_v1()).map_err(
+            |error| format!("emergency throttle file {path:?} failed JSON admission: {error}"),
+        )?;
+        let document: EmergencyThrottleDocument =
+            norito::with_decode_limits_scope(EMERGENCY_THROTTLE_DECODE_LIMITS_V1, || {
+                json::from_slice(&bytes)
+            })
+            .map_err(|_| format!("failed to parse bounded emergency throttle file {path:?}"))?;
+        let descriptors = Self::decode_descriptor_list(document.descriptor_commit_hex.into_iter())?;
         Ok(LoadedEmergencyThrottle {
             descriptors,
             cooldown_override_secs: document.cooldown_secs,
@@ -876,7 +940,7 @@ impl QuotaLimits {
 
 impl<K> RateLimiter<K>
 where
-    K: Eq + Hash + Clone,
+    K: Eq + Hash,
 {
     fn new(params: RateLimitParams) -> Self {
         Self {
@@ -890,7 +954,13 @@ where
             return Ok(());
         }
         self.cleanup(now);
-        let entry = self.entries.entry(key.clone()).or_insert(RateEntry {
+        if !self.entries.contains_key(&key) {
+            if self.entries.len() >= self.params.max_entries || self.entries.try_reserve(1).is_err()
+            {
+                return Err(self.params.cooldown);
+            }
+        }
+        let entry = self.entries.entry(key).or_insert(RateEntry {
             window_start: now,
             count: 0,
             cooldown_until: None,
@@ -933,6 +1003,13 @@ where
         } else {
             cooldown
         };
+        self.cleanup(now);
+        if !self.entries.contains_key(&key)
+            && (self.entries.len() >= self.params.max_entries
+                || self.entries.try_reserve(1).is_err())
+        {
+            return;
+        }
         let entry = self.entries.entry(key).or_insert(RateEntry {
             window_start: now,
             count: 0,
@@ -960,18 +1037,6 @@ where
                 .unwrap_or_default()
                 <= horizon
         });
-        if self.entries.len() > self.params.max_entries {
-            let overflow = self.entries.len() - self.params.max_entries;
-            let mut removed = 0usize;
-            let keys: Vec<_> = self.entries.keys().cloned().collect();
-            for key in keys {
-                self.entries.remove(&key);
-                removed += 1;
-                if removed >= overflow {
-                    break;
-                }
-            }
-        }
     }
 }
 
@@ -1131,6 +1196,7 @@ impl SlowlorisDetector {
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
         net::SocketAddr,
         thread,
         time::{Duration as StdDuration, UNIX_EPOCH},
@@ -1161,6 +1227,26 @@ mod tests {
             .check(IpAddr::from([127, 0, 0, 1]), now)
             .expect_err("expected throttle after burst exceeded");
         assert_eq!(err, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn rate_limiter_rejects_new_keys_at_capacity_without_overshoot() {
+        let cooldown = Duration::from_secs(2);
+        let params = RateLimitParams::new(Duration::from_secs(60), 2, cooldown, 2);
+        let mut limiter = RateLimiter::new(params);
+        let now = Instant::now();
+        let first = IpAddr::from([127, 0, 0, 1]);
+        let second = IpAddr::from([127, 0, 0, 2]);
+        let overflow = IpAddr::from([127, 0, 0, 3]);
+
+        assert!(limiter.check(first, now).is_ok());
+        assert!(limiter.check(second, now).is_ok());
+        assert_eq!(limiter.check(overflow, now), Err(cooldown));
+        assert_eq!(limiter.entries.len(), 2);
+
+        limiter.impose_cooldown(overflow, now, cooldown);
+        assert_eq!(limiter.entries.len(), 2);
+        assert!(!limiter.entries.contains_key(&overflow));
     }
 
     #[test]
@@ -1357,6 +1443,55 @@ mod tests {
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.throttled_emergency, 1);
+    }
+
+    #[test]
+    fn emergency_throttle_descriptor_count_accepts_exact_limit() {
+        let descriptor = hex::encode([0x31_u8; 32]);
+        let exact = vec![descriptor.clone(); EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1];
+        let decoded = EmergencyThrottle::decode_descriptor_list(exact.iter())
+            .expect("exact descriptor count");
+        assert_eq!(decoded.len(), 1, "duplicate descriptors collapse");
+
+        let overflow = vec![descriptor; EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1 + 1];
+        let error = EmergencyThrottle::decode_descriptor_list(overflow.iter())
+            .expect_err("max+1 descriptors must fail before retention");
+        assert!(error.contains("first-release limit"), "{error}");
+    }
+
+    #[test]
+    fn emergency_throttle_document_accepts_exact_file_limit() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("emergency.json");
+        let prefix = br#"{"descriptor_commit_hex":[]}"#;
+        let mut exact = vec![b' '; EMERGENCY_THROTTLE_DOCUMENT_MAX_BYTES_V1];
+        exact[..prefix.len()].copy_from_slice(prefix);
+        fs::write(&path, &exact).expect("write exact document");
+
+        let loaded = EmergencyThrottle::load_document(&path).expect("exact document");
+        assert!(loaded.descriptors.is_empty());
+
+        exact.push(b' ');
+        fs::write(&path, exact).expect("write oversized document");
+        let error = EmergencyThrottle::load_document(&path)
+            .expect_err("max+1 document must fail before decode");
+        assert!(error.contains("first-release limit"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn emergency_throttle_document_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().expect("temporary directory");
+        let target = directory.path().join("target.json");
+        let link = directory.path().join("emergency.json");
+        fs::write(&target, br#"{"descriptor_commit_hex":[]}"#).expect("write target");
+        symlink(&target, &link).expect("create symlink");
+
+        let error = EmergencyThrottle::load_document(&link)
+            .expect_err("symlinked document must fail before read");
+        assert!(error.contains("direct regular file"), "{error}");
     }
 
     #[test]

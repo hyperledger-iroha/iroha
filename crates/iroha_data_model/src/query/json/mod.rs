@@ -14,3 +14,9 @@ pub use envelope::{
     QueryJsonError, SingularQueryJson,
 };
 pub use predicate::{EqualsCondition, InCondition, PredicateJson};
+#[doc(hidden)]
+pub use predicate::{
+    predicate_json_candidate_plan_for_execution,
+    predicate_json_from_raw_for_execution, predicate_json_value_for_execution,
+    with_bounded_predicate_json_execution,
+};

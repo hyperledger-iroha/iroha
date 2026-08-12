@@ -46,6 +46,18 @@ pub const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: usize = 256;
 /// turning validator or HTTP ingress into an unbounded allocation surface.
 pub const ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 const ORDERBOOK_DECODE_MAX_DEPTH_V1: usize = 64;
+/// Production resource limits for decoding one canonical V1 orderbook payload.
+///
+/// Callers may intersect this budget with a tighter request-scoped budget via
+/// the `*_with_limits` decoders. No caller-provided budget can loosen these
+/// protocol ceilings.
+pub const ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    512,
+    ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+    ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 * 2,
+    ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 * 4,
+    ORDERBOOK_DECODE_MAX_DEPTH_V1,
+);
 const ORDERBOOK_TRADE_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.trade-id.v1";
 /// Domain separator for settlement-channel identifiers derived from trades.
 pub const ORDERBOOK_SETTLEMENT_CHANNEL_ID_DOMAIN_V1: &[u8] =
@@ -293,8 +305,8 @@ pub fn order_request_signature_digest_v1(
     order: &OrderRequestV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
     validate_owner_account_v1(&order.owner_account)?;
-    let mut signable = order.clone();
-    signable.signature.signature.clear();
+    let signable = OrderRequestSigningViewV1::from_order(order);
+    preflight_orderbook_payload_len(&signable, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     orderbook_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &signable)
 }
 
@@ -331,8 +343,8 @@ pub fn order_cancel_signature_digest_v1(
     cancel: &OrderCancelV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
     validate_owner_account_v1(&cancel.owner_account)?;
-    let mut signable = cancel.clone();
-    signable.signature.signature.clear();
+    let signable = OrderCancelSigningViewV1::from_cancel(cancel);
+    preflight_orderbook_payload_len(&signable, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     orderbook_signature_digest(ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1, &signable)
 }
 
@@ -456,68 +468,118 @@ pub struct OrderBookMatchOutcomeV1 {
 pub fn decode_order_request_v1(
     bytes: &[u8],
 ) -> Result<OrderRequestV1, OrderbookPayloadDecodeError> {
-    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+    decode_order_request_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
+}
+
+/// Decode an exact canonical V1 order request under caller-composed limits.
+pub fn decode_order_request_v1_with_limits(
+    bytes: &[u8],
+    limits: norito::DecodeLimits,
+) -> Result<OrderRequestV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, limits)
 }
 
 /// Decode an exact canonical V1 order cancellation under production resource limits.
 pub fn decode_order_cancel_v1(bytes: &[u8]) -> Result<OrderCancelV1, OrderbookPayloadDecodeError> {
-    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+    decode_order_cancel_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
+}
+
+/// Decode an exact canonical V1 order cancellation under caller-composed limits.
+pub fn decode_order_cancel_v1_with_limits(
+    bytes: &[u8],
+    limits: norito::DecodeLimits,
+) -> Result<OrderCancelV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, limits)
 }
 
 /// Decode an exact canonical V1 trade event under production resource limits.
 pub fn decode_trade_event_v1(bytes: &[u8]) -> Result<TradeEventV1, OrderbookPayloadDecodeError> {
-    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+    decode_trade_event_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
+}
+
+/// Decode an exact canonical V1 trade event under caller-composed limits.
+pub fn decode_trade_event_v1_with_limits(
+    bytes: &[u8],
+    limits: norito::DecodeLimits,
+) -> Result<TradeEventV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, limits)
 }
 
 /// Decode an exact canonical V1 settlement channel under production resource limits.
 pub fn decode_settlement_channel_v1(
     bytes: &[u8],
 ) -> Result<SettlementChannelV1, OrderbookPayloadDecodeError> {
-    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+    decode_settlement_channel_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
+}
+
+/// Decode an exact canonical V1 settlement channel under caller-composed limits.
+pub fn decode_settlement_channel_v1_with_limits(
+    bytes: &[u8],
+    limits: norito::DecodeLimits,
+) -> Result<SettlementChannelV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, limits)
 }
 
 /// Decode an exact canonical V1 settlement receipt under production resource limits.
 pub fn decode_settlement_receipt_v1(
     bytes: &[u8],
 ) -> Result<SettlementReceiptV1, OrderbookPayloadDecodeError> {
-    decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
+    decode_settlement_receipt_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
+}
+
+/// Decode an exact canonical V1 settlement receipt under caller-composed limits.
+pub fn decode_settlement_receipt_v1_with_limits(
+    bytes: &[u8],
+    limits: norito::DecodeLimits,
+) -> Result<SettlementReceiptV1, OrderbookPayloadDecodeError> {
+    decode_orderbook_payload_v1(bytes, limits)
 }
 
 fn decode_orderbook_payload_v1<T>(
     bytes: &[u8],
-    maximum_bytes: usize,
-    maximum_sequence_elements: usize,
+    limits: norito::DecodeLimits,
 ) -> Result<T, OrderbookPayloadDecodeError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    if bytes.len() > maximum_bytes {
+    if bytes.len() > ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 {
         return Err(OrderbookPayloadDecodeError::PayloadTooLarge {
             length: bytes.len(),
-            maximum: maximum_bytes,
+            maximum: ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1,
         });
     }
-    let limits = norito::DecodeLimits::new(
-        maximum_sequence_elements,
-        maximum_bytes,
-        maximum_bytes.saturating_mul(2),
-        maximum_bytes.saturating_mul(4),
-        ORDERBOOK_DECODE_MAX_DEPTH_V1,
-    );
-    let payload: T = norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
-        OrderbookPayloadDecodeError::Decode {
-            reason: error.to_string(),
+    let limits = intersect_orderbook_decode_limits(limits);
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| {
+        if error.is_decode_resource_limit() {
+            OrderbookPayloadDecodeError::DecodeResourceLimit
+        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
+            OrderbookPayloadDecodeError::NonCanonicalEncoding
+        } else {
+            OrderbookPayloadDecodeError::Decode {
+                reason: error.to_string(),
+            }
         }
-    })?;
-    let canonical = norito::to_bytes(&payload).map_err(|error| {
-        OrderbookPayloadDecodeError::CanonicalEncoding {
-            reason: error.to_string(),
-        }
-    })?;
-    if canonical != bytes {
-        return Err(OrderbookPayloadDecodeError::NonCanonicalEncoding);
-    }
-    Ok(payload)
+    })
+}
+
+fn intersect_orderbook_decode_limits(limits: norito::DecodeLimits) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        limits
+            .max_sequence_elements()
+            .min(ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_sequence_elements()),
+        limits
+            .max_field_bytes()
+            .min(ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_field_bytes()),
+        limits
+            .max_total_elements()
+            .min(ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_total_elements()),
+        limits
+            .max_total_allocated_bytes()
+            .min(ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_total_allocated_bytes()),
+        limits
+            .max_nesting_depth()
+            .min(ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_nesting_depth()),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1175,17 +1237,129 @@ mod borrowed_norito {
 }
 
 #[derive(NoritoSerialize)]
-struct SettlementReceiptSignatureViewWireV1<'a> {
+struct OrderbookSignatureSigningViewWireV1<'a> {
     algorithm: SignatureAlgorithm,
     public_key: borrowed_norito::Vec<'a, u8>,
     signature: borrowed_norito::Vec<'a, u8>,
 }
 
-struct SettlementReceiptSignatureViewV1<'a>(SettlementReceiptSignatureViewWireV1<'a>);
+struct OrderbookSignatureSigningViewV1<'a>(OrderbookSignatureSigningViewWireV1<'a>);
 
-impl norito::core::NoritoSerialize for SettlementReceiptSignatureViewV1<'_> {
+impl<'a> OrderbookSignatureSigningViewV1<'a> {
+    fn from_signature(signature: &'a OrderbookSignatureV1) -> Self {
+        Self(OrderbookSignatureSigningViewWireV1 {
+            algorithm: signature.algorithm,
+            public_key: borrowed_norito::Vec::borrowed(&signature.public_key),
+            signature: borrowed_norito::Vec::empty(),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for OrderbookSignatureSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderbookSignatureV1::schema_hash()
+    }
+
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct OrderRequestSigningViewWireV1<'a> {
+    version: u8,
+    order_id: [u8; 32],
+    side: OrderSideV1,
+    tier: OrderTierV1,
+    price_per_gib: borrowed_norito::Value<'a, XorQuantity>,
+    quantity_gib: u64,
+    remaining_gib: u64,
+    owner_account: borrowed_norito::Vec<'a, u8>,
+    provider_id: Option<[u8; 32]>,
+    expiry_unix: u64,
+    nonce: u64,
+    maker_fee_bps: u16,
+    taker_fee_bps: u16,
+    signature: OrderbookSignatureSigningViewV1<'a>,
+}
+
+struct OrderRequestSigningViewV1<'a>(OrderRequestSigningViewWireV1<'a>);
+
+impl<'a> OrderRequestSigningViewV1<'a> {
+    fn from_order(order: &'a OrderRequestV1) -> Self {
+        Self(OrderRequestSigningViewWireV1 {
+            version: order.version,
+            order_id: order.order_id,
+            side: order.side,
+            tier: order.tier,
+            price_per_gib: borrowed_norito::Value(&order.price_per_gib),
+            quantity_gib: order.quantity_gib,
+            remaining_gib: order.remaining_gib,
+            owner_account: borrowed_norito::Vec::borrowed(&order.owner_account),
+            provider_id: order.provider_id,
+            expiry_unix: order.expiry_unix,
+            nonce: order.nonce,
+            maker_fee_bps: order.maker_fee_bps,
+            taker_fee_bps: order.taker_fee_bps,
+            signature: OrderbookSignatureSigningViewV1::from_signature(&order.signature),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for OrderRequestSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        OrderRequestV1::schema_hash()
+    }
+
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct OrderCancelSigningViewWireV1<'a> {
+    version: u8,
+    order_id: [u8; 32],
+    owner_account: borrowed_norito::Vec<'a, u8>,
+    reason: OrderCancelReasonV1,
+    nonce: u64,
+    signature: OrderbookSignatureSigningViewV1<'a>,
+}
+
+struct OrderCancelSigningViewV1<'a>(OrderCancelSigningViewWireV1<'a>);
+
+impl<'a> OrderCancelSigningViewV1<'a> {
+    fn from_cancel(cancel: &'a OrderCancelV1) -> Self {
+        Self(OrderCancelSigningViewWireV1 {
+            version: cancel.version,
+            order_id: cancel.order_id,
+            owner_account: borrowed_norito::Vec::borrowed(&cancel.owner_account),
+            reason: cancel.reason,
+            nonce: cancel.nonce,
+            signature: OrderbookSignatureSigningViewV1::from_signature(&cancel.signature),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for OrderCancelSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        OrderCancelV1::schema_hash()
     }
 
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -1214,7 +1388,7 @@ struct SettlementReceiptSigningViewWireV1<'a> {
     provider_credit: borrowed_norito::Value<'a, XorQuantity>,
     fee_amount: borrowed_norito::Value<'a, XorQuantity>,
     issued_at_unix: u64,
-    settlement_signature: SettlementReceiptSignatureViewV1<'a>,
+    settlement_signature: OrderbookSignatureSigningViewV1<'a>,
 }
 
 struct SettlementReceiptSigningViewV1<'a>(SettlementReceiptSigningViewWireV1<'a>);
@@ -1233,14 +1407,8 @@ impl<'a> SettlementReceiptSigningViewV1<'a> {
             provider_credit: borrowed_norito::Value(&receipt.provider_credit),
             fee_amount: borrowed_norito::Value(&receipt.fee_amount),
             issued_at_unix: receipt.issued_at_unix,
-            settlement_signature: SettlementReceiptSignatureViewV1(
-                SettlementReceiptSignatureViewWireV1 {
-                    algorithm: receipt.settlement_signature.algorithm,
-                    public_key: borrowed_norito::Vec::borrowed(
-                        &receipt.settlement_signature.public_key,
-                    ),
-                    signature: borrowed_norito::Vec::empty(),
-                },
+            settlement_signature: OrderbookSignatureSigningViewV1::from_signature(
+                &receipt.settlement_signature,
             ),
         })
     }
@@ -1431,14 +1599,26 @@ fn orderbook_signature_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     payload: &T,
 ) -> Result<[u8; 32], OrderbookValidationError> {
-    let payload_bytes = norito::to_bytes(payload).map_err(|err| {
-        OrderbookValidationError::SignaturePayloadEncoding {
-            reason: err.to_string(),
+    struct Blake3Writer<'a>(&'a mut Hasher);
+
+    impl std::io::Write for Blake3Writer<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
         }
-    })?;
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     let mut hasher = Hasher::new();
     hasher.update(domain);
-    hasher.update(&payload_bytes);
+    norito::core::write_frame_to_writer(payload, &mut Blake3Writer(&mut hasher)).map_err(
+        |err| OrderbookValidationError::SignaturePayloadEncoding {
+            reason: err.to_string(),
+        },
+    )?;
     Ok(*hasher.finalize().as_bytes())
 }
 
@@ -1549,6 +1729,9 @@ pub enum OrderbookPayloadDecodeError {
         /// Maximum accepted canonical length.
         maximum: usize,
     },
+    /// Decoding reached a caller or protocol resource boundary.
+    #[error("orderbook payload exceeded its decode resource limit")]
+    DecodeResourceLimit,
     /// Norito rejected the archive under the bounded decode budget.
     #[error("failed to decode orderbook payload: {reason}")]
     Decode {
@@ -1564,6 +1747,14 @@ pub enum OrderbookPayloadDecodeError {
     /// The archive decoded but was not the exact canonical Norito encoding.
     #[error("orderbook payload is not the exact canonical Norito encoding")]
     NonCanonicalEncoding,
+}
+
+impl OrderbookPayloadDecodeError {
+    /// Return whether decoding stopped at a caller-provided resource boundary.
+    #[must_use]
+    pub const fn is_decode_resource_limit(&self) -> bool {
+        matches!(self, Self::DecodeResourceLimit)
+    }
 }
 
 /// Validation errors for SoraFS orderbook payloads.
@@ -1936,6 +2127,17 @@ mod tests {
             PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
+    }
+
+    fn historical_signature_digest<T: norito::core::NoritoSerialize>(
+        domain: &[u8],
+        value: &T,
+    ) -> [u8; 32] {
+        let bytes = norito::to_bytes(value).expect("encode historical signature preimage");
+        let mut hasher = Hasher::new();
+        hasher.update(domain);
+        hasher.update(&bytes);
+        *hasher.finalize().as_bytes()
     }
 
     fn sign_order(order: OrderRequestV1, seed: u8) -> OrderRequestV1 {
@@ -2517,6 +2719,44 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_order_and_cancel_signing_views_preserve_historical_frames_and_digests() {
+        let order = sign_order(order(), 0x11);
+        let mut owned_order = order.clone();
+        owned_order.signature.signature.clear();
+        let borrowed_order = OrderRequestSigningViewV1::from_order(&order);
+
+        let cancel = sign_cancel(cancel(), 0x12);
+        let mut owned_cancel = cancel.clone();
+        owned_cancel.signature.signature.clear();
+        let borrowed_cancel = OrderCancelSigningViewV1::from_cancel(&cancel);
+
+        for flags in supported_layouts() {
+            assert_eq!(
+                encode_frame_with_flags(&borrowed_order, flags),
+                encode_frame_with_flags(&owned_order, flags),
+                "borrowed order signing frame changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                encode_frame_with_flags(&borrowed_cancel, flags),
+                encode_frame_with_flags(&owned_cancel, flags),
+                "borrowed cancellation signing frame changed for flags 0x{flags:02x}"
+            );
+
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            assert_eq!(
+                order_request_signature_digest_v1(&order).expect("stream order digest"),
+                historical_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &owned_order,),
+                "streamed order digest changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                order_cancel_signature_digest_v1(&cancel).expect("stream cancellation digest"),
+                historical_signature_digest(ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1, &owned_cancel,),
+                "streamed cancellation digest changed for flags 0x{flags:02x}"
+            );
+        }
+    }
+
+    #[test]
     fn borrowed_settlement_receipt_signing_view_is_byte_exact_for_every_layout() {
         let receipt = sign_receipt(receipt(), 0x14);
         let mut owned = receipt.clone();
@@ -2558,8 +2798,7 @@ mod tests {
             assert_eq!(
                 settlement_receipt_signature_digest_v1(&receipt)
                     .expect("digest borrowed settlement signing view"),
-                orderbook_signature_digest(SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1, &owned)
-                    .expect("digest historical owned settlement payload"),
+                historical_signature_digest(SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1, &owned),
                 "settlement signature digest changed for flags 0x{flags:02x}"
             );
         }
@@ -3540,6 +3779,25 @@ mod tests {
     fn bounded_decoder_rejects_noncanonical_trailing_bytes() {
         let mut encoded = norito::to_bytes(&order()).expect("encode order");
         encoded.push(0);
-        assert!(decode_order_request_v1(&encoded).is_err());
+        assert_eq!(
+            decode_order_request_v1(&encoded),
+            Err(OrderbookPayloadDecodeError::NonCanonicalEncoding)
+        );
+    }
+
+    #[test]
+    fn caller_decode_budget_cannot_be_loosened_or_bypassed() {
+        let encoded = norito::to_bytes(&order()).expect("encode order");
+        let no_allocation = norito::DecodeLimits::new(
+            ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_sequence_elements(),
+            ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_field_bytes(),
+            ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_total_elements(),
+            0,
+            ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_nesting_depth(),
+        );
+        assert_eq!(
+            decode_order_request_v1_with_limits(&encoded, no_allocation),
+            Err(OrderbookPayloadDecodeError::DecodeResourceLimit)
+        );
     }
 }

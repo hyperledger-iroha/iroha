@@ -15,7 +15,7 @@ use norito::DecodeLimits;
 pub const GENESIS_MANIFEST_JSON_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
 /// First-release byte limit for one compiled IVM program referenced by genesis.
 pub const GENESIS_IVM_BYTECODE_MAX_BYTES_V1: usize =
-    iroha_data_model::parameter::system::defaults::transaction::ivm_bytecode_size().get() as usize;
+    iroha_config::parameters::defaults::transaction::ivm_bytecode_size().get() as usize;
 /// Maximum JSON values, object keys, and containers admitted before parsing.
 pub const GENESIS_MANIFEST_JSON_MAX_TOKENS_V1: usize = 262_144;
 /// Maximum encoded byte length of one JSON string literal.
@@ -490,7 +490,7 @@ mod tests {
     fn ivm_limit_matches_transaction_admission_default() {
         assert_eq!(
             GENESIS_IVM_BYTECODE_MAX_BYTES_V1 as u64,
-            iroha_data_model::parameter::system::defaults::transaction::ivm_bytecode_size().get()
+            iroha_config::parameters::defaults::transaction::ivm_bytecode_size().get()
         );
     }
 

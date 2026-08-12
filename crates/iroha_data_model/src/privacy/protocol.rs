@@ -11,7 +11,7 @@
 )]
 pub struct PrivacyP256PointV1(
     /// The exact 33-byte compressed SEC1 value.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub [u8; 33],
 );
 
@@ -848,13 +848,13 @@ pub const PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * 32;
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpOutputTupleV1 {
     /// One-time output key `O`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub output_key: [u8; 32],
     /// Per-output linking-tag generator `I`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub linking_tag_generator: [u8; 32],
     /// Amount commitment `C`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub amount_commitment: [u8; 32],
 }
 
@@ -935,7 +935,7 @@ pub struct PrivacyFcmpTreeRootV1 {
     /// Number of alternating curve-tree layers.
     pub layers: u8,
     /// Canonical compressed Selene or Helios point selected by layer parity.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub point: [u8; 32],
 }
 
@@ -1004,16 +1004,16 @@ pub enum PrivacyFcmpTreeRootValidationErrorV1 {
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpInputPublicV1 {
     /// Rerandomized output key `O~`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub output_key_tilde: [u8; 32],
     /// Rerandomized linking-tag generator `I~`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub linking_tag_generator_tilde: [u8; 32],
     /// Rerandomization commitment `R`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub rerandomization_commitment: [u8; 32],
     /// Pseudo output amount commitment `C~`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub pseudo_out: [u8; 32],
     /// Linkability key image `L`.
     pub key_image: PrivacyFcmpKeyImageV1,
@@ -1130,7 +1130,7 @@ pub struct PrivacyFcmpEncryptedOutputV1 {
     /// Identifier of the ordered public output tuple.
     pub output_id: PrivacyFcmpOutputIdV1,
     /// Exact `IFCE || nonce || XChaCha20-Poly1305(FCMP note)` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ciphertext: Vec<u8>,
 }
 
@@ -1567,7 +1567,7 @@ pub enum PrivacyPgcAccountPointV1 {
 )]
 pub struct PrivacyPgcBootstrapProofBytesV1 {
     /// Exact native proof encoding.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub bytes: Vec<u8>,
 }
 

@@ -16,7 +16,7 @@ async fn dispatch_connect_session_status(
     let sid = required_string(arguments, "sid")?;
     let token = required_string(arguments, "token_management")?;
     let path = format!("/v1/connect/status?sid={sid}");
-    let headers = norito::json!({ "Authorization": format!("Bearer {token}") });
+    let headers = norito::json!({ "Authorization": (format!("Bearer {token}")) });
     dispatch_route_with_extra_header_policy(
         app,
         inbound_headers,

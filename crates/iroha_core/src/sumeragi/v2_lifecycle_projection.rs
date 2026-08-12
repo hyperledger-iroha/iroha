@@ -1478,7 +1478,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: "sumeragi-v2-lifecycle-projection-test".into(),
+                network_id: crate::sumeragi::synthetic_network_id(
+                    "sumeragi-v2-lifecycle-projection-test",
+                ),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 1,
@@ -2339,7 +2341,7 @@ mod tests {
         let (mut payload_store, _) =
             CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
                 .expect("open payload store");
-        payload_store
+        let _first_receipt = payload_store
             .persist_pending(&first)
             .expect("persist first request");
         let second_receipt = payload_store
@@ -2513,7 +2515,7 @@ mod tests {
         let admitted_receipt = payload_store
             .persist_pending(&admitted_request)
             .expect("persist ledger-backed request");
-        payload_store
+        let _orphan_receipt = payload_store
             .persist_pending(&orphan_request)
             .expect("persist payload-only crash tail");
         drop(payload_store);
@@ -2585,7 +2587,7 @@ mod tests {
         let pending = payload_store
             .persist_pending(&request)
             .expect("persist pending orphan");
-        payload_store
+        let _negative_receipt = payload_store
             .persist_negative(
                 pending.id(),
                 CertifiedServePayloadNegativeOutcome::Failed(7),
@@ -2628,14 +2630,14 @@ mod tests {
         let (mut first_store, _) =
             CertifiedServePayloadStoreV1::open(&first_root, &fixture.context)
                 .expect("open first payload store");
-        first_store
+        let _first_receipt = first_store
             .persist_pending(&first)
             .expect("persist first-store payload");
         drop(first_store);
         let (mut second_store, _) =
             CertifiedServePayloadStoreV1::open(&second_root, &fixture.context)
                 .expect("open second payload store");
-        second_store
+        let _second_receipt = second_store
             .persist_pending(&second)
             .expect("persist second-store payload");
         let body_store =
@@ -2730,7 +2732,7 @@ mod tests {
             coordinator.admit_certified_serve(&fixture.verified, &request, pending),
             Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
         ));
-        payload_store
+        let _negative_receipt = payload_store
             .persist_negative(
                 pending.id(),
                 CertifiedServePayloadNegativeOutcome::Rejected(19),
@@ -2786,7 +2788,7 @@ mod tests {
         let request = fixture.authenticated_serve_request_for(manifest.round, manifest.subject, 3);
         let mut body_store =
             V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
-        body_store
+        let _body_receipt = body_store
             .store(manifest.clone(), body.clone())
             .expect("persist canonical response body");
         let (mut payload_store, _) =
@@ -2818,7 +2820,7 @@ mod tests {
         )
         .payload()
         .to_vec();
-        payload_store
+        let _completed_receipt = payload_store
             .persist_completed(&request, &response)
             .expect("persist completed response metadata");
         drop(payload_store);
@@ -3289,7 +3291,7 @@ mod tests {
         };
         let commit_request = wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            chain_id: fixture.context.chain_id.clone(),
+            network_id: fixture.context.network_id.clone(),
             context_id: fixture.context.id(),
             height: fixture.context.height,
             requester: fixture.context.roster[0].validator.clone(),

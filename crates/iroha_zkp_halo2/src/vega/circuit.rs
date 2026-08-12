@@ -1,12 +1,12 @@
 //! Deterministic fixed-shape R1CS synthesis for the closed Vega relation.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use thiserror::Error;
 
 use super::{
     VegaT256ScalarV1 as Scalar,
-    r1cs::{R1csError, Shape, SparseMatrixRowBuilder},
+    r1cs::{CoefficientDictionaryCounter, R1csError, Shape, SparseMatrixRowBuilder},
 };
 
 /// Hard synthesis bound shared with the polynomial evaluation work cap.
@@ -90,15 +90,28 @@ impl LinearCombination {
         self
     }
 
-    fn canonical_terms(&self) -> Vec<(Variable, Scalar)> {
-        let mut terms = BTreeMap::<Variable, Scalar>::new();
-        for (variable, coefficient) in &self.terms {
-            *terms.entry(*variable).or_insert_with(Scalar::zero) += *coefficient;
+    fn canonicalize(&mut self) {
+        self.terms.sort_unstable_by_key(|(variable, _)| *variable);
+        let mut read = 0;
+        let mut write = 0;
+        while read < self.terms.len() {
+            let variable = self.terms[read].0;
+            let mut coefficient = Scalar::zero();
+            while read < self.terms.len() && self.terms[read].0 == variable {
+                coefficient += self.terms[read].1;
+                read += 1;
+            }
+            if !coefficient.is_zero() {
+                self.terms[write] = (variable, coefficient);
+                write += 1;
+            }
         }
-        terms
-            .into_iter()
-            .filter(|(_, coefficient)| !coefficient.is_zero())
-            .collect()
+        self.terms.truncate(write);
+    }
+
+    fn into_canonical_terms(mut self) -> Vec<(Variable, Scalar)> {
+        self.canonicalize();
+        self.terms
     }
 }
 
@@ -123,6 +136,7 @@ impl Bit {
     }
 }
 
+#[cfg(test)]
 struct Constraint {
     a: LinearCombination,
     b: LinearCombination,
@@ -185,17 +199,31 @@ pub(super) struct CircuitDimensions {
     pub(super) constraint_count: usize,
     pub(super) emitted_private_value_count: usize,
     pub(super) emitted_constraint_count: usize,
+    pub(super) a_nonzero_count: usize,
+    pub(super) b_nonzero_count: usize,
+    pub(super) c_nonzero_count: usize,
+    pub(super) a_coefficient_count: usize,
+    pub(super) b_coefficient_count: usize,
+    pub(super) c_coefficient_count: usize,
 }
 
 /// Canonical fixed-shape topology plus the exact unpadded synthesis counts.
 ///
 /// The raw counts distinguish a relation's emitted rows and private values
-/// from the empty power-of-two CSR padding. Construct this once alongside the
-/// canonical shape, then reuse it for every witness-only synthesis.
+/// from the empty power-of-two CSR padding. Exact A/B/C nonzero and distinct
+/// coefficient totals retain the canonical compact-CSR storage profile.
+/// Construct this once alongside the shape, then reuse it for every
+/// witness-only synthesis.
 pub(super) struct CircuitProfile {
     shape: Arc<Shape>,
     raw_private_value_count: usize,
     raw_constraint_count: usize,
+    a_nonzero_count: usize,
+    b_nonzero_count: usize,
+    c_nonzero_count: usize,
+    a_coefficient_count: usize,
+    b_coefficient_count: usize,
+    c_coefficient_count: usize,
 }
 
 impl CircuitProfile {
@@ -222,10 +250,22 @@ impl CircuitProfile {
         if !shape.has_only_empty_rows_from(raw_constraint_count)? {
             return Err(CircuitError::ShapeMismatch);
         }
+        let a_nonzero_count = shape.a.nonzero_count();
+        let b_nonzero_count = shape.b.nonzero_count();
+        let c_nonzero_count = shape.c.nonzero_count();
+        let a_coefficient_count = shape.a.coefficient_count();
+        let b_coefficient_count = shape.b.coefficient_count();
+        let c_coefficient_count = shape.c.coefficient_count();
         Ok(Self {
             shape,
             raw_private_value_count,
             raw_constraint_count,
+            a_nonzero_count,
+            b_nonzero_count,
+            c_nonzero_count,
+            a_coefficient_count,
+            b_coefficient_count,
+            c_coefficient_count,
         })
     }
 
@@ -240,12 +280,28 @@ impl CircuitProfile {
     fn raw_constraint_count(&self) -> usize {
         self.raw_constraint_count
     }
+
+    fn has_exact_storage_counts(&self) -> bool {
+        self.a_nonzero_count == self.shape.a.nonzero_count()
+            && self.b_nonzero_count == self.shape.b.nonzero_count()
+            && self.c_nonzero_count == self.shape.c.nonzero_count()
+            && self.a_coefficient_count == self.shape.a.coefficient_count()
+            && self.b_coefficient_count == self.shape.b.coefficient_count()
+            && self.c_coefficient_count == self.shape.c.coefficient_count()
+    }
 }
 
 enum CircuitBuilderMode {
+    #[cfg(test)]
     Shape(Vec<Constraint>),
     Count {
         emitted_constraint_count: usize,
+        a_nonzero_count: usize,
+        b_nonzero_count: usize,
+        c_nonzero_count: usize,
+        a_coefficients: CoefficientDictionaryCounter,
+        b_coefficients: CoefficientDictionaryCounter,
+        c_coefficients: CoefficientDictionaryCounter,
     },
     Compile {
         variable_count: usize,
@@ -277,6 +333,7 @@ pub(super) struct CircuitAssignment {
 }
 
 impl CircuitBuilder {
+    #[cfg(test)]
     pub(super) fn new(public_inputs: Vec<Scalar>) -> Result<Self, CircuitError> {
         if public_inputs.is_empty() {
             return Err(CircuitError::InvalidDimension);
@@ -288,7 +345,7 @@ impl CircuitBuilder {
         })
     }
 
-    /// Count a deterministic circuit while retaining only scalar assignments.
+    /// Count canonical A/B/C nonzeros and distinct coefficients fallibly.
     pub(super) fn new_counting(public_inputs: Vec<Scalar>) -> Result<Self, CircuitError> {
         if public_inputs.is_empty() {
             return Err(CircuitError::InvalidDimension);
@@ -298,11 +355,17 @@ impl CircuitBuilder {
             private_values: SecretCircuitValues::new(),
             mode: CircuitBuilderMode::Count {
                 emitted_constraint_count: 0,
+                a_nonzero_count: 0,
+                b_nonzero_count: 0,
+                c_nonzero_count: 0,
+                a_coefficients: CoefficientDictionaryCounter::new(),
+                b_coefficients: CoefficientDictionaryCounter::new(),
+                c_coefficients: CoefficientDictionaryCounter::new(),
             },
         })
     }
 
-    /// Compile a deterministic circuit directly into its final CSR matrices.
+    /// Compile directly into fallibly preallocated, exactly counted CSR matrices.
     pub(super) fn new_compiling(
         public_inputs: Vec<Scalar>,
         dimensions: CircuitDimensions,
@@ -310,6 +373,20 @@ impl CircuitBuilder {
         if public_inputs.is_empty()
             || dimensions.variable_count == 0
             || dimensions.constraint_count == 0
+            || dimensions.emitted_private_value_count == 0
+            || dimensions.emitted_constraint_count == 0
+            || dimensions.variable_count > MAX_CIRCUIT_ROWS
+            || dimensions.constraint_count > MAX_CIRCUIT_ROWS
+            || dimensions
+                .emitted_private_value_count
+                .checked_next_power_of_two()
+                .ok_or(CircuitError::InvalidDimension)?
+                != dimensions.variable_count
+            || dimensions
+                .emitted_constraint_count
+                .checked_next_power_of_two()
+                .ok_or(CircuitError::InvalidDimension)?
+                != dimensions.constraint_count
         {
             return Err(CircuitError::InvalidDimension);
         }
@@ -318,6 +395,23 @@ impl CircuitBuilder {
             .checked_add(1)
             .and_then(|value| value.checked_add(public_inputs.len()))
             .ok_or(CircuitError::InvalidDimension)?;
+        if u32::try_from(columns).is_err()
+            || [
+                dimensions.a_nonzero_count,
+                dimensions.b_nonzero_count,
+                dimensions.c_nonzero_count,
+            ]
+            .into_iter()
+            .any(|count| u32::try_from(count).is_err())
+        {
+            return Err(R1csError::CsrStorageOverflow.into());
+        }
+        if dimensions.a_coefficient_count > dimensions.a_nonzero_count
+            || dimensions.b_coefficient_count > dimensions.b_nonzero_count
+            || dimensions.c_coefficient_count > dimensions.c_nonzero_count
+        {
+            return Err(R1csError::CsrEntryCountMismatch.into());
+        }
         Ok(Self {
             public_inputs,
             private_values: SecretCircuitValues::with_capacity(dimensions.variable_count),
@@ -327,9 +421,24 @@ impl CircuitBuilder {
                 expected_private_value_count: dimensions.emitted_private_value_count,
                 expected_constraint_count: dimensions.emitted_constraint_count,
                 emitted_constraint_count: 0,
-                a: SparseMatrixRowBuilder::new(dimensions.constraint_count, columns)?,
-                b: SparseMatrixRowBuilder::new(dimensions.constraint_count, columns)?,
-                c: SparseMatrixRowBuilder::new(dimensions.constraint_count, columns)?,
+                a: SparseMatrixRowBuilder::new(
+                    dimensions.constraint_count,
+                    columns,
+                    dimensions.a_nonzero_count,
+                    dimensions.a_coefficient_count,
+                )?,
+                b: SparseMatrixRowBuilder::new(
+                    dimensions.constraint_count,
+                    columns,
+                    dimensions.b_nonzero_count,
+                    dimensions.b_coefficient_count,
+                )?,
+                c: SparseMatrixRowBuilder::new(
+                    dimensions.constraint_count,
+                    columns,
+                    dimensions.c_nonzero_count,
+                    dimensions.c_coefficient_count,
+                )?,
             },
         })
     }
@@ -342,6 +451,9 @@ impl CircuitBuilder {
     ) -> Result<Self, CircuitError> {
         if public_inputs.is_empty() || public_inputs.len() != profile.shape().public_input_count() {
             return Err(CircuitError::InvalidDimension);
+        }
+        if !profile.has_exact_storage_counts() {
+            return Err(CircuitError::ShapeMismatch);
         }
         Ok(Self {
             public_inputs,
@@ -366,7 +478,9 @@ impl CircuitBuilder {
                 ..
             } => *expected_private_value_count,
             CircuitBuilderMode::Witness { profile, .. } => profile.raw_private_value_count(),
-            CircuitBuilderMode::Shape(_) | CircuitBuilderMode::Count { .. } => MAX_CIRCUIT_ROWS,
+            CircuitBuilderMode::Count { .. } => MAX_CIRCUIT_ROWS,
+            #[cfg(test)]
+            CircuitBuilderMode::Shape(_) => MAX_CIRCUIT_ROWS,
         };
         if self.private_values.len() >= limit {
             return Err(CircuitError::InvalidDimension);
@@ -403,18 +517,23 @@ impl CircuitBuilder {
                 profile.raw_constraint_count(),
                 *emitted_constraint_count,
             )),
-            CircuitBuilderMode::Shape(_)
-            | CircuitBuilderMode::Count { .. }
-            | CircuitBuilderMode::Compile { .. } => None,
+            CircuitBuilderMode::Count { .. } | CircuitBuilderMode::Compile { .. } => None,
+            #[cfg(test)]
+            CircuitBuilderMode::Shape(_) => None,
         };
         if let Some((shape, expected_constraint_count, row)) = witness_mode {
             if row >= MAX_CIRCUIT_ROWS || row >= expected_constraint_count {
                 return Err(CircuitError::InvalidDimension);
             }
-            let a_row = matrix_row_entries(shape.variable_count(), &a)?;
-            let b_row = matrix_row_entries(shape.variable_count(), &b)?;
-            let c_row = matrix_row_entries(shape.variable_count(), &c)?;
-            if !shape.matches_canonical_constraint_row(row, &a_row, &b_row, &c_row)? {
+            let a_row = matrix_row_entries(shape.variable_count(), a)?;
+            let b_row = matrix_row_entries(shape.variable_count(), b)?;
+            let c_row = matrix_row_entries(shape.variable_count(), c)?;
+            if !shape.matches_canonical_constraint_row(
+                row,
+                a_row.entries(),
+                b_row.entries(),
+                c_row.entries(),
+            )? {
                 return Err(CircuitError::ShapeMismatch);
             }
             let CircuitBuilderMode::Witness {
@@ -441,17 +560,17 @@ impl CircuitBuilder {
                 *expected_constraint_count,
                 *emitted_constraint_count,
             )),
-            CircuitBuilderMode::Shape(_)
-            | CircuitBuilderMode::Count { .. }
-            | CircuitBuilderMode::Witness { .. } => None,
+            CircuitBuilderMode::Count { .. } | CircuitBuilderMode::Witness { .. } => None,
+            #[cfg(test)]
+            CircuitBuilderMode::Shape(_) => None,
         };
         if let Some((variable_count, constraint_count, row)) = compile_mode {
             if row >= MAX_CIRCUIT_ROWS || row >= constraint_count {
                 return Err(CircuitError::InvalidDimension);
             }
-            let a_row = matrix_row_entries(variable_count, &a)?;
-            let b_row = matrix_row_entries(variable_count, &b)?;
-            let c_row = matrix_row_entries(variable_count, &c)?;
+            let a_row = matrix_row_entries(variable_count, a)?;
+            let b_row = matrix_row_entries(variable_count, b)?;
+            let c_row = matrix_row_entries(variable_count, c)?;
             let CircuitBuilderMode::Compile {
                 emitted_constraint_count,
                 a,
@@ -462,9 +581,9 @@ impl CircuitBuilder {
             else {
                 unreachable!("compile mode was observed");
             };
-            a.append_canonical_row(a_row)?;
-            b.append_canonical_row(b_row)?;
-            c.append_canonical_row(c_row)?;
+            a.append_canonical_row(a_row.entries())?;
+            b.append_canonical_row(b_row.entries())?;
+            c.append_canonical_row(c_row.entries())?;
             *emitted_constraint_count = emitted_constraint_count
                 .checked_add(1)
                 .ok_or(CircuitError::InvalidDimension)?;
@@ -473,25 +592,62 @@ impl CircuitBuilder {
 
         if let CircuitBuilderMode::Count {
             emitted_constraint_count,
+            a_nonzero_count,
+            b_nonzero_count,
+            c_nonzero_count,
+            a_coefficients,
+            b_coefficients,
+            c_coefficients,
         } = &mut self.mode
         {
             if *emitted_constraint_count >= MAX_CIRCUIT_ROWS {
                 return Err(CircuitError::InvalidDimension);
             }
-            *emitted_constraint_count = emitted_constraint_count
+            let a_terms = a.into_canonical_terms();
+            let b_terms = b.into_canonical_terms();
+            let c_terms = c.into_canonical_terms();
+            let next_constraint_count = emitted_constraint_count
                 .checked_add(1)
                 .ok_or(CircuitError::InvalidDimension)?;
+            let next_a_nonzero_count = a_nonzero_count
+                .checked_add(a_terms.len())
+                .ok_or(R1csError::CsrStorageOverflow)?;
+            let next_b_nonzero_count = b_nonzero_count
+                .checked_add(b_terms.len())
+                .ok_or(R1csError::CsrStorageOverflow)?;
+            let next_c_nonzero_count = c_nonzero_count
+                .checked_add(c_terms.len())
+                .ok_or(R1csError::CsrStorageOverflow)?;
+            for (_, coefficient) in a_terms {
+                a_coefficients.observe(coefficient)?;
+            }
+            for (_, coefficient) in b_terms {
+                b_coefficients.observe(coefficient)?;
+            }
+            for (_, coefficient) in c_terms {
+                c_coefficients.observe(coefficient)?;
+            }
+            *emitted_constraint_count = next_constraint_count;
+            *a_nonzero_count = next_a_nonzero_count;
+            *b_nonzero_count = next_b_nonzero_count;
+            *c_nonzero_count = next_c_nonzero_count;
             return Ok(());
         }
 
-        let CircuitBuilderMode::Shape(constraints) = &mut self.mode else {
-            unreachable!("all streaming modes returned above");
-        };
-        if constraints.len() >= MAX_CIRCUIT_ROWS {
-            return Err(CircuitError::InvalidDimension);
+        #[cfg(test)]
+        {
+            let CircuitBuilderMode::Shape(constraints) = &mut self.mode else {
+                unreachable!("all streaming modes returned above");
+            };
+            if constraints.len() >= MAX_CIRCUIT_ROWS {
+                return Err(CircuitError::InvalidDimension);
+            }
+            constraints.push(Constraint { a, b, c });
+            return Ok(());
         }
-        constraints.push(Constraint { a, b, c });
-        Ok(())
+
+        #[cfg(not(test))]
+        unreachable!("all production streaming modes returned above")
     }
 
     pub(super) fn enforce_zero(&mut self, value: LinearCombination) -> Result<(), CircuitError> {
@@ -623,13 +779,14 @@ impl CircuitBuilder {
         Ok(output)
     }
 
+    #[cfg(test)]
     pub(super) fn finalize(self) -> Result<CircuitAssignment, CircuitError> {
         let Self {
             public_inputs,
             mut private_values,
             mode,
         } = self;
-        let CircuitBuilderMode::Shape(constraints) = mode else {
+        let CircuitBuilderMode::Shape(mut constraints) = mode else {
             return Err(CircuitError::InvalidAssignment);
         };
         if private_values.is_empty() || constraints.is_empty() {
@@ -650,26 +807,77 @@ impl CircuitBuilder {
             .checked_add(1)
             .and_then(|value| value.checked_add(public_inputs.len()))
             .ok_or(CircuitError::InvalidDimension)?;
-        let mut a = SparseMatrixRowBuilder::new(constraint_count, columns)?;
-        let mut b = SparseMatrixRowBuilder::new(constraint_count, columns)?;
-        let mut c = SparseMatrixRowBuilder::new(constraint_count, columns)?;
+        let mut a_nonzero_count = 0usize;
+        let mut b_nonzero_count = 0usize;
+        let mut c_nonzero_count = 0usize;
+        let mut a_coefficients = CoefficientDictionaryCounter::new();
+        let mut b_coefficients = CoefficientDictionaryCounter::new();
+        let mut c_coefficients = CoefficientDictionaryCounter::new();
+        for constraint in &mut constraints {
+            constraint.a.canonicalize();
+            constraint.b.canonicalize();
+            constraint.c.canonicalize();
+            a_nonzero_count = a_nonzero_count
+                .checked_add(constraint.a.terms.len())
+                .ok_or(R1csError::CsrStorageOverflow)?;
+            b_nonzero_count = b_nonzero_count
+                .checked_add(constraint.b.terms.len())
+                .ok_or(R1csError::CsrStorageOverflow)?;
+            c_nonzero_count = c_nonzero_count
+                .checked_add(constraint.c.terms.len())
+                .ok_or(R1csError::CsrStorageOverflow)?;
+            for (_, coefficient) in &constraint.a.terms {
+                a_coefficients.observe(*coefficient)?;
+            }
+            for (_, coefficient) in &constraint.b.terms {
+                b_coefficients.observe(*coefficient)?;
+            }
+            for (_, coefficient) in &constraint.c.terms {
+                c_coefficients.observe(*coefficient)?;
+            }
+        }
+        let a_coefficient_count = a_coefficients.len();
+        let b_coefficient_count = b_coefficients.len();
+        let c_coefficient_count = c_coefficients.len();
+        drop((a_coefficients, b_coefficients, c_coefficients));
+        let mut a = SparseMatrixRowBuilder::new(
+            constraint_count,
+            columns,
+            a_nonzero_count,
+            a_coefficient_count,
+        )?;
+        let mut b = SparseMatrixRowBuilder::new(
+            constraint_count,
+            columns,
+            b_nonzero_count,
+            b_coefficient_count,
+        )?;
+        let mut c = SparseMatrixRowBuilder::new(
+            constraint_count,
+            columns,
+            c_nonzero_count,
+            c_coefficient_count,
+        )?;
         for Constraint {
             a: constraint_a,
             b: constraint_b,
             c: constraint_c,
         } in constraints
         {
-            a.append_canonical_row(matrix_row_entries(variable_count, &constraint_a)?)?;
-            b.append_canonical_row(matrix_row_entries(variable_count, &constraint_b)?)?;
-            c.append_canonical_row(matrix_row_entries(variable_count, &constraint_c)?)?;
+            let row = matrix_row_entries(variable_count, constraint_a)?;
+            a.append_canonical_row(row.entries())?;
+            let row = matrix_row_entries(variable_count, constraint_b)?;
+            b.append_canonical_row(row.entries())?;
+            let row = matrix_row_entries(variable_count, constraint_c)?;
+            c.append_canonical_row(row.entries())?;
         }
         let shape = Arc::new(Shape::new(
             constraint_count,
             variable_count,
             public_inputs.len(),
-            a.finish(),
-            b.finish(),
-            c.finish(),
+            a.finish()?,
+            b.finish()?,
+            c.finish()?,
         )?);
         private_values.resize(variable_count, Scalar::zero());
         Ok(CircuitAssignment {
@@ -679,7 +887,7 @@ impl CircuitBuilder {
         })
     }
 
-    /// Return the power-of-two dimensions discovered by a count-only pass.
+    /// Return the dimensions and canonical CSR totals from a count-only pass.
     pub(super) fn finish_counting(self) -> Result<CircuitDimensions, CircuitError> {
         let Self {
             private_values,
@@ -688,6 +896,12 @@ impl CircuitBuilder {
         } = self;
         let CircuitBuilderMode::Count {
             emitted_constraint_count,
+            a_nonzero_count,
+            b_nonzero_count,
+            c_nonzero_count,
+            a_coefficients,
+            b_coefficients,
+            c_coefficients,
         } = mode
         else {
             return Err(CircuitError::InvalidAssignment);
@@ -705,11 +919,33 @@ impl CircuitBuilder {
         if variable_count > MAX_CIRCUIT_ROWS || constraint_count > MAX_CIRCUIT_ROWS {
             return Err(CircuitError::InvalidDimension);
         }
+        if [a_nonzero_count, b_nonzero_count, c_nonzero_count]
+            .into_iter()
+            .any(|count| u32::try_from(count).is_err())
+        {
+            return Err(R1csError::CsrStorageOverflow.into());
+        }
+        let a_coefficient_count = a_coefficients.len();
+        let b_coefficient_count = b_coefficients.len();
+        let c_coefficient_count = c_coefficients.len();
+        drop((a_coefficients, b_coefficients, c_coefficients));
+        if a_coefficient_count > a_nonzero_count
+            || b_coefficient_count > b_nonzero_count
+            || c_coefficient_count > c_nonzero_count
+        {
+            return Err(R1csError::CsrEntryCountMismatch.into());
+        }
         Ok(CircuitDimensions {
             variable_count,
             constraint_count,
             emitted_private_value_count: private_values.len(),
             emitted_constraint_count,
+            a_nonzero_count,
+            b_nonzero_count,
+            c_nonzero_count,
+            a_coefficient_count,
+            b_coefficient_count,
+            c_coefficient_count,
         })
     }
 
@@ -756,9 +992,9 @@ impl CircuitBuilder {
             constraint_count,
             variable_count,
             public_inputs.len(),
-            a.finish(),
-            b.finish(),
-            c.finish(),
+            a.finish()?,
+            b.finish()?,
+            c.finish()?,
         )?);
         private_values.resize(variable_count, Scalar::zero());
         Ok(CircuitAssignment {
@@ -814,25 +1050,50 @@ impl CircuitBuilder {
     }
 }
 
+struct CanonicalMatrixRow {
+    variable_count: usize,
+    terms: Vec<(Variable, Scalar)>,
+}
+
+impl CanonicalMatrixRow {
+    fn entries(&self) -> impl ExactSizeIterator<Item = (usize, Scalar)> + '_ {
+        self.terms.iter().map(|(variable, coefficient)| {
+            (
+                matrix_column(self.variable_count, *variable)
+                    .expect("canonical matrix row columns were checked"),
+                *coefficient,
+            )
+        })
+    }
+}
+
 fn matrix_row_entries(
     variable_count: usize,
-    combination: &LinearCombination,
-) -> Result<Vec<(usize, Scalar)>, CircuitError> {
-    let mut row_entries = Vec::new();
-    for (variable, coefficient) in combination.canonical_terms() {
-        let column = match variable {
-            Variable::Private(index) if index < variable_count => index,
-            Variable::Private(_) => return Err(CircuitError::InvalidDimension),
-            Variable::One => variable_count,
-            Variable::Public(index) => variable_count
-                .checked_add(1)
-                .and_then(|value| value.checked_add(index))
-                .ok_or(CircuitError::InvalidDimension)?,
-        };
-        row_entries.push((column, coefficient));
+    combination: LinearCombination,
+) -> Result<CanonicalMatrixRow, CircuitError> {
+    let mut terms = combination.into_canonical_terms();
+    for (variable, _) in &terms {
+        matrix_column(variable_count, *variable)?;
     }
-    row_entries.sort_by_key(|(column, _)| *column);
-    Ok(row_entries)
+    terms.sort_unstable_by_key(|(variable, _)| {
+        matrix_column(variable_count, *variable).expect("canonical matrix row columns were checked")
+    });
+    Ok(CanonicalMatrixRow {
+        variable_count,
+        terms,
+    })
+}
+
+fn matrix_column(variable_count: usize, variable: Variable) -> Result<usize, CircuitError> {
+    match variable {
+        Variable::Private(index) if index < variable_count => Ok(index),
+        Variable::Private(_) => Err(CircuitError::InvalidDimension),
+        Variable::One => Ok(variable_count),
+        Variable::Public(index) => variable_count
+            .checked_add(1)
+            .and_then(|value| value.checked_add(index))
+            .ok_or(CircuitError::InvalidDimension),
+    }
 }
 
 #[cfg(test)]
@@ -946,6 +1207,12 @@ mod tests {
         let dimensions = counter.finish_counting().expect("counted dimensions");
         assert_eq!(dimensions.emitted_private_value_count, 1);
         assert_eq!(dimensions.emitted_constraint_count, 3);
+        assert_eq!(dimensions.a_nonzero_count, 3);
+        assert_eq!(dimensions.b_nonzero_count, 3);
+        assert_eq!(dimensions.c_nonzero_count, 3);
+        assert_eq!(dimensions.a_coefficient_count, 1);
+        assert_eq!(dimensions.b_coefficient_count, 1);
+        assert_eq!(dimensions.c_coefficient_count, 1);
 
         let mut compiler = CircuitBuilder::new_compiling(vec![s(2)], dimensions).expect("compiler");
         synthesize_three_equal_rows(&mut compiler, s(2)).expect("compiled rows");
@@ -968,6 +1235,114 @@ mod tests {
                 .shape
                 .validate_strict_assignment(&dummy.witness, &dummy.public_inputs),
             Err(R1csError::Unsatisfied)
+        ));
+    }
+
+    #[test]
+    fn count_and_compile_use_post_cancellation_nonzero_totals() {
+        fn synthesize_cancelled_row(builder: &mut CircuitBuilder) -> Result<(), CircuitError> {
+            let value = builder.alloc(s(7))?;
+            let cancelled = LinearCombination::variable(value).add_term(value, -s(1));
+            builder.enforce(
+                cancelled,
+                LinearCombination::one(),
+                LinearCombination::zero(),
+            )
+        }
+
+        let mut counter = CircuitBuilder::new_counting(vec![s(1)]).expect("public");
+        synthesize_cancelled_row(&mut counter).expect("counted row");
+        let dimensions = counter.finish_counting().expect("counted dimensions");
+        assert_eq!(dimensions.a_nonzero_count, 0);
+        assert_eq!(dimensions.b_nonzero_count, 1);
+        assert_eq!(dimensions.c_nonzero_count, 0);
+        assert_eq!(dimensions.a_coefficient_count, 0);
+        assert_eq!(dimensions.b_coefficient_count, 1);
+        assert_eq!(dimensions.c_coefficient_count, 0);
+
+        let mut compiler =
+            CircuitBuilder::new_compiling(vec![s(1)], dimensions).expect("exact compiler");
+        synthesize_cancelled_row(&mut compiler).expect("compiled row");
+        let assignment = compiler.finalize_compiled().expect("exact CSR totals");
+        assert_eq!(assignment.shape.a.nonzero_count(), 0);
+        assert_eq!(assignment.shape.b.nonzero_count(), 1);
+        assert_eq!(assignment.shape.c.nonzero_count(), 0);
+        assignment
+            .shape
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
+            .expect("cancelled relation remains strict");
+    }
+
+    #[test]
+    fn compile_rejects_counted_csr_overfill_and_underfill() {
+        let mut counter = CircuitBuilder::new_counting(vec![s(2)]).expect("public");
+        synthesize_three_equal_rows(&mut counter, s(2)).expect("counted rows");
+        let dimensions = counter.finish_counting().expect("counted dimensions");
+
+        let mut overfill_profile = dimensions;
+        overfill_profile.a_nonzero_count -= 1;
+        let mut overfilled =
+            CircuitBuilder::new_compiling(vec![s(2)], overfill_profile).expect("bounded compiler");
+        assert!(matches!(
+            synthesize_three_equal_rows(&mut overfilled, s(2)),
+            Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
+        ));
+
+        let mut underfill_profile = dimensions;
+        underfill_profile.a_nonzero_count += 1;
+        let mut underfilled =
+            CircuitBuilder::new_compiling(vec![s(2)], underfill_profile).expect("bounded compiler");
+        synthesize_three_equal_rows(&mut underfilled, s(2)).expect("compiled rows");
+        assert!(matches!(
+            underfilled.finalize_compiled(),
+            Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
+        ));
+    }
+
+    #[test]
+    fn compile_rejects_under_and_over_counted_coefficient_dictionaries() {
+        let mut counter = CircuitBuilder::new_counting(vec![s(2)]).expect("public");
+        synthesize_three_equal_rows(&mut counter, s(2)).expect("counted rows");
+        let dimensions = counter.finish_counting().expect("counted dimensions");
+
+        let mut undercounted_profile = dimensions;
+        undercounted_profile.a_coefficient_count = 0;
+        let mut undercounted = CircuitBuilder::new_compiling(vec![s(2)], undercounted_profile)
+            .expect("bounded compiler");
+        assert!(matches!(
+            synthesize_three_equal_rows(&mut undercounted, s(2)),
+            Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
+        ));
+
+        let mut overcounted_profile = dimensions;
+        overcounted_profile.a_coefficient_count = 2;
+        let mut overcounted = CircuitBuilder::new_compiling(vec![s(2)], overcounted_profile)
+            .expect("bounded compiler");
+        synthesize_three_equal_rows(&mut overcounted, s(2)).expect("compiled rows");
+        assert!(matches!(
+            overcounted.finalize_compiled(),
+            Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
+        ));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn compile_rejects_nonzero_profiles_outside_u32_before_allocating() {
+        let dimensions = CircuitDimensions {
+            variable_count: 1,
+            constraint_count: 1,
+            emitted_private_value_count: 1,
+            emitted_constraint_count: 1,
+            a_nonzero_count: u32::MAX as usize + 1,
+            b_nonzero_count: 0,
+            c_nonzero_count: 0,
+            a_coefficient_count: 0,
+            b_coefficient_count: 0,
+            c_coefficient_count: 0,
+        };
+        assert!(matches!(
+            CircuitBuilder::new_compiling(vec![s(1)], dimensions),
+            Err(CircuitError::R1cs(R1csError::CsrStorageOverflow))
         ));
     }
 
@@ -1061,6 +1436,31 @@ mod tests {
     }
 
     #[test]
+    fn circuit_profile_records_exact_shape_nonzero_totals() {
+        let mut builder = CircuitBuilder::new(vec![s(2)]).expect("public");
+        synthesize_three_equal_rows(&mut builder, s(2)).expect("canonical rows");
+        let assignment = builder.finalize().expect("shape");
+        let profile =
+            CircuitProfile::new(Arc::clone(&assignment.shape), 1, 3).expect("canonical profile");
+        assert_eq!(profile.a_nonzero_count, assignment.shape.a.nonzero_count());
+        assert_eq!(profile.b_nonzero_count, assignment.shape.b.nonzero_count());
+        assert_eq!(profile.c_nonzero_count, assignment.shape.c.nonzero_count());
+        assert_eq!(
+            profile.a_coefficient_count,
+            assignment.shape.a.coefficient_count()
+        );
+        assert_eq!(
+            profile.b_coefficient_count,
+            assignment.shape.b.coefficient_count()
+        );
+        assert_eq!(
+            profile.c_coefficient_count,
+            assignment.shape.c.coefficient_count()
+        );
+        assert!(profile.has_exact_storage_counts());
+    }
+
+    #[test]
     fn shape_synthesis_does_not_retain_three_global_entry_vectors() {
         let source = include_str!("circuit.rs");
         let production = source
@@ -1074,13 +1474,26 @@ mod tests {
         assert!(production.contains("CircuitBuilderMode::Compile"));
         assert!(production.contains("CircuitBuilderMode::Witness"));
         assert!(production.contains("has_only_empty_rows_from"));
+        assert!(production.contains("a_nonzero_count"));
+        assert!(production.contains("b_nonzero_count"));
+        assert!(production.contains("c_nonzero_count"));
+        assert!(production.contains("a_coefficient_count"));
+        assert!(production.contains("b_coefficient_count"));
+        assert!(production.contains("c_coefficient_count"));
+        assert!(production.contains("CoefficientDictionaryCounter"));
+        assert!(production.contains("into_canonical_terms"));
         assert!(production.contains("for Constraint"));
+        assert!(production.contains("#[cfg(test)]\nstruct Constraint"));
+        assert!(production.contains("#[cfg(test)]\n    Shape(Vec<Constraint>)"));
+        assert!(production.contains("#[cfg(test)]\n    pub(super) fn new("));
+        assert!(production.contains("#[cfg(test)]\n    pub(super) fn finalize("));
         assert!(!production.contains("constraints.resize"));
         assert!(!production.contains("&self.constraints"));
         assert!(!production.contains("collect::<Result<Vec<_>, _>>()"));
         assert!(!production.contains("collect::<Result<Vec<_>>>"));
         assert!(!production.contains("let mut a_entries = Vec::new()"));
         assert!(!production.contains("matrix_from_constraints"));
+        assert!(!production.contains("BTreeMap"));
         let witness_constructor = production
             .split("pub(super) fn new_with_profile")
             .nth(1)

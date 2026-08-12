@@ -2445,7 +2445,7 @@ impl ValidQuery for FindAssetEscrows {
         let world = state_ro.world();
         let predicate_json = filter
             .json_payload()
-            .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
         if let Some(candidate_ids) = predicate_json
             .as_ref()
             .and_then(|predicate| asset_escrow_candidate_ids(predicate, world))

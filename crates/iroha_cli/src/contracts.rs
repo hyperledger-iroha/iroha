@@ -5782,14 +5782,13 @@ mod tests {
         .expect("encode contract arguments");
         let arguments = ContractArgumentRecord::try_new(argument_bytes)
             .expect("bounded contract argument record");
-        let contract_address =
-            ContractAddress::derive(
-                &ctx.config().network_id,
-                &authority,
-                1,
-                DataSpaceId::UNIVERSAL,
-            )
-                .expect("derive contract address");
+        let contract_address = ContractAddress::derive(
+            &ctx.config().network_id,
+            &authority,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
 
         let fixture_domain =
             Domain::new(DomainId::try_new("fixture", "universal").expect("valid fixture domain"))
@@ -6005,8 +6004,8 @@ mod tests {
         let authority = fixture_account(0x41);
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             iroha::data_model::nexus::DataSpaceId::new(0),

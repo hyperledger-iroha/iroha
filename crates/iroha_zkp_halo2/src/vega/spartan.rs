@@ -16,8 +16,8 @@ use super::{
     hyrax::{HyraxError, prove_direct, verify_direct},
     r1cs::{R1csError, RelaxedInstance, RelaxedWitness, Shape},
     sumcheck::{
-        SecretScalarTable, SumcheckError, SumcheckProof, prove_cubic_with_three_inputs_owned,
-        prove_quadratic_owned,
+        SecretScalarTable, SplitSecretScalarTable, SumcheckError, SumcheckProof,
+        prove_cubic_with_split_first_owned, prove_quadratic_owned,
     },
     transcript::{VegaTranscriptError, VegaTranscriptV1},
 };
@@ -77,29 +77,31 @@ impl RelaxedSpartanProof {
         for _ in 0..dimensions.outer_rounds {
             tau.push(transcript.squeeze(b"t")?);
         }
-        // Reserve and populate the public equality table before materializing
-        // any witness-derived product table. The three products are then the
-        // only full secret row tables, and C is consumed in place as D=u*C+E.
-        let eq_table = SecretScalarTable::try_eq_evals(&tau)?;
-        drop(tau);
         let [a_product, b_product, mut d_product] =
-            derive_assignment_products(shape, instance, witness)?;
-        for (c, error) in d_product
-            .as_mut_slice()
+            derive_assignment_products_split(shape, instance, witness)?;
+        let (d_lower, d_upper) = d_product.as_mut_slices();
+        let error_half = witness.error.len() / 2;
+        for (c, error) in d_lower
             .iter_mut()
-            .zip(witness.error.iter().copied())
+            .zip(witness.error[..error_half].iter().copied())
         {
             *c = instance.relaxation * *c + error;
         }
-        let (outer_sumcheck, row_point, outer_claims) = prove_cubic_with_three_inputs_owned(
+        for (c, error) in d_upper
+            .iter_mut()
+            .zip(witness.error[error_half..].iter().copied())
+        {
+            *c = instance.relaxation * *c + error;
+        }
+        let (outer_sumcheck, row_point, outer_claims) = prove_cubic_with_split_first_owned(
             Scalar::zero(),
-            dimensions.outer_rounds,
-            eq_table,
+            &tau,
             a_product,
             b_product,
             d_product,
             transcript,
         )?;
+        drop(tau);
         transcript.absorb_scalars(b"claims_outer", &outer_claims)?;
 
         let batching_challenge = transcript.squeeze(b"r")?;
@@ -229,28 +231,31 @@ impl RelaxedSpartanProof {
     }
 }
 
-fn derive_assignment_products(
+fn derive_assignment_products_split(
     shape: &Shape,
     instance: &RelaxedInstance,
     witness: &RelaxedWitness,
-) -> Result<[SecretScalarTable; 3], SpartanError> {
+) -> Result<[SplitSecretScalarTable; 3], SpartanError> {
     if witness.values.len() != shape.variable_count()
         || instance.public_inputs.len() != shape.public_input_count()
     {
         return Err(SpartanError::InvalidDimension);
     }
     let mut products = [
-        SecretScalarTable::try_zeroed(shape.constraint_count())?,
-        SecretScalarTable::try_zeroed(shape.constraint_count())?,
-        SecretScalarTable::try_zeroed(shape.constraint_count())?,
+        SplitSecretScalarTable::try_zeroed(shape.constraint_count())?,
+        SplitSecretScalarTable::try_zeroed(shape.constraint_count())?,
+        SplitSecretScalarTable::try_zeroed(shape.constraint_count())?,
     ];
-    // All full-size reservations above happen before the first table receives
-    // witness-derived data. A later reservation failure therefore drops only
-    // zero-filled owners, while every populated owner remains RAII-erased.
+    // Both halves of all three products are reserved before the first table
+    // receives witness-derived data. A later reservation failure therefore
+    // drops only zero-filled owners, while every populated owner remains
+    // RAII-erased.
     for (matrix, product) in [&shape.a, &shape.b, &shape.c]
         .into_iter()
         .zip(products.iter_mut())
     {
+        let (lower, upper) = product.as_mut_slices();
+        let half = shape.constraint_count() / 2;
         for row in 0..shape.constraint_count() {
             let mut evaluation = Scalar::zero();
             for (column, coefficient) in
@@ -268,7 +273,11 @@ fn derive_assignment_products(
                 };
                 evaluation += coefficient * assigned;
             }
-            product.as_mut_slice()[row] = evaluation;
+            if row < half {
+                lower[row] = evaluation;
+            } else {
+                upper[row - half] = evaluation;
+            }
         }
     }
     Ok(products)
@@ -504,10 +513,18 @@ mod tests {
         assignment.extend_from_slice(&instance.public_inputs);
         let expected_products = shape.multiply(&assignment).expect("fixture dimensions");
         let [actual_a, actual_b, actual_c] =
-            derive_assignment_products(&shape, &instance, &witness).expect("streamed products");
-        assert_eq!(actual_a.as_slice(), expected_products.a.as_slice());
-        assert_eq!(actual_b.as_slice(), expected_products.b.as_slice());
-        assert_eq!(actual_c.as_slice(), expected_products.c.as_slice());
+            derive_assignment_products_split(&shape, &instance, &witness)
+                .expect("streamed products");
+        let half = shape.constraint_count() / 2;
+        for (actual, expected) in [actual_a, actual_b, actual_c].into_iter().zip([
+            expected_products.a,
+            expected_products.b,
+            expected_products.c,
+        ]) {
+            let (lower, upper) = actual.as_slices();
+            assert_eq!(lower, &expected[..half]);
+            assert_eq!(upper, &expected[half..]);
+        }
 
         let row_weights = [s(2), s(3), s(5), s(7)];
         let challenge = s(11);
@@ -534,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn spartan_prover_source_owns_each_full_table_once() {
+    fn spartan_prover_source_splits_and_releases_first_round_tables() {
         let source = include_str!("spartan.rs");
         let production = source
             .split("#[cfg(test)]")
@@ -544,7 +561,9 @@ mod tests {
         assert!(!production.contains("shape.multiply(&assignment)"));
         assert!(!production.contains(".bind_rows("));
         assert!(production.contains("*c = instance.relaxation * *c + error"));
-        assert!(production.contains("prove_cubic_with_three_inputs_owned"));
+        assert!(production.contains("prove_cubic_with_split_first_owned"));
+        assert!(production.contains("derive_assignment_products_split"));
+        assert!(!production.contains("SecretScalarTable::try_eq_evals(&tau)"));
         assert!(production.contains("prove_quadratic_owned"));
         assert!(production.contains("drop(row_weights)"));
     }

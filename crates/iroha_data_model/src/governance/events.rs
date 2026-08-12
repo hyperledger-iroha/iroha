@@ -80,7 +80,7 @@ pub struct SudoExecuted {
     /// Identifier of the proposal or context this execution belongs to.
     pub proposal_id: ProposalId,
     /// Blake2b-256 hash of the approving signature set.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub sig_set_hash: [u8; 32],
     /// Block height where the sudo action executed.
     pub at_height: u64,
@@ -166,7 +166,7 @@ pub struct GovernanceExecutionFailed {
     /// Referendum identifier.
     pub referendum_id: ProposalId,
     /// Blake2b-256 hash of the preimage acted upon.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub preimage_hash: [u8; 32],
     /// Block height where the failure occurred.
     pub at_height: u64,
@@ -198,7 +198,7 @@ pub struct ParliamentExecutionFailed {
     /// Epoch index the failure applies to.
     pub selection_epoch: u64,
     /// Blake2b-256 hash of the enactment preimage.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub preimage_hash: [u8; 32],
     /// Block height where the failure occurred.
     pub at_height: u64,

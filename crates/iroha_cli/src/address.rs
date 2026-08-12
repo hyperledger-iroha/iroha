@@ -9,14 +9,22 @@ use iroha::data_model::account::AccountId;
 use iroha_crypto::PublicKey;
 use norito::json::{self, JsonSerialize};
 use std::{
-    fs::{self, File},
-    io::{self, BufWriter, Read, Write},
+    fs::File,
+    io::{self, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
 /// Minamoto I105 prefix used by tests (runtime commands require an explicit context).
 #[cfg(test)]
 const DEFAULT_I105_PREFIX: u16 = 753;
+
+// A canonical V1 controller payload is at most 1,024 bytes. Four KiB leaves
+// ample room for I105/base-105 or public-key text, while the aggregate and
+// row ceilings keep audit/normalization reports from retaining an arbitrary
+// pipe or file before address validation begins.
+const ADDRESS_INPUT_MAX_LINE_BYTES_V1: usize = 4 * 1024;
+const ADDRESS_INPUT_MAX_ENTRIES_V1: usize = 16_384;
+const ADDRESS_INPUT_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -548,30 +556,87 @@ impl AddressAuditStats {
 }
 
 fn read_address_inputs(source: Option<&PathBuf>) -> Result<Vec<String>> {
-    let mut buffer = String::new();
-    match source {
-        Some(path) if path == Path::new("-") => {
-            io::stdin()
-                .read_to_string(&mut buffer)
-                .wrap_err("failed to read addresses from stdin")?;
-        }
+    let bytes = match source {
+        Some(path) if path == Path::new("-") => read_cli_input_bounded(
+            &mut io::stdin().lock(),
+            ADDRESS_INPUT_MAX_BYTES_V1,
+            "address input",
+        )
+        .wrap_err("failed to read addresses from stdin")?,
         Some(path) => {
-            buffer = fs::read_to_string(path)
-                .wrap_err_with(|| format!("failed to read addresses from {}", path.display()))?;
+            let mut file = File::open(path)
+                .wrap_err_with(|| format!("failed to open addresses from {}", path.display()))?;
+            let metadata = file
+                .metadata()
+                .wrap_err_with(|| format!("failed to inspect address input {}", path.display()))?;
+            if !metadata.is_file() {
+                eyre::bail!("address input must be a regular file: {}", path.display());
+            }
+            if metadata.len() > ADDRESS_INPUT_MAX_BYTES_V1 as u64 {
+                eyre::bail!(
+                    "address input {} exceeds the first-release limit of {} bytes",
+                    path.display(),
+                    ADDRESS_INPUT_MAX_BYTES_V1
+                );
+            }
+            let bytes =
+                read_cli_input_bounded(&mut file, ADDRESS_INPUT_MAX_BYTES_V1, "address input")
+                    .wrap_err_with(|| {
+                        format!("failed to read addresses from {}", path.display())
+                    })?;
+            let after = file.metadata().wrap_err_with(|| {
+                format!("failed to reinspect address input {}", path.display())
+            })?;
+            if after.len() != metadata.len() || after.len() != bytes.len() as u64 {
+                eyre::bail!("address input changed while reading: {}", path.display());
+            }
+            bytes
         }
-        None => {
-            io::stdin()
-                .read_to_string(&mut buffer)
-                .wrap_err("failed to read addresses from stdin")?;
+        None => read_cli_input_bounded(
+            &mut io::stdin().lock(),
+            ADDRESS_INPUT_MAX_BYTES_V1,
+            "address input",
+        )
+        .wrap_err("failed to read addresses from stdin")?,
+    };
+
+    parse_address_input_lines(bytes, "address input")
+}
+
+fn parse_address_input_lines(bytes: Vec<u8>, label: &str) -> Result<Vec<String>> {
+    let buffer = String::from_utf8(bytes)
+        .map_err(|error| eyre::eyre!("{label} is not valid UTF-8: {error}"))?;
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(ADDRESS_INPUT_MAX_ENTRIES_V1.min(buffer.lines().count()))
+        .map_err(|error| eyre::eyre!("failed to reserve address entry storage: {error}"))?;
+
+    for (line_index, line) in buffer.lines().enumerate() {
+        if line.len() > ADDRESS_INPUT_MAX_LINE_BYTES_V1 {
+            eyre::bail!(
+                "{label} line {} exceeds the first-release limit of {} bytes",
+                line_index + 1,
+                ADDRESS_INPUT_MAX_LINE_BYTES_V1
+            );
         }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if entries.len() == ADDRESS_INPUT_MAX_ENTRIES_V1 {
+            eyre::bail!(
+                "{label} exceeds the first-release limit of {} address entries",
+                ADDRESS_INPUT_MAX_ENTRIES_V1
+            );
+        }
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(trimmed.len())
+            .map_err(|error| eyre::eyre!("failed to reserve address line storage: {error}"))?;
+        owned.push_str(trimmed);
+        entries.push(owned);
     }
 
-    let entries = buffer
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
     Ok(entries)
 }
 
@@ -849,5 +914,45 @@ mod tests {
             .canonical_i105()
             .expect("canonical I105"),
         );
+    }
+
+    #[test]
+    fn address_input_line_and_entry_bounds_are_exact() {
+        let exact_line = "a".repeat(ADDRESS_INPUT_MAX_LINE_BYTES_V1);
+        assert_eq!(
+            parse_address_input_lines(exact_line.clone().into_bytes(), "fixture")
+                .expect("exact line bound is admitted"),
+            vec![exact_line]
+        );
+
+        let over_line = "a".repeat(ADDRESS_INPUT_MAX_LINE_BYTES_V1 + 1);
+        let error = parse_address_input_lines(over_line.into_bytes(), "fixture")
+            .expect_err("first over-limit line must fail");
+        assert!(error.to_string().contains("line 1"));
+
+        let exact_entries = "a\n".repeat(ADDRESS_INPUT_MAX_ENTRIES_V1);
+        assert_eq!(
+            parse_address_input_lines(exact_entries.into_bytes(), "fixture")
+                .expect("exact entry bound is admitted")
+                .len(),
+            ADDRESS_INPUT_MAX_ENTRIES_V1
+        );
+        let over_entries = "a\n".repeat(ADDRESS_INPUT_MAX_ENTRIES_V1 + 1);
+        let error = parse_address_input_lines(over_entries.into_bytes(), "fixture")
+            .expect_err("first over-limit entry must fail");
+        assert!(error.to_string().contains("address entries"));
+    }
+
+    #[test]
+    fn address_file_size_is_rejected_before_reading() {
+        let directory = tempfile::tempdir().expect("create address input directory");
+        let path = directory.path().join("addresses.txt");
+        let file = File::create(&path).expect("create sparse address input");
+        file.set_len((ADDRESS_INPUT_MAX_BYTES_V1 + 1) as u64)
+            .expect("extend sparse address input");
+
+        let error = read_address_inputs(Some(&path))
+            .expect_err("oversized address file must fail before allocation");
+        assert!(error.to_string().contains("first-release limit"));
     }
 }

@@ -75,6 +75,19 @@ impl norito::json::JsonSerialize for VotingMode {
             out,
         );
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(
+            match self {
+                Self::Zk => "Zk",
+                Self::Plain => "Plain",
+            },
+            out,
+        )
+    }
 }
 
 #[cfg(feature = "json")]
@@ -121,6 +134,17 @@ impl norito::json::JsonSerialize for CouncilDerivationKind {
             CouncilDerivationKind::Manual => "Manual",
         };
         norito::json::write_json_string(label, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            CouncilDerivationKind::Sortition => "Sortition",
+            CouncilDerivationKind::Manual => "Manual",
+        };
+        norito::json::write_json_string_to(label, out)
     }
 }
 
@@ -265,13 +289,13 @@ pub struct BallotProof {
     /// Proof backend tag (e.g., "halo2/ipa" or "halo2/pasta/tiny-add").
     pub backend: iroha_schema::Ident,
     /// Opaque proof envelope bytes (ZK1 or H2* container).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub envelope_bytes: Vec<u8>,
     /// Optional eligibility root hint (32-byte) to bind verification to a known root.
     /// JSON uses a lowercase hex string (optional 0x or blake2b32: prefix).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes_hex::option")
+        norito(json = "crate::json_helpers::fixed_bytes_hex::option")
     )]
     pub root_hint: Option<[u8; 32]>,
     /// Optional owner account id (when the circuit commits to it in public inputs).
@@ -280,7 +304,7 @@ pub struct BallotProof {
     /// JSON uses a lowercase hex string (optional 0x or blake2b32: prefix).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes_hex::option")
+        norito(json = "crate::json_helpers::fixed_bytes_hex::option")
     )]
     pub nullifier: Option<[u8; 32]>,
     /// Optional exact lock amount hint.
@@ -317,10 +341,10 @@ impl crate::seal::Instruction for CastPlainBallot {}
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct EnactReferendum {
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     /// Identifier of the referendum to enact.
     pub referendum_id: [u8; 32],
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     /// Blake2b-32 hash of the referendum preimage (proposal payload).
     pub preimage_hash: [u8; 32],
     /// Window describing when enactment is valid.
@@ -346,7 +370,7 @@ impl crate::seal::Instruction for EnactReferendum {}
 #[norito(deny_unknown_fields)]
 pub struct EnactSccpRouteGovernance {
     /// Canonical identifier derived from the complete SCCP anchor.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub referendum_id: [u8; 32],
     /// Full network- and action-bound preimage approved by the referendum.
     pub anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
@@ -366,7 +390,7 @@ pub struct FinalizeReferendum {
     /// Identifier of the referendum to finalize.
     pub referendum_id: String,
     /// Deterministic proposal id this referendum governs
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proposal_id: [u8; 32],
 }
 
@@ -381,7 +405,7 @@ pub struct ApproveGovernanceProposal {
     #[norito(default)]
     pub body: ParliamentBody,
     /// Deterministic proposal id (Blake2b-32) being approved by the council.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proposal_id: [u8; 32],
 }
 
@@ -417,6 +441,13 @@ impl norito::json::JsonSerialize for ParliamentDecision {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -448,7 +479,7 @@ pub struct CastParliamentBallot {
     /// Parliament body receiving the ballot.
     pub body: ParliamentBody,
     /// Deterministic proposal id (Blake2b-32) being decided by the body.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proposal_id: [u8; 32],
     /// Equal citizen decision signed by the transaction authority.
     pub decision: ParliamentDecision,
@@ -741,6 +772,19 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
     fn contract_address() -> crate::smart_contract::ContractAddress {
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
@@ -866,6 +910,8 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn voting_mode_json_is_canonical_and_rejects_aliases() {
+        assert_exact_json(&VotingMode::Zk);
+        assert_exact_json(&VotingMode::Plain);
         assert_eq!(
             norito::json::to_json(&VotingMode::Zk).expect("serialize Zk voting mode"),
             "\"Zk\""
@@ -899,6 +945,7 @@ mod tests {
             (ParliamentDecision::Reject, "reject"),
             (ParliamentDecision::Abstain, "abstain"),
         ] {
+            assert_exact_json(&decision);
             let json = format!("\"{label}\"");
             assert_eq!(
                 norito::json::to_json(&decision).expect("serialize parliament decision"),
@@ -918,6 +965,13 @@ mod tests {
                 "noncanonical parliament decision alias must reject: {alias:?}"
             );
         }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn council_derivation_json_has_exact_checked_bound() {
+        assert_exact_json(&CouncilDerivationKind::Sortition);
+        assert_exact_json(&CouncilDerivationKind::Manual);
     }
 
     #[test]

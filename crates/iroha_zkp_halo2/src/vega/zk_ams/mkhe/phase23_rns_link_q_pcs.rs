@@ -26,13 +26,24 @@
 //! theorem or zero-knowledge transform has been implemented. Fresh collective
 //! encryption lineage is nonce-hiding, but this PCS still has no deterministic
 //! source/witness linkage from those openings to its relation rows.
-//! The packed-plaintext owner also remains a public `Clone + Debug` type rather
-//! than a move-only zeroizing secret owner.
-//! A private child now exercises the masking identity `H~=H+S`,
+//! The packed-plaintext owner now zeroizes on drop, redacts `Debug`, and derives
+//! `Clone` only under `cfg(test)`; that hardening does not supply the missing
+//! deterministic PCS source/witness linkage.
+//! A test-only private child exercises the masking identity `H~=H+S`,
 //! `P~=P+(X^N+1)S` for five caller-sampled, domain-separated masks and freezes
-//! the resulting ten-row accounting. It remains unwired: the topology sink
-//! constructs no aggregate pairs, this PCS still accepts only two batch rows,
-//! and no production uniform sampler, source link, or ten-row proof exists.
+//! the resulting ten-row accounting. A separate private V2 child freezes the
+//! fixed-width ten-row parameter identity and owns concrete authenticated
+//! coefficient/LDE spools. Its production constructor requires an uninhabited
+//! source-and-algebra seal, so it cannot yet accept witness material. A third
+//! private V2 child fixes the ten-row transcript order, derives 190 post-root
+//! points, checks every masked relation evaluation before accepting the
+//! opening-quotient root, and strictly parses the bounded proof shape. Its
+//! private verifier child authenticates borrowed C0, Cq, and FRI multiproofs
+//! and checks every one-point quotient, ten-row batch, fold, and terminal
+//! equation with fixed scratch. The production source/replay seal remains
+//! uninhabited. The topology sink constructs no aggregate pairs, this V1 PCS
+//! still accepts only two batch rows, and no production uniform sampler,
+//! source link, ten-row prover, or wire integration exists.
 //! All qualification booleans below consequently remain false.
 
 use core::fmt;
@@ -44,8 +55,15 @@ use super::super::manifest::{
 };
 use super::super::{ZkAmsMkheErrorV1, is_prime_u64};
 
+#[cfg(test)]
 #[path = "phase23_rns_link_q_pcs_masking.rs"]
 mod masking;
+
+#[path = "phase23_rns_link_q_pcs_spool.rs"]
+mod spool;
+
+#[path = "phase23_rns_link_q_pcs_v2_soundness.rs"]
+mod v2_soundness;
 
 const PCS_VERSION_V1: u8 = 1;
 const OPENING_REPETITIONS_V1: usize = 5;
@@ -3162,6 +3180,10 @@ mod tests {
     #[test]
     fn release_source_guards_keep_the_prototype_private_and_fail_closed() {
         let source = include_str!("phase23_rns_link_q_pcs.rs");
+        let v2_soundness = include_str!("phase23_rns_link_q_pcs_v2_soundness.rs");
+        let v2_soundness_tests = include_str!("phase23_rns_link_q_pcs_v2_soundness_tests.rs");
+        let v2_verifier = include_str!("phase23_rns_link_q_pcs_v2_verifier.rs");
+        let v2_verifier_tests = include_str!("phase23_rns_link_q_pcs_v2_verifier_tests.rs");
         let parent = include_str!("phase23_rns_link.rs");
         let audit = include_str!("receipt_capability_audit.rs");
         let manifest = include_str!("manifest.rs");
@@ -3179,8 +3201,22 @@ mod tests {
         assert!(source.contains("validate_proof_evaluations_v1"));
         assert!(source.contains("preflight_in_memory_reference_v1("));
         assert!(parent.contains("#[path = \"phase23_rns_link_q_pcs.rs\"]\nmod q_pcs;"));
-        assert!(source.contains("#[path = \"phase23_rns_link_q_pcs_masking.rs\"]\nmod masking;"));
+        assert!(source.contains(
+            "#[cfg(test)]\n#[path = \"phase23_rns_link_q_pcs_masking.rs\"]\nmod masking;"
+        ));
+        assert!(source.contains("#[path = \"phase23_rns_link_q_pcs_spool.rs\"]\nmod spool;"));
+        assert!(
+            source.contains(
+                "#[path = \"phase23_rns_link_q_pcs_v2_soundness.rs\"]\nmod v2_soundness;"
+            )
+        );
+        assert!(v2_soundness.lines().count() <= 1_200);
+        assert!(v2_soundness_tests.lines().count() <= 1_200);
+        assert!(v2_verifier.lines().count() <= 1_200);
+        assert!(v2_verifier_tests.lines().count() <= 1_200);
         assert!(!source.contains(concat!("pub use ", "masking")));
+        assert!(!source.contains(concat!("pub use ", "spool")));
+        assert!(!source.contains(concat!("pub use ", "v2_soundness")));
         assert!(!parent.contains("pub use q_pcs"));
         assert!(!audit.contains("phase23_rns_link_q_pcs"));
         assert!(!manifest.contains("phase23_rns_link_q_pcs"));

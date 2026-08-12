@@ -375,6 +375,16 @@ impl<T> CompoundPredicate<T> {
         }
     }
 
+    fn try_with_owned_payload<P>(payload: P) -> Result<Self, norito::core::Error>
+    where
+        P: core::any::Any + Send + Sync + 'static,
+    {
+        norito::core::reserve_decode_arc_allocation::<P>()?;
+        let payload: std::sync::Arc<dyn core::any::Any + Send + Sync + 'static> =
+            std::sync::Arc::new(payload);
+        Ok(Self::with_payload(payload))
+    }
+
     #[cfg(feature = "json")]
     fn from_json_value(value: &norito::json::Value) -> Result<Self, norito::json::Error>
     where
@@ -428,20 +438,20 @@ impl<T> CompoundPredicate<T> {
             }
             let value = norito::json::from_json::<Value>(&raw)
                 .map_err(|error| norito::core::Error::Message(error.to_string()))?;
-            let canonical = match PredicateJson::try_from_value(&value) {
+            let predicate = match PredicateJson::try_from_owned_value(value) {
                 Ok(predicate) if predicate.is_empty() => {
                     return Err(norito::core::Error::Message(
                         "empty predicate JSON must use the Pass wire variant".to_owned(),
                     ));
                 }
-                Ok(predicate) => PredicateJsonPayload::from_predicate(&predicate)
-                    .as_str()
-                    .to_owned(),
+                Ok(predicate) => predicate,
                 Err(schema_error) => {
                     return Err(norito::core::Error::Message(schema_error.to_string()));
                 }
             };
-            if canonical != raw {
+            let canonical = norito::json::to_json_bounded(&predicate, raw.len())
+                .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+            if canonical.as_bytes() != raw.as_bytes() {
                 return Err(norito::core::Error::Message(
                     "predicate JSON payload must use canonical encoding".to_owned(),
                 ));
@@ -455,9 +465,10 @@ impl<T> CompoundPredicate<T> {
             ));
         }
         let payload = PredicateJsonPayload::from_raw(raw);
-        Ok(Self::with_payload(std::sync::Arc::new(payload)))
+        Self::try_with_owned_payload(payload)
     }
 
+    #[cfg(test)]
     fn to_wire(&self) -> CompoundPredicateWire {
         if let Some(payload) = self.payload.as_ref() {
             if let Some(tree) = payload.downcast_ref::<CommittedTxPredicate>() {
@@ -515,6 +526,20 @@ impl<T> CompoundPredicate<T> {
             .as_ref()
             .and_then(|p| p.downcast_ref::<PredicateJsonPayload>())
             .map(PredicateJsonPayload::as_str)
+    }
+
+    #[cfg(feature = "json")]
+    #[doc(hidden)]
+    /// Parse the retained canonical JSON predicate inside the active resource scope.
+    pub fn parse_json_payload_owned(&self) -> Result<Option<PredicateJson>, norito::core::Error> {
+        let Some(raw) = self.json_payload() else {
+            return Ok(None);
+        };
+        let value = norito::json::from_json::<Value>(raw)
+            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        PredicateJson::try_from_owned_value(value)
+            .map(Some)
+            .map_err(|error| norito::core::Error::Message(error.to_string()))
     }
 }
 
@@ -651,6 +676,38 @@ impl<T: 'static> JsonSerialize for CompoundPredicate<T> {
         out.push('{');
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        if core::any::TypeId::of::<T>()
+            == core::any::TypeId::of::<crate::query::CommittedTransaction>()
+            && let Some(payload) = self.payload.as_ref()
+        {
+            if let Some(predicate) = payload.downcast_ref::<CommittedTxPredicate>() {
+                return predicate.json_serialize_to(out);
+            }
+            if let Some(json) = payload.downcast_ref::<PredicateJsonPayload>()
+                && let Some(predicate) = predicate_json_from_raw(json.as_str())
+                && let Ok(predicate) = committed_tx_predicate_from_predicate_json(&predicate)
+            {
+                return predicate.json_serialize_to(out);
+            }
+            return CommittedTxPredicate::Const(false).json_serialize_to(out);
+        }
+        if let Some(json) = self
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.downcast_ref::<PredicateJsonPayload>())
+        {
+            return norito::json::write_validated_json_to(json.as_str(), out);
+        }
+        out.begin_container()?;
+        out.push_str("{}")?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -687,8 +744,7 @@ impl<T: 'static> IntoSchema for CompoundPredicate<T> {
 
 #[cfg(feature = "json")]
 fn predicate_json_from_raw(raw: &str) -> Option<PredicateJson> {
-    let value = norito::json::from_json::<Value>(raw).ok()?;
-    predicate_json_from_value(&value)
+    crate::query::json::predicate_json_from_raw_for_execution(raw)
 }
 
 #[cfg(feature = "json")]
@@ -702,7 +758,7 @@ fn committed_tx_predicate_from_json_payload(_raw: &str) -> Option<CommittedTxPre
     None
 }
 
-#[cfg(feature = "json")]
+#[cfg(all(feature = "json", test))]
 fn predicate_json_from_value(value: &Value) -> Option<PredicateJson> {
     PredicateJson::try_from_value(value).ok()
 }
@@ -811,7 +867,7 @@ where
         let Some(predicate) = predicate_json_from_raw(json_payload.as_str()) else {
             return false;
         };
-        let Ok(value) = json::to_value(input) else {
+        let Some(value) = crate::query::json::predicate_json_value_for_execution(input) else {
             return false;
         };
         predicate_json_applies(&predicate, &value)
@@ -865,6 +921,17 @@ impl JsonSerialize for SelectorMode {
             SelectorMode::IdsOnly => "IdsOnly",
         };
         norito::json::write_json_string(label, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            SelectorMode::Full => "Full",
+            SelectorMode::IdsOnly => "IdsOnly",
+        };
+        norito::json::write_json_string_to(label, out)
     }
 }
 
@@ -940,6 +1007,25 @@ impl<T> JsonSerialize for SelectorTuple<T> {
             norito::json::write_json_string(label, out);
         }
         out.push(']');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        #[cfg(feature = "ids_projection")]
+        {
+            let label = match self.0 {
+                SelectorMode::Full => "Full",
+                SelectorMode::IdsOnly => "IdsOnly",
+            };
+            norito::json::write_json_string_to(label, out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1174,6 +1260,35 @@ mod codec_tests {
 
         assert!(matches!(decoded.to_wire(), CompoundPredicateWire::Json(_)));
         assert_eq!(decoded.json_payload(), predicate.json_payload());
+    }
+
+    #[test]
+    fn raw_json_predicate_retained_graph_is_measured_and_limited() {
+        let raw = CompoundPredicate::<Domain>::build(|p| p.exists("id"))
+            .json_payload()
+            .expect("JSON predicate")
+            .to_owned();
+        let limits = norito::DecodeLimits::new(128, raw.len(), 512, 64 * 1_024, 32);
+        let admitted_wire = CompoundPredicateWire::Json(raw.clone());
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
+            CompoundPredicate::<Domain>::from_wire(admitted_wire)
+        });
+        assert_eq!(
+            decoded.expect("bounded raw predicate").json_payload(),
+            Some(raw.as_str())
+        );
+        assert!(
+            usage.total_allocated_bytes()
+                >= norito::core::owned_arc_allocation_bytes::<PredicateJsonPayload>()
+                    .expect("Arc layout")
+        );
+
+        let denied_wire = CompoundPredicateWire::Json(raw);
+        let denied = norito::core::with_decode_limits(
+            norito::DecodeLimits::new(128, 1_024, 512, 1, 32),
+            || CompoundPredicate::<Domain>::from_wire(denied_wire),
+        );
+        assert!(denied.is_err());
     }
 
     #[test]
@@ -2546,6 +2661,42 @@ mod evaluate_selector_tests {
     #[test]
     fn unit_type_implements_evaluate_selector() {
         assert_impl_selector::<()>();
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod checked_json_tests {
+    use super::*;
+
+    fn assert_exact<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[test]
+    fn predicate_and_selector_json_families_have_exact_checked_bounds() {
+        let raw_predicate: CompoundPredicate<crate::domain::Domain> = PredicateJson {
+            equals: Vec::new(),
+            r#in: Vec::new(),
+            exists: vec!["metadata.rank".to_owned()],
+        }
+        .into_predicate();
+        assert_exact(&raw_predicate);
+        assert_exact(
+            &CompoundPredicate::<crate::query::CommittedTransaction>::from_committed_tx_predicate(
+                CommittedTxPredicate::ResultEq(true),
+            ),
+        );
+        assert_exact(&SelectorTuple::<crate::domain::Domain>::default());
+        #[cfg(feature = "ids_projection")]
+        assert_exact(&SelectorMode::IdsOnly);
     }
 }
 

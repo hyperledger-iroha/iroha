@@ -12,6 +12,7 @@ name = "iroha_zkp_halo2"
 path = "src/lib.rs"
 
 [dependencies]
+iroha_confidential_spool = { workspace = true }
 tiny-keccak = { workspace = true }
 thiserror = { workspace = true, default-features = false }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }

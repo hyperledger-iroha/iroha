@@ -190,7 +190,7 @@ async fn handler_proof_record_get(
     )
     .await?;
     let routes = torii_all_dataspace_routes(app.as_ref());
-    let (rec, diagnostics, routed_by) =
+    let (rec, diagnostics, routed_by, fanout_reservation) =
         match resolve_torii_proof_record_for_routes(&app, routes, id).await {
             Ok(result) => result,
             Err(response) => return Ok(response),
@@ -234,15 +234,29 @@ async fn handler_proof_record_get(
                 resp.headers_mut().insert(axum::http::header::ETAG, etag);
             }
             insert_routed_by_header(&mut resp, routed_by);
-            return Ok(with_torii_fanout_headers(resp, diagnostics));
+            return Ok(hold_query_fanout_memory_in_response_body(
+                with_torii_fanout_headers(resp, diagnostics),
+                fanout_reservation,
+            ));
         }
     }
 
-    let bytes = norito::to_bytes(&rec).map_err(|err| {
+    let response_budget = ToriiRoutedReadMemoryBudget::new(
+        app.query_fanout_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+    )
+    .map_err(|_| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
-            err.to_string(),
+            "failed to derive the admitted proof response envelope".to_owned(),
         ))
     })?;
+    let bytes = norito::core::to_bytes_bounded(&rec, response_budget.final_body_limit()).map_err(
+        |err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        },
+    )?;
     let body_len = bytes.len() as u64;
     enforce_proof_egress(
         &app,
@@ -269,7 +283,10 @@ async fn handler_proof_record_get(
     app.telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("/v1/proofs/{id}", "ok", body_len, start.elapsed())
     });
-    Ok(with_torii_fanout_headers(resp, diagnostics))
+    Ok(hold_query_fanout_memory_in_response_body(
+        with_torii_fanout_headers(resp, diagnostics),
+        fanout_reservation,
+    ))
 }
 
 async fn handler_proof_retention_status(

@@ -118,6 +118,18 @@ impl FastJsonWrite for ProposeRuntimeUpgrade {
         JsonSerialize::json_serialize(&self.manifest_bytes, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"manifest_bytes\":")?;
+        JsonSerialize::json_serialize_to(&self.manifest_bytes, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -127,6 +139,18 @@ impl FastJsonWrite for ActivateRuntimeUpgrade {
         out.push_str("\"id\":");
         JsonSerialize::json_serialize(&self.id, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        JsonSerialize::json_serialize_to(&self.id, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -138,6 +162,18 @@ impl FastJsonWrite for CancelRuntimeUpgrade {
         JsonSerialize::json_serialize(&self.id, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        JsonSerialize::json_serialize_to(&self.id, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -145,6 +181,30 @@ mod tests {
     use norito::core::DecodeFromSlice;
 
     use super::*;
+
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn runtime_upgrade_json_families_have_exact_checked_bounds() {
+        let id = RuntimeUpgradeId([0x99; 32]);
+        assert_exact_json(&ProposeRuntimeUpgrade {
+            manifest_bytes: vec![1, 2, 3],
+        });
+        assert_exact_json(&ActivateRuntimeUpgrade { id });
+        assert_exact_json(&CancelRuntimeUpgrade { id });
+    }
 
     #[test]
     fn encode_decode_runtime_upgrade_isis() {

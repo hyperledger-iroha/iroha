@@ -271,6 +271,13 @@ impl norito::json::FastJsonWrite for ContractArgumentRecord {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -567,13 +574,40 @@ impl norito::json::FastJsonWrite for ExecutableBatchItem {
         }
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        match self {
+            Self::Instruction(instruction) => {
+                out.push_str("\"Instruction\":")?;
+                norito::json::JsonSerialize::json_serialize_to(instruction, out)?;
+            }
+            Self::ContractCall(invocation) => {
+                out.push_str("\"ContractCall\":")?;
+                norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for IvmBytecode {
     fn write_json(&self, out: &mut String) {
-        let encoded = STANDARD.encode(&self.0);
-        norito::json::JsonSerialize::json_serialize(&encoded, out);
+        norito::json::write_base64_json(&self.0, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_base64_json_to(&self.0, out)
     }
 }
 
@@ -610,6 +644,24 @@ impl norito::json::FastJsonWrite for IvmProved {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.gas_policy_commitment, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"bytecode\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.bytecode, out)?;
+        out.push_str(",\"overlay\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.overlay, out)?;
+        out.push_str(",\"events_commitment\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.events_commitment, out)?;
+        out.push_str(",\"gas_policy_commitment\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.gas_policy_commitment, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -841,6 +893,39 @@ impl norito::json::FastJsonWrite for Executable {
         }
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        match self {
+            Executable::Instructions(instructions) => {
+                out.push_str("\"Instructions\":")?;
+                norito::json::JsonSerialize::json_serialize_to(instructions, out)?;
+            }
+            Executable::ContractCall(invocation) => {
+                out.push_str("\"ContractCall\":")?;
+                norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
+            }
+            Executable::Ivm(bytecode) => {
+                out.push_str("\"Ivm\":")?;
+                norito::json::JsonSerialize::json_serialize_to(bytecode, out)?;
+            }
+            Executable::IvmProved(proved) => {
+                out.push_str("\"IvmProved\":")?;
+                norito::json::JsonSerialize::json_serialize_to(proved, out)?;
+            }
+            Executable::Batch(items) => {
+                out.push_str("\"Batch\":")?;
+                norito::json::JsonSerialize::json_serialize_to(items, out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -861,6 +946,17 @@ mod tests {
             Vec::new()
         }
 
+        fn dyn_write_frame(
+            &self,
+            _writer: &mut dyn std::io::Write,
+        ) -> Result<(), norito::core::Error> {
+            Err(norito::core::Error::LengthMismatch)
+        }
+
+        fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
+            Err(norito::core::Error::LengthMismatch)
+        }
+
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -879,6 +975,45 @@ mod tests {
         // IVM bytecode debug output should only show its length
         let ivm_bytecode = IvmBytecode::from_compiled(vec![0, 1, 2, 3, 4]);
         assert_eq!(format!("{ivm_bytecode:?}"), "IVM bytecode(len = 5)");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn manual_executable_json_families_have_closed_bounds() {
+        fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
+            let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len()).expect("exact JSON bound"),
+                expected
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+
+        let arguments =
+            ContractArgumentRecord::try_new(vec![0, 1, 2, 255]).expect("bounded argument record");
+        assert_bounded(&arguments);
+
+        let bytecode = IvmBytecode::from_compiled(vec![0, 1, 2, 3, 4]);
+        assert_bounded(&bytecode);
+        assert_bounded(&Executable::Ivm(bytecode.clone()));
+
+        let proved = IvmProved {
+            bytecode,
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: iroha_crypto::Hash::new(b"events"),
+            gas_policy_commitment: iroha_crypto::Hash::new(b"gas"),
+        };
+        assert_bounded(&proved);
+        assert_bounded(&Executable::IvmProved(proved));
+
+        let instruction = InstructionBox::from(crate::isi::Log::new(
+            crate::Level::INFO,
+            "bounded".to_owned(),
+        ));
+        assert_bounded(&ExecutableBatchItem::Instruction(instruction));
     }
 
     #[test]

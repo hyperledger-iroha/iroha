@@ -19,10 +19,7 @@ use iroha::data_model::{
     },
     nexus::{AssetPermissionManifest, DataSpaceId},
 };
-use iroha::{
-    config::Config,
-    data_model::{Decode, Encode},
-};
+use iroha::{config::Config, data_model::Decode};
 use iroha_data_model::{
     asset::AssetDefinitionId,
     name::Name,
@@ -38,6 +35,22 @@ use reqwest::{
     header::{ACCEPT, HeaderValue},
 };
 use url::Url;
+
+const SPACE_DIRECTORY_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;
+const SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
+const SPACE_DIRECTORY_MAX_TOTAL_ELEMENTS_V1: usize = 4 * SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1;
+const SPACE_DIRECTORY_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
+const SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1: usize = 64;
+const SPACE_DIRECTORY_ERROR_PREVIEW_BYTES_V1: usize = 4 * 1024;
+const SPACE_DIRECTORY_OUTPUT_MAX_BYTES_V1: usize = 2 * SPACE_DIRECTORY_INPUT_MAX_BYTES_V1;
+
+const SPACE_DIRECTORY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1,
+    SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
+    SPACE_DIRECTORY_MAX_TOTAL_ELEMENTS_V1,
+    SPACE_DIRECTORY_MAX_DECODE_ALLOCATION_BYTES_V1,
+    SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1,
+);
 
 #[allow(clippy::large_enum_variant)]
 #[derive(clap::Subcommand, Debug)]
@@ -129,11 +142,11 @@ impl Run for ManifestPublishArgs {
         let manifest = self.load_manifest()?;
         let mut instruction = PublishSpaceDirectoryManifest { manifest };
         if let Some(reason) = &self.reason {
-            instruction.manifest.entries.iter_mut().for_each(|entry| {
-                if entry.notes.is_none() {
-                    entry.notes = Some(reason.clone());
-                }
-            });
+            apply_manifest_reason_bounded(
+                &mut instruction.manifest,
+                reason,
+                SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
+            )?;
         }
         let isi: InstructionBox = instruction.into();
         context.finish(vec![isi])
@@ -144,6 +157,36 @@ impl ManifestPublishArgs {
     fn load_manifest(&self) -> Result<AssetPermissionManifest> {
         load_manifest_from_sources(self.manifest.as_deref(), self.manifest_json.as_deref())
     }
+}
+
+fn apply_manifest_reason_bounded(
+    manifest: &mut AssetPermissionManifest,
+    reason: &str,
+    max_added_bytes: usize,
+) -> Result<()> {
+    let missing_notes = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.notes.is_none())
+        .count();
+    let added_bytes = missing_notes
+        .checked_mul(reason.len())
+        .ok_or_else(|| eyre!("manifest reason retention length overflow"))?;
+    if added_bytes > max_added_bytes {
+        return Err(eyre!(
+            "manifest reason expansion exceeds the retained limit of {max_added_bytes} bytes"
+        ));
+    }
+    for entry in &mut manifest.entries {
+        if entry.notes.is_none() {
+            let mut note = String::new();
+            note.try_reserve_exact(reason.len())
+                .map_err(|error| eyre!("failed to reserve manifest reason storage: {error}"))?;
+            note.push_str(reason);
+            entry.notes = Some(note);
+        }
+    }
+    Ok(())
 }
 
 #[derive(clap::Args, Debug)]
@@ -175,14 +218,12 @@ impl ManifestEncodeArgs {
 
 impl Run for ManifestEncodeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let json_bytes = std::fs::read(&self.json).wrap_err_with(|| {
-            format!("failed to read manifest JSON from {}", self.json.display())
-        })?;
-        let manifest: AssetPermissionManifest = norito::json::from_slice(&json_bytes)
-            .wrap_err("manifest JSON could not be parsed as AssetPermissionManifest")?;
+        let json_bytes = read_space_directory_file_bounded(&self.json, "manifest JSON")?;
+        let manifest: AssetPermissionManifest =
+            decode_space_directory_json(&json_bytes, "manifest JSON")?;
 
-        let encoded = norito::to_bytes(&manifest)
-            .wrap_err("failed to encode manifest as canonical Norito payload")?;
+        let encoded = norito::core::to_bytes_bounded(&manifest, SPACE_DIRECTORY_INPUT_MAX_BYTES_V1)
+            .map_err(|error| eyre!("failed to encode bounded manifest payload: {error}"))?;
 
         let out_path = self.resolve_out();
         if let Some(parent) = out_path.parent()
@@ -884,7 +925,8 @@ impl Run for ManifestAuditBundleArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let manifest =
             load_manifest_from_sources(self.manifest.as_deref(), self.manifest_json.as_deref())?;
-        let encoded = manifest.encode();
+        let encoded = norito::core::to_bytes_bounded(&manifest, SPACE_DIRECTORY_INPUT_MAX_BYTES_V1)
+            .map_err(|error| eyre!("failed to encode bounded manifest payload: {error}"))?;
         fs::create_dir_all(&self.out_dir).wrap_err_with(|| {
             format!(
                 "failed to create audit bundle directory {}",
@@ -904,7 +946,7 @@ impl Run for ManifestAuditBundleArgs {
         let profile_out_path = self.out_dir.join(profile_json_name);
         let bundle_path = self.out_dir.join(bundle_name);
 
-        let manifest_json_bytes = norito::json::to_vec_pretty(&manifest)
+        let manifest_json_bytes = encode_space_directory_json_bounded(&manifest)
             .wrap_err("failed to serialize manifest JSON for audit bundle")?;
         fs::write(&manifest_json_path, manifest_json_bytes).wrap_err_with(|| {
             format!(
@@ -929,15 +971,11 @@ impl Run for ManifestAuditBundleArgs {
             )
         })?;
 
-        let profile_bytes = fs::read(&self.profile).wrap_err_with(|| {
-            format!(
-                "failed to read dataspace profile {}",
-                self.profile.display()
-            )
-        })?;
-        let profile_json: JsonValue = norito::json::from_slice(&profile_bytes)
-            .wrap_err("profile JSON could not be parsed")?;
-        let profile_serialized = norito::json::to_vec_pretty(&profile_json)
+        let profile_bytes = read_space_directory_file_bounded(&self.profile, "dataspace profile")?;
+        let profile_json: JsonValue =
+            decode_space_directory_json(&profile_bytes, "dataspace profile JSON")?;
+        drop(profile_bytes);
+        let profile_serialized = encode_space_directory_json_bounded(&profile_json)
             .wrap_err("failed to serialize profile JSON for audit bundle")?;
         fs::write(&profile_out_path, profile_serialized).wrap_err_with(|| {
             format!(
@@ -967,7 +1005,7 @@ impl Run for ManifestAuditBundleArgs {
             profile: profile_json,
         };
 
-        let bundle_bytes = norito::json::to_vec_pretty(&bundle)
+        let bundle_bytes = encode_space_directory_json_bounded(&bundle)
             .wrap_err("failed to serialize audit bundle metadata")?;
         fs::write(&bundle_path, bundle_bytes).wrap_err_with(|| {
             format!("failed to write audit bundle to {}", bundle_path.display())
@@ -1051,25 +1089,26 @@ impl SpaceDirectoryRestClient {
         if let Some((ref login, ref password)) = self.basic_auth {
             request = request.basic_auth(login, Some(password));
         }
-        let response = request
+        let mut response = request
             .send()
             .wrap_err_with(|| format!("failed to query Torii at {url}"))?;
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .wrap_err("failed to read Torii response body")?
-            .to_vec();
+        let declared_bytes = response.content_length();
+        let bytes = read_space_directory_body_bounded(
+            &mut response,
+            declared_bytes,
+            SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
+        )?;
         if !status.is_success() {
-            let preview = String::from_utf8_lossy(&bytes);
+            let preview_len = bytes.len().min(SPACE_DIRECTORY_ERROR_PREVIEW_BYTES_V1);
+            let preview = String::from_utf8_lossy(&bytes[..preview_len]);
             return Err(eyre!(
                 "Torii {url} responded with {}: {}",
                 status,
                 preview.trim()
             ));
         }
-        let value: JsonValue = json::from_slice(&bytes)
-            .map_err(|err| eyre!("failed to parse Torii response JSON: {err}"))?;
-        Ok(value)
+        decode_space_directory_json(&bytes, "Torii response JSON")
     }
 }
 
@@ -1080,8 +1119,7 @@ fn write_json_response(path: &Path, value: &JsonValue) -> Result<()> {
         fs::create_dir_all(parent)
             .wrap_err_with(|| format!("failed to create {}", parent.display()))?;
     }
-    let bytes = json::to_vec_pretty(value)
-        .map_err(|err| eyre!("failed to serialize JSON payload: {err}"))?;
+    let bytes = encode_space_directory_json_bounded(value)?;
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
 
@@ -1103,27 +1141,132 @@ fn load_manifest_from_sources(
 ) -> Result<AssetPermissionManifest> {
     match (manifest_path, manifest_json_path) {
         (Some(path), None) => {
-            let bytes = fs::read(path).wrap_err_with(|| {
-                format!("failed to read manifest payload from {}", path.display())
-            })?;
-            AssetPermissionManifest::decode(&mut &*bytes).wrap_err("manifest is not valid Norito")
+            let bytes = read_space_directory_file_bounded(path, "manifest payload")?;
+            norito::with_decode_limits_scope(SPACE_DIRECTORY_DECODE_LIMITS_V1, || {
+                AssetPermissionManifest::decode(&mut &*bytes)
+            })
+            .wrap_err("manifest is not valid bounded Norito")
         }
         (None, Some(path)) => {
-            let bytes = fs::read(path).wrap_err_with(|| {
-                format!("failed to read manifest JSON from {}", path.display())
-            })?;
-            norito::json::from_slice(&bytes).wrap_err_with(|| {
-                format!(
-                    "manifest JSON could not be parsed as AssetPermissionManifest ({})",
-                    path.display()
-                )
-            })
+            let bytes = read_space_directory_file_bounded(path, "manifest JSON")?;
+            decode_space_directory_json(&bytes, "manifest JSON")
+                .wrap_err_with(|| format!("manifest JSON is invalid ({})", path.display()))
         }
         (None, None) => Err(eyre::eyre!(
             "either --manifest (Norito .to) or --manifest-json (raw JSON) must be provided"
         )),
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
     }
+}
+
+fn read_space_directory_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
+    let path_metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} {}", path.display()))?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(eyre!(
+            "{label} must be a direct regular file: {}",
+            path.display()
+        ));
+    }
+    if path_metadata.len() > SPACE_DIRECTORY_INPUT_MAX_BYTES_V1 as u64 {
+        return Err(eyre!(
+            "{label} {} exceeds the first-release limit of {} bytes",
+            path.display(),
+            SPACE_DIRECTORY_INPUT_MAX_BYTES_V1
+        ));
+    }
+
+    let mut file = open_space_directory_input_file(path)
+        .wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
+    let before = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} {}", path.display()))?;
+    if !before.is_file() || before.len() > SPACE_DIRECTORY_INPUT_MAX_BYTES_V1 as u64 {
+        return Err(eyre!(
+            "{label} must be a regular file within {} bytes: {}",
+            SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
+            path.display()
+        ));
+    }
+    let bytes = super::read_cli_input_bounded(&mut file, SPACE_DIRECTORY_INPUT_MAX_BYTES_V1, label)
+        .wrap_err_with(|| format!("failed to read {label} {}", path.display()))?;
+    let after = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to reinspect {label} {}", path.display()))?;
+    if before.len() != after.len() || after.len() != bytes.len() as u64 {
+        return Err(eyre!("{label} changed while reading: {}", path.display()));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn open_space_directory_input_file(path: &Path) -> std::io::Result<fs::File> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?;
+    Ok(fs::File::from(descriptor))
+}
+
+#[cfg(windows)]
+fn open_space_directory_input_file(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_space_directory_input_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+fn read_space_directory_body_bounded<R: std::io::Read>(
+    reader: &mut R,
+    declared_bytes: Option<u64>,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    if declared_bytes.is_some_and(|length| length > max_bytes as u64) {
+        return Err(eyre!(
+            "Space Directory response Content-Length exceeds the first-release limit of {max_bytes} bytes"
+        ));
+    }
+    super::read_cli_input_bounded(reader, max_bytes, "Space Directory response body")
+}
+
+fn decode_space_directory_json<T>(bytes: &[u8], label: &str) -> Result<T>
+where
+    T: JsonDeserialize,
+{
+    if bytes.len() > SPACE_DIRECTORY_INPUT_MAX_BYTES_V1 {
+        return Err(eyre!(
+            "{label} exceeds the first-release input limit of {} bytes",
+            SPACE_DIRECTORY_INPUT_MAX_BYTES_V1
+        ));
+    }
+    json::preflight_slice(
+        bytes,
+        json::JsonPreflightLimits::from_decode_limits(
+            SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
+            SPACE_DIRECTORY_DECODE_LIMITS_V1,
+        ),
+    )
+    .map_err(|error| eyre!("{label} exceeds its JSON lexical resource bounds: {error}"))?;
+    norito::with_decode_limits_scope(SPACE_DIRECTORY_DECODE_LIMITS_V1, || json::from_slice(bytes))
+        .map_err(|_| eyre!("{label} could not be decoded within its resource limits"))
+}
+
+fn encode_space_directory_json_bounded<T>(value: &T) -> Result<Vec<u8>>
+where
+    T: JsonSerialize + ?Sized,
+{
+    json::to_json_bounded(value, SPACE_DIRECTORY_OUTPUT_MAX_BYTES_V1)
+        .map(String::into_bytes)
+        .map_err(|error| eyre!("JSON output exceeds its bounded resource corridor: {error}"))
 }
 
 fn extract_audit_hooks(profile: &JsonValue) -> Result<Option<AuditHookSummary>> {
@@ -1133,7 +1276,10 @@ fn extract_audit_hooks(profile: &JsonValue) -> Result<Option<AuditHookSummary>> 
     if raw_hooks.is_null() {
         return Ok(None);
     }
-    let hooks: AuditHookSummary = norito::json::from_value(raw_hooks.clone())
+    let hooks: AuditHookSummary =
+        norito::with_decode_limits_scope(SPACE_DIRECTORY_DECODE_LIMITS_V1, || {
+            norito::json::from_value(raw_hooks.clone())
+        })
         .wrap_err("profile audit_hooks could not be parsed")?;
     eyre::ensure!(
         hooks
@@ -1178,8 +1324,7 @@ fn default_scaffold_dir() -> PathBuf {
 
 fn write_json<T: JsonSerialize>(path: &Path, value: &T) -> Result<()> {
     ensure_parent_dir(path)?;
-    let bytes = norito::json::to_vec_pretty(value)
-        .map_err(|err| eyre!("failed to serialize JSON payload: {err}"))?;
+    let bytes = encode_space_directory_json_bounded(value)?;
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
 
@@ -1621,6 +1766,97 @@ mod tests {
         assert_eq!(ManifestStatusArg::Active.as_query_value(), "active");
         assert_eq!(ManifestStatusArg::Inactive.as_query_value(), "inactive");
         assert_eq!(ManifestStatusArg::All.as_query_value(), "all");
+    }
+
+    #[test]
+    fn manifest_reason_rejects_aggregate_expansion_before_mutation() {
+        let mut manifest = sample_manifest();
+        manifest.entries[0].notes = None;
+        manifest.entries.push(manifest.entries[0].clone());
+        let before = manifest.clone();
+
+        let error = apply_manifest_reason_bounded(&mut manifest, "ab", 3)
+            .expect_err("aggregate max plus one must fail");
+        assert!(error.to_string().contains("retained limit"));
+        assert_eq!(manifest, before, "failed admission must not mutate entries");
+    }
+
+    #[test]
+    fn bounded_file_reader_rejects_sparse_max_plus_one() {
+        let dir = tempdir().expect("tmpdir");
+        let small = dir.path().join("small.json");
+        fs::write(&small, b"{}").expect("write small input");
+        assert_eq!(
+            read_space_directory_file_bounded(&small, "test input").expect("small input"),
+            b"{}"
+        );
+
+        let oversized = dir.path().join("oversized.json");
+        let file = fs::File::create(&oversized).expect("create sparse input");
+        file.set_len(SPACE_DIRECTORY_INPUT_MAX_BYTES_V1 as u64 + 1)
+            .expect("size sparse input");
+        drop(file);
+        let error = read_space_directory_file_bounded(&oversized, "test input")
+            .expect_err("max plus one must fail before allocation");
+        assert!(error.to_string().contains("first-release limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_file_reader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("tmpdir");
+        let target = dir.path().join("target.json");
+        fs::write(&target, b"{}").expect("write target");
+        let link = dir.path().join("link.json");
+        symlink(&target, &link).expect("create symlink");
+
+        let error = read_space_directory_file_bounded(&link, "test input")
+            .expect_err("symlink must fail closed");
+        assert!(error.to_string().contains("direct regular file"));
+    }
+
+    #[test]
+    fn response_reader_preflights_length_and_probes_growth() {
+        struct PanicReader;
+        impl std::io::Read for PanicReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                panic!("declared oversize must fail before reading")
+            }
+        }
+
+        let declared = read_space_directory_body_bounded(&mut PanicReader, Some(17), 16)
+            .expect_err("declared max plus one must fail");
+        assert!(declared.to_string().contains("Content-Length"));
+
+        let mut exact = std::io::Cursor::new([0_u8; 16]);
+        assert_eq!(
+            read_space_directory_body_bounded(&mut exact, None, 16)
+                .expect("exact response")
+                .len(),
+            16
+        );
+        let mut oversized = std::io::Cursor::new([0_u8; 17]);
+        let error = read_space_directory_body_bounded(&mut oversized, None, 16)
+            .expect_err("chunked max plus one must fail");
+        assert!(error.to_string().contains("first-release limit"));
+    }
+
+    #[test]
+    fn json_decoder_accepts_exact_depth_and_rejects_one_more() {
+        let exact = format!(
+            "{}null{}",
+            "[".repeat(SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1 - 1),
+            "]".repeat(SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1 - 1)
+        );
+        decode_space_directory_json::<JsonValue>(exact.as_bytes(), "test JSON")
+            .expect("exact nesting depth");
+
+        let over = format!("[{exact}]");
+        let error = decode_space_directory_json::<JsonValue>(over.as_bytes(), "test JSON")
+            .expect_err("max depth plus one must fail");
+        assert!(error.to_string().contains("lexical resource bounds"));
     }
 
     #[test]

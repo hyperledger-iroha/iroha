@@ -1225,8 +1225,13 @@ mod tests {
                 .expect("encode maximum canonical SM2 public key payload");
 
         assert_eq!(payload.len(), MAX_PUBLIC_KEY_PAYLOAD_BYTES);
-        PublicKey::from_bytes(Algorithm::Sm2, &payload)
+        let key = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("maximum-size canonical SM2 public key remains decodable");
+        let literal = key
+            .try_to_multihash_string()
+            .expect("maximum-size canonical multihash");
+        assert_eq!(literal.len(), 2 * (2 + 2 + MAX_PUBLIC_KEY_PAYLOAD_BYTES));
+        assert_bounded_public_key_json(&literal, &key);
     }
 
     #[cfg(feature = "sm")]
@@ -1375,6 +1380,56 @@ mod tests {
         assert_eq!(
             norito::core::NoritoSerialize::encoded_len_exact(&pk).expect("exact public key length"),
             expected
+        );
+    }
+
+    #[test]
+    #[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
+    fn mldsa_public_key_sizing_does_not_revalidate_key_material() {
+        let public_key = checked_seed_keypair(&[0x5A; 32], Algorithm::MlDsa)
+            .public_key()
+            .clone();
+        let compact = &public_key.0;
+        let expected_hint = <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
+            &compact.algorithm_and_payload,
+        );
+        let expected_exact = <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
+            &compact.algorithm_and_payload,
+        );
+
+        reset_public_key_validation_call_count();
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_hint(compact),
+            expected_hint
+        );
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(compact),
+            expected_exact
+        );
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_hint(&public_key),
+            expected_hint
+        );
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&public_key),
+            expected_exact
+        );
+        assert_eq!(
+            public_key_validation_call_count(),
+            0,
+            "Norito sizing must not parse ML-DSA key material"
+        );
+
+        compact
+            .validated_full()
+            .expect("generated compact ML-DSA key validates");
+        public_key
+            .validated_full()
+            .expect("generated ML-DSA key validates");
+        assert_eq!(
+            public_key_validation_call_count(),
+            2,
+            "test counter must observe both validation entry points"
         );
     }
 
@@ -1885,6 +1940,69 @@ mod tests {
                     .unwrap()
                 )
             }
+        );
+    }
+
+    #[cfg(not(feature = "ffi_import"))]
+    fn assert_bounded_public_key_json(literal: &str, key: &PublicKey) {
+        let encoded = format!("\"{literal}\"");
+        assert_eq!(
+            norito::json::to_json_bounded(key, encoded.len()).expect("exact bounded writer"),
+            encoded
+        );
+        assert!(matches!(
+            norito::json::to_json_bounded(key, encoded.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        ));
+        let decoded: PublicKey = norito::json::from_str(&encoded).expect("bounded JSON decode");
+        assert_eq!(&decoded, key);
+
+        let limits = |bytes| {
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        };
+        let (_, usage) = norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+            norito::json::from_str::<PublicKey>(&encoded)
+        });
+        let exact = usage.total_allocated_bytes();
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            norito::json::from_str::<PublicKey>(&encoded)
+        });
+        assert_eq!(&decoded.expect("exact decode budget"), key);
+        assert_eq!(usage.total_allocated_bytes(), exact);
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
+            norito::json::from_str::<PublicKey>(&encoded)
+        });
+        assert!(matches!(
+            decoded,
+            Err(norito::json::Error::DecodeResourceLimit)
+        ));
+        assert!(usage.total_allocated_bytes() <= exact - 1);
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_bounded_json_is_direct_and_measured() {
+        let ed_literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let ed: PublicKey = ed_literal.parse().expect("Ed25519 fixture");
+        assert_bounded_public_key_json(ed_literal, &ed);
+
+        let secp_literal =
+            "e701210312273E8810581E58948D3FB8F9E8AD53AAA21492EBB8703915BBB565A21B7FCC";
+        let secp: PublicKey = secp_literal.parse().expect("Secp256k1 fixture");
+        assert_bounded_public_key_json(secp_literal, &secp);
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_json_rejects_above_protocol_literal_before_hex_decode() {
+        let encoded = format!(
+            "\"{}\"",
+            "A".repeat(multihash::MAX_PUBLIC_KEY_LITERAL_BYTES + 1)
+        );
+        let error = norito::json::from_str::<PublicKey>(&encoded)
+            .expect_err("above-protocol public-key literal must fail");
+        assert!(
+            matches!(error, norito::json::Error::Message(message) if message == "invalid public key")
         );
     }
 

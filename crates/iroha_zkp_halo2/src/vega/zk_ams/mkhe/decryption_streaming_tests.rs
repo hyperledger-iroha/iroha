@@ -163,6 +163,22 @@ fn test_payload(length: usize) -> Vec<u8> {
         .collect()
 }
 
+fn release_test_roster_v1(epoch: u64) -> ZkAmsMkheGovernedRosterWireV1 {
+    let parties = core::array::from_fn(|index| {
+        let mut bytes = [0_u8; 32];
+        bytes[31] = u8::try_from(index + 1).expect("release party index");
+        ZkAmsMkhePartyIdV1::new(bytes).expect("nonzero release party")
+    });
+    ZkAmsMkheGovernedRosterWireV1::new(
+        release_profile_v1()
+            .digest()
+            .expect("release profile digest"),
+        epoch,
+        parties,
+    )
+    .expect("ordered release roster")
+}
+
 fn valid_release_proof_bytes() -> Vec<u8> {
     let profile = release_profile_v1();
     let evidence = derive_decryption_resource_evidence(&profile).expect("release evidence");
@@ -245,24 +261,30 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
         .expect("source-derived streaming evidence");
     assert_eq!(evidence.native_rns_polynomial_bytes, 39_845_888);
     assert_eq!(evidence.rns_limb_bytes, 1_048_576);
-    assert_eq!(evidence.ciphertext_input_bytes, 79_691_776);
+    assert_eq!(size_of::<ZkAmsMkheStreamingCollectiveCiphertextV1>(), 656);
+    assert_eq!(size_of::<ZkAmsMkheDirectObjectPointerV1>(), 80);
+    assert_eq!(size_of::<ZkAmsMkheDirectObjectReadReceiptV1>(), 248);
+    assert_eq!(size_of::<ZkAmsMkheDirectObjectPublicationReceiptV1>(), 704);
+    assert_eq!(evidence.ciphertext_input_bytes, 104_016);
     assert_eq!(evidence.aggregate_bytes, 39_845_888);
     assert_eq!(evidence.proof_view_backing_bytes, 33_030_199);
     assert_eq!(evidence.manifest_preflight_bytes, 3_984);
     assert_eq!(evidence.direct_read_buffer_bytes, 8_192);
     assert_eq!(evidence.sparse_challenge_bytes, 131_072);
-    assert_eq!(evidence.manifest_preflight_peak_bytes, 79_695_760);
-    assert_eq!(evidence.proof_load_peak_bytes, 152_580_039);
-    assert_eq!(evidence.public_input_hash_peak_bytes, 153_759_687);
-    assert_eq!(evidence.public_key_commitment_peak_bytes, 156_905_415);
-    assert_eq!(evidence.share_commitment_peak_bytes, 155_856_839);
-    assert_eq!(evidence.crt_decode_peak_bytes, 123_735_952);
-    assert_eq!(evidence.enumerated_verifier_peak_bytes, 156_905_415);
+    assert_eq!(evidence.manifest_preflight_peak_bytes, 108_000);
+    assert_eq!(evidence.proof_load_peak_bytes, 74_040_855);
+    assert_eq!(evidence.public_input_hash_peak_bytes, 74_171_927);
+    assert_eq!(evidence.public_key_commitment_peak_bytes, 77_317_655);
+    assert_eq!(evidence.share_commitment_peak_bytes, 77_317_655);
+    assert_eq!(evidence.crt_decode_peak_bytes, 44_148_192);
+    assert_eq!(evidence.enumerated_verifier_peak_bytes, 77_317_655);
     assert_eq!(evidence.governed_workspace_ceiling_bytes, 167_772_160);
-    assert_eq!(evidence.maximum_full_rns_polynomials, 3);
+    assert_eq!(evidence.maximum_full_rns_polynomials, 1);
     assert_eq!(evidence.maximum_rns_limb_buffers, 4);
     assert_eq!(evidence.party_b_passes, 2);
     assert_eq!(evidence.decryption_share_passes, 2);
+    assert_eq!(evidence.ciphertext_constant_passes, 10);
+    assert_eq!(evidence.ciphertext_linear_passes, 17);
     assert_eq!(evidence.native_reference_lower_bound_bytes, 358_612_992);
     assert_eq!(
         evidence.compact_authority_construction_lower_bound_bytes,
@@ -302,24 +324,24 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
     );
     assert_eq!(
         evidence.staged_prover_share_construction_peak_bytes,
-        119_546_012
+        41_006_828
     );
     assert_eq!(
         evidence.staged_prover_public_input_hash_peak_bytes,
-        154_149_178
+        37_861_258
     );
-    assert_eq!(evidence.staged_prover_commitment_peak_bytes, 157_286_714);
-    assert_eq!(evidence.staged_prover_proof_write_peak_bytes, 153_231_836);
+    assert_eq!(evidence.staged_prover_commitment_peak_bytes, 77_707_146);
+    assert_eq!(evidence.staged_prover_proof_write_peak_bytes, 73_644_076);
     assert_eq!(
         evidence.staged_prover_self_verification_peak_bytes,
-        119_153_329
+        39_565_569
     );
-    assert_eq!(evidence.staged_prover_enumerated_peak_bytes, 157_286_714);
+    assert_eq!(evidence.staged_prover_enumerated_peak_bytes, 77_707_146);
     assert_eq!(
         evidence
             .governed_workspace_ceiling_bytes
             .checked_sub(evidence.staged_prover_enumerated_peak_bytes),
-        Some(10_485_446)
+        Some(90_065_014)
     );
     assert!(!evidence.staged_prover_cas_backend_residency_enumerated);
     assert!(evidence.staged_prover_enumerated_ceiling_met);
@@ -342,7 +364,7 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
     );
     assert_eq!(
         evidence.staged_prover_first_candidate_common_a_candidates,
-        1_205_338_112
+        607_649_792
     );
     assert_eq!(
         evidence.staged_prover_common_a_xof_byte_budget,
@@ -350,39 +372,54 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
     );
     assert_eq!(
         evidence.staged_prover_first_candidate_common_a_xof_bytes,
-        9_642_704_896
+        4_861_198_336
     );
     assert_eq!(
         evidence.staged_prover_common_a_residue_output_work_units,
-        1_205_338_112
+        607_649_792
     );
     assert_eq!(evidence.staged_prover_common_a_prepare_validation_passes, 1);
-    assert_eq!(evidence.staged_prover_common_a_limb_derivations, 9_196);
-    assert_eq!(evidence.staged_prover_common_a_frame_work_units, 1_452_968);
+    assert_eq!(evidence.staged_prover_common_a_limb_derivations, 4_636);
+    assert_eq!(evidence.staged_prover_common_a_frame_work_units, 732_488);
     assert_eq!(
         evidence.staged_prover_immutable_object_scan_work_units,
-        9_901_180_029
+        5_279_074_909
+    );
+    assert_eq!(
+        evidence.staged_prover_ciphertext_preflight_scan_work_units,
+        79_692_080
+    );
+    assert_eq!(
+        evidence.staged_prover_ciphertext_preflight_hash_work_units,
+        79_691_947
+    );
+    assert_eq!(
+        evidence.staged_prover_ciphertext_preflight_work_units,
+        159_384_027
     );
     assert_eq!(
         evidence.staged_prover_transcript_hash_work_units,
-        33_749_511_664
+        9_841_935_664
     );
+    assert_eq!(evidence.staged_prover_transcript_fork_work_units, 41_624);
     assert_eq!(evidence.staged_prover_response_work_units, 13_278_880_301);
     assert_eq!(
         evidence.staged_prover_semantic_replay_work_units,
         1_539_047_424
     );
-    assert_eq!(evidence.staged_prover_total_work_units, 98_461_149_918);
+    assert_eq!(evidence.staged_prover_total_work_units, 69_492_485_649);
     assert_eq!(
         release_profile_v1()
             .max_work_units
             .checked_sub(evidence.staged_prover_total_work_units),
-        Some(1_538_850_082)
+        Some(30_507_514_351)
     );
     assert!(evidence.staged_prover_work_ceiling_met);
-    assert_eq!(evidence.staged_prover_party_b_read_passes, 122);
-    assert_eq!(evidence.staged_prover_share_immutable_read_passes, 124);
+    assert_eq!(evidence.staged_prover_party_b_read_passes, 2);
+    assert_eq!(evidence.staged_prover_share_immutable_read_passes, 4);
     assert_eq!(evidence.staged_prover_proof_immutable_read_passes, 3);
+    assert_eq!(evidence.staged_prover_ciphertext_constant_read_passes, 1);
+    assert_eq!(evidence.staged_prover_ciphertext_linear_read_passes, 123);
     assert!(evidence.enumerated_verifier_ceiling_met);
     assert!(evidence.staged_prover_output_implemented);
     assert_eq!(evidence.staged_prover_release_kat_digest, [0; 32]);
@@ -409,25 +446,159 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
 }
 
 #[test]
+fn compact_ciphertext_axes_keep_record_and_sample_indices_distinct_and_bounded() {
+    let roster = release_test_roster_v1(41);
+    let maximum_samples = super::super::super::manifest::zk_ams_mkhe_release_manifest_v1()
+        .expect("release manifest")
+        .max_samples_per_secret_epoch;
+    let valid = DecryptionCiphertextAxesV1 {
+        profile_digest: roster.profile_digest(),
+        roster_digest: roster.roster_digest(),
+        epoch: roster.epoch(),
+        transcript_digest: [0x31; 32],
+        ciphertext_digest: [0x41; 32],
+        ciphertext_record_index: 7,
+        sample_index: 11,
+        level: 0,
+    };
+    valid
+        .validate_for_roster_v1(&roster)
+        .expect("distinct record and sample axes remain valid");
+    let key_context_digest = [0x51; 32];
+    let mut legacy_statement_hash = Keccak256::new();
+    legacy_statement_hash.update(b"iroha.zk-ams.v1.mkhe.decryption-statement-binding");
+    legacy_statement_hash.update(&roster.profile_digest());
+    legacy_statement_hash.update(&roster.roster_digest());
+    legacy_statement_hash.update(&roster.epoch().to_be_bytes());
+    legacy_statement_hash.update(&valid.transcript_digest());
+    legacy_statement_hash.update(&valid.ciphertext_record_index().to_be_bytes());
+    legacy_statement_hash.update(&valid.sample_index().to_be_bytes());
+    legacy_statement_hash.update(&[valid.level()]);
+    legacy_statement_hash.update(&key_context_digest);
+    assert_eq!(
+        decryption_statement_binding_digest_from_axes_v1(&roster, valid, key_context_digest,),
+        legacy_statement_hash.finalize(),
+        "compact axes must preserve legacy statement bytes without conflating record and sample"
+    );
+
+    let mut record_at_limit = valid;
+    record_at_limit.ciphertext_record_index =
+        u32::try_from(maximum_samples).expect("release record bound fits u32");
+    assert_eq!(
+        record_at_limit.validate_for_roster_v1(&roster),
+        Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+    );
+
+    let mut sample_at_limit = valid;
+    sample_at_limit.sample_index = maximum_samples;
+    assert_eq!(
+        sample_at_limit.validate_for_roster_v1(&roster),
+        Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+    );
+}
+
+#[test]
+fn live_ciphertext_key_lineage_rejects_each_independent_hostile_axis() {
+    let expected = DecryptionCiphertextKeyLineageV1 {
+        key_material_digest: [0x21; 32],
+        key_transcript_digest: [0x31; 32],
+        collective_key_digest: [0x41; 32],
+    };
+    expected
+        .validate_expected_v1(expected)
+        .expect("exact admitted lineage");
+
+    let mut wrong_material = expected;
+    wrong_material.key_material_digest[0] ^= 1;
+    assert_eq!(
+        wrong_material.validate_expected_v1(expected),
+        Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+    );
+
+    let mut wrong_transcript = expected;
+    wrong_transcript.key_transcript_digest[0] ^= 1;
+    assert_eq!(
+        wrong_transcript.validate_expected_v1(expected),
+        Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+    );
+
+    let mut wrong_key = expected;
+    wrong_key.collective_key_digest[0] ^= 1;
+    assert_eq!(
+        wrong_key.validate_expected_v1(expected),
+        Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+    );
+}
+
+#[test]
+fn persistent_authority_rejects_provider_and_snapshot_mismatch_independently() {
+    use super::super::super::persistent_decryption_equality::validate_exact_streaming_provider_snapshot_axes_v1;
+
+    let provider = [0x51; 32];
+    let snapshot = [0x61; 32];
+    validate_exact_streaming_provider_snapshot_axes_v1(provider, snapshot, provider, snapshot)
+        .expect("exact provider snapshot");
+    assert_eq!(
+        validate_exact_streaming_provider_snapshot_axes_v1(
+            [0x52; 32], snapshot, provider, snapshot,
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+    );
+    assert_eq!(
+        validate_exact_streaming_provider_snapshot_axes_v1(
+            provider, [0x62; 32], provider, snapshot,
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+    );
+}
+
+#[test]
 fn compact_authority_source_surface_is_move_only_ordered_and_fail_closed() {
     let persistent = include_str!("persistent_decryption_equality.rs");
     let cpk = include_str!("cpk_relation.rs");
     let collective = include_str!("collective.rs");
+    let incremental = include_str!("collective/incremental_source.rs");
     let streaming = include_str!("decryption_streaming.rs");
 
     // The ceremony surface stays internal and monotonic: one exact contribution
-    // and one borrowed share enter each step, while the builder owns only one
-    // aggregate and poisons itself before every fallible/backend transition.
+    // and one owned share are consumed at each step. The first stage retains no
+    // aggregate or party polynomial; the one aggregate is allocated only after
+    // all eight published shares have been sealed and their owners dropped.
     assert!(
         persistent.contains("pub(super) struct ZkAmsMkheStreamingDecryptionAuthorityBuilderV1")
     );
     assert!(persistent.contains("contribution: VerifiedZkAmsMkheCpkContributionV1"));
-    assert!(persistent.contains("share: &ZkAmsMkheCollectivePublicKeyShareV1"));
+    assert!(persistent.contains("share: ZkAmsMkheCollectivePublicKeyShareV1"));
+    assert!(persistent.contains("party_state: &mut ZkAmsMkheCollectivePartyStateV1"));
+    assert!(!persistent.contains("share: &ZkAmsMkheCollectivePublicKeyShareV1"));
     assert!(persistent.contains("let party_index = self.next_party_index;"));
     assert!(persistent.contains("self.failed = true;"));
     assert!(persistent.contains("if result.is_ok()"));
     assert!(persistent.contains("self.party_b_pointers.contains(&expected_pointer)"));
-    assert!(persistent.contains("drop(self.aggregate_b);"));
+    assert!(persistent.contains("pub(super) fn finish_staging_v1("));
+    assert!(persistent.contains("std::sync::Arc::try_unwrap(common_public_a)"));
+    assert!(persistent.contains("let mut aggregate_b = ZeroizingRns::zero_exact_v1(&profile)?;"));
+    assert!(persistent.contains("aggregate_staged_party_b_v1("));
+    assert!(persistent.contains("binding.fork_for_state_and_verifier_v1()"));
+    assert!(persistent.contains("party_state.admit_staged_verified_cpk_binding_v1("));
+    assert!(!persistent.contains("streaming_decryption_authority,\n            self.bindings"));
+    let absorb = persistent
+        .split("fn absorb_verified_party_inner_v1")
+        .nth(1)
+        .expect("staged party absorption")
+        .split("pub(super) fn finish_staging_v1")
+        .next()
+        .expect("staged party absorption boundary");
+    let verifier_push = absorb
+        .find("self.bindings.push(verifier_binding)")
+        .expect("verifier successor retention");
+    let state_admission = absorb
+        .find("party_state.admit_staged_verified_cpk_binding_v1(")
+        .expect("state successor admission");
+    let index_advance = absorb
+        .find("self.next_party_index += 1")
+        .expect("ordered cursor advance");
+    assert!(verifier_push < state_admission && state_admission < index_advance);
 
     // The consumed CPK capability supplies both its exact pointer and original
     // complete-read receipt. No caller-provided digest/pointer overload exists.
@@ -443,35 +614,75 @@ fn compact_authority_source_surface_is_move_only_ordered_and_fail_closed() {
     assert!(
         collective.contains("validate_collective_public_key_share_active_admission_v1(share)?")
     );
+    assert!(collective.contains("pub(super) fn admit_staged_verified_cpk_binding_v1("));
+    assert!(collective.contains("admission.validate_for_v1("));
+    let staged_state = collective
+        .split("pub(super) fn admit_staged_verified_cpk_binding_v1")
+        .nth(1)
+        .expect("staged state admission")
+        .split("pub(super) fn persistent_secret_binding_for")
+        .next()
+        .expect("staged state admission boundary");
+    let binding_validation = staged_state
+        .find("binding.validate_for(")
+        .expect("binding validation");
+    let commitment_validation = staged_state
+        .find("ensure_state_owned_cpk_commitments_v1(")
+        .expect("state-owned commitment validation");
+    let state_assignment = staged_state
+        .find("self.persistent_secret_binding = Some(binding)")
+        .expect("sole state mutation");
+    assert!(binding_validation < state_assignment);
+    assert!(commitment_validation < state_assignment);
 
-    // The only public bounded constructor consumes the move-only permit. The
-    // retained compatibility bridge accepts a fully validated native statement,
-    // never raw hashes or pointers.
-    assert!(streaming.contains("pub fn from_verified_cpk_authority_v1("));
+    // The only production constructor consumes the move-only permit and the
+    // direct-object manifest; no native compatibility bridge remains.
+    assert!(streaming.contains("pub fn from_verified_cpk_authority_v1<P>("));
     assert!(streaming.contains("authority: ZkAmsMkheStreamingDecryptionAuthorityV1"));
-    assert!(streaming.contains("pub fn from_native_reference_v1("));
+    assert!(streaming.contains("ciphertext: &'a ZkAmsMkheStreamingCollectiveCiphertextV1"));
+    assert!(streaming.contains("ciphertext_record_index: u32"));
+    assert!(!streaming.contains("pub fn from_native_reference_v1("));
     assert!(!streaming.contains("pub fn from_raw"));
     assert!(!persistent.contains("impl Clone for ZkAmsMkheStreamingDecryptionAuthorityV1"));
 
-    // Explicit branches reject pointer/content/provider/snapshot/publication
-    // splices and rebind the permit to the exact roster and ciphertext.
+    // Authority consumption rejects roster/provider/snapshot/key-lineage
+    // splices. The sealed direct reader separately authenticates each C0/C1
+    // pointer and requires the fresh complete receipt to equal its exact
+    // post-publication readback receipt; publication session identities need
+    // not equal the earlier key-publication identity.
     for required in [
-        "verification_snapshot.pointer() != expected_pointer",
-        "publication_receipt.pointer() != expected_pointer",
-        "expected_pointer.payload_blake3() != payload_blake3",
-        "verification_read_receipt.payload_blake3() != expected_pointer.payload_blake3()",
-        "verification_snapshot.provider_identity() != publication_snapshot.provider_identity()",
-        "verification_snapshot.snapshot_identity() != publication_snapshot.snapshot_identity()",
-        "expected_publication_identity",
+        "validate_exact_streaming_provider_snapshot_axes_v1(",
+        "observed_provider_identity != expected_provider_identity",
+        "observed_snapshot_identity != expected_snapshot_identity",
         "self.roster.to_wire_roster()? != *roster",
-        "decryption_wire_ciphertext_digest_v1(&profile, roster, ciphertext)?",
         "authority.context_authority_digest != streaming.authority_digest",
+        "streaming_collective_key_digest_v1",
     ] {
         assert!(
             persistent.contains(required),
             "missing fail-closed branch: {required}"
         );
     }
+    let consume = persistent
+        .split("pub(super) fn consume_streaming_authority_v1(")
+        .nth(1)
+        .expect("streaming authority consumption")
+        .split("/// Mint the exact move-only party-use set")
+        .next()
+        .expect("streaming authority consumption boundary");
+    assert!(consume.contains("validate_exact_streaming_provider_snapshot_axes_v1("));
+    assert!(consume.contains("self.roster.to_wire_roster()? != *roster"));
+    assert!(consume.contains("ciphertext.validate_for_roster_v1(roster)?"));
+
+    let direct_reader = incremental
+        .split("fn read_component_limb_into_v1<P>(")
+        .nth(1)
+        .expect("direct ciphertext limb reader")
+        .split("/// Reread and authenticate one exact constant-component limb")
+        .next()
+        .expect("direct ciphertext limb reader boundary");
+    assert!(direct_reader.contains("StreamingCollectiveLimbReaderV1::begin("));
+    assert!(direct_reader.contains("if receipt != *publication.post_publish_read_receipt()"));
 }
 
 #[test]
@@ -584,7 +795,7 @@ fn direct_object_reads_reject_short_read_snapshot_drift_mutation_and_kind_replay
         &mut stable,
     )
     .expect("complete stable object");
-    assert_eq!(observed, bytes);
+    assert_eq!(observed.as_slice(), bytes);
     assert_eq!(receipt.canonical_bytes(), pointer.payload_bytes());
     assert_eq!(receipt.payload_blake3(), pointer.payload_blake3());
 
@@ -594,14 +805,14 @@ fn direct_object_reads_reject_short_read_snapshot_drift_mutation_and_kind_replay
     );
     short.short_read_at = Some(1);
     let short_pointer = short.pointer;
-    assert_eq!(
+    assert!(matches!(
         read_complete_object_v1(
             ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
             short_pointer,
             &mut short,
         ),
         Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
-    );
+    ));
 
     let mut drift = TestProvider::new(
         ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
@@ -609,14 +820,14 @@ fn direct_object_reads_reject_short_read_snapshot_drift_mutation_and_kind_replay
     );
     drift.drift_snapshot_at = Some(3);
     let drift_pointer = drift.pointer;
-    assert_eq!(
+    assert!(matches!(
         read_complete_object_v1(
             ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
             drift_pointer,
             &mut drift,
         ),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
-    );
+    ));
 
     let mut mutation = TestProvider::new(
         ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
@@ -624,14 +835,14 @@ fn direct_object_reads_reject_short_read_snapshot_drift_mutation_and_kind_replay
     );
     mutation.mutate_payload_at = Some(2);
     let mutation_pointer = mutation.pointer;
-    assert_eq!(
+    assert!(matches!(
         read_complete_object_v1(
             ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
             mutation_pointer,
             &mut mutation,
         ),
         Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
-    );
+    ));
 
     let mut wrong_kind = TestProvider::new(
         ZkAmsMkheDirectObjectKindV1::DecryptionSharePolynomial,
@@ -898,6 +1109,116 @@ fn staged_transcript_rns_frames_match_native_order_and_bytes() {
 }
 
 #[test]
+fn streamed_ciphertext_digest_frames_match_native_component_major_bytes() {
+    let profile = test_profile();
+    let polynomial = |domain: u64| {
+        let coefficients = profile
+            .moduli
+            .iter()
+            .enumerate()
+            .flat_map(|(limb, modulus)| {
+                (0..profile.ring_degree).map(move |coefficient| {
+                    (domain
+                        + u64::try_from(limb * 101 + coefficient * 17)
+                            .expect("tiny coefficient index"))
+                        % modulus
+                })
+            })
+            .collect::<Vec<_>>();
+        RnsPolynomial::from_flat(&profile, coefficients).expect("canonical tiny polynomial")
+    };
+    let constant = polynomial(7);
+    let linear = polynomial(19);
+    let profile_digest = profile.digest().expect("tiny profile digest");
+    let roster_digest = [0x21; 32];
+    let epoch = 9_u64;
+    let transcript_digest = [0x31; 32];
+    let sample_index = 11_u64;
+    let level = 0_u8;
+
+    let mut native = Keccak256::new();
+    native.update(COLLECTIVE_CIPHERTEXT_DOMAIN_V1);
+    native.update(&profile_digest);
+    native.update(&roster_digest);
+    native.update(&epoch.to_be_bytes());
+    native.update(&transcript_digest);
+    native.update(&sample_index.to_be_bytes());
+    native.update(&[level]);
+    super::super::update_rns_hash(&mut native, &profile, &constant).expect("native constant frame");
+    super::super::update_rns_hash(&mut native, &profile, &linear).expect("native linear frame");
+
+    let mut streamed = Keccak256::new();
+    streamed.update(COLLECTIVE_CIPHERTEXT_DOMAIN_V1);
+    streamed.update(&profile_digest);
+    streamed.update(&roster_digest);
+    streamed.update(&epoch.to_be_bytes());
+    streamed.update(&transcript_digest);
+    streamed.update(&sample_index.to_be_bytes());
+    streamed.update(&[level]);
+    for component in [&constant, &linear] {
+        update_streamed_rns_header(&mut streamed, &profile).expect("streamed component header");
+        for limb in 0..profile.moduli.len() {
+            update_residue_limb(&mut streamed, component.limb(&profile, limb));
+        }
+    }
+    assert_eq!(streamed.finalize(), native.finalize());
+
+    let mut wrong_order = Keccak256::new();
+    wrong_order.update(COLLECTIVE_CIPHERTEXT_DOMAIN_V1);
+    wrong_order.update(&profile_digest);
+    wrong_order.update(&roster_digest);
+    wrong_order.update(&epoch.to_be_bytes());
+    wrong_order.update(&transcript_digest);
+    wrong_order.update(&sample_index.to_be_bytes());
+    wrong_order.update(&[level]);
+    for component in [&linear, &constant] {
+        update_streamed_rns_header(&mut wrong_order, &profile).expect("streamed component header");
+        for limb in 0..profile.moduli.len() {
+            update_residue_limb(&mut wrong_order, component.limb(&profile, limb));
+        }
+    }
+    assert_ne!(
+        wrong_order.finalize(),
+        streamed_ciphertext_digest_reference_v1(
+            &profile,
+            profile_digest,
+            roster_digest,
+            epoch,
+            transcript_digest,
+            sample_index,
+            level,
+            &constant,
+            &linear,
+        )
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn streamed_ciphertext_digest_reference_v1(
+    profile: &BgvProfile,
+    profile_digest: [u8; 32],
+    roster_digest: [u8; 32],
+    epoch: u64,
+    transcript_digest: [u8; 32],
+    sample_index: u64,
+    level: u8,
+    constant: &RnsPolynomial,
+    linear: &RnsPolynomial,
+) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(COLLECTIVE_CIPHERTEXT_DOMAIN_V1);
+    hash.update(&profile_digest);
+    hash.update(&roster_digest);
+    hash.update(&epoch.to_be_bytes());
+    hash.update(&transcript_digest);
+    hash.update(&sample_index.to_be_bytes());
+    hash.update(&[level]);
+    super::super::update_rns_hash(&mut hash, profile, constant).expect("constant frame");
+    super::super::update_rns_hash(&mut hash, profile, linear).expect("linear frame");
+    hash.finalize()
+}
+
+#[test]
 fn staged_random_budget_accepts_boundary_and_rejects_one_over_or_source_error() {
     struct RecordingRandom {
         forwarded: u64,
@@ -981,6 +1302,41 @@ fn staged_zeroizing_ntt_and_wide_encoding_match_native_bytes() {
 }
 
 #[test]
+fn verifier_commitment_limb_owner_zeroizes_on_success_error_and_unwind() {
+    let modulus = TEST_MODULI[0];
+    let left = (0..8)
+        .map(|index| (17 * index + 3) as u64 % modulus)
+        .collect::<Vec<_>>();
+    let right = (0..8)
+        .map(|index| (29 * index + 11) as u64 % modulus)
+        .collect::<Vec<_>>();
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    drop(
+        negacyclic_multiply_staged_v1(&left, &right, modulus, TEST_ROOTS[0])
+            .expect("zeroizing verifier commitment limb"),
+    );
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    assert!(matches!(
+        negacyclic_multiply_staged_v1(&left, &right, modulus, 0),
+        Err(ZkAmsMkheErrorV1::InvalidProfile)
+    ));
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let unwind = std::panic::catch_unwind(|| {
+        let commitment = negacyclic_multiply_staged_v1(&left, &right, modulus, TEST_ROOTS[0])
+            .expect("zeroizing verifier commitment limb");
+        assert_eq!(commitment.as_slice().len(), left.len());
+        panic!("exercise verifier commitment limb unwind erasure");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
+}
+
+#[test]
 fn staged_transients_zeroize_on_success_error_and_unwind() {
     reset_decryption_transient_zeroized_drop_count_v1();
     {
@@ -1007,6 +1363,267 @@ fn staged_transients_zeroize_on_success_error_and_unwind() {
     });
     assert!(unwind.is_err());
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+}
+
+#[test]
+fn complete_proof_byte_owner_zeroizes_exact_capacity_on_success_error_and_unwind() {
+    reset_decryption_transient_zeroized_drop_count_v1();
+    {
+        let mut bytes =
+            ZeroizingStagedByteVectorV1::new_zeroed_exact(64).expect("exact proof-byte owner");
+        assert_eq!(bytes.0.len(), 64);
+        assert_eq!(bytes.0.capacity(), 64);
+        bytes.as_mut_slice().fill(0xa5);
+    }
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let failed = (|| -> Result<(), ZkAmsMkheErrorV1> {
+        let mut bytes = ZeroizingStagedByteVectorV1::new_zeroed_exact(64)?;
+        bytes.as_mut_slice().fill(0x5a);
+        Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+    })();
+    assert_eq!(failed, Err(ZkAmsMkheErrorV1::InvalidWireEncoding));
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let unwind = std::panic::catch_unwind(|| {
+        let mut bytes =
+            ZeroizingStagedByteVectorV1::new_zeroed_exact(64).expect("exact proof-byte owner");
+        bytes.as_mut_slice().fill(0x3c);
+        panic!("exercise complete proof-byte unwind erasure");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+}
+
+#[test]
+fn decoded_secret_limb_owner_zeroizes_exact_capacity_on_success_error_and_unwind() {
+    let profile = release_profile_v1();
+    let encoded = vec![0_u8; profile.ring_degree * size_of::<i64>()];
+    let proof = ZkAmsMkheDecryptionProofViewV1 {
+        bytes: &encoded,
+        challenge_seed: [0; 32],
+        secret_offset: 0,
+        error_offset: encoded.len(),
+        smudge_offset: encoded.len(),
+        wide_response_bytes: 1,
+    };
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    {
+        let limb = proof
+            .secret_limb(profile.moduli[0])
+            .expect("complete secret-response limb");
+        assert_eq!(limb.0.len(), profile.ring_degree);
+        assert_eq!(limb.0.capacity(), profile.ring_degree);
+    }
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let truncated = [0_u8; size_of::<i64>()];
+    let truncated_proof = ZkAmsMkheDecryptionProofViewV1 {
+        bytes: &truncated,
+        challenge_seed: [0; 32],
+        secret_offset: 0,
+        error_offset: truncated.len(),
+        smudge_offset: truncated.len(),
+        wide_response_bytes: 1,
+    };
+    assert!(matches!(
+        truncated_proof.secret_limb(profile.moduli[0]),
+        Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+    ));
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let unwind = std::panic::catch_unwind(|| {
+        let limb = proof
+            .secret_limb(profile.moduli[0])
+            .expect("complete secret-response limb");
+        assert_eq!(limb.as_slice().len(), profile.ring_degree);
+        panic!("exercise decoded secret-response limb unwind erasure");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+}
+
+fn test_streamed_rns_payload_v1(profile: &BgvProfile) -> Vec<u8> {
+    let coefficient_count = profile.ring_degree * profile.moduli.len();
+    let mut payload = Vec::with_capacity(size_of::<u32>() + coefficient_count * size_of::<u64>());
+    payload.extend_from_slice(
+        &u32::try_from(coefficient_count)
+            .expect("tiny coefficient count")
+            .to_be_bytes(),
+    );
+    for (limb, modulus) in profile.moduli.iter().copied().enumerate() {
+        for index in 0..profile.ring_degree {
+            let residue = (u64::try_from(31 * limb + index).expect("tiny residue") + 1) % modulus;
+            payload.extend_from_slice(&residue.to_be_bytes());
+        }
+    }
+    payload
+}
+
+#[test]
+fn streamed_rns_limb_owner_and_scratch_zeroize_on_success_error_and_unwind() {
+    let profile = test_profile();
+    let payload = test_streamed_rns_payload_v1(&profile);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let mut provider = TestProvider::new(ZkAmsMkheDirectObjectKindV1::CpkPartyB, payload.clone());
+    let pointer = provider.pointer;
+    let mut reader = StreamingRnsObjectReaderV1::begin(
+        ZkAmsMkheDirectObjectKindV1::CpkPartyB,
+        pointer,
+        &profile,
+        &mut provider,
+    )
+    .expect("streamed RNS reader");
+    let first = reader.read_limb(&profile, 0).expect("first streamed limb");
+    assert_eq!(first.0.len(), profile.ring_degree);
+    assert_eq!(first.0.capacity(), profile.ring_degree);
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+    drop(first);
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
+    drop(reader.read_limb(&profile, 1).expect("second streamed limb"));
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 4);
+    reader.finish(&profile).expect("complete streamed RNS read");
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let mut provider = TestProvider::new(ZkAmsMkheDirectObjectKindV1::CpkPartyB, payload.clone());
+    provider.short_read_at = Some(2);
+    let pointer = provider.pointer;
+    let mut reader = StreamingRnsObjectReaderV1::begin(
+        ZkAmsMkheDirectObjectKindV1::CpkPartyB,
+        pointer,
+        &profile,
+        &mut provider,
+    )
+    .expect("streamed RNS reader");
+    assert!(matches!(
+        reader.read_limb(&profile, 0),
+        Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+    ));
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let unwind = std::panic::catch_unwind(|| {
+        let mut provider =
+            TestProvider::new(ZkAmsMkheDirectObjectKindV1::CpkPartyB, payload.clone());
+        let pointer = provider.pointer;
+        let mut reader = StreamingRnsObjectReaderV1::begin(
+            ZkAmsMkheDirectObjectKindV1::CpkPartyB,
+            pointer,
+            &profile,
+            &mut provider,
+        )
+        .expect("streamed RNS reader");
+        let limb = reader.read_limb(&profile, 0).expect("streamed RNS limb");
+        assert_eq!(limb.as_slice().len(), profile.ring_degree);
+        panic!("exercise streamed RNS limb unwind erasure");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
+}
+
+#[test]
+fn decrypted_aggregate_owner_zeroizes_on_success_error_and_unwind() {
+    let profile = test_profile();
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    {
+        let mut aggregate =
+            ZeroizingAggregateRnsV1::zero_exact_v1(&profile).expect("zeroizing aggregate");
+        assert_eq!(
+            aggregate.coefficients_mut().len(),
+            profile.ring_degree * profile.moduli.len()
+        );
+        aggregate.coefficients_mut()[0] = 17;
+    }
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let failed = (|| -> Result<(), ZkAmsMkheErrorV1> {
+        let mut aggregate = ZeroizingAggregateRnsV1::zero_exact_v1(&profile)?;
+        aggregate.coefficients_mut()[0] = 19;
+        Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+    })();
+    assert_eq!(failed, Err(ZkAmsMkheErrorV1::InvalidPolynomial));
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+
+    reset_decryption_transient_zeroized_drop_count_v1();
+    let unwind = std::panic::catch_unwind(|| {
+        let mut aggregate =
+            ZeroizingAggregateRnsV1::zero_exact_v1(&profile).expect("zeroizing aggregate");
+        aggregate.coefficients_mut()[0] = 23;
+        panic!("exercise decrypted aggregate unwind erasure");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+}
+
+#[test]
+fn verifier_decode_and_streamed_limb_sources_use_only_zeroizing_owners() {
+    let streaming = include_str!("decryption_streaming.rs");
+    let secret_limb = streaming
+        .split("fn secret_limb(")
+        .nth(1)
+        .expect("secret-response limb decoder")
+        .split("fn error_mod")
+        .next()
+        .expect("secret-response decoder boundary");
+    assert!(secret_limb.contains("Result<ZeroizingStagedU64VectorV1"));
+    assert!(secret_limb.contains("ZeroizingStagedU64VectorV1::new_zeroed"));
+    assert!(!secret_limb.contains("Vec<u64>"));
+
+    let read_limb = streaming
+        .split("fn read_limb(")
+        .nth(1)
+        .expect("streamed RNS limb reader")
+        .split("fn finish(")
+        .next()
+        .expect("streamed RNS reader boundary");
+    assert!(read_limb.contains("Result<ZeroizingStagedU64VectorV1"));
+    assert!(read_limb.contains("ZeroizingStagedBytesV1::<"));
+    assert!(!read_limb.contains("Vec<u64>"));
+    assert!(!read_limb.contains("let mut buffer = [0_u8;"));
+
+    let public_key_commitment = streaming
+        .split("fn reconstruct_public_key_commitment_v1")
+        .nth(1)
+        .expect("public-key commitment reconstruction")
+        .split("fn reconstruct_share_commitment_and_aggregate_v1")
+        .next()
+        .expect("public-key commitment boundary");
+    let share_commitment = streaming
+        .split("fn reconstruct_share_commitment_and_aggregate_v1")
+        .nth(1)
+        .expect("share commitment reconstruction")
+        .split("/// Verify one native share relation")
+        .next()
+        .expect("share commitment boundary");
+    for commitment in [public_key_commitment, share_commitment] {
+        assert_eq!(
+            commitment.matches("negacyclic_multiply_staged_v1(").count(),
+            1
+        );
+        assert!(commitment.contains("commitment.as_mut_slice()"));
+        assert!(commitment.contains("commitment.as_slice()"));
+        assert!(!commitment.contains("let mut commitment = negacyclic_multiply("));
+    }
+
+    let combine = streaming
+        .split("pub fn verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1")
+        .nth(1)
+        .expect("streaming combine verifier")
+        .split("#[cfg(test)]")
+        .next()
+        .expect("streaming combine boundary");
+    assert!(combine.contains("ZeroizingAggregateRnsV1::zero_exact_v1(&profile)"));
+    assert!(combine.contains("decode_centered_plaintext(&profile, aggregate.as_rns()"));
+    assert!(!combine.contains("let mut aggregate_coefficients = Vec::new()"));
+    assert!(!combine.contains("RnsPolynomial::from_flat"));
 }
 
 #[test]
@@ -1160,6 +1777,65 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
     );
     assert!(streaming.contains(".published_object_identity()"));
     assert!(streaming.contains("const STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1: usize = 120;"));
+    assert!(
+        streaming.contains("let transcript_prefix = build_staged_decryption_transcript_prefix_v1(")
+    );
+    assert!(streaming.contains("let mut transcript = prefix.fork_v1();"));
+    assert!(
+        streaming
+            .contains("let mut bytes = ZeroizingStagedByteVectorV1::new_zeroed_exact(length)?;")
+    );
+    assert!(
+        streaming.contains(
+            "ZkAmsMkheDecryptionProofViewV1::decode_release_exact(proof_bytes.as_slice())"
+        )
+    );
+
+    let statement = streaming
+        .split("pub struct ZkAmsMkheStreamingDecryptionStatementV1<'a>")
+        .nth(1)
+        .expect("direct streaming statement")
+        .split("impl fmt::Debug for ZkAmsMkheStreamingDecryptionStatementV1")
+        .next()
+        .expect("direct streaming statement boundary");
+    assert!(statement.contains("&'a ZkAmsMkheStreamingCollectiveCiphertextV1"));
+    assert!(statement.contains("ciphertext_axes: DecryptionCiphertextAxesV1"));
+    assert!(statement.contains("ciphertext_snapshot: ZkAmsMkheDecryptionStreamingSnapshotV1"));
+    assert!(!statement.contains("ZkAmsMkheCollectiveCiphertextWireV1"));
+    assert!(!statement.contains("ZkAmsMkheCollectiveCiphertextV1"));
+    assert!(!statement.contains("RnsPolynomial"));
+
+    let live_admission = streaming
+        .split("fn validate_streaming_ciphertext_live_v1<P>")
+        .nth(1)
+        .expect("live ciphertext admission")
+        .split("/// Compact, context-minted release statement")
+        .next()
+        .expect("live ciphertext admission boundary");
+    for required in [
+        "key_material_digest: binding.key_material_digest()",
+        "key_transcript_digest: binding.key_transcript_digest()",
+        "collective_key_digest: binding.key_digest()",
+        ".validate_expected_v1(DecryptionCiphertextKeyLineageV1",
+        "hash_streaming_ciphertext_components_v1(",
+        "digest.finalize() != binding.ciphertext_digest()",
+        "ciphertext_record_index",
+        "u64::from(ciphertext_record_index) >= maximum_samples",
+        "binding.sample_index() >= maximum_samples",
+    ] {
+        assert!(
+            live_admission.contains(required),
+            "missing live admission check: {required}"
+        );
+    }
+    assert!(
+        live_admission
+            .find("u64::from(ciphertext_record_index) >= maximum_samples")
+            .expect("record bound preflight")
+            < live_admission
+                .find("hash_streaming_ciphertext_components_v1(")
+                .expect("live component hash")
+    );
 
     let preflight = staged
         .find("zk_ams_mkhe_decryption_streaming_residency_evidence_v1()?")
@@ -1170,6 +1846,12 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
     let consume = staged
         .find("statement.consume_party_use_v1(")
         .expect("consume");
+    let cached_prefix = staged
+        .find("let transcript_prefix = build_staged_decryption_transcript_prefix_v1(")
+        .expect("cached transcript prefix");
+    let attempt_loop = staged
+        .find("for _ in 0..STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1")
+        .expect("bounded attempt loop");
     let first_random = staged
         .find("validate_wide_relation_random_health(&mut bounded_random)?")
         .expect("random health");
@@ -1184,7 +1866,12 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
         .expect("manifest authentication");
     assert!(preflight < prepare_common_a && prepare_common_a < consume);
     assert!(consume < first_random && consume < first_publish);
+    assert!(first_publish < cached_prefix && cached_prefix < attempt_loop);
     assert!(semantic_replay < authentication);
+
+    let attempts = &staged[attempt_loop..semantic_replay];
+    assert!(attempts.contains("&transcript_prefix"));
+    assert!(!attempts.contains("build_staged_decryption_transcript_prefix_v1("));
 
     assert!(persistent.contains("bind_streaming_statement_party_uses_v1("));
     assert!(persistent.contains("consume_streaming_party_use_v1("));

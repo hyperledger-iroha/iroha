@@ -494,6 +494,13 @@ impl norito::json::FastJsonWrite for SetParameter {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -510,6 +517,13 @@ impl norito::json::JsonDeserialize for SetParameter {
 impl norito::json::FastJsonWrite for Upgrade {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.executor, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.executor, out)
     }
 }
 
@@ -632,7 +646,7 @@ isi! {
         /// Wire identifier of the instruction that failed to decode.
         pub wire_id: String,
         /// Hash of the raw instruction payload bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_hash: [u8; 32],
         /// Human-readable decode failure message (best-effort).
         pub message: String,
@@ -1311,6 +1325,22 @@ where
         JsonSerialize::json_serialize(&self.value, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push_str(",\"key\":")?;
+        JsonSerialize::json_serialize_to(&self.key, out)?;
+        out.push_str(",\"value\":")?;
+        JsonSerialize::json_serialize_to(&self.value, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1324,6 +1354,22 @@ impl FastJsonWrite for SetAssetKeyValue {
         out.push_str(",\"value\":");
         JsonSerialize::json_serialize(&self.value, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"asset\":")?;
+        JsonSerialize::json_serialize_to(&self.asset, out)?;
+        out.push_str(",\"key\":")?;
+        JsonSerialize::json_serialize_to(&self.key, out)?;
+        out.push_str(",\"value\":")?;
+        JsonSerialize::json_serialize_to(&self.value, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1341,6 +1387,20 @@ where
         JsonSerialize::json_serialize(&self.key, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push_str(",\"key\":")?;
+        JsonSerialize::json_serialize_to(&self.key, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1352,6 +1412,20 @@ impl FastJsonWrite for RemoveAssetKeyValue {
         out.push_str(",\"key\":");
         JsonSerialize::json_serialize(&self.key, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"asset\":")?;
+        JsonSerialize::json_serialize_to(&self.asset, out)?;
+        out.push_str(",\"key\":")?;
+        JsonSerialize::json_serialize_to(&self.key, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1370,6 +1444,20 @@ where
         JsonSerialize::json_serialize(&self.destination, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push_str(",\"destination\":")?;
+        JsonSerialize::json_serialize_to(&self.destination, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1387,6 +1475,20 @@ where
         JsonSerialize::json_serialize(&self.destination, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push_str(",\"destination\":")?;
+        JsonSerialize::json_serialize_to(&self.destination, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1399,6 +1501,20 @@ impl FastJsonWrite for ExecuteTrigger {
         JsonSerialize::json_serialize(&self.args, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"trigger\":")?;
+        JsonSerialize::json_serialize_to(&self.trigger, out)?;
+        out.push_str(",\"args\":")?;
+        JsonSerialize::json_serialize_to(&self.args, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1410,6 +1526,20 @@ impl FastJsonWrite for Log {
         out.push_str(",\"msg\":");
         JsonSerialize::json_serialize(&self.msg, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"level\":")?;
+        JsonSerialize::json_serialize_to(&self.level, out)?;
+        out.push_str(",\"msg\":")?;
+        JsonSerialize::json_serialize_to(&self.msg, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1564,6 +1694,54 @@ mod tests {
 
     fn role_id(name: &str) -> RoleId {
         name.parse().expect("role id")
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn transparent_instruction_json_families_have_exact_checked_bounds() {
+        let key: Name = "memo".parse().expect("metadata key");
+        let holder = account(0x70);
+        let asset = asset_id();
+        let role = role_id("auditor");
+
+        assert_exact_json(&SetParameter::new(Parameter::Transaction(
+            crate::parameter::TransactionParameter::RequireSequence(true),
+        )));
+        assert_exact_json(&Upgrade::new(Executor::new(
+            crate::transaction::executable::IvmBytecode::from_compiled(vec![1, 2, 3]),
+        )));
+        assert_exact_json(&SetKeyValue::account(
+            holder.clone(),
+            key.clone(),
+            Json::new(1_u32),
+        ));
+        assert_exact_json(&SetAssetKeyValue::new(
+            asset.clone(),
+            key.clone(),
+            Json::new("value"),
+        ));
+        assert_exact_json(&RemoveKeyValue::account(holder.clone(), key.clone()));
+        assert_exact_json(&RemoveAssetKeyValue::new(asset, key));
+        assert_exact_json(&Grant::account_role(role.clone(), holder.clone()));
+        assert_exact_json(&Revoke::account_role(role, holder));
+        assert_exact_json(
+            &ExecuteTrigger::new("nightly_tick".parse().expect("trigger id"))
+                .with_args(norito::json!({"a": 1_u32})),
+        );
+        assert_exact_json(&Log::new(Level::INFO, "checked".to_owned()));
     }
 
     fn assert_registry_decodes_name<T>(

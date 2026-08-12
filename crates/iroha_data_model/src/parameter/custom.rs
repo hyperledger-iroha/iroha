@@ -11,7 +11,9 @@ use crate::name::Name;
 #[cfg(feature = "json")]
 pub mod json_helpers {
     //! JSON helper utilities for serializing and deserializing custom parameters.
-    use norito::json::{self, JsonDeserialize, JsonSerialize, Parser, Value};
+    use norito::json::{
+        self, BoundedJsonError, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser, Value,
+    };
 
     use super::*;
 
@@ -30,6 +32,37 @@ pub mod json_helpers {
             JsonSerialize::json_serialize(parameter, out);
         }
         out.push('}');
+    }
+
+    /// Serialize a `CustomParameters` map through a checked JSON sink.
+    ///
+    /// Unlike [`serialize`], this path never stages the map in a temporary
+    /// `String`; it also accounts for the object in the sink's depth budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BoundedJsonError`] when the configured output or nesting bound
+    /// is exceeded, or when a nested parameter cannot use the checked writer.
+    pub fn serialize_bounded(
+        parameters: &CustomParameters,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        for (id, parameter) in parameters {
+            if first {
+                first = false;
+            } else {
+                out.push(',')?;
+            }
+            id.json_serialize_to(out)?;
+            out.push(':')?;
+            parameter.json_serialize_to(out)?;
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 
     /// Deserialize a `CustomParameters` map from a JSON stream.

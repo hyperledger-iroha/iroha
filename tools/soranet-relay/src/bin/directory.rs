@@ -1,3 +1,5 @@
+//! Build, rotate, inspect, and verify SoraNet guard-directory artifacts.
+
 use std::{
     fs,
     io::{Error as IoError, ErrorKind},
@@ -13,9 +15,10 @@ use soranet_relay::{
     directory::{
         DirectoryBuildError, DirectoryBuildOptions, DirectoryMetadata, DirectoryRotateError,
         RotationOutput, build_snapshot_from_config_with_options,
-        collect_guard_pinning_proofs_from_directory, inspect_snapshot, rotate_snapshot_with_os_rng,
+        collect_guard_pinning_proofs_from_directory, inspect_snapshot,
+        read_guard_pinning_proof_file, rotate_snapshot_with_os_rng,
     },
-    guard::{GuardPinningProof, verify_guard_pinning_proof},
+    guard::verify_guard_pinning_proof,
 };
 
 #[derive(Parser, Debug)]
@@ -210,18 +213,10 @@ fn command_inspect(snapshot_path: &Path) -> Result<(), String> {
 }
 
 fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> Result<(), String> {
-    let proof_bytes = fs::read(proof_path).map_err(|err| {
-        format!(
-            "failed to read guard pinning proof `{}`: {err}",
-            proof_path.display()
-        )
-    })?;
-    let proof: GuardPinningProof = json::from_slice(&proof_bytes).map_err(|err| {
-        format!(
-            "failed to decode guard pinning proof `{}`: {err}",
-            proof_path.display()
-        )
-    })?;
+    // Keep CLI verification on the same stable-file and JSON admission policy
+    // used by build/collection paths in the relay library.
+    let proof = read_guard_pinning_proof_file(proof_path)
+        .map_err(|err| guard_pinning_proof_error(proof_path, err))?;
     let snapshot_path = if let Some(path) = snapshot_override {
         path.to_path_buf()
     } else if proof.snapshot_path().is_empty() {
@@ -253,6 +248,20 @@ fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> 
     println!(" directory_hash: {}", proof.directory_hash_hex());
     println!(" recorded_at_unix: {}", proof.recorded_at_unix());
     Ok(())
+}
+
+fn guard_pinning_proof_error(path: &Path, err: DirectoryBuildError) -> String {
+    match err {
+        DirectoryBuildError::GuardPinningProofIo { source, .. } => format!(
+            "failed to read guard pinning proof `{}`: {source}",
+            path.display()
+        ),
+        DirectoryBuildError::GuardPinningProofDecode { source, .. } => format!(
+            "failed to decode guard pinning proof `{}`: {source}",
+            path.display()
+        ),
+        other => other.to_string(),
+    }
 }
 
 fn command_collect_proofs(

@@ -1498,7 +1498,7 @@ pub async fn handle_get_contract_code_view(
     Ok(JsonBody(view))
 }
 
-pub async fn handle_post_verified_source_job(
+pub fn handle_post_verified_source_job(
     code_hash_hex: String,
     request: SubmitVerifiedContractSourceDto,
     _sorafs_node: sorafs_node::NodeHandle,
@@ -2197,8 +2197,8 @@ mod tests {
         assert!(payload.verified_source_ref.is_some());
     }
 
-    #[tokio::test]
-    async fn verified_source_job_accepts_exact_match_and_persists_record() {
+    #[test]
+    fn verified_source_job_accepts_exact_match_and_persists_record() {
         let _guard = TestDataDirGuard::new();
         let source = r#"
 seiyaku Demo { kotoage fn main() authorize("Run") {} }
@@ -2224,7 +2224,6 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             },
             node,
         )
-        .await
         .expect("submit verified source");
 
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -2238,8 +2237,8 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         assert_eq!(record.language, VERIFIED_SOURCE_LANGUAGE_KOTODAMA);
     }
 
-    #[tokio::test]
-    async fn verified_source_job_does_not_mutate_provider_storage() {
+    #[test]
+    fn verified_source_job_does_not_mutate_provider_storage() {
         let _guard = TestDataDirGuard::new();
         let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
 
@@ -2264,7 +2263,6 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             },
             node,
         )
-        .await
         .expect("submit verified source");
 
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -2278,8 +2276,8 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
         );
     }
 
-    #[tokio::test]
-    async fn verified_source_job_reports_hash_mismatch() {
+    #[test]
+    fn verified_source_job_reports_hash_mismatch() {
         let _guard = TestDataDirGuard::new();
         let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
         let wrong_hash = "11".repeat(32);
@@ -2294,7 +2292,6 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             },
             node,
         )
-        .await
         .expect("submit mismatch");
 
         assert_eq!(status, StatusCode::BAD_REQUEST);

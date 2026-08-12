@@ -2075,11 +2075,11 @@ mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                    HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                        Hash::new(b"da-policy-drain-genesis"),
-                    ),
-                ),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::new(b"da-policy-drain-genesis"),
+                )),
                 lane_id: lane.id,
                 dataspace_id: lane.dataspace_id,
                 lane_incarnation: Hash::new(b"da-policy-drain-incarnation"),

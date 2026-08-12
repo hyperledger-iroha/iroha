@@ -1,5 +1,9 @@
 //! Allocation regressions for borrowed query predicates and erased-query framing.
 
+// This isolated integration test is the narrow exception that needs `GlobalAlloc`
+// to observe steady-state heap traffic in the production serialization paths.
+#![allow(unsafe_code)]
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -60,9 +64,7 @@ fn predicate_and_query_box_sizing_and_streaming_do_not_clone_large_payloads() {
         .expect("JSON predicate has an exact wire length");
     let mut filtered_output = Vec::with_capacity(filtered_len);
 
-    let mut tree_nodes: Vec<_> = (0_u64..1_000)
-        .map(CommittedTxPredicate::TsGte)
-        .collect();
+    let mut tree_nodes: Vec<_> = (0_u64..1_000).map(CommittedTxPredicate::TsGte).collect();
     tree_nodes.push(CommittedTxPredicate::MetadataEq {
         key: "large_metadata".parse().expect("metadata key"),
         value: Json::new("M".repeat(512 * 1024)),

@@ -1,4 +1,4 @@
-//! Focused reverse dataspace-alias resolution regressions.
+// Focused reverse dataspace-alias resolution regressions.
 
 use super::*;
 

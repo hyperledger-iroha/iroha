@@ -89,7 +89,10 @@ mod model {
         /// Holds the initial value of the parameter
         #[cfg_attr(
             feature = "json",
-            norito(with = "crate::parameter::custom::json_helpers")
+            norito(
+                with = "crate::parameter::custom::json_helpers",
+                bounded_with = "crate::parameter::custom::json_helpers::serialize_bounded"
+            )
         )]
         pub parameters: CustomParameters,
         /// Corresponds to instruction identifiers stored in [`crate::isi::InstructionBox`].
@@ -155,7 +158,7 @@ mod model {
             /// Contained error message if its used internally. Empty for external users.
             /// Never serialized to not to expose internal errors to the end user.
             #[codec(skip)]
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::secret_string"))]
+            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::secret_string"))]
             #[skip_from]
             #[skip_try_from]
             String,
@@ -404,6 +407,13 @@ impl norito::json::FastJsonWrite for Executor {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.bytecode, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.bytecode, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -435,6 +445,68 @@ mod tests {
         let code = IvmBytecode::from_compiled(vec![1, 2, 3]);
         let executor = Executor::new(code.clone());
         assert_eq!(executor.bytecode().as_ref(), code.as_ref());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn executor_json_has_closed_output_bound() {
+        let executor = Executor::new(IvmBytecode::from_compiled(vec![1, 2, 3, 4]));
+        let expected = norito::json::to_json(&executor).expect("serialize executor JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&executor, expected.len())
+                .expect("serialize executor at exact JSON bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&executor, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn executor_data_model_json_has_closed_output_bound() {
+        use core::str::FromStr as _;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use crate::{
+            name::Name,
+            parameter::{CustomParameter, CustomParameterId},
+        };
+
+        let id = CustomParameterId::new(Name::from_str("bounded").expect("valid name"));
+        let parameter = CustomParameter::new(id.clone(), Json::new(vec![1_u64, 2, 3]));
+        let data_model = ExecutorDataModel::new(
+            BTreeMap::from([(id, parameter)]),
+            BTreeSet::from([String::from("instruction")]),
+            BTreeSet::from([String::from("permission")]),
+            Json::new(norito::json!({"nested": [true, false]})),
+        );
+        let expected = norito::json::to_json(&data_model).expect("serialize data model JSON");
+
+        assert_eq!(
+            norito::json::to_json_bounded(&data_model, expected.len())
+                .expect("serialize data model at exact JSON bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&data_model, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+
+        let response = crate::query::QueryResponse::Singular(
+            crate::query::SingularQueryOutputBox::ExecutorDataModel(data_model),
+        );
+        let expected = norito::json::to_json(&response).expect("serialize query response JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&response, expected.len())
+                .expect("serialize query response at exact JSON bound"),
+            expected
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&response, expected.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
     }
 
     #[test]

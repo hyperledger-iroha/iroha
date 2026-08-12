@@ -75,6 +75,13 @@ mod model {
             };
             norito::json::write_json_string(label, out);
         }
+
+        fn json_serialize_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            norito::json::write_json_string_to("MaxDepthExceeded", out)
+        }
     }
 
     #[cfg(feature = "json")]
@@ -140,10 +147,14 @@ mod model {
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for TransactionRejectionReason {
     fn json_serialize(&self, out: &mut String) {
-        let bytes = norito::encode_canonical(self)
-            .expect("TransactionRejectionReason canonical Norito serialization must succeed");
-        let encoded = STANDARD.encode(bytes);
-        norito::json::JsonSerialize::json_serialize(&encoded, out);
+        norito::json::write_canonical_base64_json(self, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_canonical_base64_json_to(self, out)
     }
 }
 
@@ -180,6 +191,13 @@ impl norito::json::FastJsonWrite for TransactionLimitError {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.reason, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.reason, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -196,6 +214,13 @@ impl norito::json::JsonDeserialize for TransactionLimitError {
 impl norito::json::FastJsonWrite for IvmExecutionFail {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.reason, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.reason, out)
     }
 }
 
@@ -240,6 +265,15 @@ mod tests {
         });
         let canonical_json =
             norito::json::to_json(&reason).expect("encode canonical rejection JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(&reason, canonical_json.len())
+                .expect("encode rejection at exact JSON bound"),
+            canonical_json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&reason, canonical_json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         {
@@ -259,6 +293,25 @@ mod tests {
             .expect("encode alternate rejection frame as JSON string");
         norito::json::from_json::<TransactionRejectionReason>(&alternate_json)
             .expect_err("alternate-layout rejection JSON must be rejected");
+
+        fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
+            let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len()).expect("exact JSON bound"),
+                expected
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+        assert_bounded(&TriggerExecutionFail::MaxDepthExceeded);
+        assert_bounded(&TransactionLimitError {
+            reason: "limit".to_owned(),
+        });
+        assert_bounded(&IvmExecutionFail {
+            reason: "ivm".to_owned(),
+        });
     }
 
     #[test]

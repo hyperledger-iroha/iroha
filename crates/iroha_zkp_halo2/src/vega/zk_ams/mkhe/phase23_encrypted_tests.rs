@@ -66,6 +66,60 @@ fn s(value: u64) -> Scalar {
     Scalar::from_u64(value)
 }
 
+fn legacy_materialized_canonical_bytes_for_test(
+    value: &ZkAmsPhase23MaterializedAccumulatorsV1,
+) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
+    validate_materialized(value)?;
+    let length = materialized_wire_length(value.shape)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    bytes.push(value.version);
+    for digest in [
+        value.profile_digest,
+        value.roster_digest,
+        value.transcript_digest,
+        value.batch_id,
+        value.ordered_batch_input_digest,
+    ] {
+        bytes.extend_from_slice(&digest);
+    }
+    bytes.push(value.fold_count);
+    for family_length in [
+        value.shape.x,
+        1,
+        value.shape.e,
+        value.shape.r_e,
+        value.shape.w,
+        value.shape.r_w,
+    ] {
+        bytes.extend_from_slice(&family_length.to_be_bytes());
+    }
+    for family in [
+        value.x.as_slice(),
+        value.u.as_slice(),
+        value.e.as_slice(),
+        value.r_e.as_slice(),
+        value.w.as_slice(),
+        value.r_w.as_slice(),
+    ] {
+        for scalar in family {
+            bytes.extend_from_slice(&scalar.to_be_bytes());
+        }
+    }
+    bytes.extend_from_slice(&value.digest);
+    assert_eq!(bytes.len(), length);
+    Ok(bytes)
+}
+
+fn read_materialized_test(
+    bytes: &[u8],
+) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1> {
+    let mut reader = std::io::Cursor::new(bytes);
+    super::super::read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1(&mut reader)
+}
+
 fn sparse_map(
     kind: ZkAmsPhase23MapKindV1,
     column_count: u32,
@@ -197,12 +251,319 @@ fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings()
     );
 }
 
+fn fake_materializer_chunk(logical_values: u32, values: &[u64]) -> ZkAmsT256PackedPlaintextV1 {
+    let layout = zk_ams_t256_packing_layout_v1(logical_values).unwrap();
+    ZkAmsT256PackedPlaintextV1 {
+        version: 1,
+        profile_digest: layout.profile_digest,
+        layout_digest: layout.digest,
+        chunk_index: 0,
+        used_slots: u32::try_from(values.len()).unwrap(),
+        coefficients: values
+            .iter()
+            .copied()
+            .map(|value| Scalar::from_u64(value).to_be_bytes())
+            .collect(),
+        digest: [0; 32],
+    }
+}
+
+fn fake_materializer_chunks(u: [u64; 2]) -> Vec<ZkAmsT256PackedPlaintextV1> {
+    [
+        fake_materializer_chunk(1, &[11]),
+        fake_materializer_chunk(2, &u),
+        fake_materializer_chunk(2, &[21, 22]),
+        fake_materializer_chunk(1, &[31]),
+        fake_materializer_chunk(3, &[41, 42, 43]),
+        fake_materializer_chunk(1, &[51]),
+    ]
+    .into()
+}
+
+fn decode_fake_materializer_chunk(
+    layout: ZkAmsT256PackingLayoutV1,
+    packed: &ZkAmsT256PackedPlaintextV1,
+    visit: &mut dyn FnMut(&[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    if packed.layout_digest != layout.digest
+        || packed.chunk_index != 0
+        || packed.used_slots != layout.logical_value_count
+        || packed.coefficients.len() != layout.logical_value_count as usize
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    for value in &packed.coefficients {
+        visit(value)?;
+    }
+    Ok(())
+}
+
+fn run_fake_materializer(
+    chunks: Vec<Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
+) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1> {
+    materialize_release_accumulator_chunk_stream_with_decoder_v1(
+        release_profile_v1().digest().unwrap(),
+        [1; 32],
+        [2; 32],
+        [3; 32],
+        [4; 32],
+        1,
+        ZkAmsPhase23AccumulatorShapeV1::new(1, 2, 1, 3, 1).unwrap(),
+        chunks,
+        &mut decode_fake_materializer_chunk,
+    )
+}
+
+#[test]
+fn owned_chunk_materializer_enforces_schedule_exhaustion_and_incremental_u() {
+    let materialized = run_fake_materializer(
+        fake_materializer_chunks([7, 7])
+            .into_iter()
+            .map(Ok)
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(materialized.x, vec![Scalar::from_u64(11)]);
+    assert_eq!(materialized.u, vec![Scalar::from_u64(7)]);
+    assert_eq!(materialized.e.len(), 2);
+    assert_eq!(materialized.w.len(), 3);
+
+    let mut reordered = fake_materializer_chunks([7, 7]);
+    reordered.swap(0, 1);
+    assert_eq!(
+        run_fake_materializer(reordered.into_iter().map(Ok).collect()),
+        Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+    );
+    let mut missing = fake_materializer_chunks([7, 7]);
+    missing.pop();
+    assert_eq!(
+        run_fake_materializer(missing.into_iter().map(Ok).collect()),
+        Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+    );
+    let mut extra = fake_materializer_chunks([7, 7]);
+    extra.push(fake_materializer_chunk(1, &[61]));
+    assert_eq!(
+        run_fake_materializer(extra.into_iter().map(Ok).collect()),
+        Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+    );
+    let before_partial_error = materialized_zeroized_drop_count_v1();
+    assert_eq!(
+        run_fake_materializer(
+            fake_materializer_chunks([7, 8])
+                .into_iter()
+                .map(Ok)
+                .collect()
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+    );
+    assert_eq!(
+        materialized_zeroized_drop_count_v1(),
+        before_partial_error + 1
+    );
+}
+
+#[test]
+fn callback_materializer_visibility_stays_parent_private() {
+    let source = include_str!("phase23_encrypted.rs");
+    assert!(source.contains(
+        "pub(super) fn materialize_release_accumulator_chunk_stream_with_decoder_v1<I, D>("
+    ));
+    assert!(
+        !source
+            .contains("pub fn materialize_release_accumulator_chunk_stream_with_decoder_v1<I, D>(")
+    );
+}
+
+#[test]
+fn streaming_large_owner_surface_is_move_only_redacted_and_zeroizing() {
+    let phase_source = include_str!("phase23_encrypted.rs");
+    let materialized_wire_source = include_str!("phase23_materialized_wire.rs");
+    let packing_source = include_str!("packing.rs");
+    let mkhe_facade = include_str!("../mkhe.rs");
+    let public_facades = [
+        include_str!("../../zk_ams.rs"),
+        include_str!("../../../vega.rs"),
+    ];
+    assert!(phase_source.lines().count() <= 5_000);
+    assert!(materialized_wire_source.lines().count() <= 5_000);
+    assert!(mkhe_facade.lines().count() <= 5_000);
+    assert!(!phase_source.contains("pub fn zk_ams_phase23_materialize_release_accumulators_v1"));
+    assert!(!phase_source.contains("pub struct ZkAmsPhase23PackedAccumulatorSetV1"));
+    assert!(!phase_source.contains("impl ZkAmsPhase23MaterializedAccumulatorsV1"));
+    assert!(!mkhe_facade.contains("ZkAmsPhase23PackedAccumulatorSetV1,"));
+    for facade in std::iter::once(mkhe_facade).chain(public_facades) {
+        assert!(!facade.contains("ZkAmsPhase23PackedAccumulatorSetV1"));
+        assert!(!facade.contains("zk_ams_phase23_materialize_release_accumulators_v1"));
+        assert!(facade.contains("zk_ams_phase23_materialize_release_accumulator_chunks_v1"));
+        assert!(
+            facade.contains("read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1")
+        );
+        assert!(facade.contains("write_zk_ams_phase23_materialized_accumulators_canonical_v1"));
+    }
+    assert!(materialized_wire_source.contains(
+        "struct ZeroizingMaterializedWireBufferV1([u8; PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1])"
+    ));
+    assert!(materialized_wire_source.contains("impl Drop for ZeroizingMaterializedWireBufferV1"));
+    assert!(!materialized_wire_source.contains("#[derive("));
+    assert!(!materialized_wire_source.contains("impl Clone for ZeroizingMaterializedWireBufferV1"));
+    assert!(!materialized_wire_source.contains("impl Debug for ZeroizingMaterializedWireBufferV1"));
+    assert!(materialized_wire_source.contains("try_reserve_exact"));
+    assert!(materialized_wire_source.contains("require_eof_v1"));
+    assert!(!materialized_wire_source.contains("let mut bytes = Vec"));
+    assert!(!materialized_wire_source.contains("Vec::with_capacity"));
+    assert!(!materialized_wire_source.contains(".to_vec()"));
+    assert!(!materialized_wire_source.contains("read_to_end"));
+    assert!(!materialized_wire_source.contains("let scalar: [u8; 32]"));
+    let materialized_shape = phase_source
+        .split("pub struct ZkAmsPhase23MaterializedAccumulatorsV1")
+        .nth(1)
+        .expect("materialized owner exists")
+        .split("impl Drop for ZkAmsPhase23MaterializedAccumulatorsV1")
+        .next()
+        .expect("materialized owner ends before Drop");
+    for field in ["x", "u", "e", "r_e", "w", "r_w"] {
+        assert!(materialized_shape.contains(&format!("pub(super) {field}: Vec<Scalar>")));
+        assert!(!materialized_shape.contains(&format!("pub {field}: Vec<Scalar>")));
+    }
+    assert!(!phase_source.contains("FnMut([u8; 32])"));
+    assert!(packing_source.contains("struct ZeroizingPackingScalarBytesV1([u8; 32])"));
+    assert!(packing_source.contains("visit: impl FnMut(&[u8; 32])"));
+    let streaming_decoder = materialized_wire_source
+        .split("pub fn read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1")
+        .nth(1)
+        .unwrap()
+        .split("fn write_exact_v1")
+        .next()
+        .unwrap();
+    assert!(
+        streaming_decoder
+            .find("let mut materialized = ZkAmsPhase23MaterializedAccumulatorsV1")
+            .unwrap()
+            < streaming_decoder.find("for _ in 0..length").unwrap()
+    );
+    assert!(
+        streaming_decoder
+            .find("profile_digest != release_profile_digest")
+            .unwrap()
+            < streaming_decoder
+                .find("let mut materialized = ZkAmsPhase23MaterializedAccumulatorsV1")
+                .unwrap()
+    );
+    type PublicMaterializedWriterV1 =
+        fn(&ZkAmsPhase23MaterializedAccumulatorsV1, &mut Vec<u8>) -> Result<(), ZkAmsMkheErrorV1>;
+    type PublicMaterializedReaderV1 =
+        fn(
+            &mut std::io::Cursor<Vec<u8>>,
+        ) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1>;
+    let _: PublicMaterializedWriterV1 =
+        crate::vega::write_zk_ams_phase23_materialized_accumulators_canonical_v1::<Vec<u8>>;
+    let _: PublicMaterializedReaderV1 =
+        crate::vega::read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1::<
+            std::io::Cursor<Vec<u8>>,
+        >;
+    assert!(phase_source.contains("try_reserve_exact(length as usize)"));
+    assert!(phase_source.contains("if family == 1"));
+    assert!(phase_source.contains("if let Some(extra) = chunks.next()"));
+    assert!(!phase_source.contains("let mut outputs: [Vec<Scalar>; 6]"));
+    assert!(
+        phase_source
+            .find("let mut materialized = ZkAmsPhase23MaterializedAccumulatorsV1")
+            .unwrap()
+            < phase_source
+                .find("let mut chunks = packed_chunks.into_iter()")
+                .unwrap()
+    );
+    assert!(packing_source.contains("T256PackedPlaintextDecodeWorkspaceV1"));
+    assert!(packing_source.contains("ClearingPackingFp2BorrowV1"));
+    let decoder = packing_source
+        .split("pub fn decode_zk_ams_t256_packed_plaintext_v1")
+        .nth(1)
+        .unwrap()
+        .split("pub fn permute_zk_ams_t256_slots_v1")
+        .next()
+        .unwrap();
+    assert!(decoder.contains("visit_validated_packed_plaintext_used_slots_with_workspace_v1"));
+    assert!(!decoder.contains("ZeroizingPackingScalarsV1"));
+    assert!(!decoder.contains("decode_coefficients("));
+    assert!(
+        !packing_source.contains(
+            "#[derive(Clone, Debug, PartialEq, Eq)]\npub struct ZkAmsT256PackedPlaintextV1"
+        )
+    );
+    assert!(packing_source.contains(
+        "#[cfg_attr(test, derive(Clone))]\n#[derive(PartialEq, Eq)]\npub struct ZkAmsT256PackedPlaintextV1"
+    ));
+    assert!(!packing_source.contains(".field(\"coefficients\", &self.coefficients)"));
+    assert!(phase_source.contains(
+        "#[cfg_attr(test, derive(Clone))]\n#[derive(PartialEq, Eq)]\npub(super) struct ZkAmsPhase23PackedAccumulatorSetV1"
+    ));
+    assert!(phase_source.contains(
+        "#[cfg_attr(test, derive(Clone))]\n#[derive(PartialEq, Eq)]\npub struct ZkAmsPhase23MaterializedAccumulatorsV1"
+    ));
+    assert!(!phase_source.contains(".field(\"w\", &self.w)"));
+
+    let chunk = fake_materializer_chunk(1, &[9]);
+    assert!(format!("{chunk:?}").len() < 1_024);
+    drop(chunk);
+
+    let before_partial_unwind = materialized_zeroized_drop_count_v1();
+    let mut decoder_calls = 0_usize;
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut decoder =
+            |layout: ZkAmsT256PackingLayoutV1,
+             packed: &ZkAmsT256PackedPlaintextV1,
+             visit: &mut dyn FnMut(&[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>| {
+                decoder_calls += 1;
+                if decoder_calls == 3 {
+                    panic!("intentional partial-materialization erasure audit");
+                }
+                decode_fake_materializer_chunk(layout, packed, visit)
+            };
+        materialize_release_accumulator_chunk_stream_with_decoder_v1(
+            release_profile_v1().digest().unwrap(),
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            1,
+            ZkAmsPhase23AccumulatorShapeV1::new(1, 2, 1, 3, 1).unwrap(),
+            fake_materializer_chunks([7, 7])
+                .into_iter()
+                .map(Ok)
+                .collect::<Vec<_>>(),
+            &mut decoder,
+        )
+        .unwrap();
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(
+        materialized_zeroized_drop_count_v1(),
+        before_partial_unwind + 1
+    );
+
+    let before_materialized = materialized_zeroized_drop_count_v1();
+    let materialized = run_fake_materializer(
+        fake_materializer_chunks([7, 7])
+            .into_iter()
+            .map(Ok)
+            .collect(),
+    )
+    .unwrap();
+    assert!(format!("{materialized:?}").len() < 1_024);
+    drop(materialized);
+    assert_eq!(
+        materialized_zeroized_drop_count_v1(),
+        before_materialized + 1
+    );
+}
+
 #[test]
 fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
-    let release = zk_ams_phase23_release_maps_v1().expect("canonical release maps compile");
+    let release =
+        zk_ams_phase23_release_map_manifest_v1().expect("canonical release manifest compiles");
     let [a, b, c] = release.abc();
     assert_eq!(
-        [a.kind, b.kind, c.kind],
+        [a.kind(), b.kind(), c.kind()],
         [
             ZkAmsPhase23MapKindV1::A,
             ZkAmsPhase23MapKindV1::B,
@@ -210,24 +571,18 @@ fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
         ]
     );
     for map in [a, b, c] {
-        assert_eq!(map.row_count, 1_048_576);
-        assert_eq!(map.column_count, 524_378);
-        validate_sparse_map(map).unwrap();
+        assert_eq!(map.row_count(), 1_048_576);
+        assert_eq!(map.column_count(), 524_378);
+        assert!(map.nonzero_count() >= map.max_row_fan_in());
+        validate_sparse_map_manifest_v1(map).unwrap();
     }
-    assert_eq!(require_release_relation_maps_v1([a, b, c]), Ok(()));
+    let tiny_maps = [
+        sparse_map(ZkAmsPhase23MapKindV1::A, 1, &[vec![(0, 1)]]),
+        sparse_map(ZkAmsPhase23MapKindV1::B, 1, &[vec![(0, 1)]]),
+        sparse_map(ZkAmsPhase23MapKindV1::C, 1, &[vec![(0, 1)]]),
+    ];
     assert_eq!(
-        require_release_relation_maps_v1([b, a, c]),
-        Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-    );
-
-    let tiny_substitute = sparse_map(ZkAmsPhase23MapKindV1::A, 1, &[vec![(0, 1)]]);
-    assert_eq!(
-        require_release_relation_maps_v1([&tiny_substitute, b, c]),
-        Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-    );
-    let type_confused = sparse_map(ZkAmsPhase23MapKindV1::CommitmentG, 1, &[vec![(0, 1)]]);
-    assert_eq!(
-        require_release_relation_maps_v1([&type_confused, b, c]),
+        require_release_relation_maps_v1([&tiny_maps[0], &tiny_maps[1], &tiny_maps[2]]),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
 
@@ -262,15 +617,15 @@ fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
     let shape = super::super::super::canonical_shape_ref().unwrap();
-    assert_eq!(
-        compile_paper_order_relation_map_v1(
+    assert!(matches!(
+        PaperOrderRelationMapViewV1::new(
             ZkAmsPhase23MapKindV1::A,
             &shape.a,
             shape.variable_count(),
             shape.public_input_count() - 1,
         ),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-    );
+    ));
 
     let layout = release.commitment_preimage_layout();
     assert_eq!(layout.version(), 1);
@@ -321,6 +676,149 @@ fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
         ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1,
         "the canonical release-map KAT drifted"
     );
+}
+
+#[test]
+fn paper_order_manifest_stream_matches_owned_csr_without_row_buffers() {
+    let matrix = || {
+        SparseMatrix::new(
+            2,
+            5,
+            &[
+                (0, 0, s(2)),
+                (0, 2, s(3)),
+                (0, 3, s(4)),
+                (0, 4, s(5)),
+                (1, 1, s(6)),
+                (1, 2, s(7)),
+            ],
+        )
+        .expect("canonical internal W,u,x matrix")
+    };
+    let shape = Shape::new(2, 2, 2, matrix(), matrix(), matrix()).expect("tiny relation shape");
+    let view = PaperOrderRelationMapViewV1::new(
+        ZkAmsPhase23MapKindV1::A,
+        &shape.a,
+        shape.variable_count(),
+        shape.public_input_count(),
+    )
+    .expect("bounded paper-order view");
+    let mut streamed = Vec::new();
+    for row in 0..2 {
+        let mut entries = Vec::new();
+        view.for_each_paper_row_entry(row, |column, coefficient| {
+            entries.push((column, coefficient.to_be_bytes()));
+            Ok(())
+        })
+        .expect("stream canonical row");
+        streamed.push(entries);
+    }
+    assert_eq!(
+        streamed,
+        vec![
+            vec![
+                (0, s(2).to_be_bytes()),
+                (2, s(4).to_be_bytes()),
+                (3, s(5).to_be_bytes()),
+                (4, s(3).to_be_bytes()),
+            ],
+            vec![(1, s(6).to_be_bytes()), (4, s(7).to_be_bytes())],
+        ]
+    );
+
+    let owned = |kind| {
+        ZkAmsPhase23SparseMapV1::new(
+            kind,
+            2,
+            5,
+            4,
+            vec![0, 4, 6],
+            vec![0, 2, 3, 4, 1, 4],
+            [2, 4, 5, 3, 6, 7]
+                .into_iter()
+                .map(|value| s(value).to_be_bytes())
+                .collect(),
+        )
+        .expect("canonical owned paper map")
+    };
+    let maps = [
+        owned(ZkAmsPhase23MapKindV1::A),
+        owned(ZkAmsPhase23MapKindV1::B),
+        owned(ZkAmsPhase23MapKindV1::C),
+    ];
+    let manifests = [
+        compile_paper_order_map_manifest_v1(
+            PaperOrderRelationMapViewV1::new(ZkAmsPhase23MapKindV1::A, &shape.a, 2, 2).unwrap(),
+        )
+        .unwrap(),
+        compile_paper_order_map_manifest_v1(
+            PaperOrderRelationMapViewV1::new(ZkAmsPhase23MapKindV1::B, &shape.b, 2, 2).unwrap(),
+        )
+        .unwrap(),
+        compile_paper_order_map_manifest_v1(
+            PaperOrderRelationMapViewV1::new(ZkAmsPhase23MapKindV1::C, &shape.c, 2, 2).unwrap(),
+        )
+        .unwrap(),
+    ];
+    for (map, manifest) in maps.iter().zip(manifests) {
+        assert_eq!(sparse_map_manifest_from_owned_v1(map).unwrap(), manifest);
+    }
+    let layout = compile_commitment_preimage_layout_v1(2).unwrap();
+    let release_manifest = ZkAmsPhase23ReleaseMapManifestV1 {
+        a: manifests[0],
+        b: manifests[1],
+        c: manifests[2],
+        commitment_preimage_layout: layout,
+        digest: release_map_set_digest_v1(manifests[0], manifests[1], manifests[2], layout)
+            .unwrap(),
+    };
+    assert_eq!(
+        require_relation_maps_matching_manifest_v1(
+            [&maps[0], &maps[1], &maps[2]],
+            &shape,
+            release_manifest,
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn canonical_release_map_source_retains_only_compact_streaming_metadata() {
+    let source = include_str!("phase23_encrypted.rs");
+    assert!(!source.contains("Lazy<Result<ZkAmsPhase23ReleaseMapsV1"));
+    assert!(!source.contains("compile_paper_order_relation_map_v1"));
+    assert!(source.contains("#[cfg(test)]\npub(super) fn require_release_relation_maps_v1"));
+    for helper in [
+        "sparse_map_manifest_from_owned_v1",
+        "sparse_map_matches_paper_view_v1",
+        "require_relation_maps_matching_manifest_v1",
+    ] {
+        let declaration = format!("#[cfg(test)]\nfn {helper}");
+        assert!(source.contains(&declaration));
+    }
+    let manifest_owner = source
+        .split("pub struct ZkAmsPhase23ReleaseMapManifestV1")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ZkAmsPhase23ReleaseMapManifestV1").next())
+        .expect("compact manifest declaration");
+    assert!(!manifest_owner.contains("Vec<"));
+    let row_stream = source
+        .split("fn for_each_paper_row_entry")
+        .nth(1)
+        .and_then(|tail| tail.split("fn compile_release_map_manifest_v1").next())
+        .expect("bounded row stream");
+    assert!(row_stream.contains("postponed_u"));
+    assert!(!row_stream.contains("Vec<"));
+    assert!(!row_stream.contains("sort"));
+    let compiler = source
+        .split("fn compile_release_map_manifest_v1")
+        .nth(1)
+        .and_then(|tail| tail.split("fn internal_to_paper_column_v1").next())
+        .expect("streaming manifest compiler");
+    assert!(compiler.contains("compile_paper_order_map_manifest_v1"));
+    assert!(!compiler.contains("ZkAmsPhase23SparseMapV1::new"));
+    assert!(!compiler.contains("Vec<"));
+    assert!(!compiler.contains("sort"));
 }
 
 struct TestKeys {
@@ -883,56 +1381,236 @@ fn signed_binary_rotation_preflights_the_complete_work() {
 fn materialized_six_family_wire_is_canonical_and_mutation_closed() {
     let shape = ZkAmsPhase23AccumulatorShapeV1::new(2, 6, 3, 5, 2).unwrap();
     let materialized = materialized_from_values(
-        [1; 32],
+        release_profile_v1().digest().unwrap(),
         [2; 32],
         [3; 32],
         [4; 32],
         [5; 32],
         2,
         shape,
-        vec![s(1).to_be_bytes(), s(2).to_be_bytes()],
-        vec![s(3).to_be_bytes()],
-        (4..10).map(|value| s(value).to_be_bytes()).collect(),
-        (10..13).map(|value| s(value).to_be_bytes()).collect(),
-        (1..6).map(|value| s(value).to_be_bytes()).collect(),
-        vec![s(6).to_be_bytes(), s(7).to_be_bytes()],
+        vec![s(1), s(2)],
+        vec![s(3)],
+        (4..10).map(s).collect(),
+        (10..13).map(s).collect(),
+        (1..6).map(s).collect(),
+        vec![s(6), s(7)],
     )
     .unwrap();
-    let bytes = materialized.to_canonical_bytes().unwrap();
-    assert_eq!(
-        ZkAmsPhase23MaterializedAccumulatorsV1::from_canonical_bytes(&bytes),
-        Ok(materialized.clone())
-    );
+    let legacy_bytes = legacy_materialized_canonical_bytes_for_test(&materialized).unwrap();
+    let mut bytes = Vec::new();
+    super::super::write_zk_ams_phase23_materialized_accumulators_canonical_v1(
+        &materialized,
+        &mut bytes,
+    )
+    .unwrap();
+    assert_eq!(bytes, legacy_bytes);
+    assert_eq!(read_materialized_test(&bytes), Ok(materialized.clone()));
     let mut corrupt_digest = bytes.clone();
     *corrupt_digest.last_mut().unwrap() ^= 1;
-    assert!(ZkAmsPhase23MaterializedAccumulatorsV1::from_canonical_bytes(&corrupt_digest).is_err());
+    assert!(read_materialized_test(&corrupt_digest).is_err());
     let mut noncanonical = bytes.clone();
     let first_value = PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1;
     noncanonical[first_value..first_value + 32].copy_from_slice(&VEGA_T256_SCALAR_MODULUS_BE_V1);
-    assert!(ZkAmsPhase23MaterializedAccumulatorsV1::from_canonical_bytes(&noncanonical).is_err());
+    assert!(read_materialized_test(&noncanonical).is_err());
     let mut wrong_u_length = bytes.clone();
     let u_length_offset = 1 + 5 * 32 + 1 + 4;
     wrong_u_length[u_length_offset..u_length_offset + 4].copy_from_slice(&2_u32.to_be_bytes());
-    assert!(ZkAmsPhase23MaterializedAccumulatorsV1::from_canonical_bytes(&wrong_u_length).is_err());
+    assert!(read_materialized_test(&wrong_u_length).is_err());
     let mut trailing = bytes;
     trailing.push(0);
-    assert!(ZkAmsPhase23MaterializedAccumulatorsV1::from_canonical_bytes(&trailing).is_err());
+    assert!(read_materialized_test(&trailing).is_err());
+}
+
+#[test]
+fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
+    struct PrefixFailingWriter {
+        prefix: Vec<u8>,
+        remaining: usize,
+    }
+
+    impl std::io::Write for PrefixFailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::other("intentional sink failure"));
+            }
+            let written = bytes.len().min(self.remaining);
+            self.prefix.extend_from_slice(&bytes[..written]);
+            self.remaining -= written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct PanicOnScalarWriter {
+        written: usize,
+    }
+
+    impl std::io::Write for PanicOnScalarWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.written >= PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 {
+                panic!("intentional streaming-writer unwind");
+            }
+            self.written += bytes.len();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct PanicAfterReader<'a> {
+        bytes: &'a [u8],
+        position: usize,
+        panic_at: usize,
+    }
+
+    impl std::io::Read for PanicAfterReader<'_> {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            if self.position >= self.panic_at {
+                panic!("intentional streaming-reader unwind");
+            }
+            let available = self
+                .panic_at
+                .saturating_sub(self.position)
+                .min(self.bytes.len().saturating_sub(self.position));
+            let read = output.len().min(available);
+            output[..read].copy_from_slice(&self.bytes[self.position..self.position + read]);
+            self.position += read;
+            Ok(read)
+        }
+    }
+
+    let shape = ZkAmsPhase23AccumulatorShapeV1::new(2, 2, 1, 2, 1).unwrap();
+    let materialized = materialized_from_values(
+        release_profile_v1().digest().unwrap(),
+        [2; 32],
+        [3; 32],
+        [4; 32],
+        [5; 32],
+        2,
+        shape,
+        vec![s(1), s(2)],
+        vec![s(3)],
+        vec![s(4), s(5)],
+        vec![s(6)],
+        vec![s(7), s(8)],
+        vec![s(9)],
+    )
+    .unwrap();
+    let legacy_bytes = legacy_materialized_canonical_bytes_for_test(&materialized).unwrap();
+
+    let scalar_scratch_count = || {
+        super::super::phase23_materialized_wire::materialized_scalar_bytes_zeroized_drop_count_v1()
+    };
+    let before_writer_error = scalar_scratch_count();
+    let writer_prefix = PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 + 16;
+    let mut failing_writer = PrefixFailingWriter {
+        prefix: Vec::new(),
+        remaining: writer_prefix,
+    };
+    assert_eq!(
+        super::super::write_zk_ams_phase23_materialized_accumulators_canonical_v1(
+            &materialized,
+            &mut failing_writer,
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+    );
+    assert_eq!(failing_writer.prefix, legacy_bytes[..writer_prefix]);
+    assert_eq!(scalar_scratch_count(), before_writer_error + 1);
+
+    let before_writer_unwind = scalar_scratch_count();
+    let mut panic_writer = PanicOnScalarWriter { written: 0 };
+    let writer_unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::super::write_zk_ams_phase23_materialized_accumulators_canonical_v1(
+            &materialized,
+            &mut panic_writer,
+        )
+        .unwrap();
+    }));
+    assert!(writer_unwind.is_err());
+    assert_eq!(scalar_scratch_count(), before_writer_unwind + 1);
+
+    let scratch_count = || {
+        super::super::phase23_materialized_wire::materialized_wire_buffer_zeroized_drop_count_v1()
+    };
+    let before_success = scratch_count();
+    let decoded = read_materialized_test(&legacy_bytes).unwrap();
+    assert_eq!(decoded, materialized);
+    assert_eq!(scratch_count(), before_success + 1);
+    drop(decoded);
+
+    let before_error_scratch = scratch_count();
+    let before_error_owner = materialized_zeroized_drop_count_v1();
+    let mut wrong_profile = legacy_bytes.clone();
+    wrong_profile[1] ^= 1;
+    assert_eq!(
+        read_materialized_test(&wrong_profile),
+        Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+    );
+    assert_eq!(scratch_count(), before_error_scratch + 1);
+    assert_eq!(materialized_zeroized_drop_count_v1(), before_error_owner);
+
+    let before_error_scratch = scratch_count();
+    let mut invalid_header = legacy_bytes.clone();
+    invalid_header[1 + 5 * 32] = 0;
+    assert_eq!(
+        read_materialized_test(&invalid_header),
+        Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+    );
+    assert_eq!(scratch_count(), before_error_scratch + 1);
+    assert_eq!(materialized_zeroized_drop_count_v1(), before_error_owner);
+
+    let before_error_scratch = scratch_count();
+    let partial_body_end = PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 + 33;
+    assert_eq!(
+        read_materialized_test(&legacy_bytes[..partial_body_end]),
+        Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
+    );
+    assert_eq!(scratch_count(), before_error_scratch + 1);
+    assert_eq!(
+        materialized_zeroized_drop_count_v1(),
+        before_error_owner + 1
+    );
+
+    let before_unwind_scratch = scratch_count();
+    let before_unwind_owner = materialized_zeroized_drop_count_v1();
+    let mut panic_reader = PanicAfterReader {
+        bytes: &legacy_bytes,
+        position: 0,
+        panic_at: PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 + 32,
+    };
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::super::read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1(
+            &mut panic_reader,
+        )
+        .unwrap();
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(scratch_count(), before_unwind_scratch + 1);
+    assert_eq!(
+        materialized_zeroized_drop_count_v1(),
+        before_unwind_owner + 1
+    );
 }
 
 #[test]
 fn replicated_u_rejects_mismatched_slots_chunks_lengths_and_legacy_scalar_shape() {
-    let u = s(3).to_be_bytes();
+    let u = s(3);
     assert_eq!(collapse_replicated_u_values(vec![u; 8], 8), Ok(vec![u]));
 
     let mut mismatched_slot = vec![u; 8];
-    mismatched_slot[2] = s(4).to_be_bytes();
+    mismatched_slot[2] = s(4);
     assert_eq!(
         collapse_replicated_u_values(mismatched_slot, 8),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
 
     let mut mismatched_chunk = vec![u; 8];
-    mismatched_chunk[4] = s(5).to_be_bytes();
+    mismatched_chunk[4] = s(5);
     assert_eq!(
         collapse_replicated_u_values(mismatched_chunk, 8),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1285,39 +1963,32 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
     let w = decrypt_collective_vector(&profile, &folded.w, &keys).unwrap();
     let r_w = decrypt_collective_vector(&profile, &folded.r_w, &keys).unwrap();
     let shape = ZkAmsPhase23AccumulatorShapeV1::new(2, 6, 3, 5, 2).unwrap();
-    let materialized_u = collapse_replicated_u_values(
-        u.iter().copied().map(s).map(Scalar::to_be_bytes).collect(),
-        shape.e,
-    )
-    .unwrap();
+    let materialized_u =
+        collapse_replicated_u_values(u.iter().copied().map(s).collect(), shape.e).unwrap();
     let materialized = materialized_from_values(
-        binding.profile_digest,
+        release_profile_v1().digest().unwrap(),
         binding.roster_digest,
         binding.transcript_digest,
         binding.batch_id,
         binding.ordered_batch_input_digest,
         binding.fold_index,
         shape,
-        x.iter().copied().map(s).map(Scalar::to_be_bytes).collect(),
+        x.iter().copied().map(s).collect(),
         materialized_u,
-        e.iter().copied().map(s).map(Scalar::to_be_bytes).collect(),
-        r_e.iter()
-            .copied()
-            .map(s)
-            .map(Scalar::to_be_bytes)
-            .collect(),
-        w.iter().copied().map(s).map(Scalar::to_be_bytes).collect(),
-        r_w.iter()
-            .copied()
-            .map(s)
-            .map(Scalar::to_be_bytes)
-            .collect(),
+        e.iter().copied().map(s).collect(),
+        r_e.iter().copied().map(s).collect(),
+        w.iter().copied().map(s).collect(),
+        r_w.iter().copied().map(s).collect(),
+    )
+    .unwrap();
+    let mut materialized_wire = Vec::new();
+    super::super::write_zk_ams_phase23_materialized_accumulators_canonical_v1(
+        &materialized,
+        &mut materialized_wire,
     )
     .unwrap();
     assert_eq!(
-        ZkAmsPhase23MaterializedAccumulatorsV1::from_canonical_bytes(
-            &materialized.to_canonical_bytes().unwrap()
-        ),
+        read_materialized_test(&materialized_wire),
         Ok(materialized.clone())
     );
 

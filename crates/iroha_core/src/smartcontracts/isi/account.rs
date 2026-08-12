@@ -1207,9 +1207,7 @@ pub mod query {
     }
 
     fn latest_ledger_time_ms(state_ro: &impl StateReadOnly) -> u64 {
-        state_ro.latest_block().map_or(0, |block| {
-            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-        })
+        state_ro.query_ledger_time_ms()
     }
 
     fn strict_recovery_account(
@@ -1762,8 +1760,9 @@ pub mod query {
                 );
                 return Ok(iter);
             }
-            let predicate_json =
-                filter_payload.and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let predicate_json = filter_payload.and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
             let simple_id_path = predicate_json
                 .as_ref()
                 .and_then(account_predicate_simple_id_path);
@@ -1848,7 +1847,7 @@ pub mod query {
             let world = state_ro.world();
             let predicate_json = filter
                 .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+                .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
             if let Some(path) = predicate_json
                 .as_ref()
                 .and_then(account_predicate_simple_id_path)
@@ -1935,8 +1934,9 @@ pub mod query {
                 return Ok(iter);
             }
 
-            let predicate_json =
-                filter_payload.and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let predicate_json = filter_payload.and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
             let simple_id_path = predicate_json
                 .as_ref()
                 .and_then(account_predicate_simple_id_path);
@@ -2029,9 +2029,7 @@ pub mod query {
         #[metrics(+"find_account_by_alias")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Account, Error> {
             let world = state_ro.world();
-            let now_ms = state_ro.latest_block().map_or(0, |block| {
-                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-            });
+            let now_ms = latest_ledger_time_ms(state_ro);
             let account_id = crate::sns::resolve_active_account_alias(
                 world,
                 &state_ro.nexus().dataspace_catalog,
@@ -2054,10 +2052,7 @@ pub mod query {
             &self,
             state_ro: &impl StateReadOnly,
         ) -> Result<Vec<AccountAliasBindingRecord>, Error> {
-            let now_ms = state_ro
-                .latest_block()
-                .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(0))
-                .unwrap_or(0);
+            let now_ms = latest_ledger_time_ms(state_ro);
             let dataspace_filter = self
                 .dataspace()
                 .map(str::trim)
@@ -2097,12 +2092,11 @@ pub mod query {
             let labels = state_ro
                 .world()
                 .account_aliases_by_account()
-                .get(account_id)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            let mut records =
-                crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(labels.len())?;
-            for label in labels {
+                .get(account_id);
+            let mut records = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(
+                labels.map_or(0, BTreeSet::len),
+            )?;
+            for label in labels.into_iter().flatten() {
                 if dataspace_filter.is_some_and(|dataspace| label.dataspace != dataspace)
                     || domain_filter
                         .as_ref()
@@ -2148,24 +2142,35 @@ pub mod query {
                 .map_err(|err| {
                     Error::Conversion(format!("invalid account alias selector: {err}"))
                 })?;
-                let record =
-                    crate::sns::get_name_record_by_selector(state_ro.world(), &selector, now_ms)
-                        .map_err(|err| {
-                            Error::Conversion(format!("invalid account alias lease record: {err}"))
-                        })?;
+                let (status, lease_expiry_ms, grace_until_ms, bound_at_ms) = {
+                    let record = crate::sns::get_name_record_by_selector(
+                        state_ro.world(),
+                        &selector,
+                        now_ms,
+                    )
+                    .map_err(|err| {
+                        Error::Conversion(format!("invalid account alias lease record: {err}"))
+                    })?;
+                    (
+                        record.status,
+                        Some(record.expires_at_ms),
+                        Some(record.grace_expires_at_ms),
+                        record.registered_at_ms,
+                    )
+                };
                 records.try_push(AccountAliasBindingRecord {
                     account_id: account_id.clone(),
                     alias,
                     dataspace,
                     domain: label.domain.as_ref().map(ToString::to_string),
                     is_primary: account.as_ref().label() == Some(&label),
-                    status: record.status,
-                    lease_expiry_ms: Some(record.expires_at_ms),
-                    grace_until_ms: Some(record.grace_expires_at_ms),
-                    bound_at_ms: record.registered_at_ms,
+                    status,
+                    lease_expiry_ms,
+                    grace_until_ms,
+                    bound_at_ms,
                 })?;
             }
-            Ok(records.into_vec())
+            records.into_vec()
         }
     }
 

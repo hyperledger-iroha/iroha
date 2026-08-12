@@ -53,7 +53,7 @@ pub struct RuntimeUpgradeSbomDigest {
     /// Digest algorithm identifier (e.g., `sha256`).
     pub algorithm: String,
     /// Digest bytes for the SBOM artifact.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub digest: Vec<u8>,
 }
 
@@ -71,7 +71,7 @@ pub struct RuntimeUpgradeManifest {
     /// ABI version to activate. Must be `1` in the first release.
     pub abi_version: u16,
     /// ABI hash for the target version.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub abi_hash: [u8; 32],
     /// Reserved syscall delta list. Must remain empty in the first release.
     pub added_syscalls: Vec<u16>,
@@ -86,7 +86,7 @@ pub struct RuntimeUpgradeManifest {
     pub sbom_digests: Vec<RuntimeUpgradeSbomDigest>,
     /// Raw SLSA attestation bytes (base64 in JSON).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub slsa_attestation: Vec<u8>,
     /// Provenance signatures over the canonical manifest payload.
     #[norito(default)]
@@ -107,7 +107,7 @@ pub struct RuntimeUpgradeManifestSignaturePayload {
     /// ABI version to activate. Must be `1` in the first release.
     pub abi_version: u16,
     /// ABI hash for the target version.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub abi_hash: [u8; 32],
     /// Reserved syscall delta list. Must remain empty in the first release.
     pub added_syscalls: Vec<u16>,
@@ -122,7 +122,7 @@ pub struct RuntimeUpgradeManifestSignaturePayload {
     pub sbom_digests: Vec<RuntimeUpgradeSbomDigest>,
     /// Raw SLSA attestation bytes (base64 in JSON).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub slsa_attestation: Vec<u8>,
 }
 

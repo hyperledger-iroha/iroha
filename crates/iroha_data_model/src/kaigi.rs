@@ -238,7 +238,7 @@ pub struct KaigiRelayHop {
     /// Account offering relay services.
     pub relay_id: AccountId,
     /// HPKE public key bytes advertised by the relay.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub hpke_public_key: Vec<u8>,
     /// Relative weight for load-balancing decisions.
     pub weight: u8,
@@ -301,7 +301,7 @@ pub struct KaigiRelayRegistration {
     /// Account advertising relay capabilities.
     pub relay_id: AccountId,
     /// HPKE public key bytes advertised by the relay.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub hpke_public_key: Vec<u8>,
     /// Bandwidth class signalled by the relay (larger value == higher capacity).
     pub bandwidth_class: u8,
@@ -633,7 +633,7 @@ pub struct KaigiRecord {
     /// Additional participant metadata (keyed by participant id) for future expansion.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::account_metadata_map")
+        norito(json = "crate::json_helpers::account_metadata_map")
     )]
     pub participant_metadata: BTreeMap<AccountId, Metadata>,
 }
@@ -867,6 +867,25 @@ mod tests {
         record.push_participant(bob.clone());
         assert_eq!(record.participants.len(), 1);
         assert!(record.has_participant(&bob));
+        record
+            .participant_metadata
+            .insert(bob.clone(), Metadata::default());
+        record
+            .participant_metadata
+            .insert(record.host.clone(), Metadata::default());
+        #[cfg(feature = "json")]
+        {
+            let ordinary = norito::json::to_json(&record).expect("serialize call record JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(&record, ordinary.len())
+                    .expect("serialize call record at exact JSON limit"),
+                ordinary
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(&record, ordinary.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
 
         assert!(record.remove_participant(&bob));
         assert!(!record.has_participant(&bob));

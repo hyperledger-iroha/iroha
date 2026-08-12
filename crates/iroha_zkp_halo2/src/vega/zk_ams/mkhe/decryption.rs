@@ -23,34 +23,26 @@
 //! only for exhaustive algebra tests and is not part of the public transport.
 
 use core::{cmp::Ordering, mem::size_of};
+#[cfg(test)]
 use std::sync::Arc;
 
 use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
-    MaskedRelaxedRandomSourceV1, PlaintextModulus, RnsPolynomial, SecretPolynomial, WideUint,
-    ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
-    active::{ZkAmsMkheActivePartySecretV1, ZkAmsMkheGovernedActiveRosterV1},
-    checked_coefficient_work, checked_ring_multiplication_work, checked_rns_polynomial_bytes,
-    collective::{
-        COLLECTIVE_CIPHERTEXT_DOMAIN_V1, ZkAmsMkheCollectiveCiphertextV1,
-        ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
-        ZkAmsMkheCollectivePublicKeyV1,
-    },
+    MaskedRelaxedRandomSourceV1, PlaintextModulus, RnsPolynomial, WideUint, ZkAmsMkheErrorV1,
+    ZkAmsMkhePartyIdV1,
+    active::ZkAmsMkheGovernedActiveRosterV1,
+    checked_rns_polynomial_bytes,
     cpk_relation::derive_active_collective_public_a_limb_v1,
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
-        release_profile_v1, zk_ams_mkhe_noise_certificate_v1,
+        release_profile_v1, zk_ams_mkhe_noise_certificate_v1, zk_ams_mkhe_release_manifest_v1,
     },
     modulus_product,
-    persistent_decryption_equality::{
-        PersistentDecryptionProofBindingV1, ZkAmsMkhePersistentDecryptionPartyUseV1,
-        ZkAmsMkhePersistentDecryptionVerificationContextV1,
-    },
+    persistent_decryption_equality::PersistentDecryptionProofBindingV1,
     sample_below,
     wire::{
         ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, ZkAmsMkheAuthenticationWireV1,
-        ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
-        ZkAmsMkheRnsPolynomialWireV1, derive_wire_length_certificate_v1, governed_roster_digest,
+        ZkAmsMkheGovernedRosterWireV1, derive_wire_length_certificate_v1, governed_roster_digest,
     },
     zk_ams_mkhe_security_certificate_v1,
 };
@@ -58,12 +50,19 @@ use crate::vega::sponge::{Keccak256, keccak256, shake256};
 
 #[cfg(test)]
 use super::{
-    AuthenticationSecret,
-    persistent_decryption_equality::prepare_zk_ams_mkhe_persistent_decryption_v1,
-    persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
-    wire::ZkAmsMkheWireBindingV1,
+    AuthenticationSecret, SecretPolynomial, ZkAmsMkheActivePartySecretV1,
+    ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectivePartyStateV1,
+    ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkheCollectivePublicKeyV1,
+    ZkAmsMkhePersistentDecryptionPartyUseV1, ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    checked_coefficient_work, checked_ring_multiplication_work,
+};
+#[cfg(test)]
+use super::{
+    collective::COLLECTIVE_CIPHERTEXT_DOMAIN_V1,
+    wire::{ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheRnsPolynomialWireV1},
 };
 
+#[cfg(test)]
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";
 // This private codec exists solely to exercise the complete tiny-profile path
@@ -599,6 +598,7 @@ impl ZeroizingI64VectorV1 {
         Ok(Self(values))
     }
 
+    #[cfg(test)]
     fn from_vec(values: Vec<i64>) -> Self {
         Self(values)
     }
@@ -611,6 +611,7 @@ impl ZeroizingI64VectorV1 {
         &self.0
     }
 
+    #[cfg(test)]
     fn iter(&self) -> core::slice::Iter<'_, i64> {
         self.0.iter()
     }
@@ -625,8 +626,10 @@ impl Drop for ZeroizingI64VectorV1 {
 }
 
 /// Secret RNS mask material erased when its last named owner leaves scope.
+#[cfg(test)]
 struct ZeroizingDecryptionRnsV1(RnsPolynomial);
 
+#[cfg(test)]
 impl ZeroizingDecryptionRnsV1 {
     fn new(polynomial: RnsPolynomial) -> Self {
         Self(polynomial)
@@ -637,6 +640,7 @@ impl ZeroizingDecryptionRnsV1 {
     }
 }
 
+#[cfg(test)]
 impl Drop for ZeroizingDecryptionRnsV1 {
     fn drop(&mut self) {
         clear_secret_u64_slice_v1(&mut self.0.coefficients);
@@ -884,6 +888,7 @@ impl SignedWideV1 {
         Ok(bytes)
     }
 
+    #[cfg(test)]
     pub(super) fn encode_fixed_into(
         &self,
         output: &mut Vec<u8>,
@@ -966,6 +971,7 @@ impl ZeroizingSignedWideVectorV1 {
         Ok(Self(values))
     }
 
+    #[cfg(test)]
     fn from_vec(values: Vec<SignedWideV1>) -> Self {
         Self(values)
     }
@@ -978,6 +984,7 @@ impl ZeroizingSignedWideVectorV1 {
         &self.0
     }
 
+    #[cfg(test)]
     fn iter(&self) -> core::slice::Iter<'_, SignedWideV1> {
         self.0.iter()
     }
@@ -1151,6 +1158,7 @@ pub(super) fn sample_signed_wide<R: MaskedRelaxedRandomSourceV1>(
     }
 }
 
+#[cfg(test)]
 pub(super) fn wide_vector_as_rns(
     profile: &BgvProfile,
     values: &[SignedWideV1],
@@ -1171,6 +1179,7 @@ pub(super) fn wide_vector_as_rns(
     RnsPolynomial::from_flat(profile, coefficients)
 }
 
+#[cfg(test)]
 pub(super) fn sparse_negacyclic_mul_small(
     challenge: &[i8],
     witness: &[i64],
@@ -1209,6 +1218,7 @@ pub(super) fn sparse_negacyclic_mul_small(
     Ok(output)
 }
 
+#[cfg(test)]
 pub(super) fn sparse_negacyclic_mul_wide(
     challenge: &[i8],
     witness: &[SignedWideV1],
@@ -1386,6 +1396,7 @@ pub struct ZkAmsMkheDecryptionTransportPointerV1 {
 }
 
 impl ZkAmsMkheDecryptionTransportPointerV1 {
+    #[cfg(test)]
     fn from_payload(
         kind: ZkAmsMkheDecryptionTransportComponentKindV1,
         payload: &[u8],
@@ -1416,6 +1427,7 @@ impl ZkAmsMkheDecryptionTransportPointerV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_payload(self, payload: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_shape()?;
         if u64::try_from(payload.len()).ok() != Some(self.payload_bytes)
@@ -1492,6 +1504,7 @@ impl ZkAmsMkheDecryptionTransportManifestV1 {
         )
     }
 
+    #[cfg(test)]
     fn validate_for_statement(
         &self,
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
@@ -1543,6 +1556,7 @@ impl ZkAmsMkheDecryptionTransportManifestV1 {
     }
 
     /// Decode, authenticate, and bind one exact manifest before any component allocation.
+    #[cfg(test)]
     pub fn decode_exact(
         statement: ZkAmsMkheDecryptionStatementV1<'_>,
         persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
@@ -1705,12 +1719,14 @@ fn decryption_split_manifest_digest(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 struct DecryptionPublicRelationV1 {
     binding: DecryptionBindingV1,
     common_a: Arc<RnsPolynomial>,
     party_b: RnsPolynomial,
 }
 
+#[cfg(test)]
 impl DecryptionPublicRelationV1 {
     fn validate(
         &self,
@@ -1727,12 +1743,14 @@ impl DecryptionPublicRelationV1 {
     }
 }
 
+#[cfg(test)]
 struct DecryptionPartyWitnessV1<'a> {
     binding: DecryptionBindingV1,
     secret: &'a SecretPolynomial,
     public_key_error: &'a SecretPolynomial,
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for DecryptionPartyWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1744,6 +1762,7 @@ impl core::fmt::Debug for DecryptionPartyWitnessV1<'_> {
     }
 }
 
+#[cfg(test)]
 fn update_rns_hash(
     hash: &mut Keccak256,
     profile: &BgvProfile,
@@ -1761,6 +1780,7 @@ fn update_rns_hash(
     Ok(())
 }
 
+#[cfg(test)]
 fn update_wire_rns_hash(
     hash: &mut Keccak256,
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
@@ -1778,6 +1798,7 @@ fn update_wire_rns_hash(
 }
 
 /// Allocation-bounded digest of the exact release ciphertext wire form.
+#[cfg(test)]
 pub(super) fn decryption_wire_ciphertext_digest_v1(
     profile: &BgvProfile,
     roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -1813,12 +1834,129 @@ pub(super) fn decryption_wire_ciphertext_digest_v1(
     Ok(digest)
 }
 
+/// Compact validated ciphertext axes shared by the persistent binding and the
+/// source-backed decryption corridor. The record index is an explicit release
+/// record identifier; it is intentionally independent of any packed-plaintext
+/// chunk or encryption sample index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DecryptionCiphertextAxesV1 {
+    profile_digest: [u8; 32],
+    roster_digest: [u8; 32],
+    epoch: u64,
+    transcript_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+    ciphertext_record_index: u32,
+    sample_index: u64,
+    level: u8,
+}
+
+impl DecryptionCiphertextAxesV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_v1(
+        roster: &ZkAmsMkheGovernedRosterWireV1,
+        profile_digest: [u8; 32],
+        roster_digest: [u8; 32],
+        epoch: u64,
+        transcript_digest: [u8; 32],
+        ciphertext_digest: [u8; 32],
+        ciphertext_record_index: u32,
+        sample_index: u64,
+        level: u8,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        let value = Self {
+            profile_digest,
+            roster_digest,
+            epoch,
+            transcript_digest,
+            ciphertext_digest,
+            ciphertext_record_index,
+            sample_index,
+            level,
+        };
+        value.validate_for_roster_v1(roster)?;
+        Ok(value)
+    }
+
+    pub(super) fn validate_for_roster_v1(
+        self,
+        roster: &ZkAmsMkheGovernedRosterWireV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let maximum_samples = zk_ams_mkhe_release_manifest_v1()?.max_samples_per_secret_epoch;
+        if self.profile_digest != release_profile_v1().digest()?
+            || self.profile_digest != roster.profile_digest()
+            || self.roster_digest != roster.roster_digest()
+            || self.epoch != roster.epoch()
+            || self.transcript_digest == [0; 32]
+            || self.ciphertext_digest == [0; 32]
+            || u64::from(self.ciphertext_record_index) >= maximum_samples
+            || self.sample_index >= maximum_samples
+            || self.level > 1
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        Ok(())
+    }
+
+    pub(super) const fn profile_digest(self) -> [u8; 32] {
+        self.profile_digest
+    }
+
+    pub(super) const fn roster_digest(self) -> [u8; 32] {
+        self.roster_digest
+    }
+
+    pub(super) const fn epoch(self) -> u64 {
+        self.epoch
+    }
+
+    pub(super) const fn transcript_digest(self) -> [u8; 32] {
+        self.transcript_digest
+    }
+
+    pub(super) const fn ciphertext_digest(self) -> [u8; 32] {
+        self.ciphertext_digest
+    }
+
+    pub(super) const fn ciphertext_record_index(self) -> u32 {
+        self.ciphertext_record_index
+    }
+
+    pub(super) const fn sample_index(self) -> u64 {
+        self.sample_index
+    }
+
+    pub(super) const fn level(self) -> u8 {
+        self.level
+    }
+}
+
+#[cfg(test)]
+fn decryption_ciphertext_axes_from_wire_v1(
+    roster: &ZkAmsMkheGovernedRosterWireV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+) -> Result<DecryptionCiphertextAxesV1, ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    let binding = ciphertext.binding();
+    DecryptionCiphertextAxesV1::new_v1(
+        roster,
+        binding.profile_digest(),
+        binding.roster_digest(),
+        binding.epoch(),
+        binding.transcript_digest(),
+        decryption_wire_ciphertext_digest_v1(&profile, roster, ciphertext)?,
+        binding.record_index(),
+        ciphertext.sample_index(),
+        binding.level(),
+    )
+}
+
 /// Borrowed release-only statement for exact all-eight governed P24-H decryption.
 ///
 /// The verified aggregate key and its exact eight proof-carrying source shares
 /// are retained by reference. The constructor derives `a`, every `b_i`, the
 /// authentication-key material, and all share digests from those immutable
 /// objects, so callers cannot assert an unrelated raw polynomial context.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub struct ZkAmsMkheDecryptionStatementV1<'a> {
     roster: &'a ZkAmsMkheGovernedRosterWireV1,
@@ -1829,6 +1967,7 @@ pub struct ZkAmsMkheDecryptionStatementV1<'a> {
     key_context_digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheDecryptionStatementV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1842,6 +1981,7 @@ impl core::fmt::Debug for ZkAmsMkheDecryptionStatementV1<'_> {
     }
 }
 
+#[cfg(test)]
 impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
     /// Construct the exact release statement from one verified collective key
     /// and the same ordered eight source shares used to aggregate it.
@@ -1913,10 +2053,15 @@ impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
     /// Compact digest of every non-polynomial statement binding axis.
     #[must_use]
     pub fn binding_digest(&self) -> [u8; 32] {
-        decryption_statement_binding_digest_from_axes_v1(
-            self.roster,
-            self.ciphertext,
-            self.key_context_digest,
+        decryption_ciphertext_axes_from_wire_v1(self.roster, self.ciphertext).map_or(
+            [0; 32],
+            |ciphertext| {
+                decryption_statement_binding_digest_from_axes_v1(
+                    self.roster,
+                    ciphertext,
+                    self.key_context_digest,
+                )
+            },
         )
     }
 
@@ -1988,6 +2133,7 @@ impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
         Ok(hash.finalize())
     }
 
+    #[cfg(test)]
     fn internal_for_party(
         &self,
         party_index: usize,
@@ -2106,23 +2252,23 @@ where
 /// Exact non-polynomial statement binding shared by native and compact paths.
 pub(super) fn decryption_statement_binding_digest_from_axes_v1(
     roster: &ZkAmsMkheGovernedRosterWireV1,
-    ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+    ciphertext: DecryptionCiphertextAxesV1,
     key_context_digest: [u8; 32],
 ) -> [u8; 32] {
-    let binding = ciphertext.binding();
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.decryption-statement-binding");
     hash.update(&roster.profile_digest());
     hash.update(&roster.roster_digest());
     hash.update(&roster.epoch().to_be_bytes());
-    hash.update(&binding.transcript_digest());
-    hash.update(&binding.record_index().to_be_bytes());
+    hash.update(&ciphertext.transcript_digest());
+    hash.update(&ciphertext.ciphertext_record_index().to_be_bytes());
     hash.update(&ciphertext.sample_index().to_be_bytes());
-    hash.update(&[binding.level()]);
+    hash.update(&[ciphertext.level()]);
     hash.update(&key_context_digest);
     hash.finalize()
 }
 
+#[cfg(test)]
 fn decryption_binding_from_statement(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     party_index: usize,
@@ -2132,55 +2278,56 @@ fn decryption_binding_from_statement(
     if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidPartySet);
     }
+    let ciphertext =
+        decryption_ciphertext_axes_from_wire_v1(statement.roster, statement.ciphertext)?;
     Ok(DecryptionBindingV1 {
         profile_digest: statement.roster.profile_digest(),
         roster_digest: statement.roster.roster_digest(),
         epoch: statement.roster.epoch(),
-        transcript_digest: statement.ciphertext.binding().transcript_digest(),
-        ciphertext_digest: statement.ciphertext_digest()?,
+        transcript_digest: ciphertext.transcript_digest(),
+        ciphertext_digest: ciphertext.ciphertext_digest(),
         key_context_digest: statement.key_context_digest,
         statement_binding_digest: persistent.binding_digest(),
-        ciphertext_record_index: statement.ciphertext.binding().record_index(),
-        sample_index: statement.ciphertext.sample_index(),
+        ciphertext_record_index: ciphertext.ciphertext_record_index(),
+        sample_index: ciphertext.sample_index(),
         party_index: u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
         party: statement.roster.parties()[party_index],
-        level: statement.ciphertext.binding().level(),
+        level: ciphertext.level(),
     })
 }
 
 fn decryption_binding_from_compact_axes_v1(
     roster: &ZkAmsMkheGovernedRosterWireV1,
-    ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
-    ciphertext_digest: [u8; 32],
+    ciphertext: DecryptionCiphertextAxesV1,
     key_context_digest: [u8; 32],
     party_index: usize,
     persistent: &PersistentDecryptionProofBindingV1,
 ) -> Result<DecryptionBindingV1, ZkAmsMkheErrorV1> {
-    let profile = release_profile_v1();
+    ciphertext.validate_for_roster_v1(roster)?;
     if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
         || key_context_digest == [0; 32]
-        || ciphertext_digest != decryption_wire_ciphertext_digest_v1(&profile, roster, ciphertext)?
         || persistent.binding_digest() == [0; 32]
     {
         return Err(ZkAmsMkheErrorV1::InvalidShareSet);
     }
     Ok(DecryptionBindingV1 {
-        profile_digest: roster.profile_digest(),
-        roster_digest: roster.roster_digest(),
-        epoch: roster.epoch(),
-        transcript_digest: ciphertext.binding().transcript_digest(),
-        ciphertext_digest,
+        profile_digest: ciphertext.profile_digest(),
+        roster_digest: ciphertext.roster_digest(),
+        epoch: ciphertext.epoch(),
+        transcript_digest: ciphertext.transcript_digest(),
+        ciphertext_digest: ciphertext.ciphertext_digest(),
         key_context_digest,
         statement_binding_digest: persistent.binding_digest(),
-        ciphertext_record_index: ciphertext.binding().record_index(),
+        ciphertext_record_index: ciphertext.ciphertext_record_index(),
         sample_index: ciphertext.sample_index(),
         party_index: u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
         party: roster.parties()[party_index],
-        level: ciphertext.binding().level(),
+        level: ciphertext.level(),
     })
 }
 
 /// Canonical native Fiat--Shamir-with-aborts proof of the public-key and share relations.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkAmsMkheDecryptionProofV1 {
     wide_response_bytes: u16,
@@ -2190,8 +2337,10 @@ pub struct ZkAmsMkheDecryptionProofV1 {
     smudge_response: Vec<SignedWideV1>,
 }
 
+#[cfg(test)]
 type DecryptionRelationProofV1 = ZkAmsMkheDecryptionProofV1;
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheDecryptionProofV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -2203,6 +2352,7 @@ impl core::fmt::Debug for ZkAmsMkheDecryptionProofV1 {
     }
 }
 
+#[cfg(test)]
 impl ZkAmsMkheDecryptionProofV1 {
     /// Exact byte length of the canonical native lattice-proof encoding.
     pub fn encoded_len(&self) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -2338,8 +2488,8 @@ impl ZkAmsMkheDecryptionProofV1 {
     /// Decode the sole release-profile proof shape with all counts preflighted.
     ///
     /// This only establishes canonical syntax and bounds. A decoded proof is
-    /// authenticated to context only by [`verify_zk_ams_mkhe_decryption_share_v1`]
-    /// or [`reconstruct_zk_ams_mkhe_decryption_share_v1`].
+    /// authenticated to context only by the test-only native verifier or the
+    /// test-only native reconstruction wrapper.
     pub fn decode_release_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         let evidence = derive_decryption_resource_evidence(&profile)?;
@@ -2407,6 +2557,7 @@ fn test_decryption_share_record_bytes(
 }
 
 /// One native proof-bound and T256-authenticated governed decryption share.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkAmsMkheAuthenticatedDecryptionShareV1 {
     binding: DecryptionBindingV1,
@@ -2415,8 +2566,10 @@ pub struct ZkAmsMkheAuthenticatedDecryptionShareV1 {
     authentication: ArtifactAuthentication,
 }
 
+#[cfg(test)]
 type AuthenticatedDecryptionShareV1 = ZkAmsMkheAuthenticatedDecryptionShareV1;
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheAuthenticatedDecryptionShareV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -2429,32 +2582,38 @@ impl core::fmt::Debug for ZkAmsMkheAuthenticatedDecryptionShareV1 {
     }
 }
 
+#[cfg(test)]
 impl ZkAmsMkheAuthenticatedDecryptionShareV1 {
     /// Governed roster slot authenticated by this share.
     #[must_use]
+    #[expect(dead_code, reason = "native reference share inspection surface")]
     pub const fn party_index(&self) -> u8 {
         self.binding.party_index
     }
 
     /// Authentication-key-derived governed party.
     #[must_use]
+    #[expect(dead_code, reason = "native reference share inspection surface")]
     pub const fn party(&self) -> ZkAmsMkhePartyIdV1 {
         self.binding.party
     }
 
     /// Native proof tied to both the party public-key relation and ciphertext share.
     #[must_use]
+    #[expect(dead_code, reason = "native reference share inspection surface")]
     pub const fn proof(&self) -> &ZkAmsMkheDecryptionProofV1 {
         &self.proof
     }
 
     /// Canonical limb-major partial-decryption residues.
     #[must_use]
+    #[expect(dead_code, reason = "native reference share inspection surface")]
     pub fn share_residues(&self) -> &[u64] {
         &self.share.coefficients
     }
 
     /// Exact standalone native `ZADP` proof bytes used by the split transport.
+    #[expect(dead_code, reason = "native reference share inspection surface")]
     pub fn canonical_proof_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         self.proof.encode()
     }
@@ -2633,12 +2792,14 @@ impl ZkAmsMkheAuthenticatedDecryptionShareV1 {
 ///
 /// The two large objects remain independently reusable and content addressed;
 /// only the small authenticated manifest is consensus/header material.
+#[cfg(test)]
 pub struct ZkAmsMkheDecryptionSplitTransportV1 {
     manifest: ZkAmsMkheDecryptionTransportManifestV1,
     polynomial_object: Vec<u8>,
     proof_envelope: Vec<u8>,
 }
 
+#[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheDecryptionSplitTransportV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -2653,37 +2814,59 @@ impl core::fmt::Debug for ZkAmsMkheDecryptionSplitTransportV1 {
     }
 }
 
+#[cfg(test)]
 impl ZkAmsMkheDecryptionSplitTransportV1 {
     /// Authenticated fixed-width manifest.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "native reference split-transport inspection surface"
+    )]
     pub const fn manifest(&self) -> &ZkAmsMkheDecryptionTransportManifestV1 {
         &self.manifest
     }
 
     /// Encode the exact 498-byte manifest.
+    #[expect(
+        dead_code,
+        reason = "native reference split-transport inspection surface"
+    )]
     pub fn manifest_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         self.manifest.encode()
     }
 
     /// Exact 39,845,892-byte count-prefixed limb-major polynomial object.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "native reference split-transport inspection surface"
+    )]
     pub fn polynomial_object(&self) -> &[u8] {
         &self.polynomial_object
     }
 
     /// Exact 33,030,199-byte standalone native `ZADP` proof envelope.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "native reference split-transport inspection surface"
+    )]
     pub fn proof_envelope(&self) -> &[u8] {
         &self.proof_envelope
     }
 
     /// Sole canonical ordered component list: polynomial first, proof second.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "native reference split-transport inspection surface"
+    )]
     pub fn ordered_components(&self) -> [&[u8]; DECRYPTION_SPLIT_COMPONENT_COUNT_V1] {
         [&self.polynomial_object, &self.proof_envelope]
     }
 }
 
+#[cfg(test)]
 fn encode_decryption_polynomial_object(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -2708,6 +2891,7 @@ fn encode_decryption_polynomial_object(
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn decode_decryption_polynomial_object(bytes: &[u8]) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
     let expected_length = checked_rns_polynomial_bytes(&profile)?;
@@ -2736,6 +2920,7 @@ fn decode_decryption_polynomial_object(bytes: &[u8]) -> Result<RnsPolynomial, Zk
     RnsPolynomial::from_flat(&profile, residues)
 }
 
+#[cfg(test)]
 fn release_decryption_split_components(
     share: &ZkAmsMkheAuthenticatedDecryptionShareV1,
 ) -> Result<
@@ -2774,6 +2959,7 @@ fn release_decryption_split_components(
     ))
 }
 
+#[cfg(test)]
 fn release_decryption_split_authentication_digest(
     share: &ZkAmsMkheAuthenticatedDecryptionShareV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -2781,6 +2967,7 @@ fn release_decryption_split_authentication_digest(
     decryption_split_manifest_digest(&share.binding, polynomial, proof)
 }
 
+#[cfg(test)]
 fn authenticated_decryption_share_identity(
     profile: &BgvProfile,
     share: &ZkAmsMkheAuthenticatedDecryptionShareV1,
@@ -2788,15 +2975,11 @@ fn authenticated_decryption_share_identity(
     if profile.digest()? == release_profile_v1().digest()? {
         return release_decryption_split_authentication_digest(share);
     }
-    #[cfg(test)]
-    {
-        return share.record_digest(profile);
-    }
-    #[cfg(not(test))]
-    Err(ZkAmsMkheErrorV1::InvalidProfile)
+    share.record_digest(profile)
 }
 
 /// Materialize the sole canonical first-release split transport from a verified native share.
+#[cfg(test)]
 pub fn split_zk_ams_mkhe_decryption_share_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
@@ -2824,6 +3007,11 @@ pub fn split_zk_ams_mkhe_decryption_share_v1(
 /// `components` must contain exactly the polynomial object followed by the
 /// proof envelope. The manifest signature is verified before either large
 /// component is hashed or decoded.
+#[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "native split-transport reconstruction reference remains intentionally callable"
+)]
 pub fn reconstruct_zk_ams_mkhe_decryption_share_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
@@ -2852,6 +3040,7 @@ pub fn reconstruct_zk_ams_mkhe_decryption_share_v1(
     Ok(native)
 }
 
+#[cfg(test)]
 fn expect_bytes(bytes: &[u8], cursor: &mut usize, expected: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     let end = cursor
         .checked_add(expected.len())
@@ -2902,6 +3091,7 @@ fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, ZkAmsMkheErrorV1> {
     Ok(u64::from_be_bytes(read_array::<8>(bytes, cursor)?))
 }
 
+#[cfg(test)]
 fn validate_party_witness(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -2976,6 +3166,7 @@ fn initialize_decryption_challenge_transcript(
     Ok(hash)
 }
 
+#[cfg(test)]
 fn decryption_challenge_seed(
     profile: &BgvProfile,
     smudge_bits: usize,
@@ -3004,6 +3195,7 @@ fn decryption_challenge_seed(
     clippy::too_many_arguments,
     reason = "the proof boundary keeps every public relation and private witness input explicit"
 )]
+#[cfg(test)]
 fn prove_decryption_relation<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -3219,6 +3411,7 @@ fn prove_decryption_relation<R: MaskedRelaxedRandomSourceV1>(
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
+#[cfg(test)]
 fn verify_decryption_relation(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -3299,6 +3492,7 @@ fn verify_decryption_relation(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn create_decryption_share<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -3402,9 +3596,14 @@ fn create_authenticated_decryption_share<R: MaskedRelaxedRandomSourceV1>(
 
 /// Create one authenticated native P24-H partial-decryption share.
 ///
-/// Materialize its sole canonical public representation with
-/// [`split_zk_ams_mkhe_decryption_share_v1`]. The polynomial and proof are
-/// admitted independently under their unchanged governed ceilings.
+/// Test-only native share construction retained for exhaustive reference
+/// vectors. Production uses the staged proving API. The polynomial and proof
+/// are admitted independently under their unchanged governed ceilings.
+#[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "native share prover remains as an exhaustive staged-prover reference"
+)]
 pub fn prove_zk_ams_mkhe_decryption_share_v1<R: MaskedRelaxedRandomSourceV1>(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
@@ -3467,6 +3666,7 @@ pub fn prove_zk_ams_mkhe_decryption_share_v1<R: MaskedRelaxedRandomSourceV1>(
 }
 
 /// Verify one authenticated native share against its exact governed statement.
+#[cfg(test)]
 pub fn verify_zk_ams_mkhe_decryption_share_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
@@ -3524,6 +3724,11 @@ pub fn verify_zk_ams_mkhe_decryption_share_v1(
 
 /// Verify an exact ordered all-eight share set, aggregate in `R_Q`, center by
 /// CRT, enforce the certified residual bound, and recover canonical T256 values.
+#[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "native full-roster verifier remains as a streaming-verifier reference"
+)]
 pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
     statement: ZkAmsMkheDecryptionStatementV1<'_>,
     persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
@@ -3605,50 +3810,13 @@ pub fn verify_combine_decode_zk_ams_mkhe_decryption_v1(
             return Err(binding_failure(index, ciphertext_digest));
         }
     }
-    let common_a = Arc::new(
-        RnsPolynomial::from_flat(&profile, statement.common_a().residues().to_vec())
-            .map_err(|_| binding_failure(0, ciphertext_digest))?,
-    );
-    let mut relations = Vec::with_capacity(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1);
-    for index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
-        let persistent = persistent_context
-            .proof_binding(statement, index)
-            .map_err(|_| binding_failure(index, ciphertext_digest))?;
-        let persistent_binding = decryption_binding_from_statement(statement, index, &persistent)
-            .map_err(|_| binding_failure(index, ciphertext_digest))?;
-        let party_b = RnsPolynomial::from_flat(
-            &profile,
-            statement.public_key_shares[index]
-                .party_public_b()
-                .residues()
-                .to_vec(),
-        )
-        .map_err(|_| binding_failure(index, ciphertext_digest))?;
-        relations.push(DecryptionPublicRelationV1 {
-            binding: DecryptionBindingV1 {
-                profile_digest: statement.roster.profile_digest(),
-                roster_digest: statement.roster.roster_digest(),
-                epoch: statement.roster.epoch(),
-                transcript_digest: binding.transcript_digest(),
-                ciphertext_digest,
-                key_context_digest: statement.key_context_digest,
-                statement_binding_digest: persistent_binding.statement_binding_digest,
-                ciphertext_record_index: binding.record_index(),
-                sample_index: statement.ciphertext.sample_index(),
-                party_index: u8::try_from(index).unwrap_or(u8::MAX),
-                party: parties.parties[index],
-                level: binding.level(),
-            },
-            common_a: Arc::clone(&common_a),
-            party_b,
-        });
-    }
     let noise =
         zk_ams_mkhe_noise_certificate_v1().map_err(|_| binding_failure(0, ciphertext_digest))?;
-    aggregate_and_decrypt_full_roster(
+    aggregate_and_decrypt_full_roster_release_reference(
         &profile,
         &parties,
-        &relations,
+        statement,
+        persistent_context,
         &ciphertext,
         shares,
         usize::from(noise.decryption_smudge_quotient_bits),
@@ -3739,8 +3907,10 @@ pub struct ZkAmsMkheFullRosterDecryptionResultV1 {
     pub ordered_share_set_digest: [u8; 32],
 }
 
+#[cfg(test)]
 type DecryptionResultV1 = ZkAmsMkheFullRosterDecryptionResultV1;
 
+#[cfg(test)]
 fn verify_authenticated_share(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -3782,6 +3952,103 @@ fn verify_authenticated_share(
     )
 }
 
+#[cfg(test)]
+fn verify_authenticated_share_limb_streaming(
+    profile: &BgvProfile,
+    parties: &super::PartySet,
+    statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    expected_binding: &DecryptionBindingV1,
+    party_b: &ZkAmsMkheRnsPolynomialWireV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+    share: &AuthenticatedDecryptionShareV1,
+    smudge_bits: usize,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    expected_binding.validate(profile, parties)?;
+    ciphertext.validate(profile, parties)?;
+    if share.binding != *expected_binding
+        || share.authentication.party != expected_binding.party
+        || ciphertext.digest() != expected_binding.ciphertext_digest
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidShareSet);
+    }
+    let release = profile.digest()? == release_profile_v1().digest()?;
+    let identity = authenticated_decryption_share_identity(profile, share)?;
+    if release {
+        share
+            .authentication
+            .verify(DECRYPTION_SPLIT_MANIFEST_AUTH_DOMAIN_V1, identity)?;
+    } else {
+        share
+            .authentication
+            .verify(DECRYPTION_SHARE_AUTH_DOMAIN_V1, identity)?;
+    }
+    let challenge_weight = wide_relation_challenge_weight(profile.ring_degree)?;
+    let (_, secret_response_limit) = small_response_parameters(1, challenge_weight, profile)?;
+    let (_, error_response_limit) =
+        small_response_parameters(i64::from(profile.error_eta), challenge_weight, profile)?;
+    let (_, wide_response_limit, wide_response_bytes) =
+        wide_response_parameters(smudge_bits, challenge_weight)?;
+    if usize::from(share.proof.wide_response_bytes) != wide_response_bytes
+        || share
+            .proof
+            .secret_response
+            .iter()
+            .any(|value| value.unsigned_abs() > secret_response_limit as u64)
+        || share
+            .proof
+            .public_key_error_response
+            .iter()
+            .any(|value| value.unsigned_abs() > error_response_limit as u64)
+        || share
+            .proof
+            .smudge_response
+            .iter()
+            .any(|value| value.magnitude > wide_response_limit)
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidShareProof);
+    }
+    streaming::verify_native_relation_limb_streaming(
+        profile,
+        expected_binding,
+        statement.common_a(),
+        party_b,
+        ciphertext,
+        &share.share,
+        smudge_bits,
+        &share.proof,
+    )
+}
+
+/// Add one validated native RNS polynomial into an existing owner.
+///
+/// The ordinary `RnsPolynomial::add` returns a fresh `P`-byte owner.  The
+/// all-roster decryption path is deliberately sequential, so retaining that
+/// temporary for every share would recreate the same peak it is trying to
+/// avoid.  This helper preserves the exact modular-addition semantics while
+/// reusing the aggregate allocation.
+#[cfg(test)]
+fn add_rns_polynomial_in_place(
+    aggregate: &mut RnsPolynomial,
+    share: &RnsPolynomial,
+    profile: &BgvProfile,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    aggregate.validate(profile)?;
+    share.validate(profile)?;
+    for (limb, (left, right)) in aggregate
+        .coefficients
+        .chunks_exact_mut(profile.ring_degree)
+        .zip(share.coefficients.chunks_exact(profile.ring_degree))
+        .enumerate()
+    {
+        let modulus = profile.moduli[limb];
+        for (left, right) in left.iter_mut().zip(right) {
+            *left = super::mod_add(*left, *right, modulus);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn aggregate_and_decrypt_full_roster(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -3905,14 +4172,188 @@ fn aggregate_and_decrypt_full_roster(
                 ));
             }
         }
-        aggregate = aggregate.add(&shares[index].share, profile).map_err(|_| {
+        add_rns_polynomial_in_place(&mut aggregate, &shares[index].share, profile).map_err(
+            |_| {
+                identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::CorrectnessBoundExceeded,
+                    ciphertext_digest,
+                )
+            },
+        )?;
+        set_hash.update(&[u8::try_from(index).unwrap_or(u8::MAX)]);
+        set_hash.update(
+            &authenticated_decryption_share_identity(profile, &shares[index]).map_err(|_| {
+                identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::ProofFailure,
+                    ciphertext_digest,
+                )
+            })?,
+        );
+    }
+    let (plaintext, maximum_residual_bits) =
+        decode_centered_plaintext(profile, &aggregate, final_residual_bits).map_err(|_| {
             identifiable_abort(
                 parties,
-                index,
+                0,
                 DecryptionAbortReasonV1::CorrectnessBoundExceeded,
                 ciphertext_digest,
             )
         })?;
+    Ok(DecryptionResultV1 {
+        plaintext,
+        maximum_residual_bits,
+        ordered_share_set_digest: set_hash.finalize(),
+    })
+}
+
+#[cfg(test)]
+fn aggregate_and_decrypt_full_roster_release_reference(
+    profile: &BgvProfile,
+    parties: &super::PartySet,
+    statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    persistent_context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+    shares: &[AuthenticatedDecryptionShareV1],
+    smudge_bits: usize,
+    final_residual_bits: usize,
+) -> Result<DecryptionResultV1, IdentifiableDecryptionAbortV1> {
+    ciphertext.validate(profile, parties).map_err(|_| {
+        identifiable_abort(
+            parties,
+            0,
+            DecryptionAbortReasonV1::BindingMismatch,
+            [0; 32],
+        )
+    })?;
+    let ciphertext_digest = ciphertext.digest();
+    if shares.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+        return Err(identifiable_abort(
+            parties,
+            shares.len(),
+            if shares.len() < ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+                DecryptionAbortReasonV1::MissingShare
+            } else {
+                DecryptionAbortReasonV1::ExcessShare
+            },
+            ciphertext_digest,
+        ));
+    }
+    let mut aggregate = ciphertext.constant().clone();
+    let mut set_hash = Keccak256::new();
+    set_hash.update(DECRYPTION_SET_DOMAIN_V1);
+    set_hash.update(&ciphertext.roster_digest());
+    set_hash.update(&ciphertext_digest);
+    for index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+        // Keep only one wire party-b limb in the bounded verifier. The old
+        // path retained all eight native party-b payloads in a relation Vec.
+        let persistent = persistent_context
+            .proof_binding(statement, index)
+            .map_err(|_| {
+                identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::BindingMismatch,
+                    ciphertext_digest,
+                )
+            })?;
+        let persistent_binding = decryption_binding_from_statement(statement, index, &persistent)
+            .map_err(|_| {
+            identifiable_abort(
+                parties,
+                index,
+                DecryptionAbortReasonV1::BindingMismatch,
+                ciphertext_digest,
+            )
+        })?;
+        let expected_binding = DecryptionBindingV1 {
+            profile_digest: profile.digest().map_err(|_| {
+                identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::BindingMismatch,
+                    ciphertext_digest,
+                )
+            })?,
+            roster_digest: ciphertext.roster_digest(),
+            epoch: ciphertext.epoch(),
+            transcript_digest: ciphertext.transcript_digest(),
+            ciphertext_digest,
+            key_context_digest: statement.key_context_digest,
+            statement_binding_digest: persistent_binding.statement_binding_digest,
+            ciphertext_record_index: statement.ciphertext.binding().record_index(),
+            sample_index: ciphertext.sample_index(),
+            party_index: u8::try_from(index).map_err(|_| {
+                identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::BindingMismatch,
+                    ciphertext_digest,
+                )
+            })?,
+            party: parties.parties[index],
+            level: ciphertext.level(),
+        };
+        let party_b = statement.public_key_shares[index].party_public_b();
+        if shares[index].binding.party_index != expected_binding.party_index
+            || shares[index].binding.party != expected_binding.party
+        {
+            return Err(identifiable_abort(
+                parties,
+                index,
+                DecryptionAbortReasonV1::ReorderedOrDuplicateShare,
+                ciphertext_digest,
+            ));
+        }
+        match verify_authenticated_share_limb_streaming(
+            profile,
+            parties,
+            statement,
+            &expected_binding,
+            party_b,
+            ciphertext,
+            &shares[index],
+            smudge_bits,
+        ) {
+            Ok(()) => {}
+            Err(ZkAmsMkheErrorV1::InvalidAuthentication) => {
+                return Err(identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::AuthenticationFailure,
+                    ciphertext_digest,
+                ));
+            }
+            Err(ZkAmsMkheErrorV1::InvalidShareProof) => {
+                return Err(identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::ProofFailure,
+                    ciphertext_digest,
+                ));
+            }
+            Err(_) => {
+                return Err(identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::BindingMismatch,
+                    ciphertext_digest,
+                ));
+            }
+        }
+        add_rns_polynomial_in_place(&mut aggregate, &shares[index].share, profile).map_err(
+            |_| {
+                identifiable_abort(
+                    parties,
+                    index,
+                    DecryptionAbortReasonV1::CorrectnessBoundExceeded,
+                    ciphertext_digest,
+                )
+            },
+        )?;
         set_hash.update(&[u8::try_from(index).unwrap_or(u8::MAX)]);
         set_hash.update(
             &authenticated_decryption_share_identity(profile, &shares[index]).map_err(|_| {

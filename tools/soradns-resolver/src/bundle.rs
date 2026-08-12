@@ -1,6 +1,8 @@
 use norito_derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
+use crate::limits::{MAX_CHILD_STRINGS, MAX_FIELD_BYTES, MAX_IDENTIFIER_BYTES};
+
 /// Expected length of a Blake3 digest used for namehash and manifest hashes.
 pub const BLAKE3_HASH_LEN: usize = 32;
 
@@ -21,6 +23,7 @@ pub struct ProofBundleV1 {
 impl ProofBundleV1 {
     /// Validate bundle invariants according to DG-1 specification.
     pub fn validate(&self) -> Result<(), ProofBundleValidationError> {
+        self.validate_resource_bounds()?;
         if self.zone_version == 0 {
             return Err(ProofBundleValidationError::InvalidZoneVersion);
         }
@@ -55,11 +58,117 @@ impl ProofBundleV1 {
         Ok(())
     }
 
+    /// Validate source-coupled collection and field limits before retention.
+    pub(crate) fn validate_resource_bounds(&self) -> Result<(), ProofBundleValidationError> {
+        check_count("ksk_set", self.ksk_set.len(), MAX_CHILD_STRINGS)?;
+        check_count(
+            "zsk_signatures",
+            self.zsk_signatures.len(),
+            MAX_CHILD_STRINGS,
+        )?;
+        check_count(
+            "delegation_chain",
+            self.delegation_chain.len(),
+            MAX_CHILD_STRINGS,
+        )?;
+        check_bytes(
+            "car_root_cid",
+            self.car_root_cid.len(),
+            MAX_IDENTIFIER_BYTES,
+        )?;
+        for entry in &self.ksk_set {
+            check_bytes("ksk public_key", entry.public_key.len(), MAX_FIELD_BYTES)?;
+            check_bytes("ksk signature", entry.signature.len(), MAX_FIELD_BYTES)?;
+        }
+        for signature in &self.zsk_signatures {
+            check_bytes("zsk id", signature.zsk_id.len(), MAX_FIELD_BYTES)?;
+            check_bytes("zsk signature", signature.signature.len(), MAX_FIELD_BYTES)?;
+        }
+        for proof in &self.delegation_chain {
+            check_bytes(
+                "delegation signature",
+                proof.signature.len(),
+                MAX_FIELD_BYTES,
+            )?;
+        }
+        check_bytes(
+            "freshness signer",
+            self.freshness.signer.len(),
+            MAX_IDENTIFIER_BYTES,
+        )?;
+        check_bytes(
+            "freshness signature",
+            self.freshness.signature.len(),
+            MAX_FIELD_BYTES,
+        )
+    }
+
+    /// Account the heap retained by this decoded bundle, including spare capacities.
+    pub(crate) fn retained_bytes(&self) -> Result<usize, ProofBundleValidationError> {
+        self.validate_resource_bounds()?;
+        let mut bytes = std::mem::size_of::<Self>();
+        charge(&mut bytes, self.car_root_cid.capacity())?;
+        charge_vec::<KskEntryV1>(&mut bytes, self.ksk_set.capacity())?;
+        for entry in &self.ksk_set {
+            charge(&mut bytes, entry.public_key.capacity())?;
+            charge(&mut bytes, entry.signature.capacity())?;
+        }
+        charge_vec::<ZskSignatureV1>(&mut bytes, self.zsk_signatures.capacity())?;
+        for signature in &self.zsk_signatures {
+            charge(&mut bytes, signature.zsk_id.capacity())?;
+            charge(&mut bytes, signature.signature.capacity())?;
+        }
+        charge_vec::<DelegationProofV1>(&mut bytes, self.delegation_chain.capacity())?;
+        for proof in &self.delegation_chain {
+            charge(&mut bytes, proof.signature.capacity())?;
+        }
+        charge(&mut bytes, self.freshness.signer.capacity())?;
+        charge(&mut bytes, self.freshness.signature.capacity())?;
+        Ok(bytes)
+    }
+
     /// Returns the hexadecimal representation of the bundle namehash.
     #[must_use]
     pub fn namehash_hex(&self) -> String {
         hex::encode(self.namehash)
     }
+}
+
+fn check_count(
+    field: &'static str,
+    found: usize,
+    maximum: usize,
+) -> Result<(), ProofBundleValidationError> {
+    if found > maximum {
+        return Err(ProofBundleValidationError::ResourceLimit {
+            field,
+            found,
+            maximum,
+        });
+    }
+    Ok(())
+}
+
+fn check_bytes(
+    field: &'static str,
+    found: usize,
+    maximum: usize,
+) -> Result<(), ProofBundleValidationError> {
+    check_count(field, found, maximum)
+}
+
+fn charge(total: &mut usize, additional: usize) -> Result<(), ProofBundleValidationError> {
+    *total = (*total)
+        .checked_add(additional)
+        .ok_or(ProofBundleValidationError::RetainedSizeOverflow)?;
+    Ok(())
+}
+
+fn charge_vec<T>(total: &mut usize, capacity: usize) -> Result<(), ProofBundleValidationError> {
+    let bytes = capacity
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(ProofBundleValidationError::RetainedSizeOverflow)?;
+    charge(total, bytes)
 }
 
 fn is_zero_hash(hash: &[u8; BLAKE3_HASH_LEN]) -> bool {
@@ -164,6 +273,19 @@ impl FreshnessProofV1 {
 /// Errors raised when validating proof bundles.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ProofBundleValidationError {
+    /// A variable-width field or child collection exceeded its first-release limit.
+    #[error("{field} contains {found} entries/bytes; the limit is {maximum}")]
+    ResourceLimit {
+        /// Stable field label used in diagnostics.
+        field: &'static str,
+        /// Observed element or byte count.
+        found: usize,
+        /// Maximum admitted element or byte count.
+        maximum: usize,
+    },
+    /// Retained-memory accounting overflowed `usize`.
+    #[error("proof bundle retained-byte accounting overflowed")]
+    RetainedSizeOverflow,
     #[error("namehash must not be zero")]
     InvalidNamehash,
     #[error("zone_version must be non-zero")]
@@ -284,5 +406,23 @@ mod tests {
         bundle.freshness.expires_at = bundle.freshness.issued_at;
         let error = bundle.validate().expect_err("validation failure expected");
         expect!["freshness validity window must be positive"].assert_eq(&error.to_string());
+    }
+
+    #[test]
+    fn bundle_collection_limit_accepts_exact_and_rejects_plus_one() {
+        let mut bundle = sample_bundle();
+        bundle.ksk_set = vec![bundle.ksk_set[0].clone(); MAX_CHILD_STRINGS];
+        bundle
+            .validate_resource_bounds()
+            .expect("exact KSK count is admitted");
+        bundle.ksk_set.push(bundle.ksk_set[0].clone());
+        assert!(matches!(
+            bundle.validate_resource_bounds(),
+            Err(ProofBundleValidationError::ResourceLimit {
+                field: "ksk_set",
+                found,
+                maximum: MAX_CHILD_STRINGS,
+            }) if found == MAX_CHILD_STRINGS + 1
+        ));
     }
 }

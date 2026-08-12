@@ -511,7 +511,7 @@ pub(crate) mod taikai_ingest {
         let capacity = usize::try_from(metadata.len()).unwrap_or(0);
         let mut bytes = Vec::with_capacity(capacity);
         let mut file = fs::File::open(path)?;
-        file.by_ref()
+        Read::by_ref(&mut file)
             .take(maximum_u64.saturating_add(1))
             .read_to_end(&mut bytes)?;
         ensure_taikai_artifact_size(label, bytes.len(), maximum)?;

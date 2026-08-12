@@ -352,7 +352,7 @@ pub struct OpenVerifyEnvelope {
     /// Generic codecs may still represent an unavailable key binding as all
     /// zeros, but chain admission for registered proof attachments requires an
     /// exact match with the active verifier-key commitment.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub vk_hash: [u8; 32],
     /// Public-input metadata bytes (opaque; backend-specific canonical encoding).
     ///
@@ -553,7 +553,7 @@ pub struct ZkAcePrivacyPublicInputsV1 {
     /// Exact typed consensus statement being authorized.
     pub statement: ZkAcePqAuthorizationStatementV1,
     /// Trusted genesis-block digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
 }
 

@@ -561,7 +561,13 @@ pub enum OutlierPolicy {
 )]
 pub struct AbsoluteOutlier {
     /// Maximum absolute deviation allowed (mantissa aligned with feed value scale).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::i128_string"))]
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::i128_string",
+            bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
+        )
+    )]
     pub max_delta: i128,
 }
 
@@ -999,7 +1005,13 @@ impl ObservationOutcome {
 )]
 pub struct ObservationValue {
     /// Signed mantissa.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::i128_string"))]
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            with = "crate::json_helpers::i128_string",
+            bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
+        )
+    )]
     pub mantissa: i128,
     /// Decimal scale (number of fractional digits).
     pub scale: u32,

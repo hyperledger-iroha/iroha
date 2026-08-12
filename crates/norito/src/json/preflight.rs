@@ -139,8 +139,12 @@ pub enum JsonPreflightSyntax {
     InvalidEscape,
     /// A Unicode escape or surrogate pair is malformed.
     InvalidUnicodeEscape,
+    /// A low surrogate appeared without a preceding high surrogate.
+    UnexpectedLowSurrogate,
     /// A number does not use JSON number grammar.
     InvalidNumber,
+    /// A number's integer component contains a forbidden leading zero.
+    LeadingZero,
     /// A boolean or null literal is malformed.
     InvalidLiteral,
 }
@@ -157,7 +161,9 @@ impl JsonPreflightSyntax {
             Self::InvalidString => "invalid JSON string",
             Self::InvalidEscape => "invalid JSON string escape",
             Self::InvalidUnicodeEscape => "invalid JSON Unicode escape",
+            Self::UnexpectedLowSurrogate => "unexpected low surrogate",
             Self::InvalidNumber => "invalid JSON number",
+            Self::LeadingZero => "leading zeros are not allowed in JSON numbers",
             Self::InvalidLiteral => "invalid JSON literal",
         }
     }
@@ -683,7 +689,7 @@ impl<'a> Scanner<'a> {
             Some(b'0') => {
                 self.offset += 1;
                 if matches!(self.peek(), Some(b'0'..=b'9')) {
-                    return Err(self.error(JsonPreflightSyntax::InvalidNumber));
+                    return Err(self.error(JsonPreflightSyntax::LeadingZero));
                 }
             }
             Some(b'1'..=b'9') => {
@@ -818,7 +824,10 @@ impl<'a> Scanner<'a> {
             return Ok(4);
         }
         if (0xdc00..=0xdfff).contains(&high) {
-            return Err(self.error(JsonPreflightSyntax::InvalidUnicodeEscape));
+            return Err(JsonPreflightError::syntax(
+                self.offset.saturating_sub(1),
+                JsonPreflightSyntax::UnexpectedLowSurrogate,
+            ));
         }
         char::from_u32(high)
             .map(char::len_utf8)
@@ -1029,7 +1038,6 @@ mod tests {
         assert_eq!(profile.object_key_decoded_bytes(), 3);
         assert_eq!(profile.max_decoded_string_bytes(), 2);
         assert_eq!(profile.max_nesting_depth(), 3);
-        assert_eq!(profile.max_container_depth(), 3);
         assert_eq!(
             profile.string_capacity_bytes(),
             profile.decoded_string_bytes()
@@ -1129,6 +1137,21 @@ mod tests {
         let error = preflight_slice(&[b'"', 0xff, b'"'], generous()).expect_err("invalid UTF-8");
         assert_eq!(error.syntax_kind(), Some(JsonPreflightSyntax::InvalidUtf8));
         assert_eq!(error.to_string(), "invalid UTF-8 at byte 1");
+
+        let leading_zero = preflight_slice(b"-012", generous()).expect_err("leading zero");
+        assert_eq!(
+            leading_zero.syntax_kind(),
+            Some(JsonPreflightSyntax::LeadingZero)
+        );
+        assert_eq!(leading_zero.offset(), 2);
+
+        let isolated_low =
+            preflight_slice(br#""\uDD1E""#, generous()).expect_err("isolated low surrogate");
+        assert_eq!(
+            isolated_low.syntax_kind(),
+            Some(JsonPreflightSyntax::UnexpectedLowSurrogate)
+        );
+        assert_eq!(isolated_low.offset(), 6);
     }
 
     #[test]

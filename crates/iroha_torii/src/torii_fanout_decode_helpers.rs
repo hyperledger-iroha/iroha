@@ -88,12 +88,13 @@ const QUERY_FANOUT_SIGNED_REQUEST_REPRESENTATIONS: usize =
 const QUERY_FANOUT_VERIFIED_REQUEST_REPRESENTATIONS: usize = 1;
 /// Equal high-water phases in the coordinator working set.
 ///
-/// The sixth unit covers the singular producer corridor while a previously
+/// The seventh unit covers the singular producer corridor while a previously
 /// successful route remains retained: request decode, retained first output,
-/// an owned persisted/source projection, the current decoded output, and two
-/// canonical encoding units can coexist. Routes still execute sequentially.
-const QUERY_FANOUT_PHASE_COUNT: usize = 6;
-/// Conservative pre-body units: 7Q + E + 6P.
+/// an owned persisted/source projection, the current decoded output, the
+/// destination frame, and two canonicalization scratch units can coexist.
+/// Routes still execute sequentially.
+const QUERY_FANOUT_PHASE_COUNT: usize = 7;
+/// Conservative pre-body units: 7Q + E + 7P.
 const QUERY_FANOUT_PREBODY_UNITS: usize = QUERY_FANOUT_SIGNED_REQUEST_REPRESENTATIONS
     + QUERY_FANOUT_VERIFIED_REQUEST_REPRESENTATIONS
     + QUERY_FANOUT_PHASE_COUNT;
@@ -146,7 +147,7 @@ fn query_fanout_fixed_overhead_bytes() -> Option<usize> {
 ///
 /// This is logical admission accounting, not an estimate of allocator internals.
 /// The request and fixed allowance remain live for the operation. The remaining
-/// bytes are divided into six equal parts so that every high-water phase fits
+/// bytes are divided into seven equal parts so that every high-water phase fits
 /// in one working-set reservation:
 ///
 /// - request decode + outer accumulator + a local Core accumulator + two
@@ -157,12 +158,16 @@ fn query_fanout_fixed_overhead_bytes() -> Option<usize> {
 ///   one concurrently held transport chunk + decoded route output;
 /// - request decode + outer accumulator + decoded route output + direct
 ///   candidate frame + nested serialization scratch;
-/// - final decoded output + the exact direct-streamed iterable body + one
-///   protocol-bounded identifier item's nested serialization scratch; and
+/// - final decoded output + the exact direct-streamed response body + one
+///   cache-free identifier encoder scratch allowance. A retained identifier's
+///   canonical bytes fit its decoded-output phase, while the bounded I105
+///   writer reserves less than twice those bytes, so the two-unit final-body
+///   allowance also bounds this scratch; and
 /// - response body + proxy snapshot copy; and
-/// - retained first singular output + the current source/output corridor +
-///   two canonical scratch units. This is a sequential comparison phase, not
-///   a route-count multiplier.
+/// - retained first singular output + the retained Core builder + the current
+///   source/output corridor + the destination canonical frame + two
+///   canonicalization scratch units. This is a sequential comparison phase,
+///   not a route-count multiplier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QueryFanoutMemoryEnvelope {
     working_set_bytes: usize,
@@ -233,7 +238,7 @@ impl QueryFanoutMemoryEnvelope {
     fn body_admission_unit(working_set_bytes: usize) -> Result<usize, Response> {
         // Before decoding, the exact verified-request frame is unknown. Reserve
         // seven signed-query-sized transport representations, one verified
-        // frame, and six high-water phases up front. Once Q and E are
+        // frame, and seven high-water phases up front. Once Q and E are
         // measured, the exact envelope can only make a phase larger, never
         // smaller.
         let fixed_overhead = query_fanout_fixed_overhead_bytes().ok_or_else(|| {
@@ -382,13 +387,14 @@ impl QueryFanoutMemoryEnvelope {
             self.decode_allocated_bytes,
             self.candidate_allocation_bytes,
             self.candidate_encoded_bytes,
+            self.candidate_encoded_bytes,
         ]) else {
             return false;
         };
         let Some(final_encode) = checked_sum([
             self.decode_allocated_bytes,
             self.final_body_bytes,
-            self.candidate_encoded_bytes,
+            self.final_body_bytes,
         ]) else {
             return false;
         };
@@ -400,7 +406,8 @@ impl QueryFanoutMemoryEnvelope {
             self.decode_allocated_bytes,
             self.decode_allocated_bytes,
             self.decode_allocated_bytes,
-            self.candidate_allocation_bytes,
+            self.candidate_encoded_bytes,
+            self.candidate_encoded_bytes,
             self.candidate_encoded_bytes,
         ]) else {
             return false;
@@ -735,6 +742,7 @@ mod query_ingress_json_decode_limit_tests {
 struct QueryMemoryGeometry {
     ingress: QueryIngressMemoryEnvelope,
     ingress_slots: NonZeroUsize,
+    fanout_pool_bytes: usize,
     fanout_working_set_bytes: usize,
     fanout_slots: NonZeroUsize,
 }
@@ -781,6 +789,7 @@ fn query_memory_geometry(
     Some(QueryMemoryGeometry {
         ingress,
         ingress_slots,
+        fanout_pool_bytes,
         fanout_working_set_bytes,
         fanout_slots,
     })
@@ -797,6 +806,304 @@ fn query_fanout_slot_count(
     }
     NonZeroUsize::new(
         (max_retained_bytes / working_set_bytes.get()).min(max_concurrent_queries.max(1)),
+    )
+}
+
+fn take_nonzero_generation(counter: &AtomicU64) -> Option<u64> {
+    counter
+        .fetch_update(
+            AtomicOrdering::Relaxed,
+            AtomicOrdering::Relaxed,
+            |current| (current != 0).then(|| current.checked_add(1)).flatten(),
+        )
+        .ok()
+}
+
+static NEXT_QUERY_MEMORY_POOL_GENERATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_ORDINARY_QUERY_POLICY_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_query_memory_pool_generation() -> u64 {
+    take_nonzero_generation(&NEXT_QUERY_MEMORY_POOL_GENERATION)
+        .expect("query memory pool generation must not wrap")
+}
+
+fn next_ordinary_query_policy_generation() -> u64 {
+    take_nonzero_generation(&NEXT_ORDINARY_QUERY_POLICY_GENERATION)
+        .expect("ordinary query policy generation must not wrap")
+}
+
+fn weighted_permit_count(bytes: u64, bytes_per_permit: NonZeroU64) -> Option<u32> {
+    if bytes == 0 {
+        return Some(0);
+    }
+    let quantum = bytes_per_permit.get();
+    let permits = (bytes / quantum).checked_add(u64::from(bytes % quantum != 0))?;
+    u32::try_from(permits).ok()
+}
+
+/// One app-local byte-weighted pool shared by fanout and ordinary queries.
+///
+/// Tokio exposes weighted acquisition through a `u32` permit count, while its
+/// semaphore has a platform-dependent larger maximum. The pool therefore
+/// chooses a conservative byte quantum and never represents more bytes than
+/// the configured capacity.
+#[derive(Clone, Debug)]
+struct QueryWeightedMemoryPool {
+    semaphore: Arc<tokio::sync::Semaphore>,
+    bytes_per_permit: NonZeroU64,
+    total_permits: NonZeroU32,
+    generation: u64,
+}
+
+impl QueryWeightedMemoryPool {
+    fn new(pool_bytes: usize) -> Option<Self> {
+        let max_permits = tokio::sync::Semaphore::MAX_PERMITS
+            .min(usize::try_from(u32::MAX).unwrap_or(usize::MAX));
+        Self::with_max_permits(pool_bytes, max_permits)
+    }
+
+    fn with_max_permits(pool_bytes: usize, max_permits: usize) -> Option<Self> {
+        let pool_bytes = u64::try_from(pool_bytes).ok()?;
+        let max_permits = max_permits
+            .min(tokio::sync::Semaphore::MAX_PERMITS)
+            .min(usize::try_from(u32::MAX).unwrap_or(usize::MAX));
+        let max_permits = u64::try_from(max_permits)
+            .ok()
+            .filter(|value| *value != 0)?;
+        if pool_bytes == 0 {
+            return None;
+        }
+
+        // Division plus a remainder bit is ceil-division without the usual
+        // `bytes + divisor - 1` overflow near `u64::MAX`.
+        let bytes_per_permit =
+            (pool_bytes / max_permits).checked_add(u64::from(pool_bytes % max_permits != 0))?;
+        let bytes_per_permit = NonZeroU64::new(bytes_per_permit)?;
+        let total_permits = pool_bytes / bytes_per_permit.get();
+        let total_permits = NonZeroU32::new(u32::try_from(total_permits).ok()?)?;
+        Some(Self {
+            semaphore: Arc::new(tokio::sync::Semaphore::new(
+                usize::try_from(total_permits.get()).ok()?,
+            )),
+            bytes_per_permit,
+            total_permits,
+            generation: next_query_memory_pool_generation(),
+        })
+    }
+
+    fn permits_for_parts<const N: usize>(&self, byte_parts: [u64; N]) -> Option<NonZeroU32> {
+        let permits = byte_parts.into_iter().try_fold(0_u32, |total, bytes| {
+            total.checked_add(weighted_permit_count(bytes, self.bytes_per_permit)?)
+        })?;
+        let permits = NonZeroU32::new(permits)?;
+        (permits.get() <= self.total_permits.get()).then_some(permits)
+    }
+
+    fn can_reserve_parts<const N: usize>(&self, byte_parts: [u64; N]) -> bool {
+        self.permits_for_parts(byte_parts).is_some()
+    }
+
+    fn try_acquire_parts<const N: usize>(
+        &self,
+        byte_parts: [u64; N],
+    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let permits = self.permits_for_parts(byte_parts)?;
+        self.semaphore
+            .clone()
+            .try_acquire_many_owned(permits.get())
+            .ok()
+    }
+
+    fn capacity_bytes(&self) -> u64 {
+        u64::from(self.total_permits.get())
+            .checked_mul(self.bytes_per_permit.get())
+            .expect("weighted query pool capacity was validated at construction")
+    }
+
+    fn available_bytes(&self) -> u64 {
+        u64::try_from(self.semaphore.available_permits())
+            .ok()
+            .and_then(|permits| permits.checked_mul(self.bytes_per_permit.get()))
+            .expect("weighted query pool availability cannot exceed validated capacity")
+    }
+
+    fn available_permits(&self) -> usize {
+        self.semaphore.available_permits()
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+/// Immutable app-local limits used for every ordinary query on one Torii.
+///
+/// This deliberately does not read the process-global app endpoint limits at
+/// request time. Multiple Torii instances in one process therefore cannot
+/// invalidate one another's cursor policies through the legacy global setter.
+#[derive(Clone, Copy, Debug)]
+struct OrdinaryQueryServerPolicy {
+    limits: iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits,
+    singular_output_limits: iroha_core::smartcontracts::isi::query::SingularQueryOutputLimits,
+    singular_execution_reservation_bytes: u64,
+    max_fetch_size: u64,
+}
+
+impl OrdinaryQueryServerPolicy {
+    fn new(
+        app_limits: routing::AppQueryLimits,
+        ingress: QueryIngressMemoryEnvelope,
+        fanout: QueryFanoutMemoryEnvelope,
+    ) -> Option<Self> {
+        use iroha_core::smartcontracts::isi::query::{
+            ORDINARY_NAME_ID_SOURCE_BYTES, OrdinaryQueryExecutionLimits,
+        };
+
+        let max_page_items = app_limits.max_fetch_size;
+        let max_source_item_bytes = ORDINARY_NAME_ID_SOURCE_BYTES;
+        let max_response_bytes = u64::try_from(fanout.final_body_bytes).ok()?;
+        let max_cursor_retained_items = max_page_items;
+        let max_cursor_value_bytes =
+            max_cursor_retained_items.checked_mul(max_source_item_bytes)?;
+        let max_revalidation_archive_bytes = u64::try_from(ingress.canonical_encoded_bytes).ok()?;
+        let revalidation_decode_limits = QueryFanoutMemoryEnvelope::decode_limits_for(
+            ingress.canonical_encoded_bytes,
+            ingress.decode_allocated_bytes,
+        )
+        .ok()?;
+        let required_execution = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
+            max_page_items,
+            max_source_item_bytes,
+            max_response_bytes,
+            max_revalidation_archive_bytes,
+            revalidation_decode_limits,
+        )
+        .ok()?;
+        // Core's minimum owns one bounded encoded response. The narrow
+        // ordinary iterable closure and fixed-width ABI scalar use this
+        // smaller geometry. State-backed singular requests instead reserve
+        // the complete fanout-derived working set below. Torii can also own a
+        // proxy snapshot or actor-wire copy while either the Norito or JSON
+        // body is live, so charge that copied body separately here.
+        let transport_copy_bytes = max_response_bytes
+            .checked_add(u64::try_from(TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1).ok()?)?;
+        let execution_headroom_bytes = required_execution.checked_add(transport_copy_bytes)?;
+        let max_cursor_retained_bytes =
+            OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(
+                max_cursor_retained_items,
+                max_source_item_bytes,
+                max_cursor_value_bytes,
+                max_revalidation_archive_bytes,
+            )
+            .ok()?;
+        let limits = OrdinaryQueryExecutionLimits::try_new(
+            next_ordinary_query_policy_generation(),
+            fanout.execution_budget(),
+            max_page_items,
+            execution_headroom_bytes,
+            max_source_item_bytes,
+            max_response_bytes,
+            max_cursor_retained_items,
+            max_cursor_value_bytes,
+            max_cursor_retained_bytes,
+            max_revalidation_archive_bytes,
+            revalidation_decode_limits,
+        )
+        .ok()?;
+        let singular_output_limits = fanout.singular_output_limits();
+        let singular_execution_reservation_bytes = u64::try_from(fanout.working_set_bytes).ok()?;
+        Some(Self {
+            limits,
+            singular_output_limits,
+            singular_execution_reservation_bytes,
+            max_fetch_size: app_limits.max_fetch_size,
+        })
+    }
+
+    fn start_reservation_parts(self) -> [u64; 2] {
+        [
+            self.limits.execution_headroom_bytes(),
+            self.limits.max_cursor_retained_bytes(),
+        ]
+    }
+
+    fn execution_reservation_parts(self) -> [u64; 1] {
+        [self.limits.execution_headroom_bytes()]
+    }
+
+    fn singular_execution_reservation_parts(self) -> [u64; 1] {
+        [self.singular_execution_reservation_bytes]
+    }
+}
+
+/// Direct, move-only ownership of one ordinary-query weighted reservation.
+#[derive(Debug)]
+struct ToriiOrdinaryQueryMemoryReservation {
+    permit: tokio::sync::OwnedSemaphorePermit,
+    bytes_per_permit: NonZeroU64,
+    pool_generation: u64,
+}
+
+impl iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryReservation
+    for ToriiOrdinaryQueryMemoryReservation
+{
+    fn reserved_bytes(&self) -> u64 {
+        u64::try_from(self.permit.num_permits())
+            .ok()
+            .and_then(|permits| permits.checked_mul(self.bytes_per_permit.get()))
+            .expect("ordinary query permit weight stays within its validated pool")
+    }
+
+    fn pool_generation(&self) -> u64 {
+        self.pool_generation
+    }
+
+    fn split_off(
+        &mut self,
+        bytes: u64,
+    ) -> Option<Box<dyn iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryReservation>>
+    {
+        let permits = weighted_permit_count(bytes, self.bytes_per_permit)?;
+        let permits = NonZeroU32::new(permits)?;
+        let permit = self.permit.split(usize::try_from(permits.get()).ok()?)?;
+        Some(Box::new(Self {
+            permit,
+            bytes_per_permit: self.bytes_per_permit,
+            pool_generation: self.pool_generation,
+        }))
+    }
+}
+
+fn try_acquire_ordinary_query_memory(
+    app: &SharedAppState,
+    stored_start: bool,
+    singular: bool,
+) -> Result<iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease, Error> {
+    let permit = if singular {
+        app.query_fanout_inflight.try_acquire_parts(
+            app.ordinary_query_policy
+                .singular_execution_reservation_parts(),
+        )
+    } else if stored_start {
+        app.query_fanout_inflight
+            .try_acquire_parts(app.ordinary_query_policy.start_reservation_parts())
+    } else {
+        app.query_fanout_inflight
+            .try_acquire_parts(app.ordinary_query_policy.execution_reservation_parts())
+    }
+    .ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        ))
+    })?;
+    Ok(
+        iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease::new(
+            ToriiOrdinaryQueryMemoryReservation {
+                permit,
+                bytes_per_permit: app.query_fanout_inflight.bytes_per_permit,
+                pool_generation: app.query_fanout_inflight.generation(),
+            },
+        ),
     )
 }
 
@@ -835,32 +1142,14 @@ impl ToriiProxyMemoryReservation {
     }
 }
 
-async fn acquire_torii_proxy_memory(
+fn acquire_torii_proxy_memory(
     app: &SharedAppState,
 ) -> Result<ToriiProxyMemoryReservation, Response> {
-    let capacity_response = || {
-        torii_proxy_error_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "proxy_capacity_exceeded",
-            "Torii proxy memory capacity is exhausted",
-        )
-    };
-    if app.query_queue_timeout.is_zero() {
-        return app
-            .torii_proxy_memory_inflight
-            .clone()
-            .try_acquire_owned()
-            .map(ToriiProxyMemoryReservation::new)
-            .map_err(|_| capacity_response());
-    }
-    tokio::time::timeout(
-        app.query_queue_timeout,
-        app.torii_proxy_memory_inflight.clone().acquire_owned(),
-    )
-    .await
-    .map_err(|_| capacity_response())?
-    .map(ToriiProxyMemoryReservation::new)
-    .map_err(|_| capacity_response())
+    // A waiter would retain its decoded request and candidate catalogue while
+    // another complete W-sized proxy graph owns the only slot. Proxy promotion
+    // is therefore always fail-fast; the ordinary query queue timeout does not
+    // apply to this independent all-variant memory lane.
+    try_acquire_torii_proxy_memory(app)
 }
 
 fn try_acquire_torii_proxy_memory(
@@ -901,11 +1190,28 @@ fn hold_torii_proxy_memory_in_response_body(
 fn try_acquire_query_fanout_memory(
     app: &SharedAppState,
 ) -> Result<QueryFanoutMemoryReservation, Response> {
+    #[cfg(feature = "app_api")]
+    if let Some(reservation) = current_app_routed_read_fanout_reservation() {
+        return Ok(reservation);
+    }
+    try_acquire_new_query_fanout_memory(app)
+}
+
+fn try_acquire_new_query_fanout_memory(
+    app: &SharedAppState,
+) -> Result<QueryFanoutMemoryReservation, Response> {
     app.query_fanout_inflight
-        .clone()
-        .try_acquire_owned()
+        .try_acquire_parts([
+            u64::try_from(app.query_fanout_working_set_bytes).map_err(|_| {
+                torii_proxy_error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "query_capacity_exceeded",
+                    "cross-dataspace query fanout memory weight is not representable",
+                )
+            })?,
+        ])
         .map(QueryFanoutMemoryReservation::new)
-        .map_err(|_| {
+        .ok_or_else(|| {
             torii_proxy_error_response(
                 StatusCode::TOO_MANY_REQUESTS,
                 "query_capacity_exceeded",
@@ -931,6 +1237,42 @@ impl QueryFanoutMemoryReservation {
     fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         Self(Arc::new(permit))
     }
+}
+
+/// Cloneable response-only owner for a move-only ordinary-query lease.
+#[derive(Clone, Debug)]
+struct OrdinaryQueryResponseMemory(
+    Arc<iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease>,
+);
+
+impl OrdinaryQueryResponseMemory {
+    fn new(lease: iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease) -> Self {
+        Self(Arc::new(lease))
+    }
+}
+
+fn hold_ordinary_query_memory_in_response_body(
+    mut response: Response,
+    reservation: OrdinaryQueryResponseMemory,
+) -> Response {
+    use http_body_util::BodyExt as _;
+
+    response.extensions_mut().insert(reservation.clone());
+    let (parts, body) = response.into_parts();
+    let guarded_body = body.map_frame(move |frame| {
+        let _reservation = &reservation;
+        frame
+    });
+    Response::from_parts(parts, Body::new(guarded_body))
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn take_ordinary_query_memory_reservation(
+    response: &mut Response,
+) -> Option<OrdinaryQueryResponseMemory> {
+    response
+        .extensions_mut()
+        .remove::<OrdinaryQueryResponseMemory>()
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect", feature = "app_api"))]

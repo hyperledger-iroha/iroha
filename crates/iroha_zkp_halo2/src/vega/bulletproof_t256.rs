@@ -1330,6 +1330,146 @@ mod tests {
         )
     }
 
+    fn scalar_commitment(value: Scalar, mask: Scalar) -> Point {
+        let generators = TinyT256Suite::generators();
+        let mut terms = SecretMultiexpBuilder::<TinyT256Suite>::new(2)
+            .expect("fixed scalar commitment capacity");
+        terms
+            .push(value, generators.g)
+            .expect("scalar value term fits exact capacity");
+        terms
+            .push(mask, generators.h)
+            .expect("scalar mask term fits exact capacity");
+        terms.evaluate().expect("complete scalar commitment")
+    }
+
+    fn scalar_openings() -> Vec<(Scalar, Scalar)> {
+        vec![
+            (Scalar::from_u64(7), Scalar::from_u64(11)),
+            (Scalar::from_u64(13), Scalar::from_u64(17)),
+        ]
+    }
+
+    fn scalar_commitments() -> Vec<Point> {
+        scalar_openings()
+            .into_iter()
+            .map(|(value, mask)| scalar_commitment(value, mask))
+            .collect()
+    }
+
+    fn scalar_constraints() -> Vec<LinComb<Scalar>> {
+        vec![
+            LinComb::empty()
+                .term(Scalar::ONE, Variable::aO(0))
+                .term(-Scalar::ONE, Variable::V(0))
+                .constant(-Scalar::from_u64(5)),
+            LinComb::empty()
+                .term(Scalar::ONE, Variable::aO(1))
+                .term(Scalar::from_u64(2), Variable::V(1))
+                .constant(-Scalar::from_u64(56)),
+        ]
+    }
+
+    fn scalar_fixture_context() -> [u8; 32] {
+        keccak256(b"t256-bp-scalar-opening-context")
+    }
+
+    fn scalar_fixture_basis() -> [u8; 32] {
+        keccak256(b"t256-bp-scalar-opening-basis")
+    }
+
+    fn prove_scalar_fixture(
+        constraints: Vec<LinComb<Scalar>>,
+        vector_commitments: Vec<Point>,
+        vector_openings: Vec<VectorCommitmentOpening<Scalar>>,
+        scalar_commitments: Vec<Point>,
+        scalar_openings: Vec<(Scalar, Scalar)>,
+        rng_label: &[u8],
+    ) -> Result<(Vec<u8>, [u8; 32]), GeneralizedBulletproofErrorV1> {
+        let statement_axis = scalar_commitments
+            .first()
+            .copied()
+            .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+        let witness = ArithmeticCircuitWitness::<TinyT256Suite>::new_with_scalar_commitments(
+            vec![Scalar::from_u64(3), Scalar::from_u64(5)],
+            vec![Scalar::from_u64(4), Scalar::from_u64(6)],
+            vector_openings,
+            scalar_openings,
+        )?;
+        let mut transcript = T256BulletproofProverTranscriptV1::<TinyT256Suite>::new(
+            scalar_fixture_context(),
+            scalar_fixture_basis(),
+            11,
+            2,
+            statement_axis,
+        )?;
+        ArithmeticCircuitStatement::new(
+            TinyT256Suite::generators().reduce(4)?,
+            constraints,
+            vector_commitments,
+            scalar_commitments,
+        )?
+        .prove(&mut KatRandom::new(rng_label), &mut transcript, witness)?;
+        Ok(transcript.complete())
+    }
+
+    fn verify_scalar_fixture(
+        constraints: Vec<LinComb<Scalar>>,
+        vector_commitments: Vec<Point>,
+        scalar_commitments: Vec<Point>,
+        proof: &[u8],
+    ) -> Result<[u8; 32], GeneralizedBulletproofErrorV1> {
+        let statement_axis = scalar_commitments
+            .first()
+            .copied()
+            .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+        let mut transcript = T256BulletproofVerifierTranscriptV1::<TinyT256Suite>::new(
+            scalar_fixture_context(),
+            scalar_fixture_basis(),
+            11,
+            2,
+            statement_axis,
+            proof,
+        )?;
+        ArithmeticCircuitStatement::new(
+            TinyT256Suite::generators().reduce(4)?,
+            constraints,
+            vector_commitments,
+            scalar_commitments,
+        )?
+        .verify(&mut transcript)?;
+        transcript.finish()
+    }
+
+    fn mixed_vector_opening() -> (Point, VectorCommitmentOpening<Scalar>) {
+        let generators = TinyT256Suite::generators().reduce(4).expect("tiny basis");
+        let values = vec![
+            Scalar::from_u64(19),
+            Scalar::from_u64(23),
+            Scalar::from_u64(29),
+            Scalar::from_u64(31),
+        ];
+        let mask = Scalar::from_u64(37);
+        let mut terms = SecretMultiexpBuilder::<TinyT256Suite>::new(values.len() + 1)
+            .expect("fixed mixed commitment capacity");
+        for (value, generator) in values
+            .iter()
+            .copied()
+            .zip(generators.g_bold.iter().copied())
+        {
+            terms
+                .push(value, generator)
+                .expect("mixed value fits exact capacity");
+        }
+        terms
+            .push(mask, generators.h)
+            .expect("mixed mask fits exact capacity");
+        (
+            terms.evaluate().expect("complete mixed commitment"),
+            VectorCommitmentOpening::new(values, mask),
+        )
+    }
+
     fn verify_fixture_with_axes(
         context: [u8; 32],
         basis: [u8; 32],
@@ -1992,6 +2132,171 @@ mod tests {
                 &bound_two,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn scalar_pedersen_openings_roundtrip_for_one_and_mixed_commitments() {
+        let mut one_constraints = scalar_constraints();
+        one_constraints.truncate(1);
+        let one_commitments = vec![scalar_commitments()[0]];
+        let one_openings = vec![scalar_openings()[0]];
+        let (one_proof, one_digest) = prove_scalar_fixture(
+            one_constraints,
+            Vec::new(),
+            Vec::new(),
+            one_commitments,
+            one_openings,
+            b"t256-bp-one-scalar-opening-rng",
+        )
+        .expect("one scalar commitment proves");
+        let mut one_constraints = scalar_constraints();
+        one_constraints.truncate(1);
+        assert_eq!(
+            verify_scalar_fixture(
+                one_constraints,
+                Vec::new(),
+                vec![scalar_commitments()[0]],
+                &one_proof,
+            ),
+            Ok(one_digest)
+        );
+        assert_eq!(one_proof.len(), 589);
+
+        let (vector_commitment, vector_opening) = mixed_vector_opening();
+        let (mixed_proof, mixed_digest) = prove_scalar_fixture(
+            scalar_constraints(),
+            vec![vector_commitment],
+            vec![vector_opening],
+            scalar_commitments(),
+            scalar_openings(),
+            b"t256-bp-mixed-scalar-opening-rng",
+        )
+        .expect("mixed vector and scalar commitments prove");
+        assert_eq!(
+            verify_scalar_fixture(
+                scalar_constraints(),
+                vec![vector_commitment],
+                scalar_commitments(),
+                &mixed_proof,
+            ),
+            Ok(mixed_digest)
+        );
+        assert_eq!(mixed_proof.len(), 589);
+
+        // Scalar openings use the omitted center coefficient and therefore
+        // add no transcript elements at the governed lookup dimensions.
+        assert_eq!(membership_proof_len(1_024), Ok(1_117));
+        assert_eq!(membership_proof_len(16_384), Ok(1_381));
+        assert_eq!(membership_proof_len(32_768), Ok(1_447));
+    }
+
+    #[test]
+    fn scalar_pedersen_openings_reject_wrong_openings_order_count_weights_and_sign() {
+        let canonical_commitments = scalar_commitments();
+        let canonical_openings = scalar_openings();
+        let (proof, digest) = prove_scalar_fixture(
+            scalar_constraints(),
+            Vec::new(),
+            Vec::new(),
+            canonical_commitments.clone(),
+            canonical_openings.clone(),
+            b"t256-bp-two-scalar-opening-rng",
+        )
+        .expect("canonical two-scalar fixture proves");
+        assert_eq!(
+            verify_scalar_fixture(
+                scalar_constraints(),
+                Vec::new(),
+                canonical_commitments.clone(),
+                &proof,
+            ),
+            Ok(digest)
+        );
+
+        let mut wrong_value = canonical_openings.clone();
+        wrong_value[0].0 += Scalar::ONE;
+        let mut wrong_mask = canonical_openings.clone();
+        wrong_mask[0].1 += Scalar::ONE;
+        let mut wrong_order = canonical_openings.clone();
+        wrong_order.swap(0, 1);
+        let mut too_many = canonical_openings.clone();
+        too_many.push((Scalar::from_u64(19), Scalar::from_u64(23)));
+        for openings in [
+            wrong_value,
+            wrong_mask,
+            wrong_order,
+            canonical_openings[..1].to_vec(),
+            too_many,
+        ] {
+            assert!(matches!(
+                prove_scalar_fixture(
+                    scalar_constraints(),
+                    Vec::new(),
+                    Vec::new(),
+                    canonical_commitments.clone(),
+                    openings,
+                    b"t256-bp-invalid-scalar-opening-rng",
+                ),
+                Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+            ));
+        }
+
+        let mut prover_wrong_sign = scalar_constraints();
+        prover_wrong_sign[0].wv[0].1 = Scalar::ONE;
+        assert!(matches!(
+            prove_scalar_fixture(
+                prover_wrong_sign,
+                Vec::new(),
+                Vec::new(),
+                canonical_commitments.clone(),
+                canonical_openings.clone(),
+                b"t256-bp-wrong-scalar-sign-rng",
+            ),
+            Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+        ));
+        let mut prover_wrong_weight = scalar_constraints();
+        prover_wrong_weight[1].wv[0].1 = Scalar::from_u64(3);
+        assert!(matches!(
+            prove_scalar_fixture(
+                prover_wrong_weight,
+                Vec::new(),
+                Vec::new(),
+                canonical_commitments.clone(),
+                canonical_openings,
+                b"t256-bp-wrong-scalar-weight-rng",
+            ),
+            Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
+        ));
+
+        let mut reordered_commitments = canonical_commitments.clone();
+        reordered_commitments.swap(0, 1);
+        assert!(
+            verify_scalar_fixture(
+                scalar_constraints(),
+                Vec::new(),
+                reordered_commitments,
+                &proof,
+            )
+            .is_err()
+        );
+
+        let mut wrong_sign = scalar_constraints();
+        wrong_sign[0].wv[0].1 = Scalar::ONE;
+        assert!(
+            verify_scalar_fixture(
+                wrong_sign,
+                Vec::new(),
+                canonical_commitments.clone(),
+                &proof,
+            )
+            .is_err()
+        );
+        let mut wrong_weight = scalar_constraints();
+        wrong_weight[1].wv[0].1 = Scalar::from_u64(3);
+        assert!(
+            verify_scalar_fixture(wrong_weight, Vec::new(), canonical_commitments, &proof,)
+                .is_err()
         );
     }
 

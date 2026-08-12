@@ -19,6 +19,31 @@ struct UncheckedMultisigPolicyWire {
     members: Vec<UncheckedMultisigMemberWire>,
 }
 
+#[test]
+fn streamed_musubi_domain_hashes_preserve_exact_legacy_bytes() {
+    let value = vec![3_u64, 5, 8, 13];
+    let encoded = value.encode();
+    let domain = b"iroha.musubi.streaming-hash.test.v1";
+    assert_eq!(
+        domain_hash_value(domain, &value),
+        domain_hash(domain, &encoded)
+    );
+
+    let domain_len = u64::try_from(domain.len())
+        .expect("test domain length fits u64")
+        .to_le_bytes();
+    let encoded_len = u64::try_from(encoded.len())
+        .expect("test payload length fits u64")
+        .to_le_bytes();
+    let legacy = HashOf::<Vec<u64>>::from_untyped_unchecked(Hash::new_from_chunks(&[
+        &domain_len,
+        domain,
+        &encoded_len,
+        &encoded,
+    ]));
+    assert_eq!(domain_signing_hash(domain, &value), legacy);
+}
+
 #[allow(dead_code)]
 #[derive(Encode)]
 enum UncheckedAccountControllerWire {
@@ -414,6 +439,67 @@ fn resolver_row(version: &str) -> MusubiResolverReleaseRowV1 {
             governance: MusubiArtifactGovernanceStateV1::Available,
         },
         index_revision: 3,
+    }
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn resolver_json_counting_preserves_exact_wire_without_output_scratch() {
+    let member_a = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)
+        .expect("fixture seed derives a checked keypair");
+    let member_b = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
+        .expect("fixture seed derives a checked keypair");
+    let multisig = AccountId::new_multisig(
+        MultisigPolicy::new(
+            1,
+            vec![
+                MultisigMember::new(member_a.public_key().clone(), 1).expect("valid member"),
+                MultisigMember::new(member_b.public_key().clone(), 1).expect("valid member"),
+            ],
+        )
+        .expect("valid policy"),
+    );
+
+    for discriminant in [0x02f1, 0x0171, 0, 42] {
+        let _guard = crate::account::address::ChainDiscriminantGuard::enter(discriminant);
+        for changed_by in [account(17), multisig.clone()] {
+            let mut row = resolver_row("1.0.0");
+            row.selection.yank.changed_by = changed_by;
+            let counted_row_len = row
+                .canonical_json_len_bounded(usize::MAX)
+                .expect("count resolver row JSON before the ordinary encoder can populate caches");
+            let bounded_row_json = norito::json::to_json_bounded(&row, counted_row_len)
+                .expect("bounded resolver row JSON before the ordinary encoder populates caches");
+            let row_json = norito::json::to_json(&row).expect("encode resolver row JSON");
+            assert_eq!(counted_row_len, row_json.len());
+            assert_eq!(bounded_row_json, row_json);
+            assert_eq!(
+                row.canonical_json_len_bounded(row_json.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge),
+            );
+
+            let page = MusubiResolverIndexPageV1 {
+                query: MusubiResolverIndexQueryV1 {
+                    package: row.release.package.clone(),
+                    requirement: None,
+                    page: MusubiPageRequestV1 {
+                        limit: 1,
+                        cursor: None,
+                    },
+                },
+                network_id: test_network_id(0x15),
+                items: vec![row],
+                next_cursor: None,
+                snapshot: snapshot(),
+            };
+            let counted_page_len = streaming::musubi_json_len_bounded(&page, usize::MAX)
+                .expect("count resolver page JSON");
+            let bounded_page_json = norito::json::to_json_bounded(&page, counted_page_len)
+                .expect("bounded resolver page JSON");
+            let page_json = norito::json::to_json(&page).expect("encode resolver page JSON");
+            assert_eq!(bounded_page_json, page_json);
+            assert_eq!(counted_page_len, page_json.len());
+        }
     }
 }
 

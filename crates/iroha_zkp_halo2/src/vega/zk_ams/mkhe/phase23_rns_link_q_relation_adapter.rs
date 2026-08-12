@@ -408,7 +408,7 @@ mod tests {
             );
         }
         assert!(parent.contains(
-            "#[path = \"phase23_rns_link_q_relation_adapter.rs\"]\nmod q_relation_adapter;"
+            "#[cfg(test)]\n#[path = \"phase23_rns_link_q_relation_adapter.rs\"]\nmod q_relation_adapter;"
         ));
         assert!(collective.contains("relation_sink.absorb_validated_opening_topology_v1(&permit)"));
         assert!(q_pcs.contains("fiat_shamir_relation_adapter_implemented: false"));

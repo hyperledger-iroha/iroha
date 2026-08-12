@@ -696,7 +696,7 @@ pub struct ReserveAuthorityPolicyV1 {
     /// Digest of the immediately preceding revision.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Deterministic rent, underwriting, credit-cap, and APR policy.
@@ -785,11 +785,23 @@ impl ReserveAuthorityPolicyV1 {
     ///
     /// Returns a Norito encoding error if canonical serialization fails.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(RESERVE_AUTHORITY_POLICY_DIGEST_DOMAIN_V1);
-        hasher.update(&encoded);
+        norito::core::write_canonical_to_writer(self, &mut Blake3Writer(&mut hasher))?;
         Ok(*hasher.finalize().as_bytes())
+    }
+}
+
+struct Blake3Writer<'a>(&'a mut blake3::Hasher);
+
+impl std::io::Write for Blake3Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -851,7 +863,7 @@ pub struct ReserveAuthorityPolicyRecordV1 {
     /// Activated policy body.
     pub policy: ReserveAuthorityPolicyV1,
     /// Canonical policy digest.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Governance authority that activated the policy.
     pub activated_by: AccountId,
@@ -884,7 +896,7 @@ pub struct ReserveProviderAccountV1 {
     /// Immutable underwriting terms.
     pub terms: ReserveProviderTermsV1,
     /// Policy digest under which the account was last projected.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Compare-and-set account revision.
     pub revision: u64,
@@ -1039,7 +1051,7 @@ pub enum ReserveMovementStatusV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReserveMovementRecordV1 {
     /// Globally unique movement identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub movement_id: [u8; 32],
     /// Provider reserve partition.
     pub provider_id: ProviderId,
@@ -1052,7 +1064,7 @@ pub struct ReserveMovementRecordV1 {
     /// Provider revision on which the request is conditional.
     pub expected_provider_revision: u64,
     /// Policy digest on which the request is conditional.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
     /// Decision lifecycle.
     pub status: ReserveMovementStatusV1,
@@ -1084,7 +1096,7 @@ pub enum ReserveAppealStatusV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReserveAppealRecordV1 {
     /// Globally unique appeal identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub appeal_id: [u8; 32],
     /// Appealing provider.
     pub provider_id: ProviderId,
@@ -1097,7 +1109,7 @@ pub struct ReserveAppealRecordV1 {
     /// Optional external evidence digest.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub evidence_digest: Option<[u8; 32]>,
     /// Provider revision on which the appeal is conditional.
@@ -1121,7 +1133,7 @@ pub struct ReserveFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same immutable state view.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
 
@@ -1134,7 +1146,7 @@ pub struct ReserveFinalizedEventCursorV1 {
     /// Finalized block height containing the event.
     pub block_height: u64,
     /// Finalized block hash resolved only after the block commits.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Reserve-event index within the committing block.
     pub event_index: u32,
@@ -1149,7 +1161,7 @@ pub struct ReserveFinalizedEventV1 {
     /// Committing block height.
     pub block_height: u64,
     /// Committing block hash resolved from finalized state.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
     /// Reserve-event index within the committing block.
     pub event_index: u32,
@@ -1211,7 +1223,7 @@ pub struct ReserveMovementPageV1 {
     /// Exclusive movement-id continuation, present only when `has_more` is true.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub next_after: Option<[u8; 32]>,
 }
@@ -1229,7 +1241,7 @@ pub struct ReserveAppealPageV1 {
     /// Exclusive appeal-id continuation, present only when `has_more` is true.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub next_after: Option<[u8; 32]>,
 }
@@ -1733,6 +1745,11 @@ mod tests {
         policy.validate().expect("valid authority policy");
         assert_canonical_norito_round_trip(&policy);
         let digest = policy.digest().expect("digest authority policy");
+        let canonical = norito::encode_canonical(&policy).expect("historical policy bytes");
+        let mut historical = blake3::Hasher::new();
+        historical.update(RESERVE_AUTHORITY_POLICY_DIGEST_DOMAIN_V1);
+        historical.update(&canonical);
+        assert_eq!(digest, *historical.finalize().as_bytes());
 
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;

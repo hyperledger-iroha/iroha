@@ -2912,20 +2912,11 @@ fn query_paths() -> Map {
     let mut operation = versioned_dual_format_post_operation(
         "Queries",
         "Submit a signed query.",
-        "Submit a versioned SignedQuery using application/x-norito. JSON request bodies are rejected before collection because the JSON decoder cannot enforce the signed-query allocation envelope. Successful single-route responses remain negotiable as Norito or JSON. Bounded cross-dataspace iterable fanout requires Norito and supports only boxed, unfiltered, unsorted identity FindRoleIds and FindActiveTriggerIds queries; fast-DSL predicate/selector classification and other unsupported iterable shapes fail before route execution.",
+        "Submit a versioned SignedQuery using bounded application/x-norito or application/json decoding. Successful single-route and cross-dataspace responses are negotiable as Norito or JSON. Bounded cross-dataspace fanout supports every source-bounded singular query plus boxed, unfiltered, unsorted identity FindRoleIds and FindActiveTriggerIds iterables; fast-DSL predicate/selector classification and other unsupported iterable shapes fail before route execution.",
         "#/components/schemas/VersionedSignedQueryJson",
         "#/components/schemas/JsonValue",
         200,
     );
-    operation
-        .get_mut("post")
-        .and_then(Value::as_object_mut)
-        .and_then(|post| post.get_mut("requestBody"))
-        .and_then(Value::as_object_mut)
-        .and_then(|body| body.get_mut("content"))
-        .and_then(Value::as_object_mut)
-        .expect("signed-query request content exists")
-        .remove("application/json");
     let responses = operation
         .get_mut("post")
         .and_then(Value::as_object_mut)
@@ -2933,6 +2924,10 @@ fn query_paths() -> Map {
         .and_then(Value::as_object_mut)
         .expect("signed-query response map exists");
     for (status, description) in [
+        (
+            "408",
+            "The signed-query body did not complete within its configured signature-validity window.",
+        ),
         (
             "409",
             "The authenticated query shape is not supported by bounded routed fanout.",
@@ -2944,6 +2939,10 @@ fn query_paths() -> Map {
         (
             "429",
             "Signed-query ingress or fanout memory capacity is exhausted.",
+        ),
+        (
+            "500",
+            "The admitted response could not be encoded by its checked serializer.",
         ),
         (
             "502",
@@ -3271,7 +3270,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_get_operation(
             "Contracts",
             "Read smart contract state.",
-            "Read smart contract state by exact path, path list, or prefix.",
+            "Read smart contract state by exact path, path list, or prefix. A path list accepts at most 10,000 entries. Prefix reads stop before the 16 MiB V1 retained-response budget and expose `next_offset`; exact and path-list reads that cannot fit fail closed so callers can split them. JSON projection scans retain only query-relevant schemas and fail closed beyond 10,000 schemas or 1 MiB of aggregate canonical schema bytes.",
             "#/components/schemas/JsonValue",
             vec![
                 string_query_param(
@@ -3283,8 +3282,14 @@ fn contracts_paths() -> Map {
                     "Optional contract alias used to scope logical state paths.",
                 ),
                 string_query_param("path", "Exact state key path (Name)."),
-                string_query_param("paths", "Comma-separated list of state key paths (Names)."),
-                string_query_param("prefix", "Prefix for state key paths (Name)."),
+                string_query_param(
+                    "paths",
+                    "Comma-separated list of at most 10,000 state key paths (Names).",
+                ),
+                string_query_param(
+                    "prefix",
+                    "Prefix for state key paths (Name); byte-budgeted pages expose `next_offset`.",
+                ),
                 bool_query_param(
                     "include_value",
                     "Include base64-encoded values (default true).",
@@ -18770,7 +18775,6 @@ fn tagged_unit_schema(tag: &str, values: &[&str]) -> Value {
             tag_schema.insert("const".to_owned(), Value::String((*value).to_owned()));
             properties.insert(tag.to_owned(), Value::Object(tag_schema));
             properties.insert("value".to_owned(), norito::json!({ "type": "null" }));
-
             let mut schema = Map::new();
             schema.insert("type".to_owned(), Value::String("object".to_owned()));
             schema.insert("additionalProperties".to_owned(), Value::Bool(false));
@@ -29180,7 +29184,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected_required = required_fields.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(actual_required, expected_required, "{name} required fields");
-
         let actual_properties = schema
             .get("properties")
             .and_then(Value::as_object)
@@ -29214,7 +29217,6 @@ mod tests {
             ],
             &["nonce", "attachments"],
         );
-
         let payload = schemas
             .get("TransactionPayload")
             .and_then(Value::as_object)
@@ -29245,7 +29247,6 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(1)
         );
-
         let network_id = schemas
             .get("NetworkId")
             .and_then(Value::as_object)
@@ -29260,7 +29261,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/Hash")
         );
-
         let domain_variants = schemas
             .get("TransactionDomain")
             .and_then(Value::as_object)
@@ -29537,7 +29537,6 @@ mod tests {
             .map(str::to_owned)
             .collect::<VecDeque<_>>();
         let mut reachable = BTreeSet::new();
-
         while let Some(name) = pending.pop_front() {
             if !reachable.insert(name.clone()) {
                 continue;
@@ -29622,9 +29621,7 @@ mod tests {
         let document = generate_spec();
         let schemas = component_schemas(&document);
         let mut reference_count = 0;
-
         assert_component_schema_refs_resolve(&document, schemas, "$", &mut reference_count);
-
         assert!(
             reference_count > 0,
             "generated OpenAPI document unexpectedly contains no schema references"
@@ -37058,20 +37055,27 @@ mod tests {
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
             .expect("signed-query request content");
-        assert_eq!(
-            query_request_content
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            vec!["application/x-norito"],
-            "the bounded signed-query extractor rejects JSON before body collection"
-        );
+        assert!(query_request_content.contains_key("application/json"));
+        assert!(query_request_content.contains_key("application/x-norito"));
         assert!(
             query_post
                 .get("description")
                 .and_then(Value::as_str)
-                .is_some_and(|description| description.contains("JSON request bodies are rejected"))
+                .is_some_and(|description| {
+                    description.contains("bounded application/x-norito or application/json")
+                        && description.contains("every source-bounded singular query")
+                })
         );
+        let query_responses = query_post
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("signed-query responses");
+        for status in ["408", "409", "413", "429", "500", "502", "503", "504"] {
+            assert!(
+                query_responses.contains_key(status),
+                "signed-query operation must document HTTP {status}"
+            );
+        }
     }
 
     #[test]
@@ -37963,202 +37967,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn native_amx_participant_diagnostics_schema_is_closed_and_bounded() {
-        let schemas = openapi_schemas();
-        let response = schemas
-            .get("SumeragiDiagnosticsResponse")
-            .and_then(Value::as_object)
-            .expect("diagnostics response schema");
-        let applications = response
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("native_amx_participant_applications"))
-            .and_then(Value::as_object)
-            .expect("Native AMX participant diagnostics vector schema");
-        assert_eq!(applications.get("maxItems"), Some(&Value::from(1_024_u64)));
-        assert_eq!(
-            applications
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiNativeAmxParticipantApplication")
-        );
-
-        let row = schemas
-            .get("SumeragiNativeAmxParticipantApplication")
-            .and_then(Value::as_object)
-            .expect("Native AMX participant diagnostics row schema");
-        assert_eq!(row.get("additionalProperties"), Some(&Value::from(false)));
-        let state_geometry = row
-            .get("oneOf")
-            .and_then(Value::as_array)
-            .expect("Native AMX participant state/carrier geometry");
-        assert_eq!(state_geometry.len(), 4);
-        assert_eq!(
-            state_geometry
-                .iter()
-                .filter_map(|case| { case.get("properties")?.get("state")?.get("const")?.as_str() })
-                .collect::<Vec<_>>(),
-            vec![
-                "certified_pending_carrier",
-                "committed_evidence_pending",
-                "durably_applied",
-                "conflict",
-            ]
-        );
-        for index in [0_usize, 3] {
-            assert_eq!(
-                state_geometry[index]["properties"]["application_block_height"]["type"],
-                Value::from("null")
-            );
-        }
-        for index in [1_usize, 2] {
-            let required = state_geometry[index]["required"]
-                .as_array()
-                .expect("committed Native application carrier fields");
-            assert!(required.contains(&Value::from("application_block_height")));
-            assert!(required.contains(&Value::from("application_block_hash")));
-        }
-        let source_count = row
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("source_count"))
-            .and_then(Value::as_object)
-            .expect("source count schema");
-        assert_eq!(source_count.get("minimum"), Some(&Value::from(1_u64)));
-        assert_eq!(source_count.get("maximum"), Some(&Value::from(4_096_u64)));
-
-        let states = schemas
-            .get("SumeragiNativeAmxParticipantApplicationState")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .expect("Native AMX participant diagnostics states");
-        assert_eq!(
-            states,
-            &vec![
-                Value::from("certified_pending_carrier"),
-                Value::from("committed_evidence_pending"),
-                Value::from("durably_applied"),
-                Value::from("conflict"),
-            ]
-        );
-    }
-
-    #[test]
-    fn autonomous_lane_execution_diagnostics_schema_is_closed_and_bounded() {
-        let schemas = openapi_schemas();
-        let response = schemas
-            .get("SumeragiDiagnosticsResponse")
-            .and_then(Value::as_object)
-            .expect("diagnostics response schema");
-        let executions = response
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("autonomous_lane_executions"))
-            .and_then(Value::as_object)
-            .expect("autonomous execution diagnostics vector schema");
-        assert_eq!(executions.get("maxItems"), Some(&Value::from(128_u64)));
-        assert_eq!(
-            executions
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiAutonomousLaneExecution")
-        );
-        let row = schemas
-            .get("SumeragiAutonomousLaneExecution")
-            .and_then(Value::as_object)
-            .expect("autonomous execution row schema");
-        assert_eq!(row.get("additionalProperties"), Some(&Value::from(false)));
-        let required = row
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("autonomous execution required fields");
-        let properties = row
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("autonomous execution properties");
-        for field in [
-            "reservation_owner_hash",
-            "proposal_identity_hash",
-            "reservation_group_hash",
-        ] {
-            assert!(
-                required.contains(&Value::from(field)),
-                "{field} must be present at the Queue fsync boundary"
-            );
-        }
-        for field in ["proposal_view", "proposal_hash", "descriptor_hash"] {
-            assert!(
-                !required.contains(&Value::from(field)),
-                "{field} remains absent until the finalized proposal is durable"
-            );
-        }
-        assert!(
-            !required.contains(&Value::from("stuck_reason")),
-            "stuck reason remains optional for a future independently proven terminal stage"
-        );
-        assert!(
-            row.get("allOf")
-                .and_then(Value::as_array)
-                .is_some_and(|constraints| constraints.len() >= 4),
-            "autonomous row must expose identity-pair and reservation-stage constraints"
-        );
-        for payload_field in [
-            "reservation_keys",
-            "entrypoints",
-            "routing_plans",
-            "source_bundle",
-        ] {
-            assert!(
-                !properties.contains_key(payload_field),
-                "{payload_field} payload bytes must not leak through diagnostics"
-            );
-        }
-        let stages = schemas
-            .get("SumeragiAutonomousLaneExecutionStage")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .expect("autonomous stage enum");
-        let expected_stages = [
-            "reservations_durable",
-            "executable_payload_durable",
-            "payload_availability_certified",
-            "lane_certified",
-            "certified_bundle_durable",
-            "merge_candidate_durable",
-            "global_carrier_committed",
-            "kura_wsv_application_receipt_durable",
-            "queue_finalized",
-            "conflict",
-        ]
-        .map(Value::from);
-        assert_eq!(stages.as_slice(), expected_stages.as_slice());
-        let reasons = schemas
-            .get("SumeragiAutonomousLaneExecutionStuckReason")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .expect("autonomous stuck-reason enum");
-        let expected_reasons = [
-            "awaiting_executable_payload",
-            "awaiting_payload_availability",
-            "awaiting_lane_certification",
-            "certified_bundle_unavailable",
-            "awaiting_merge_selection",
-            "awaiting_global_carrier",
-            "awaiting_application_receipt",
-            "queue_finalization_unverifiable",
-            "evidence_conflict",
-        ]
-        .map(Value::from);
-        assert_eq!(reasons.as_slice(), expected_reasons.as_slice());
-    }
+    include!("openapi/tests/diagnostics_schemas.rs");
 
     include!("openapi/tests/finality_app_contracts.rs");
 

@@ -57,7 +57,7 @@ pub struct CapacityDeclarationRecord {
     /// Provider that authored the capacity declaration.
     pub provider_id: ProviderId,
     /// Canonical Norito encoding of `CapacityDeclarationV1`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub declaration: Vec<u8>,
     /// Total committed GiB advertised by the provider.
     pub committed_capacity_gib: u64,

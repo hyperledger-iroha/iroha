@@ -1966,6 +1966,95 @@ mod handle_update_tests {
         }
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn recoverable_best_effort_post_reports_queue_cap_and_closed_without_losing_source() {
+        let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
+            handle_with_network_receivers::<RoutedActorDummy>();
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let post = || Post {
+            data: RoutedActorDummy::Control,
+            peer_id: target.clone(),
+            priority: Priority::High,
+        };
+        let reliable = Post {
+            data: RoutedActorDummy::Lane,
+            peer_id: target.clone(),
+            priority: Priority::Low,
+        };
+        match handle.post_best_effort_recoverable(reliable) {
+            Err(NetworkPostAdmissionError::Rejected {
+                message,
+                reason: NetworkActorAdmissionRejection::ReliableProgressRequiresRecoverable,
+            }) => {
+                assert_eq!(message.data, RoutedActorDummy::Lane);
+                assert_eq!(message.peer_id, target);
+                assert_eq!(message.priority, Priority::Low);
+            }
+            other => panic!("reliable progress must reject best-effort admission: {other:?}"),
+        }
+
+        handle
+            .post_best_effort_recoverable(post())
+            .expect("the actor queue owns the first control post");
+        handle
+            .post_best_effort_recoverable(post())
+            .expect("the bounded high-priority deferral owns the second control post");
+        let returned = match handle.post_best_effort_recoverable(post()) {
+            Err(NetworkPostAdmissionError::Backpressured { message }) => message,
+            other => {
+                panic!("saturated actor ownership must return the exact third post: {other:?}")
+            }
+        };
+        assert_eq!(returned.data, RoutedActorDummy::Control);
+        assert_eq!(returned.peer_id, target);
+        assert_eq!(returned.priority, Priority::High);
+
+        let first = high_rx
+            .recv()
+            .await
+            .expect("first accepted control post remains actor-owned")
+            .into_inner();
+        assert!(matches!(first, NetworkMessage::Post(_)));
+        let second = high_rx
+            .recv()
+            .await
+            .expect("deferred control post transfers after actor capacity opens")
+            .into_inner();
+        assert!(matches!(second, NetworkMessage::Post(_)));
+
+        let (mut capped, _safety_rx, _progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<RoutedActorDummy>();
+        let capped_post = post();
+        let plaintext_bytes = outbound_actor_message_wire_bytes(
+            &NetworkMessage::Post(capped_post.clone()),
+            &capped.self_id,
+            capped.relay_ttl,
+        )
+        .expect("count exact control-post frame");
+        capped.topic_frame_caps.control = plaintext_bytes - 1;
+        match capped.post_best_effort_recoverable(capped_post) {
+            Err(NetworkPostAdmissionError::Rejected {
+                message,
+                reason: NetworkActorAdmissionRejection::FrameTooLarge,
+            }) => {
+                assert_eq!(message.data, RoutedActorDummy::Control);
+                assert_eq!(message.peer_id, target);
+            }
+            other => panic!("oversize post must be returned with its exact cap outcome: {other:?}"),
+        }
+
+        let (closed, _safety_rx, _progress_rx, closed_high_rx, _low_rx) =
+            handle_with_network_receivers::<RoutedActorDummy>();
+        drop(closed_high_rx);
+        match closed.post_best_effort_recoverable(post()) {
+            Err(NetworkPostAdmissionError::Closed { message }) => {
+                assert_eq!(message.data, RoutedActorDummy::Control);
+                assert_eq!(message.peer_id, target);
+            }
+            other => panic!("closed actor must return the exact post: {other:?}"),
+        }
+    }
+
     #[test]
     fn ordinary_high_saturation_does_not_consume_progress_or_safety_capacity() {
         let (handle, mut safety_rx, mut progress_rx, mut high_rx, mut low_rx) =

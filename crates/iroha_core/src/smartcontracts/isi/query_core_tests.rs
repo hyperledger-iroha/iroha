@@ -50,7 +50,7 @@ fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
 #[test]
 fn stored_query_revalidation_archive_ignores_ambient_norito_layout() {
     let request = block_request_with_payload(Vec::new()).request;
-    let canonical = encode_stored_query_revalidation_request(&request)
+    let canonical = encode_stored_query_revalidation_request(&request, None)
         .expect("encode canonical stored-query request");
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -61,7 +61,7 @@ fn stored_query_revalidation_archive_ignores_ambient_norito_layout() {
         "fixture must exercise a distinct ambient Norito layout"
     );
     assert_eq!(
-        encode_stored_query_revalidation_request(&request)
+        encode_stored_query_revalidation_request(&request, None)
             .expect("encode stored-query request under alternate ambient layout"),
         canonical
     );

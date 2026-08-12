@@ -104,6 +104,15 @@ pub enum ToriiError {
     /// HTTP-level failure when talking to Torii.
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
+    /// A response exceeded its route-specific retained-body budget or could
+    /// not reserve memory within that budget.
+    #[error("Torii {context} response exceeded its {maximum}-byte resource budget")]
+    ResponseResourceLimit {
+        /// Stable route family used for diagnostics without reflecting a URL.
+        context: &'static str,
+        /// Maximum complete response body admitted for the route family.
+        maximum: usize,
+    },
     /// Torii answered with a non-success status code.
     #[error("unexpected Torii status code {status}")]
     UnexpectedStatus {
@@ -165,6 +174,8 @@ pub enum ToriiErrorKind {
     InvalidHeader,
     /// Transport-level HTTP failure before receiving a response body.
     HttpTransport,
+    /// Torii response exceeded a route-specific memory budget.
+    ResponseResourceLimit,
     /// Torii responded with an unexpected status code.
     UnexpectedStatus,
     /// WebSocket negotiation or framing failed.
@@ -248,6 +259,11 @@ impl ToriiError {
                 ToriiErrorKind::HttpTransport,
                 "HTTP transport error while contacting Torii",
                 err.to_string(),
+            ),
+            Self::ResponseResourceLimit { context, maximum } => ToriiErrorInfo::with_detail(
+                ToriiErrorKind::ResponseResourceLimit,
+                "Torii response exceeded its memory budget",
+                format!("{context} response limit: {maximum} bytes"),
             ),
             Self::UnexpectedStatus {
                 status,
@@ -418,6 +434,40 @@ fn error_message_from_body(body: &[u8]) -> Option<String> {
 
     let text = String::from_utf8_lossy(body).trim().to_owned();
     if text.is_empty() { None } else { Some(text) }
+}
+
+fn decode_bounded_json_response(bytes: &[u8], context: &'static str) -> ToriiResult<json::Value> {
+    const MAX_VALUES: usize = 262_144;
+    const MAX_STRING_BYTES: usize = 1024 * 1024;
+    const MAX_CONTAINER_ENTRIES: usize = 65_536;
+    const MAX_DEPTH: usize = 64;
+    let limits = norito::json::JsonPreflightLimits::new(
+        MAX_JSON_RESPONSE_BYTES,
+        MAX_VALUES,
+        MAX_JSON_RESPONSE_BYTES,
+        MAX_STRING_BYTES,
+        MAX_JSON_RESPONSE_BYTES,
+        MAX_CONTAINER_ENTRIES,
+        MAX_VALUES,
+        MAX_VALUES,
+        MAX_VALUES,
+        MAX_DEPTH,
+    );
+    norito::json::preflight_slice(bytes, limits).map_err(|_| {
+        ToriiError::Decode(format!(
+            "{context} response failed bounded JSON syntax/resource preflight"
+        ))
+    })?;
+    json::from_slice(bytes)
+        .map_err(|_| ToriiError::Decode(format!("{context} response failed JSON decoding")))
+}
+
+async fn read_bounded_json_response(
+    response: Response,
+    context: &'static str,
+) -> ToriiResult<json::Value> {
+    let bytes = read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, context).await?;
+    decode_bounded_json_response(&bytes, context)
 }
 
 fn compose_base_urls(base_url: &str) -> ToriiResult<(Url, Url)> {
@@ -2953,6 +3003,10 @@ fn lag_to_usize(skipped: u64) -> usize {
 /// Decode a Norito payload, retrying with an aligned copy if the caller hands us
 /// misaligned bytes (a common artefact of mock HTTP servers and FFI bindings).
 ///
+/// Every attempt uses limits derived from the complete frame, so an untrusted
+/// header or nested length cannot allocate outside the encoded payload's
+/// conservative first-release envelope.
+///
 /// The helper is exported so downstream crates (or language bindings) can share
 /// the same alignment guard instead of cloning the `unsafe` retry logic.
 pub fn decode_norito_with_alignment<T>(bytes: &[u8]) -> Result<T, ToriiError>
@@ -2963,7 +3017,10 @@ where
 
     let attempt = |slice: &[u8]| {
         catch_unwind(AssertUnwindSafe(|| {
-            norito::decode_from_reader(Cursor::new(slice))
+            norito::decode_from_reader_with_limits(
+                Cursor::new(slice),
+                norito::canonical_decode_limits(slice.len()),
+            )
         }))
     };
 
@@ -2972,7 +3029,13 @@ where
         Ok(Err(err)) => Err(ToriiError::Decode(err.to_string())),
         Err(_) => {
             for pad in 1..=MAX_PAD {
-                let mut buffer = Vec::with_capacity(bytes.len() + pad);
+                let capacity = bytes.len().checked_add(pad).ok_or_else(|| {
+                    ToriiError::Decode("Norito alignment length overflowed".into())
+                })?;
+                let mut buffer = Vec::new();
+                buffer.try_reserve_exact(capacity).map_err(|_| {
+                    ToriiError::Decode("Norito alignment retry allocation failed".into())
+                })?;
                 buffer.resize(pad, 0);
                 buffer.extend_from_slice(bytes);
 
@@ -3376,7 +3439,9 @@ impl ToriiClient {
         if !response.status().is_success() {
             let status = response.status();
             let reject_code = reject_code_from_headers(response.headers());
-            let body = response.bytes().await?;
+            let body =
+                read_bounded_response(response, MAX_ERROR_RESPONSE_BYTES, "transaction error")
+                    .await?;
             let message = error_message_from_body(body.as_ref());
             return Err(ToriiError::UnexpectedStatus {
                 status,
@@ -3400,11 +3465,11 @@ impl ToriiClient {
             .await?;
 
         if response.status().is_success() {
-            return Ok(response.bytes().await?.to_vec());
+            return read_bounded_response(response, MAX_QUERY_RESPONSE_BYTES, "query").await;
         }
         let status = response.status();
         let reject_code = reject_code_from_headers(response.headers());
-        let body = response.bytes().await?;
+        let body = read_bounded_response(response, MAX_ERROR_RESPONSE_BYTES, "query error").await?;
         let message = error_message_from_body(body.as_ref());
         Err(ToriiError::UnexpectedStatus {
             status,
@@ -3639,8 +3704,9 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let bytes =
+            read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, "pipeline status").await?;
+        let value = decode_bounded_json_response(&bytes, "pipeline status")?;
         parse_pipeline_smoke_status(&value)
     }
 
@@ -3665,8 +3731,9 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let bytes =
+            read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, "Explorer status").await?;
+        let value = decode_bounded_json_response(&bytes, "Explorer status")?;
         parse_explorer_smoke_status(&value)
     }
 
@@ -3694,10 +3761,12 @@ impl ToriiClient {
             });
         }
 
-        let body = response.bytes().await?;
+        let body = read_bounded_response(response, MAX_STATUS_RESPONSE_BYTES, "status").await?;
         decode_norito_with_alignment(body.as_ref()).or_else(|_| {
-            norito::codec::decode_adaptive(body.as_ref())
-                .map_err(|err| ToriiError::Decode(err.to_string()))
+            norito::with_decode_limits(norito::canonical_decode_limits(body.len()), || {
+                norito::codec::decode_adaptive(body.as_ref())
+            })
+            .map_err(|err| ToriiError::Decode(err.to_string()))
         })
     }
 
@@ -3807,7 +3876,9 @@ impl ToriiClient {
         if !response.status().is_success() {
             let status = response.status();
             let reject_code = reject_code_from_headers(response.headers());
-            let body = response.bytes().await?;
+            let body =
+                read_bounded_response(response, MAX_ERROR_RESPONSE_BYTES, "lane lifecycle error")
+                    .await?;
             let message = error_message_from_body(body.as_ref());
             return Err(ToriiError::UnexpectedStatus {
                 status,
@@ -3815,7 +3886,8 @@ impl ToriiClient {
                 message,
             });
         }
-        let body = response.bytes().await?;
+        let body =
+            read_bounded_response(response, MAX_STATUS_RESPONSE_BYTES, "lane lifecycle").await?;
         let status: LaneLifecycleStatusV1 = decode_norito_with_alignment(body.as_ref())?;
         status
             .validate()
@@ -3898,7 +3970,9 @@ impl ToriiClient {
                 message: None,
             });
         }
-        Ok(response.text().await?)
+        let body = read_bounded_response(response, MAX_METRICS_RESPONSE_BYTES, "metrics").await?;
+        String::from_utf8(body)
+            .map_err(|_| ToriiError::Decode("metrics response is not UTF-8".to_owned()))
     }
 
     /// Fetch and parse the Prometheus metrics payload into a structured snapshot.
@@ -3913,9 +3987,7 @@ impl ToriiClient {
         let response = self.http.get(url).send().await?;
         match response.status() {
             StatusCode::OK => {
-                let bytes = response.bytes().await?;
-                let value =
-                    json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+                let value = read_bounded_json_response(response, "Explorer block").await?;
                 ExplorerBlockRecord::from_json(&value).map(Some)
             }
             StatusCode::NOT_FOUND => Ok(None),
@@ -3952,8 +4024,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "Explorer blocks").await?;
         ExplorerBlocksPage::from_json(&value)
     }
 
@@ -3994,8 +4065,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "Explorer accounts").await?;
         ExplorerAccountsPage::from_json(&value)
     }
 
@@ -4032,8 +4102,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "Explorer domains").await?;
         ExplorerDomainsPage::from_json(&value)
     }
 
@@ -4078,8 +4147,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "Explorer asset definitions").await?;
         ExplorerAssetDefinitionsPage::from_json(&value)
     }
 
@@ -4124,8 +4192,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "Explorer assets").await?;
         ExplorerAssetsPage::from_json(&value)
     }
 
@@ -4170,8 +4237,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "Explorer NFTs").await?;
         ExplorerNftsPage::from_json(&value)
     }
 
@@ -4216,8 +4282,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "Explorer RWAs").await?;
         ExplorerRwasPage::from_json(&value)
     }
 
@@ -4259,8 +4324,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "trigger list").await?;
         TriggerListPage::from_json(&value)
     }
 
@@ -4270,9 +4334,7 @@ impl ToriiClient {
         let response = self.http.get(url).send().await?;
         match response.status() {
             StatusCode::OK => {
-                let bytes = response.bytes().await?;
-                let value =
-                    json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+                let value = read_bounded_json_response(response, "trigger record").await?;
                 TriggerRecord::from_json(&value, &format!("trigger response `{trigger_id}`"))
                     .map(Some)
             }
@@ -4304,8 +4366,7 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = response.bytes().await?;
-        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let value = read_bounded_json_response(response, "trigger registration").await?;
         TriggerRecord::from_json(&value, "trigger registration response")
     }
 
@@ -4389,8 +4450,7 @@ impl ToriiClient {
         if !response.status().is_success() {
             return Err(response_status_error(&response));
         }
-        let bytes = response.bytes().await?;
-        json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
+        read_bounded_json_response(response, "JSON API").await
     }
 
     async fn post_json(&self, url: Url, payload: &json::Value) -> ToriiResult<json::Value> {
@@ -4405,8 +4465,7 @@ impl ToriiClient {
         if !response.status().is_success() {
             return Err(response_status_error(&response));
         }
-        let bytes = response.bytes().await?;
-        json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
+        read_bounded_json_response(response, "JSON API").await
     }
 
     async fn post_notification(&self, url: Url, payload: &json::Value) -> ToriiResult<()> {
@@ -4421,7 +4480,7 @@ impl ToriiClient {
         if response.status() != StatusCode::ACCEPTED {
             return Err(response_status_error(&response));
         }
-        let bytes = response.bytes().await?;
+        let bytes = read_bounded_response(response, 1, "MCP notification").await?;
         if !bytes.is_empty() {
             return Err(decode_error(
                 "mcp notifications/initialized",
@@ -4545,93 +4604,7 @@ impl ToriiClient {
 }
 
 #[cfg(test)]
-async fn submit_and_wait_for_commit_with_receivers<Fut>(
-    tx_hash: HashOf<SignedTransaction>,
-    options: SmokeCommitOptions,
-    submit: Fut,
-    mut block_rx: broadcast::Receiver<BlockStreamEvent>,
-    mut event_rx: broadcast::Receiver<EventStreamEvent>,
-) -> ToriiResult<u64>
-where
-    Fut: Future<Output = ToriiResult<()>>,
-{
-    submit.await?;
-    let tx_hash_str = tx_hash.to_string();
-
-    let wait = async {
-        loop {
-            tokio::select! {
-                message = block_rx.recv() => {
-                    match message {
-                        Ok(BlockStreamEvent::Block { block, .. }) => {
-                            if let Some(result) =
-                                smoke_transaction_result_in_block(block.as_ref(), &tx_hash)
-                            {
-                                return result;
-                            }
-                        }
-                        Ok(BlockStreamEvent::DecodeError { error }) => {
-                            return Err(ToriiError::Decode(error.message));
-                        }
-                        Ok(BlockStreamEvent::Closed) => {
-                            return Err(ToriiError::Timeout { context: "block stream closed".to_owned() });
-                        }
-                        Ok(BlockStreamEvent::Lagged { .. } | BlockStreamEvent::Text { .. }) => {}
-                        Err(RecvError::Lagged(_)) => {}
-                        Err(RecvError::Closed) => {
-                            return Err(ToriiError::Timeout { context: "block stream closed".to_owned() });
-                        }
-                    }
-                }
-                message = event_rx.recv() => {
-                    match message {
-                        Ok(EventStreamEvent::Event { event, .. }) => {
-                            if let EventBox::Pipeline(PipelineEventBox::Transaction(tx_event)) = event.as_ref()
-                                && tx_event.hash() == &tx_hash
-                            {
-                                match tx_event.status() {
-                                    iroha_data_model::events::pipeline::TransactionStatus::Rejected(reason) => {
-                                        return Err(ToriiError::SmokeRejected {
-                                            hash: tx_hash_str.clone(),
-                                            reason: format!("{reason:?}"),
-                                        });
-                                    }
-                                    iroha_data_model::events::pipeline::TransactionStatus::Expired => {
-                                        return Err(ToriiError::SmokeRejected {
-                                            hash: tx_hash_str.clone(),
-                                            reason: "expired".to_owned(),
-                                        });
-                                    }
-                                    iroha_data_model::events::pipeline::TransactionStatus::Approved => {
-                                        if let Some(height) =
-                                            tx_event.block_height().map(std::num::NonZeroU64::get)
-                                        {
-                                            return Ok(height);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        Ok(EventStreamEvent::DecodeError { error }) => {
-                            return Err(ToriiError::Decode(error.message));
-                        }
-                        Ok(EventStreamEvent::Closed) => {}
-                        Ok(EventStreamEvent::Lagged { .. } | EventStreamEvent::Text { .. }) => {}
-                        Err(RecvError::Lagged(_)) => {}
-                        Err(RecvError::Closed) => {}
-                    }
-                }
-            }
-        }
-    };
-
-    tokio::time::timeout(options.timeout, wait)
-        .await
-        .map_err(|_| ToriiError::Timeout {
-            context: format!("smoke commit {tx_hash_str}"),
-        })?
-}
+include!("torii/commit_wait_test_support.rs");
 
 /// Broadcast-backed WebSocket subscription.
 #[derive(Debug)]

@@ -1,9 +1,23 @@
 # Roadmap
 
-Last updated: 2026-08-09
+Last updated: 2026-08-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Workspace review closure
+
+- Reconcile the late `iroha_confidential_spool` extraction with the repository's
+  immutable-lock policy before running more Cargo validation. Keeping the new
+  workspace crate requires an explicitly authorized local-package lock-graph
+  update; otherwise withdraw or park the coupled unstaged manifest and ZKP
+  integration while preserving the last locked, green in-crate implementation.
+- From that one quiescent dependency graph, rerun the staged Torii all-target
+  compile, strict workspace Clippy, and the remaining focused/workspace tests.
+- Finish the source-sealed Sumeragi proof-ledger pass, then regenerate OpenAPI
+  and the JavaScript current-contract fixture from the same final source. Refresh
+  the SF1 Rust/TypeScript/Go manifest rows only through the authorized council
+  signer; never reuse the signature over the retired manifest digest.
 
 ## Exact network identity completion
 

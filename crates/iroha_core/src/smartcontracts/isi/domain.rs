@@ -3355,7 +3355,7 @@ pub mod query {
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail,
-            json::PredicateJson,
+            json::{PredicateJson, predicate_json_candidate_plan_for_execution},
         },
     };
     use norito::json::Value;
@@ -3378,7 +3378,7 @@ pub mod query {
             let Some(raw) = predicate.json_payload() else {
                 return view;
             };
-            let Ok(predicate) = norito::json::from_str::<PredicateJson>(raw) else {
+            let Some(predicate) = predicate_json_candidate_plan_for_execution(raw) else {
                 return view;
             };
 
@@ -3492,7 +3492,7 @@ pub mod query {
 
     fn domain_json_value<'a>(cache: &'a mut Option<Value>, domain: &Domain) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = norito::json::to_value(domain).ok();
+            *cache = super::query::ordinary_predicate_json_value(domain);
         }
         cache.as_ref()
     }
@@ -3587,7 +3587,7 @@ pub mod query {
             let predicate_view = DomainPredicateView::from_predicate(&filter);
             let predicate_json = filter
                 .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+                .and_then(predicate_json_candidate_plan_for_execution);
 
             let iter: Box<dyn Iterator<Item = Domain> + '_> = match predicate_view.plan() {
                 DomainQueryPlan::Ids(ids) => Box::new(

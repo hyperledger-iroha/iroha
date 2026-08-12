@@ -268,6 +268,15 @@ fn write_key(out: &mut String, key: &str) {
 }
 
 #[cfg(feature = "json")]
+fn write_key_to(
+    out: &mut dyn norito::json::JsonWriteSink,
+    key: &str,
+) -> Result<(), norito::json::BoundedJsonError> {
+    norito::json::write_json_string_to(key, out)?;
+    out.push(':')
+}
+
+#[cfg(feature = "json")]
 fn expect_u64(field: &str, value: &norito::json::Value) -> Result<u64, norito::json::Error> {
     if let norito::json::Value::Number(num) = value {
         num.as_u64()
@@ -301,6 +310,19 @@ impl norito::json::FastJsonWrite for TimeEvent {
         write_key(out, "interval");
         norito::json::JsonSerialize::json_serialize(&self.interval, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        write_key_to(out, "interval")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.interval, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -337,6 +359,13 @@ impl norito::json::FastJsonWrite for TimeEventFilter {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -360,6 +389,23 @@ impl norito::json::FastJsonWrite for ExecutionTime {
                 write_key(out, "Schedule");
                 norito::json::JsonSerialize::json_serialize(schedule, out);
                 out.push('}');
+            }
+        }
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        match self {
+            ExecutionTime::PreCommit => norito::json::write_json_string_to("PreCommit", out),
+            ExecutionTime::Schedule(schedule) => {
+                out.begin_container()?;
+                out.push_str("{\"Schedule\":")?;
+                norito::json::JsonSerialize::json_serialize_to(schedule, out)?;
+                out.push('}')?;
+                out.end_container();
+                Ok(())
             }
         }
     }
@@ -423,6 +469,22 @@ impl norito::json::FastJsonWrite for Schedule {
         norito::json::JsonSerialize::json_serialize(&self.period_ms, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        write_key_to(out, "start_ms")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.start_ms, out)?;
+        out.push(',')?;
+        write_key_to(out, "period_ms")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.period_ms, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -479,6 +541,22 @@ impl norito::json::FastJsonWrite for TimeInterval {
         write_key(out, "length_ms");
         norito::json::JsonSerialize::json_serialize(&self.length_ms, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        write_key_to(out, "since_ms")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.since_ms, out)?;
+        out.push(',')?;
+        write_key_to(out, "length_ms")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.length_ms, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -587,6 +665,30 @@ mod json_tests {
 
         let deserialized: TimeInterval = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized, interval);
+
+        fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
+            let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len())
+                    .expect("serialize at exact JSON bound"),
+                expected
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+
+        let schedule = Schedule {
+            start_ms: 500,
+            period_ms: Some(250),
+        };
+        assert_bounded(&interval);
+        assert_bounded(&schedule);
+        assert_bounded(&ExecutionTime::PreCommit);
+        assert_bounded(&ExecutionTime::Schedule(schedule));
+        assert_bounded(&TimeEventFilter(ExecutionTime::Schedule(schedule)));
+        assert_bounded(&TimeEvent { interval });
     }
 
     #[test]

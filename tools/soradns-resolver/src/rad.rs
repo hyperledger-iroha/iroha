@@ -3,10 +3,16 @@ use iroha_data_model::soradns::{
     GatewayHostSet, RAD_VERSION_V1, ResolverAttestationDocumentV1, ResolverTransportBundle,
 };
 use iroha_primitives::soradns::derive_gateway_hosts;
-use norito::{decode_from_bytes, json};
+use norito::{decode_from_bytes_with_limits, json};
 use thiserror::Error;
 
-use crate::canonical::{canonicalize_norito_bytes, sha256_domain_digest};
+use crate::{
+    canonical::{canonicalize_norito_bytes, sha256_domain_digest},
+    limits::{
+        MAX_CHILD_STRINGS, MAX_FIELD_BYTES, MAX_IDENTIFIER_BYTES, MAX_RAD_ENTRIES,
+        MAX_RAD_SNAPSHOT_BYTES, rad_snapshot_decode_limits,
+    },
+};
 
 /// Convenience alias for the SoraDNS RAD payload.
 pub type ResolverAttestation = ResolverAttestationDocumentV1;
@@ -16,11 +22,31 @@ pub const RAD_HASH_DOMAIN: &[u8] = b"rad-v1";
 
 /// Decode a RAD payload from Norito bytes.
 pub fn decode_rad_entries(bytes: &[u8]) -> Result<Vec<ResolverAttestation>> {
-    decode_from_bytes(bytes).wrap_err("failed to decode resolver attestation entries")
+    if bytes.len() > MAX_RAD_SNAPSHOT_BYTES {
+        eyre::bail!(
+            "resolver attestation snapshot exceeds the {MAX_RAD_SNAPSHOT_BYTES}-byte limit"
+        );
+    }
+    let entries: Vec<ResolverAttestation> =
+        decode_from_bytes_with_limits(bytes, rad_snapshot_decode_limits())
+            .wrap_err("failed to decode resolver attestation entries")?;
+    if entries.len() > MAX_RAD_ENTRIES {
+        eyre::bail!(
+            "resolver attestation snapshot contains {} entries; the limit is {MAX_RAD_ENTRIES}",
+            entries.len()
+        );
+    }
+    for entry in &entries {
+        validate_rad_resource_bounds(entry).wrap_err_with(|| {
+            format!("resolver attestation `{}` exceeds field limits", entry.fqdn)
+        })?;
+    }
+    Ok(entries)
 }
 
 /// Perform structural validation for a RAD entry before it is added to state.
 pub fn validate_rad(rad: &ResolverAttestation) -> Result<(), ResolverAttestationValidationError> {
+    validate_rad_resource_bounds(rad)?;
     if rad.version != RAD_VERSION_V1 {
         return Err(ResolverAttestationValidationError::UnsupportedVersion { found: rad.version });
     }
@@ -65,6 +91,285 @@ pub fn validate_rad(rad: &ResolverAttestation) -> Result<(), ResolverAttestation
     Ok(())
 }
 
+/// Validate all variable-width fields in one decoded RAD.
+pub(crate) fn validate_rad_resource_bounds(
+    rad: &ResolverAttestation,
+) -> Result<(), ResolverAttestationValidationError> {
+    check_string("fqdn", &rad.fqdn, MAX_IDENTIFIER_BYTES)?;
+    check_string(
+        "canonical_label",
+        &rad.canonical_hosts.canonical_label,
+        MAX_IDENTIFIER_BYTES,
+    )?;
+    check_string(
+        "canonical_host",
+        &rad.canonical_hosts.canonical_host,
+        MAX_IDENTIFIER_BYTES,
+    )?;
+    check_string(
+        "canonical_wildcard",
+        &rad.canonical_hosts.canonical_wildcard,
+        MAX_IDENTIFIER_BYTES,
+    )?;
+    check_string(
+        "pretty_host",
+        &rad.canonical_hosts.pretty_host,
+        MAX_IDENTIFIER_BYTES,
+    )?;
+
+    if let Some(doh) = &rad.transport.doh {
+        check_string("DoH endpoint", &doh.endpoint, MAX_FIELD_BYTES)?;
+    }
+    if let Some(dot) = &rad.transport.dot {
+        check_string("DoT endpoint", &dot.endpoint, MAX_FIELD_BYTES)?;
+        check_string_vec("DoT ALPN protocols", &dot.alpn_protocols)?;
+        check_string_vec("DoT cipher suites", &dot.cipher_suites)?;
+    }
+    if let Some(doq) = &rad.transport.doq {
+        check_string("DoQ endpoint", &doq.endpoint, MAX_FIELD_BYTES)?;
+        if let Some(profile) = &doq.congestion_profile {
+            check_string("DoQ congestion profile", profile, MAX_IDENTIFIER_BYTES)?;
+        }
+    }
+    if let Some(relay) = &rad.transport.odoh_relay {
+        check_string("ODoH relay endpoint", &relay.endpoint, MAX_FIELD_BYTES)?;
+        check_string("ODoH relay key id", &relay.key_id, MAX_IDENTIFIER_BYTES)?;
+        check_len(
+            "ODoH relay public key",
+            relay.public_key.len(),
+            MAX_FIELD_BYTES,
+        )?;
+    }
+    if let Some(bridge) = &rad.transport.soranet_bridge {
+        check_string(
+            "SoraNet bridge multiaddr",
+            &bridge.multiaddr,
+            MAX_FIELD_BYTES,
+        )?;
+        check_string(
+            "SoraNet bridge circuit policy",
+            &bridge.circuit_policy,
+            MAX_IDENTIFIER_BYTES,
+        )?;
+    }
+
+    check_len(
+        "TLS provisioning profiles",
+        rad.tls.provisioning_profiles.len(),
+        MAX_CHILD_STRINGS,
+    )?;
+    check_string_vec(
+        "TLS certificate fingerprints",
+        &rad.tls.certificate_fingerprints,
+    )?;
+    check_string_vec("TLS wildcard hosts", &rad.tls.wildcard_hosts)?;
+    validate_operator_account_bounds(rad)?;
+    check_len(
+        "operator signature",
+        rad.operator_signature.payload().len(),
+        MAX_FIELD_BYTES,
+    )?;
+    check_len(
+        "governance signature",
+        rad.governance_signature.payload().len(),
+        MAX_FIELD_BYTES,
+    )?;
+    if let Some(endpoint) = &rad.telemetry_endpoint {
+        check_string("telemetry endpoint", endpoint, MAX_FIELD_BYTES)?;
+    }
+    Ok(())
+}
+
+/// Account the heap retained by one RAD, including decoded spare capacities.
+pub(crate) fn rad_retained_bytes(
+    rad: &ResolverAttestation,
+) -> Result<usize, ResolverAttestationValidationError> {
+    validate_rad_resource_bounds(rad)?;
+    let mut bytes = std::mem::size_of::<ResolverAttestation>()
+        // Account for allocator rounding hidden by compact crypto wrappers.
+        .checked_add(4096)
+        .ok_or(ResolverAttestationValidationError::RetainedSizeOverflow)?;
+    for value in [
+        &rad.fqdn,
+        &rad.canonical_hosts.canonical_label,
+        &rad.canonical_hosts.canonical_host,
+        &rad.canonical_hosts.canonical_wildcard,
+        &rad.canonical_hosts.pretty_host,
+    ] {
+        charge(&mut bytes, value.capacity())?;
+    }
+    if let Some(doh) = &rad.transport.doh {
+        charge(&mut bytes, doh.endpoint.capacity())?;
+    }
+    if let Some(dot) = &rad.transport.dot {
+        charge(&mut bytes, dot.endpoint.capacity())?;
+        charge_string_vec(
+            &mut bytes,
+            &dot.alpn_protocols,
+            dot.alpn_protocols.capacity(),
+        )?;
+        charge_string_vec(&mut bytes, &dot.cipher_suites, dot.cipher_suites.capacity())?;
+    }
+    if let Some(doq) = &rad.transport.doq {
+        charge(&mut bytes, doq.endpoint.capacity())?;
+        if let Some(profile) = &doq.congestion_profile {
+            charge(&mut bytes, profile.capacity())?;
+        }
+    }
+    if let Some(relay) = &rad.transport.odoh_relay {
+        charge(&mut bytes, relay.endpoint.capacity())?;
+        charge(&mut bytes, relay.key_id.capacity())?;
+        charge(&mut bytes, relay.public_key.capacity())?;
+    }
+    if let Some(bridge) = &rad.transport.soranet_bridge {
+        charge(&mut bytes, bridge.multiaddr.capacity())?;
+        charge(&mut bytes, bridge.circuit_policy.capacity())?;
+    }
+    charge_vec_capacity::<iroha_data_model::soradns::TlsProvisioningProfile>(
+        &mut bytes,
+        rad.tls.provisioning_profiles.capacity(),
+    )?;
+    charge_string_vec(
+        &mut bytes,
+        &rad.tls.certificate_fingerprints,
+        rad.tls.certificate_fingerprints.capacity(),
+    )?;
+    charge_string_vec(
+        &mut bytes,
+        &rad.tls.wildcard_hosts,
+        rad.tls.wildcard_hosts.capacity(),
+    )?;
+    charge_operator_account(&mut bytes, rad)?;
+    charge(&mut bytes, rad.operator_signature.payload().len())?;
+    charge(&mut bytes, rad.governance_signature.payload().len())?;
+    if let Some(endpoint) = &rad.telemetry_endpoint {
+        charge(&mut bytes, endpoint.capacity())?;
+    }
+    Ok(bytes)
+}
+
+fn validate_operator_account_bounds(
+    rad: &ResolverAttestation,
+) -> Result<(), ResolverAttestationValidationError> {
+    let controller = &rad.operator_account.controller;
+    if let Some(key) = controller.single_signatory() {
+        check_len(
+            "operator account public key",
+            public_key_payload_len(key)?,
+            MAX_FIELD_BYTES,
+        )?;
+        return Ok(());
+    }
+    let policy = controller
+        .multisig_policy()
+        .ok_or(ResolverAttestationValidationError::MalformedCryptoMaterial)?;
+    check_len(
+        "operator account multisig members",
+        policy.members().len(),
+        MAX_CHILD_STRINGS,
+    )?;
+    for member in policy.members() {
+        check_len(
+            "operator account member public key",
+            public_key_payload_len(member.public_key())?,
+            MAX_FIELD_BYTES,
+        )?;
+    }
+    Ok(())
+}
+
+fn charge_operator_account(
+    total: &mut usize,
+    rad: &ResolverAttestation,
+) -> Result<(), ResolverAttestationValidationError> {
+    let controller = &rad.operator_account.controller;
+    if let Some(key) = controller.single_signatory() {
+        return charge(total, public_key_payload_len(key)?);
+    }
+    let policy = controller
+        .multisig_policy()
+        .ok_or(ResolverAttestationValidationError::MalformedCryptoMaterial)?;
+    charge_vec_capacity::<iroha_data_model::account::MultisigMember>(
+        total,
+        policy.members().len(),
+    )?;
+    for member in policy.members() {
+        charge(total, public_key_payload_len(member.public_key())?)?;
+    }
+    Ok(())
+}
+
+fn public_key_payload_len(
+    key: &iroha_crypto::PublicKey,
+) -> Result<usize, ResolverAttestationValidationError> {
+    key.try_to_bytes()
+        .map(|(_, payload)| payload.len())
+        .map_err(|_| ResolverAttestationValidationError::MalformedCryptoMaterial)
+}
+
+fn check_string(
+    field: &'static str,
+    value: &str,
+    maximum: usize,
+) -> Result<(), ResolverAttestationValidationError> {
+    check_len(field, value.len(), maximum)
+}
+
+fn check_string_vec(
+    field: &'static str,
+    values: &[String],
+) -> Result<(), ResolverAttestationValidationError> {
+    check_len(field, values.len(), MAX_CHILD_STRINGS)?;
+    for value in values {
+        check_string(field, value, MAX_IDENTIFIER_BYTES)?;
+    }
+    Ok(())
+}
+
+fn check_len(
+    field: &'static str,
+    found: usize,
+    maximum: usize,
+) -> Result<(), ResolverAttestationValidationError> {
+    if found > maximum {
+        return Err(ResolverAttestationValidationError::ResourceLimit {
+            field,
+            found,
+            maximum,
+        });
+    }
+    Ok(())
+}
+
+fn charge(total: &mut usize, additional: usize) -> Result<(), ResolverAttestationValidationError> {
+    *total = (*total)
+        .checked_add(additional)
+        .ok_or(ResolverAttestationValidationError::RetainedSizeOverflow)?;
+    Ok(())
+}
+
+fn charge_vec_capacity<T>(
+    total: &mut usize,
+    capacity: usize,
+) -> Result<(), ResolverAttestationValidationError> {
+    let bytes = capacity
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(ResolverAttestationValidationError::RetainedSizeOverflow)?;
+    charge(total, bytes)
+}
+
+fn charge_string_vec(
+    total: &mut usize,
+    values: &[String],
+    capacity: usize,
+) -> Result<(), ResolverAttestationValidationError> {
+    charge_vec_capacity::<String>(total, capacity)?;
+    for value in values {
+        charge(total, value.capacity())?;
+    }
+    Ok(())
+}
+
 /// Compute the canonical digest of a RAD entry (matching the release tooling).
 pub fn compute_rad_digest(rad: &ResolverAttestation) -> Result<[u8; 32]> {
     let value = json::to_value(rad).wrap_err("failed to convert RAD into JSON value")?;
@@ -93,6 +398,22 @@ fn validate_transport_bundle(
 /// Structural validation errors surfaced when ingesting a RAD entry.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ResolverAttestationValidationError {
+    /// A variable-width field or child collection exceeded its first-release limit.
+    #[error("{field} contains {found} entries/bytes; the limit is {maximum}")]
+    ResourceLimit {
+        /// Stable field label used in diagnostics.
+        field: &'static str,
+        /// Observed element or byte count.
+        found: usize,
+        /// Maximum admitted element or byte count.
+        maximum: usize,
+    },
+    /// Retained-memory accounting overflowed `usize`.
+    #[error("resolver attestation retained-byte accounting overflowed")]
+    RetainedSizeOverflow,
+    /// A decoded account key could not expose canonical crypto material.
+    #[error("resolver attestation contains malformed crypto material")]
+    MalformedCryptoMaterial,
     #[error("unsupported RAD version {found}")]
     UnsupportedVersion { found: u8 },
     #[error("resolver fqdn must not be empty")]
@@ -216,5 +537,35 @@ mod tests {
         let digest = compute_rad_digest(&rad).expect("digest");
         expect!["90ea6fb553abd091527d60c89ca8acf637b551abd127f9632878b4ef741a34da"]
             .assert_eq(&hex::encode(digest));
+    }
+
+    #[test]
+    fn rad_collection_limit_accepts_exact_and_rejects_plus_one() {
+        check_len("RAD entries", MAX_RAD_ENTRIES, MAX_RAD_ENTRIES)
+            .expect("exact RAD count is admitted");
+        assert!(matches!(
+            check_len("RAD entries", MAX_RAD_ENTRIES + 1, MAX_RAD_ENTRIES),
+            Err(ResolverAttestationValidationError::ResourceLimit {
+                field: "RAD entries",
+                found,
+                maximum: MAX_RAD_ENTRIES,
+            }) if found == MAX_RAD_ENTRIES + 1
+        ));
+    }
+
+    #[test]
+    fn rad_crypto_field_limit_accepts_exact_and_rejects_plus_one() {
+        let mut rad = base_rad();
+        rad.operator_signature = Signature::from_bytes(&vec![1; MAX_FIELD_BYTES]);
+        validate_rad_resource_bounds(&rad).expect("exact signature boundary");
+        rad.operator_signature = Signature::from_bytes(&vec![1; MAX_FIELD_BYTES + 1]);
+        assert!(matches!(
+            validate_rad_resource_bounds(&rad),
+            Err(ResolverAttestationValidationError::ResourceLimit {
+                field: "operator signature",
+                found,
+                maximum: MAX_FIELD_BYTES,
+            }) if found == MAX_FIELD_BYTES + 1
+        ));
     }
 }

@@ -40,6 +40,51 @@ fn bounded_with_attribute_is_parsed_and_duplicate_is_rejected() {
 }
 
 #[test]
+fn json_attribute_expands_the_checked_module_writer() {
+    let field: syn::Field = syn::parse_quote! {
+        #[norito(json = "checked")]
+        demo: u32
+    };
+    let attrs = FieldAttr::parse(&field.attrs).expect("valid checked helper module attribute");
+    assert_eq!(
+        attrs
+            .with
+            .expect("ordinary helper module")
+            .to_token_stream()
+            .to_string(),
+        "checked"
+    );
+    assert_eq!(
+        attrs
+            .bounded_with
+            .expect("checked helper function")
+            .to_token_stream()
+            .to_string(),
+        "checked :: serialize_bounded"
+    );
+
+    let conflicting: syn::Field = syn::parse_quote! {
+        #[norito(with = "legacy", json = "checked")]
+        demo: u32
+    };
+    let error = FieldAttr::parse(&conflicting.attrs).expect_err("mixed helper modes must reject");
+    assert_eq!(
+        error.to_string(),
+        "`json` cannot be combined with `with` or `bounded_with`"
+    );
+
+    let reversed: syn::Field = syn::parse_quote! {
+        #[norito(json = "checked", bounded_with = "legacy::serialize")]
+        demo: u32
+    };
+    let error = FieldAttr::parse(&reversed.attrs).expect_err("reversed helper mix must reject");
+    assert_eq!(
+        error.to_string(),
+        "`json` cannot be combined with `with` or `bounded_with`"
+    );
+}
+
+#[test]
 fn required_attribute_is_parsed_and_duplicate_is_rejected() {
     let field: syn::Field = syn::parse_quote! {
         #[norito(required)]

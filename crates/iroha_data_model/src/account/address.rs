@@ -455,6 +455,7 @@ impl JsonSerialize for AccountAddress {
 impl JsonDeserialize for AccountAddress {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let literal = parser.parse_string()?;
+        super::reserve_account_literal_json_decode(literal.len())?;
         match AccountAddress::from_str(&literal) {
             Ok(address) => Ok(address),
             Err(AccountAddressError::UnsupportedAddressFormat) => {
@@ -462,15 +463,58 @@ impl JsonDeserialize for AccountAddress {
                     .strip_prefix("0x")
                     .or_else(|| literal.strip_prefix("0X"))
                     .unwrap_or(&literal);
-                let canonical_bytes = hex::decode(canonical_hex).map_err(|_| {
-                    json::Error::Message(AccountAddressError::InvalidHexAddress.to_string())
-                })?;
+                let canonical_bytes = decode_account_address_hex_for_json(canonical_hex)?;
                 AccountAddress::from_canonical_bytes(&canonical_bytes)
-                    .map_err(|err| json::Error::Message(err.to_string()))
+                    .map_err(map_account_address_json_error)
             }
-            Err(err) => Err(json::Error::Message(err.to_string())),
+            Err(error) => Err(map_account_address_json_error(error)),
         }
     }
+}
+
+#[cfg(feature = "json")]
+fn map_account_address_json_error(error: AccountAddressError) -> json::Error {
+    if matches!(error, AccountAddressError::DecodeResourceLimit) {
+        json::Error::DecodeResourceLimit
+    } else {
+        json::Error::Message("invalid account address".to_owned())
+    }
+}
+
+#[cfg(feature = "json")]
+fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::Error> {
+    if encoded.len() % 2 != 0 {
+        return Err(json::Error::Message("invalid account address".to_owned()));
+    }
+    let bytes = encoded.len() / 2;
+    if bytes == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<u8>(bytes)
+        .map_err(|_| json::Error::DecodeResourceLimit)?;
+    // The source-derived account-literal precharge covers this exact decoded
+    // destination before entry. Null is rejected before ownership.
+    let allocation = unsafe { std::alloc::alloc(layout) };
+    let allocation = core::ptr::NonNull::new(allocation).ok_or(json::Error::AllocationFailed)?;
+    let nibble = |byte| match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    };
+    for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+        let Some(byte) = nibble(pair[0]).zip(nibble(pair[1])).map(|(high, low)| {
+            (high << 4) | low
+        }) else {
+            // SAFETY: `allocation` still owns the exact `layout` above.
+            unsafe { std::alloc::dealloc(allocation.as_ptr(), layout) };
+            return Err(json::Error::Message("invalid account address".to_owned()));
+        };
+        // SAFETY: one byte is written to each disjoint in-bounds slot.
+        unsafe { allocation.as_ptr().add(index).write(byte) };
+    }
+    // SAFETY: every byte is initialized and the allocation has exact capacity.
+    Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr(), bytes, bytes) })
 }
 
 const CONTROLLER_MAX_LEN: usize = 1024;
@@ -729,8 +773,7 @@ impl ControllerPayload {
                     .get(*cursor..*cursor + len)
                     .ok_or(AccountAddressError::InvalidLength)?;
                 *cursor += len;
-                let public_key = PublicKey::from_bytes(curve.algorithm(), payload)
-                    .map_err(|_| AccountAddressError::InvalidPublicKey)?;
+                let public_key = decode_public_key(curve.algorithm(), payload)?;
                 Ok(Self::SingleKey { curve, public_key })
             }
             CONTROLLER_SINGLE_KEY_EXTENDED_TAG => {
@@ -751,8 +794,7 @@ impl ControllerPayload {
                     .get(*cursor..*cursor + len)
                     .ok_or(AccountAddressError::InvalidLength)?;
                 *cursor += len;
-                let public_key = PublicKey::from_bytes(curve.algorithm(), payload)
-                    .map_err(|_| AccountAddressError::InvalidPublicKey)?;
+                let public_key = decode_public_key(curve.algorithm(), payload)?;
                 Ok(Self::SingleKey { curve, public_key })
             }
             CONTROLLER_MULTISIG_TAG => {
@@ -774,7 +816,7 @@ impl ControllerPayload {
                 if member_count > CONTROLLER_MULTISIG_MEMBER_MAX {
                     return Err(AccountAddressError::MultisigMemberOverflow(member_count));
                 }
-                let mut members = Vec::with_capacity(member_count);
+                let mut members = allocate_multisig_members(member_count)?;
                 for _ in 0..member_count {
                     let curve_raw = *bytes
                         .get(*cursor)
@@ -795,8 +837,7 @@ impl ControllerPayload {
                         .get(*cursor..*cursor + key_len)
                         .ok_or(AccountAddressError::InvalidLength)?;
                     *cursor += key_len;
-                    let public_key = PublicKey::from_bytes(curve.algorithm(), payload)
-                        .map_err(|_| AccountAddressError::InvalidPublicKey)?;
+                    let public_key = decode_public_key(curve.algorithm(), payload)?;
                     members.push(MultisigMemberPayload {
                         curve,
                         weight,
@@ -831,6 +872,37 @@ impl ControllerPayload {
             }
         }
     }
+}
+
+fn decode_public_key(
+    algorithm: Algorithm,
+    payload: &[u8],
+) -> Result<PublicKey, AccountAddressError> {
+    PublicKey::from_bytes_uncached_for_decode(algorithm, payload).map_err(|error| {
+        if error.is_decode_resource_limit() {
+            AccountAddressError::DecodeResourceLimit
+        } else {
+            AccountAddressError::InvalidPublicKey
+        }
+    })
+}
+
+fn allocate_multisig_members(
+    member_count: usize,
+) -> Result<Vec<MultisigMemberPayload>, AccountAddressError> {
+    if member_count == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<MultisigMemberPayload>(member_count)
+        .map_err(|_| AccountAddressError::DecodeResourceLimit)?;
+    norito::core::reserve_decode_allocation(layout.size())
+        .map_err(|_| AccountAddressError::DecodeResourceLimit)?;
+    // SAFETY: the exact non-zero layout was admitted before allocation. The
+    // returned Vec starts empty and initializes elements only through `push`.
+    let allocation = unsafe { std::alloc::alloc(layout) };
+    let allocation =
+        core::ptr::NonNull::new(allocation).ok_or(AccountAddressError::DecodeResourceLimit)?;
+    Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr().cast(), 0, member_count) })
 }
 
 fn compute_local_digest(label: &str) -> [u8; 12] {
@@ -883,6 +955,8 @@ pub enum AccountAddressErrorCode {
     UnknownControllerTag,
     /// Public key payload failed validation.
     InvalidPublicKey,
+    /// An active decode allocation budget was exhausted.
+    DecodeResourceLimit,
     /// Unknown curve identifier encountered.
     UnknownCurve,
     /// Canonical payload contained trailing bytes.
@@ -924,6 +998,7 @@ impl AccountAddressErrorCode {
             Self::UnexpectedExtensionFlag => "ERR_UNEXPECTED_EXTENSION_FLAG",
             Self::UnknownControllerTag => "ERR_UNKNOWN_CONTROLLER_TAG",
             Self::InvalidPublicKey => "ERR_INVALID_PUBLIC_KEY",
+            Self::DecodeResourceLimit => "ERR_DECODE_RESOURCE_LIMIT",
             Self::UnknownCurve => "ERR_UNKNOWN_CURVE",
             Self::UnexpectedTrailingBytes => "ERR_UNEXPECTED_TRAILING_BYTES",
             Self::MissingI105Sentinel => "ERR_MISSING_I105_SENTINEL",
@@ -987,6 +1062,9 @@ pub enum AccountAddressError {
     /// Public key payload could not be parsed for the declared curve.
     #[error("invalid public key payload for declared curve")]
     InvalidPublicKey,
+    /// An active decode allocation budget was exhausted.
+    #[error("account address decode resource limit exceeded")]
+    DecodeResourceLimit,
     /// Curve identifier is not recognised.
     #[error("unknown curve identifier: {0}")]
     UnknownCurve(u8),
@@ -1051,6 +1129,7 @@ impl AccountAddressError {
             Self::UnexpectedExtensionFlag => AccountAddressErrorCode::UnexpectedExtensionFlag,
             Self::UnknownControllerTag(_) => AccountAddressErrorCode::UnknownControllerTag,
             Self::InvalidPublicKey => AccountAddressErrorCode::InvalidPublicKey,
+            Self::DecodeResourceLimit => AccountAddressErrorCode::DecodeResourceLimit,
             Self::UnknownCurve(_) => AccountAddressErrorCode::UnknownCurve,
             Self::UnexpectedTrailingBytes => AccountAddressErrorCode::UnexpectedTrailingBytes,
             Self::MissingI105Sentinel => AccountAddressErrorCode::MissingI105Sentinel,
@@ -2578,6 +2657,11 @@ mod tests {
             AccountAddressError::InvalidPublicKey,
             InvalidPublicKey,
             "ERR_INVALID_PUBLIC_KEY"
+        );
+        assert_code!(
+            AccountAddressError::DecodeResourceLimit,
+            DecodeResourceLimit,
+            "ERR_DECODE_RESOURCE_LIMIT"
         );
         assert_code!(
             AccountAddressError::UnknownCurve(4),

@@ -449,9 +449,10 @@ impl norito::json::JsonDeserialize for ContractAlias {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        value
-            .parse()
-            .map_err(|err: ParseError| norito::json::Error::Message(err.reason.into()))
+        reserve_contract_json_decode(value.len(), 6)?;
+        value.parse().map_err(|_: ParseError| {
+            norito::json::Error::Message("invalid contract alias".to_owned())
+        })
     }
 }
 
@@ -655,10 +656,28 @@ impl norito::json::JsonDeserialize for ContractAddress {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        value
-            .parse()
-            .map_err(|err: ContractAddressError| norito::json::Error::Message(err.to_string()))
+        reserve_contract_json_decode(value.len(), 3)?;
+        value.parse().map_err(|_: ContractAddressError| {
+            norito::json::Error::Message("invalid contract address".to_owned())
+        })
     }
+}
+
+#[cfg(feature = "json")]
+fn reserve_contract_json_decode(
+    raw_bytes: usize,
+    live_units: usize,
+) -> Result<(), norito::json::Error> {
+    // Alias parsing can retain three normalized segments, their canonical join,
+    // Name/UTS-46 normalization scratch, and the final ConstString (6S).
+    // Contract addresses retain Bech32 decode/canonical scratch plus the final
+    // ConstString (3S). Both derivations use the raw UTF-8 length as a strict
+    // upper bound; no decoded component expands beyond its source text.
+    let bytes = raw_bytes
+        .checked_mul(live_units)
+        .ok_or(norito::json::Error::DecodeResourceLimit)?;
+    norito::core::reserve_decode_allocation(bytes)
+        .map_err(norito::json::Error::from_decode_resource)
 }
 
 fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddressError> {
@@ -719,7 +738,9 @@ mod contract_address_tests {
     use crate::{block::BlockHeader, id::ChainId};
 
     fn network_id(seed: &[u8]) -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed)))
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
     }
 
     fn cross_sdk_network_id() -> NetworkId {
@@ -792,23 +813,15 @@ mod contract_address_tests {
         );
         assert_eq!(first_deployment.0, second_deployment.0);
         assert_ne!(first_deployment.1, second_deployment.1);
-        let first = ContractAddress::derive(
-            &first_deployment.1,
-            &authority,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("first-network address");
+        let first =
+            ContractAddress::derive(&first_deployment.1, &authority, 0, DataSpaceId::UNIVERSAL)
+                .expect("first-network address");
         let next_nonce =
             ContractAddress::derive(&first_deployment.1, &authority, 1, DataSpaceId::UNIVERSAL)
                 .expect("nonce+1 address");
-        let second = ContractAddress::derive(
-            &second_deployment.1,
-            &authority,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("second-network address");
+        let second =
+            ContractAddress::derive(&second_deployment.1, &authority, 0, DataSpaceId::UNIVERSAL)
+                .expect("second-network address");
 
         assert_ne!(first, next_nonce);
         assert_ne!(first, second);
@@ -955,6 +968,44 @@ mod contract_address_tests {
         ] {
             assert!(raw.parse::<ContractAlias>().is_err(), "must fail: {raw}");
         }
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_measured_json_decode<T>(json: &str)
+    where
+        T: norito::json::JsonDeserialize + core::fmt::Debug,
+    {
+        let limits = |bytes| {
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        };
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+                norito::json::from_str::<T>(json)
+            });
+        decoded.expect("unbounded measured decode");
+        let exact = usage.total_allocated_bytes();
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            norito::json::from_str::<T>(json)
+        });
+        decoded.expect("exact measured decode");
+        assert_eq!(usage.total_allocated_bytes(), exact);
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
+            norito::json::from_str::<T>(json)
+        });
+        assert!(matches!(
+            decoded,
+            Err(norito::json::Error::DecodeResourceLimit)
+        ));
+        assert!(usage.total_allocated_bytes() <= exact - 1);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn contract_alias_and_address_json_decode_are_measured_exactly() {
+        assert_measured_json_decode::<ContractAlias>("\"router::dex.universal\"");
+        assert_measured_json_decode::<ContractAddress>(
+            "\"irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp\"",
+        );
     }
 
     #[test]

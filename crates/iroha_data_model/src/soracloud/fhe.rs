@@ -3214,10 +3214,10 @@ pub struct SecretEnvelopeV1 {
     /// Key version under the same `key_id`.
     pub key_version: NonZeroU32,
     /// Deterministic nonce/IV bytes supplied by the producer.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub nonce: Vec<u8>,
     /// Opaque encrypted payload bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ciphertext: Vec<u8>,
     /// Commitment hash for verifying payload integrity against metadata.
     pub commitment: Hash,

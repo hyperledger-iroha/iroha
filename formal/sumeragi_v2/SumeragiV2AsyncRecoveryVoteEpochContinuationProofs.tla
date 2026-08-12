@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncRecoveryVoteEpochContinuationProofs ----
-EXTENDS SumeragiV2AsyncRecoveryVoteEpochProofs
+EXTENDS SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs
 
 (***************************************************************************
 Historical locked-Commit continuations moved intact from the preceding shard

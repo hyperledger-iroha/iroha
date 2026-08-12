@@ -210,6 +210,13 @@ impl json::JsonSerialize for VpnCellFlagsV1 {
     fn json_serialize(&self, out: &mut String) {
         let _ = FmtWrite::write_fmt(out, format_args!("{}", self.bits));
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::JsonSerialize::json_serialize_to(&self.bits, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -319,6 +326,13 @@ impl json::JsonSerialize for VpnFlowLabelV1 {
     fn json_serialize(&self, out: &mut String) {
         let _ = FmtWrite::write_fmt(out, format_args!("{}", self.to_u32()));
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::JsonSerialize::json_serialize_to(&self.to_u32(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -341,7 +355,7 @@ pub struct VpnCellHeaderV1 {
     /// Handling flags.
     pub flags: VpnCellFlagsV1,
     /// Circuit identifier derived from the route directory entry.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub circuit_id: [u8; 16],
     /// Flow label (24 bits).
     pub flow_label: VpnFlowLabelV1,
@@ -369,7 +383,7 @@ pub struct VpnCellV1 {
     /// Cell header.
     pub header: VpnCellHeaderV1,
     /// Raw payload carried by the cell.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub payload: Vec<u8>,
 }
 
@@ -842,13 +856,13 @@ pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAdd
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub struct VpnUsageVoucherBodyV1 {
     /// Session identifier bound to the tunnel runtime.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed the XOR price and relay policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Relay fingerprint that served the session.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Monotonic voucher sequence.
     pub sequence: u64,
@@ -954,21 +968,21 @@ pub struct VpnQuotePolicyV1 {
     /// Relay endpoint advertised to the client.
     pub relay_endpoint: String,
     /// Exact Ed25519 relay identity authenticated by the guard directory.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Relay descriptor commitment authenticated by the certificate.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub descriptor_commit: [u8; 32],
     /// Exact DNS name authenticated by TLS and the relay handshake.
     pub tls_server_name: String,
     /// Exact SHA-256 SPKI pin for the relay TLS leaf certificate.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_tls_spki_sha256: [u8; 32],
     /// SHA-256 digest of the canonical signed relay certificate bundle.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_certificate_sha256: [u8; 32],
     /// Externally provisioned digest authenticating the exact directory snapshot.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub directory_snapshot_digest: [u8; 32],
     /// Exclusive upper bound on relay trust validity, in milliseconds since the Unix epoch.
     pub relay_trust_valid_until_ms: u64,
@@ -1010,13 +1024,13 @@ pub struct VpnQuoteBodyV1 {
     /// Exact genesis-derived network on which this quote may open a lease.
     pub network_id: NetworkId,
     /// Operator-issued quote identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Canonical chain/client/quote-derived lease identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub lease_id: [u8; 32],
     /// Canonical chain/client/quote/slot-derived session identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Consensus-claimed point-to-point address allocation.
     pub address_slot: VpnAddressSlotV1,
@@ -1202,13 +1216,13 @@ pub enum VpnLeaseStatusV1 {
 )]
 pub struct VpnLeaseRecordV1 {
     /// Canonical chain/client/quote-derived lease identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub lease_id: [u8; 32],
     /// Session identifier bound to the tunnel runtime.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed pricing and route policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Client account that funded the escrow.
     pub client_account_id: AccountId,
@@ -1223,7 +1237,7 @@ pub struct VpnLeaseRecordV1 {
     /// Deterministic protocol custody account holding the lease fee.
     pub custody_account_id: AccountId,
     /// Relay fingerprint authorized by the quote.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Deterministic usage tariff fixed at lease opening.
     pub tariff: VpnTariffV1,
@@ -1234,7 +1248,7 @@ pub struct VpnLeaseRecordV1 {
     /// Exact operator-signed quote admitted when the lease opened.
     pub signed_quote: VpnSignedQuoteV1,
     /// Hash of the transaction that opened and funded this lease.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub open_tx_hash: [u8; 32],
     /// Current lease lifecycle status.
     pub status: VpnLeaseStatusV1,
@@ -1255,13 +1269,13 @@ pub struct VpnLeaseRecordV1 {
     /// Hash of the settled client voucher.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub client_voucher_hash: Option<[u8; 32]>,
     /// Hash of the relay receipt used for settlement.
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub relay_receipt_hash: Option<[u8; 32]>,
     /// Full relay receipt accepted during settlement.
@@ -1289,19 +1303,19 @@ impl VpnLeaseRecordV1 {
 )]
 pub struct VpnSessionReceiptV1 {
     /// Session identifier (client-assigned, 16 bytes).
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed pricing and route policy.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub quote_id: [u8; 32],
     /// Hash of the committed XOR escrow payment transaction.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub payment_tx_hash: [u8; 32],
     /// Hash of the paying canonical account id.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub account_hash: [u8; 32],
     /// Relay fingerprint that emitted the receipt.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
     /// Total ingress bytes (user payloads only).
     pub ingress_bytes: u64,
@@ -1318,14 +1332,14 @@ pub struct VpnSessionReceiptV1 {
     /// Exit class applied for billing.
     pub exit_class: VpnExitClassV1,
     /// Hash of the meter manifest applied to this session.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub meter_hash: [u8; 32],
     /// Nominal fee earned by the relay for the verified usage window.
     pub earned_fee: Quantity,
     /// Highest client usage voucher sequence accepted by the relay.
     pub highest_voucher_sequence: u64,
     /// Hash of the highest accepted client voucher.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub client_voucher_hash: [u8; 32],
 }
 
@@ -1874,6 +1888,26 @@ mod tests {
         "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
             .parse()
             .expect("signed 512-bit maximum quantity")
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: json::JsonSerialize>(value: &T) {
+        let legacy = json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            json::to_json_bounded(value, legacy.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn vpn_numeric_scalar_json_has_exact_checked_bounds() {
+        assert_exact_json(&VpnCellFlagsV1::from_bits(5));
+        assert_exact_json(&VpnFlowLabelV1::from_u32(0x00ab_cdef).expect("24-bit flow label"));
     }
 
     fn sample_quote_body(

@@ -93,6 +93,10 @@ struct TestArtifact {
     write_calls: usize,
     read_calls: usize,
     seek_calls: usize,
+    provider_identity_calls: Cell<usize>,
+    provider_pointer_calls: Cell<usize>,
+    provider_snapshot_calls: usize,
+    provider_payload_len_calls: usize,
     max_write: usize,
     max_read: usize,
     artifact_len_override: Option<u64>,
@@ -129,6 +133,10 @@ impl TestArtifact {
             write_calls: 0,
             read_calls: 0,
             seek_calls: 0,
+            provider_identity_calls: Cell::new(0),
+            provider_pointer_calls: Cell::new(0),
+            provider_snapshot_calls: 0,
+            provider_payload_len_calls: 0,
             max_write: 0,
             max_read: 0,
             artifact_len_override: None,
@@ -321,18 +329,24 @@ impl ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1 for TestArtifact {
 
 impl ZkAmsMkheCollectiveEvaluatedKeyProviderV1 for TestArtifact {
     fn provider_identity(&self) -> [u8; 32] {
+        self.provider_identity_calls
+            .set(self.provider_identity_calls.get() + 1);
         self.provider_identity
     }
 
     fn sorafs_pointer(&self) -> ZkAmsMkheEvaluatedKeySorafsPointerV1 {
+        self.provider_pointer_calls
+            .set(self.provider_pointer_calls.get() + 1);
         self.pointer.expect("test provider pointer")
     }
 
     fn snapshot_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+        self.provider_snapshot_calls += 1;
         Ok(self.provider_snapshot_identity.unwrap_or([0; 32]))
     }
 
     fn payload_len(&mut self) -> Result<u64, ZkAmsMkheErrorV1> {
+        self.provider_payload_len_calls += 1;
         Ok(self
             .artifact_len_override
             .unwrap_or(self.bytes.len() as u64))
@@ -412,14 +426,36 @@ fn expected_published_test_key(
     generated: &ZkAmsMkheGeneratedCollectiveEvaluatedKeyV1,
     pointer: ZkAmsMkheEvaluatedKeySorafsPointerV1,
 ) -> SeekableEvaluatedKeyExpectedV1 {
+    let entry = generated.manifest_entry().unwrap();
+    let cks_compact_output_set_digest = manual_cks_compact_output_set_digest_v1(
+        entry.purpose(),
+        entry.ordinal(),
+        entry.galois_exponent(),
+        [0x64; 32],
+        (0..profile.gadget_digits).map(|digit_index| {
+            let values: [u64; 8] = std::array::from_fn(|coefficient| {
+                (digit_index as u64 + 3) * (coefficient as u64 + 7)
+                    + u64::from(entry.ordinal())
+                    + 11
+            });
+            let digit = RnsPolynomial::from_unsigned(profile, &values).unwrap();
+            let mut digest =
+                new_rns_digest_hasher(RNS_NATIVE_DIGEST_DOMAIN_V1, digit.coefficients.len())
+                    .unwrap();
+            update_rns_digest_hasher(&mut digest, &digit.coefficients);
+            (u32::try_from(digit_index).unwrap(), digest.finalize())
+        }),
+        u32::try_from(profile.gadget_digits).unwrap(),
+    );
     SeekableEvaluatedKeyExpectedV1 {
-        entry: generated.manifest_entry().unwrap(),
+        entry,
         pointer,
         artifact_key_count: 32,
         profile_digest: profile.digest().unwrap(),
         roster_digest: [0x62; 32],
         epoch: 9,
         transcript_digest: [0x63; 32],
+        collective_key_digest: [0x64; 32],
         contribution_proof_digest: evaluated_key_evidence_digest(
             generated.purpose(),
             generated.ordinal(),
@@ -429,6 +465,7 @@ fn expected_published_test_key(
             [0x67; 32],
         )
         .unwrap(),
+        cks_compact_output_set_digest,
     }
 }
 
@@ -437,12 +474,16 @@ fn validated_test_key(
     validation: SeekableEvaluatedKeyValidationV1,
 ) -> ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     let runtime_context_digest = [0x71; 32];
+    let evidence_set_capability_seal = [0x72; 32];
     let provider_binding_digest = seekable_provider_binding_digest(
         runtime_context_digest,
         expected.entry,
         validation.state,
         validation.a_master_seed,
         validation.contribution_proof_digest,
+        evidence_set_capability_seal,
+        expected.cks_compact_output_set_digest,
+        validation.limb_index_digest,
     );
     ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
         runtime_context_digest,
@@ -451,9 +492,13 @@ fn validated_test_key(
         provider_identity: validation.state.provider_identity,
         snapshot_identity: validation.state.snapshot_identity,
         provider_binding_digest,
+        limb_index_digest: validation.limb_index_digest,
         a_master_seed: validation.a_master_seed,
         contribution_proof_digest: validation.contribution_proof_digest,
+        evidence_set_capability_seal,
+        cks_compact_output_set_digest: expected.cks_compact_output_set_digest,
         digits: validation.digits,
+        limbs: validation.limbs,
     }
 }
 
@@ -525,6 +570,20 @@ fn deterministic_a(profile: &BgvProfile, digit_index: usize) -> RnsPolynomial {
             .unwrap()
     });
     RnsPolynomial::from_unsigned(profile, &values).unwrap()
+}
+
+fn fill_test_limb(
+    profile: &BgvProfile,
+    polynomial: &RnsPolynomial,
+    limb_index: usize,
+    output: &mut [u64],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    polynomial.validate(profile)?;
+    if limb_index >= profile.moduli.len() || output.len() != profile.ring_degree {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    output.copy_from_slice(polynomial.limb(profile, limb_index));
+    Ok(())
 }
 
 fn exact_compact_digits(
@@ -765,8 +824,12 @@ fn hoisted_automorphed_decomposition_matches_materialized_view() {
         clone_rns_exact(&profile, &constant).unwrap(),
         clone_rns_exact(&profile, &linear).unwrap(),
         &materialized,
-        |digit_index| clone_rns_exact(&profile, &keys[digit_index].0),
-        |digit_index| clone_rns_exact(&profile, &keys[digit_index].1),
+        |digit_index, limb_index, output| {
+            fill_test_limb(&profile, &keys[digit_index].0, limb_index, output)
+        },
+        |digit_index, limb_index, output| {
+            fill_test_limb(&profile, &keys[digit_index].1, limb_index, output)
+        },
     )
     .unwrap();
     let accounting = seekable_evaluated_key_accounting(&profile).unwrap();
@@ -777,8 +840,12 @@ fn hoisted_automorphed_decomposition_matches_materialized_view() {
             clone_rns_exact(&profile, &linear).unwrap(),
             &polynomial,
             Some(exponent),
-            |digit_index| clone_rns_exact(&profile, &keys[digit_index].0),
-            |digit_index| clone_rns_exact(&profile, &keys[digit_index].1),
+            |digit_index, limb_index, output| {
+                fill_test_limb(&profile, &keys[digit_index].0, limb_index, output)
+            },
+            |digit_index, limb_index, output| {
+                fill_test_limb(&profile, &keys[digit_index].1, limb_index, output)
+            },
         )
     });
     assert_eq!(observed.unwrap(), reference);
@@ -802,6 +869,94 @@ fn hoisted_decomposition_reads_each_source_residue_once_for_all_digits() {
         expected_reads,
         "materializing any digit order must not repeat CRT source reads"
     );
+}
+
+#[test]
+fn seeded_a_and_signed_digit_limb_fills_match_native_references() {
+    let profile = hybrid_test_profile();
+    let parties = core::array::from_fn(|index| {
+        let mut bytes = [0_u8; 32];
+        bytes[31] = u8::try_from(index + 1).unwrap();
+        ZkAmsMkhePartyIdV1::new(bytes).unwrap()
+    });
+    let roster =
+        ZkAmsMkheGovernedRosterWireV1::new(release_profile_v1().digest().unwrap(), 9, parties)
+            .unwrap();
+    let transcript_digest = [0x81; 32];
+    let collective_key_digest = [0x82; 32];
+    let master_seed = [0x83; 32];
+    for digit_index in 0..profile.gadget_digits {
+        let mut legacy_context = Vec::with_capacity(192);
+        legacy_context.extend_from_slice(&roster.profile_digest());
+        legacy_context.extend_from_slice(&roster.roster_digest());
+        legacy_context.extend_from_slice(&roster.epoch().to_be_bytes());
+        legacy_context.extend_from_slice(&transcript_digest);
+        legacy_context.extend_from_slice(&collective_key_digest);
+        legacy_context.extend_from_slice(&[
+            ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Relinearization as u8,
+            0,
+        ]);
+        legacy_context.extend_from_slice(&0_u32.to_be_bytes());
+        legacy_context.extend_from_slice(&master_seed);
+        legacy_context.extend_from_slice(&u16::try_from(digit_index).unwrap().to_be_bytes());
+        assert_eq!(
+            legacy_context.len(),
+            EVALUATED_KEY_TARGET_A_CONTEXT_BYTES_V1
+        );
+        let legacy = derive_uniform_rns_from_context(
+            &profile,
+            EVALUATED_KEY_TARGET_A_DOMAIN_V1,
+            &legacy_context,
+        )
+        .unwrap();
+        let full = derive_target_a(
+            &profile,
+            &roster,
+            transcript_digest,
+            collective_key_digest,
+            ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Relinearization,
+            0,
+            0,
+            master_seed,
+            digit_index,
+        )
+        .unwrap();
+        assert_eq!(
+            full, legacy,
+            "target-a transcript changed at digit {digit_index}"
+        );
+        for limb_index in 0..profile.moduli.len() {
+            let mut limb = vec![0_u64; profile.ring_degree];
+            derive_target_a_limb(
+                &profile,
+                &roster,
+                transcript_digest,
+                collective_key_digest,
+                ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Relinearization,
+                0,
+                0,
+                master_seed,
+                digit_index,
+                limb_index,
+                &mut limb,
+            )
+            .unwrap();
+            assert_eq!(limb.as_slice(), full.limb(&profile, limb_index));
+        }
+    }
+
+    let polynomial = signed(&profile, &[17, -19, 23, -29, 31, -37, 41, -43]);
+    let batch = HoistedHybridDigitBatchV1::new(&profile, &polynomial).unwrap();
+    for digit_index in 0..profile.gadget_digits {
+        let full = batch.digit(digit_index).unwrap();
+        for limb_index in 0..profile.moduli.len() {
+            let mut limb = vec![0_u64; profile.ring_degree];
+            batch
+                .fill_digit_limb(digit_index, limb_index, &mut limb)
+                .unwrap();
+            assert_eq!(limb.as_slice(), full.limb(&profile, limb_index));
+        }
+    }
 }
 
 #[test]
@@ -834,29 +989,14 @@ fn release_hoisted_batches_cover_every_digit_with_frozen_workspace_bound() {
     assert_eq!(accounting.signed_decomposition_scratch_bytes, 5_242_880);
     let workspace_ceiling = u64::try_from(profile.max_workspace_bytes).unwrap();
     assert_eq!(workspace_ceiling, 167_772_160);
-    assert_eq!(accounting.peak_managed_workspace_bytes, 166_723_776);
+    assert_eq!(accounting.peak_managed_workspace_bytes, 87_042_112);
     assert_eq!(
         workspace_ceiling - accounting.peak_managed_workspace_bytes,
-        1_048_384
+        80_730_048
     );
-
-    let six_digit_scratch = profile
-        .ring_degree
-        .checked_mul(6)
-        .and_then(|values| values.checked_mul(core::mem::size_of::<i64>()))
-        .and_then(|bytes| u64::try_from(bytes).ok())
-        .unwrap();
-    let six_digit_peak = accounting
-        .peak_managed_workspace_bytes
-        .checked_sub(accounting.signed_decomposition_scratch_bytes)
-        .and_then(|bytes| bytes.checked_add(six_digit_scratch))
-        .unwrap();
-    assert_eq!(six_digit_peak, 167_772_352);
-    assert_eq!(six_digit_peak - workspace_ceiling, 192);
     assert!(
-        accounting.peak_managed_workspace_bytes <= workspace_ceiling
-            && six_digit_peak > workspace_ceiling,
-        "five digits are the largest batch admitted by the frozen 160 MiB ceiling"
+        accounting.peak_managed_workspace_bytes <= workspace_ceiling,
+        "the frozen five-digit schedule must retain honest allocator headroom"
     );
 }
 
@@ -930,8 +1070,12 @@ fn streamed_switch_runtime_liveness_high_water_matches_exact_certificate() {
             clone_rns_exact(&profile, &constant).unwrap(),
             clone_rns_exact(&profile, &linear).unwrap(),
             &switched,
-            |digit_index| clone_rns_exact(&profile, &keys[digit_index].0),
-            |digit_index| clone_rns_exact(&profile, &keys[digit_index].1),
+            |digit_index, limb_index, output| {
+                fill_test_limb(&profile, &keys[digit_index].0, limb_index, output)
+            },
+            |digit_index, limb_index, output| {
+                fill_test_limb(&profile, &keys[digit_index].1, limb_index, output)
+            },
         )
     });
     result.unwrap();
@@ -951,15 +1095,72 @@ fn streamed_switch_runtime_liveness_high_water_matches_exact_certificate() {
             clone_rns_exact(&profile, &constant).unwrap(),
             clone_rns_exact(&profile, &linear).unwrap(),
             &switched,
-            |_| {
+            |_, _, _| {
                 provider_calls.set(provider_calls.get() + 1);
                 Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
             },
-            |_| Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
+            |_, _, _| Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
         ),
         Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
     );
     assert_eq!(provider_calls.get(), 0, "resource rejection precedes I/O");
+}
+
+#[test]
+fn key_switch_limb_workspace_zeroizes_on_success_error_and_unwind() {
+    let profile = hybrid_test_profile();
+    reset_key_switch_limb_workspace_zeroized_drops_v1();
+    {
+        let mut workspace = KeySwitchLimbWorkspaceV1::new(&profile).unwrap();
+        workspace.evaluated_key.fill(7);
+        workspace.signed_digit.fill(9);
+    }
+    assert_eq!(key_switch_limb_workspace_zeroized_drops_v1(), 1);
+
+    let constant = signed(&profile, &[4, -7, 9, 0, -3, 12, 1, -5]);
+    let linear = signed(&profile, &[-2, 5, 0, 8, -11, 3, 7, 1]);
+    let switched = signed(&profile, &[17, -19, 23, -29, 31, -37, 41, -43]);
+    let error = apply_compact_switch_streamed_core(
+        &profile,
+        clone_rns_exact(&profile, &constant).unwrap(),
+        clone_rns_exact(&profile, &linear).unwrap(),
+        &switched,
+        |_, _, output| {
+            output.fill(11);
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        },
+        |_, _, _| Ok(()),
+    );
+    assert_eq!(error, Err(ZkAmsMkheErrorV1::InvalidKeyMaterial));
+    assert_eq!(key_switch_limb_workspace_zeroized_drops_v1(), 2);
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = apply_compact_switch_streamed_core(
+            &profile,
+            clone_rns_exact(&profile, &constant).unwrap(),
+            clone_rns_exact(&profile, &linear).unwrap(),
+            &switched,
+            |_, _, output| {
+                output.fill(13);
+                panic!("exercise key-switch limb workspace unwind");
+            },
+            |_, _, _| Ok(()),
+        );
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(key_switch_limb_workspace_zeroized_drops_v1(), 3);
+
+    let source = include_str!("collective_eval_keys/runtime.rs");
+    let drop_body = source
+        .split_once("impl Drop for KeySwitchLimbWorkspaceV1")
+        .unwrap()
+        .1
+        .split_once("fn multiply_accumulate_limb_in_place")
+        .unwrap()
+        .0;
+    for required in ["black_box", ".fill(0)", "compiler_fence"] {
+        assert!(drop_body.contains(required));
+    }
 }
 
 #[test]
@@ -969,25 +1170,28 @@ fn release_seekable_accounting_is_exact_and_io_is_not_arithmetic_work() {
     assert_eq!(accounting.canonical_payload_bytes, 1_514_144_113);
     assert_eq!(accounting.canonical_digit_record_bytes, 39_845_893);
     assert_eq!(accounting.incremental_validation_read_bytes, 1_514_144_113);
-    assert_eq!(accounting.per_key_switch_read_bytes, 1_514_143_934);
+    assert_eq!(accounting.per_key_switch_read_bytes, 1_514_143_744);
     assert_eq!(accounting.native_polynomial_allocation_bytes, 39_845_888);
+    assert_eq!(accounting.native_limb_allocation_bytes, 1_048_576);
     assert_eq!(accounting.output_accumulator_bytes, 79_691_776);
     assert_eq!(accounting.signed_decomposition_scratch_bytes, 5_242_880);
     assert_eq!(accounting.crt_residue_scratch_bytes, 304);
     assert_eq!(accounting.ntt_limb_scratch_bytes, 2_097_152);
     assert_eq!(accounting.provider_read_buffer_bytes, 8_192);
     assert_eq!(accounting.provider_hash_state_bytes, 1_920);
-    assert_eq!(accounting.validation_metadata_bytes, 1_824);
-    assert_eq!(accounting.decomposition_phase_bytes, 124_780_544);
-    assert_eq!(accounting.provider_read_phase_bytes, 164_636_544);
-    assert_eq!(accounting.peak_heap_allocation_bytes, 166_723_584);
-    assert_eq!(accounting.multiplication_phase_bytes, 166_723_776);
+    assert_eq!(core::mem::size_of::<SeekableEvaluatedKeyDigitV1>(), 48);
+    assert_eq!(core::mem::size_of::<SeekableEvaluatedKeyLimbV1>(), 48);
+    assert_eq!(accounting.validation_metadata_bytes, 71_136);
+    assert_eq!(accounting.decomposition_phase_bytes, 87_032_112);
+    assert_eq!(accounting.provider_read_phase_bytes, 87_041_920);
+    assert_eq!(accounting.peak_heap_allocation_bytes, 87_031_808);
+    assert_eq!(accounting.multiplication_phase_bytes, 87_042_112);
     assert_eq!(
-        accounting.multiplication_phase_bytes - accounting.peak_heap_allocation_bytes,
+        accounting.multiplication_phase_bytes - accounting.provider_read_phase_bytes,
         192,
-        "hoisted batch, four RNS owners, and both NTT Vec owners are explicit"
+        "batch/output/limb owners, limb views, and automorphism control are explicit"
     );
-    assert_eq!(accounting.peak_managed_workspace_bytes, 166_723_776);
+    assert_eq!(accounting.peak_managed_workspace_bytes, 87_042_112);
     assert_eq!(accounting.balanced_decomposition_work_units, 3_297_247_232);
     assert_eq!(accounting.ring_multiplication_work_units, 6_813_646_848);
     assert_eq!(accounting.accumulator_addition_work_units, 378_535_936);
@@ -1014,6 +1218,153 @@ fn release_seekable_accounting_is_exact_and_io_is_not_arithmetic_work() {
         seekable_evaluated_key_accounting(&one_byte_short),
         Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
     );
+}
+
+#[test]
+fn production_seekable_switch_source_forbids_full_digit_materialization() {
+    let source = include_str!("collective_eval_keys/runtime.rs");
+    let core = source
+        .split_once("fn apply_compact_switch_streamed_core_with_automorphism")
+        .unwrap()
+        .1
+        .split_once("fn apply_compact_switch_with_seekable_provider")
+        .unwrap()
+        .0;
+    for forbidden in [
+        "let plaintext_digit",
+        "stored_b_digit(",
+        "seeded_a_digit(",
+        "multiply_accumulate_in_place",
+        "negacyclic_multiply_exact",
+    ] {
+        assert!(
+            !core.contains(forbidden),
+            "forbidden full-P path: {forbidden}"
+        );
+    }
+    for required in [
+        "KeySwitchLimbWorkspaceV1::new",
+        "fill_digit_limb",
+        "multiply_accumulate_limb_in_place",
+    ] {
+        assert!(core.contains(required), "missing limb kernel: {required}");
+    }
+    assert!(source.contains("read_seekable_evaluated_key_limb"));
+    assert!(source.contains("derive_target_a_limb"));
+    let stored_limb = source
+        .split_once("fn stored_b_limb")
+        .unwrap()
+        .1
+        .split_once("fn seeded_a_limb")
+        .unwrap()
+        .0;
+    assert!(stored_limb.contains("validate_bound_seekable_provider_state"));
+    assert!(!stored_limb.contains("self.validate_provider_state"));
+}
+
+#[test]
+fn production_streaming_automorphism_source_is_direct_fail_closed_and_bounded() {
+    let source = include_str!("collective_eval_keys/streaming_automorphism.rs");
+    let operation = source
+        .split_once("pub fn automorphism_switch_zk_ams_mkhe_collective_streaming_v1")
+        .unwrap()
+        .1
+        .split_once("pub struct ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1")
+        .unwrap()
+        .0;
+    for forbidden in [
+        "RnsPolynomial::zero",
+        "Vec::with_capacity",
+        "plaintext_digit",
+        "stored_b_digit",
+        "seeded_a_digit",
+    ] {
+        assert!(
+            !operation.contains(forbidden),
+            "forbidden owner: {forbidden}"
+        );
+    }
+    for required in [
+        "whole_operation_managed_peak_bytes",
+        "prepare_zk_ams_mkhe_streaming_collective_automorphism_output_v1",
+        "read_automorphed_constant_v1",
+        "read_automorphed_linear_batch_v1",
+        "stored_b_limb",
+        "seeded_a_limb",
+        "multiply_accumulate_limb_in_place",
+        "publish_constant_limb_v1",
+        "publish_linear_limb_v1",
+        "finish_v1",
+    ] {
+        assert!(
+            operation.contains(required),
+            "missing direct seam: {required}"
+        );
+    }
+    let last_input_authentication = operation
+        .rfind("runtime.validate_provider_state")
+        .expect("final provider authentication");
+    let first_publication = operation
+        .find("output_publication.publish_constant_limb_v1")
+        .expect("first output publication");
+    assert!(last_input_authentication < first_publication);
+    assert!(source.contains("try_reserve_exact"));
+    assert!(source.contains("impl Drop for StreamingAutomorphismInputScratchV1"));
+    assert!(source.contains("impl Drop for StreamingAutomorphismHybridBatchV1"));
+
+    let runtime = include_str!("collective_eval_keys/runtime.rs");
+    let lineage = runtime
+        .split_once("fn output_lineage")
+        .unwrap()
+        .1
+        .split_once("fn read_seekable_evaluated_key_limb")
+        .unwrap()
+        .0;
+    assert!(lineage.contains("Keccak256::new"));
+    assert!(!lineage.contains("Vec::with_capacity"));
+}
+
+#[test]
+fn streaming_automorphism_is_the_only_production_facade_surface() {
+    let facades = [
+        include_str!("../mkhe.rs"),
+        include_str!("../../zk_ams.rs"),
+        include_str!("../../../vega.rs"),
+    ];
+    let production = [
+        "ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1",
+        "automorphism_switch_zk_ams_mkhe_collective_streaming_v1",
+        "zk_ams_mkhe_streaming_collective_automorphism_accounting_v1",
+    ];
+    let legacy = [
+        "automorphism_switch_zk_ams_mkhe_collective_v1",
+        "relinearize_zk_ams_mkhe_collective_v1",
+    ];
+
+    for source in facades {
+        for name in production {
+            let position = source.find(name).expect("production streaming facade item");
+            let use_start = source[..position]
+                .rfind("pub use ")
+                .expect("streaming facade pub use");
+            let preceding_line = source[..use_start]
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .map(str::trim);
+            assert_ne!(preceding_line, Some("#[cfg(test)]"), "{name} is test-only");
+        }
+        for name in legacy {
+            assert_eq!(source.matches(name).count(), 1, "legacy facade item {name}");
+            let position = source.find(name).expect("legacy facade item");
+            let gate = source[..position]
+                .rfind("#[cfg(test)]")
+                .expect("legacy facade cfg(test)");
+            let gated_use = &source[gate..position];
+            assert!(gated_use.contains("pub use "));
+            assert!(gated_use.len() < 192, "detached cfg(test) for {name}");
+        }
+    }
 }
 
 #[test]
@@ -1061,15 +1412,61 @@ fn generate_publish_validate_and_streamed_switch_are_exact_end_to_end() {
     let mut provider = publication.clone();
     let validation = validate_seekable_evaluated_key(&profile, expected, &mut provider).unwrap();
     assert_eq!(validation.digits.len(), profile.gadget_digits);
+    assert_eq!(
+        validation.limbs.len(),
+        profile.gadget_digits * profile.moduli.len()
+    );
+    assert_ne!(validation.limb_index_digest, [0; 32]);
+    let first_limb = validation.limbs[0];
+    let first_limb_start = usize::try_from(first_limb.absolute_offset).unwrap();
+    let first_limb_end = first_limb_start + usize::try_from(first_limb.canonical_bytes).unwrap();
+    assert_ne!(
+        first_limb.blake3,
+        blake3_hash(&provider.bytes[first_limb_start..first_limb_end]),
+        "limb authentication must include its domain/index/modulus/range frame"
+    );
     assert!(validation.digits.windows(2).all(|pair| {
         pair[0].absolute_offset + pair[0].canonical_bytes == pair[1].absolute_offset
     }));
-    let key = validated_test_key(expected, validation);
+    assert!(validation.limbs.windows(2).all(|pair| {
+        pair[0].absolute_offset + pair[0].canonical_bytes == pair[1].absolute_offset
+            || pair[0].absolute_offset
+                + pair[0].canonical_bytes
+                + SEEKABLE_EVALUATED_KEY_DIGIT_PREFIX_BYTES_V1 as u64
+                == pair[1].absolute_offset
+    }));
+    let mut key = validated_test_key(expected, validation);
+
+    let original_limb_offset = key.limbs[0].absolute_offset;
+    key.limbs[0].absolute_offset ^= 8;
+    let mut output = vec![0_u64; profile.ring_degree];
+    assert!(
+        read_seekable_evaluated_key_limb(&profile, &key, &mut provider, 0, 0, &mut output).is_err(),
+        "mutated limb metadata must fail its handle-bound index digest"
+    );
+    key.limbs[0].absolute_offset = original_limb_offset;
+    assert_eq!(
+        key.limb_index_digest,
+        seekable_evaluated_key_limb_index_digest(key.entry, &key.limbs).unwrap()
+    );
     for (digit_index, stored) in stored_digits.iter().enumerate() {
         assert_eq!(
             read_seekable_evaluated_key_digit(&profile, &key, &mut provider, digit_index).unwrap(),
             *stored
         );
+        for limb_index in 0..profile.moduli.len() {
+            let mut observed = vec![0_u64; profile.ring_degree];
+            read_seekable_evaluated_key_limb(
+                &profile,
+                &key,
+                &mut provider,
+                digit_index,
+                limb_index,
+                &mut observed,
+            )
+            .unwrap();
+            assert_eq!(observed.as_slice(), stored.limb(&profile, limb_index));
+        }
     }
 
     let constant = signed(&profile, &[4, -7, 9, 0, -3, 12, 1, -5]);
@@ -1097,8 +1494,19 @@ fn generate_publish_validate_and_streamed_switch_are_exact_end_to_end() {
         clone_rns_exact(&profile, &constant).unwrap(),
         clone_rns_exact(&profile, &linear).unwrap(),
         &switched,
-        |digit_index| read_seekable_evaluated_key_digit(&profile, &key, &mut provider, digit_index),
-        |digit_index| clone_rns_exact(&profile, &seeded_digits[digit_index]),
+        |digit_index, limb_index, output| {
+            read_seekable_evaluated_key_limb(
+                &profile,
+                &key,
+                &mut provider,
+                digit_index,
+                limb_index,
+                output,
+            )
+        },
+        |digit_index, limb_index, output| {
+            fill_test_limb(&profile, &seeded_digits[digit_index], limb_index, output)
+        },
     )
     .unwrap();
     assert_eq!(observed, reference);
@@ -1376,6 +1784,20 @@ fn provider_rechecks_identity_snapshot_pointer_length_and_digest_for_every_digit
     assert!(
         read_seekable_evaluated_key_digit(&profile, &key, &mut stable_snapshot_substitution, 0)
             .is_err()
+    );
+    let mut limb_substitution = provider.clone();
+    limb_substitution.bytes[digit_body] ^= 1;
+    let mut limb_output = vec![0_u64; profile.ring_degree];
+    assert!(
+        read_seekable_evaluated_key_limb(
+            &profile,
+            &key,
+            &mut limb_substitution,
+            0,
+            0,
+            &mut limb_output,
+        )
+        .is_err()
     );
 
     let mut short_read = provider.clone();
@@ -1874,15 +2296,23 @@ fn canonical_record_fanout_is_identical_bounded_and_rejects_every_transport_spli
     let body = canonical_test_body(0x21);
     let canonical_bytes = body.len() + EVIDENCE_RECORD_DIGEST_BYTES_V1;
     let header = test_record_header(canonical_bytes);
-    let mut set_hash = Keccak256::new();
     let mut sink = RecordingEvidenceSink::default();
-    let mut writer = CanonicalRecordFanout::new(&mut set_hash, &mut sink, header).unwrap();
+    let mut writer = CanonicalRecordFanout::new(&mut sink, header).unwrap();
     writer.write_body(&body).unwrap();
     let digest = writer.finish().unwrap();
     let encoded = sink.chunks.concat();
     assert_eq!(encoded.len(), canonical_bytes);
     assert_eq!(validate_canonical_test_record(&encoded).unwrap(), digest);
-    assert_eq!(set_hash.finalize(), keccak256(&encoded));
+    let mut descriptor_set = evidence_set::EvidenceSetDigestV1::new(header.set).unwrap();
+    descriptor_set
+        .absorb_record(
+            header.record_index,
+            header.kind,
+            header.canonical_bytes,
+            digest,
+        )
+        .unwrap();
+    assert_ne!(descriptor_set.finish(1).unwrap(), keccak256(&encoded));
     assert_eq!(sink.footer.unwrap().canonical_digest(), digest);
     assert!(
         sink.chunks
@@ -1932,10 +2362,8 @@ fn canonical_record_fanout_is_identical_bounded_and_rejects_every_transport_spli
 
     let other_body = canonical_test_body(0xa7);
     let other_header = test_record_header(other_body.len() + EVIDENCE_RECORD_DIGEST_BYTES_V1);
-    let mut other_hash = Keccak256::new();
     let mut other_sink = RecordingEvidenceSink::default();
-    let mut other_writer =
-        CanonicalRecordFanout::new(&mut other_hash, &mut other_sink, other_header).unwrap();
+    let mut other_writer = CanonicalRecordFanout::new(&mut other_sink, other_header).unwrap();
     other_writer.write_body(&other_body).unwrap();
     other_writer.finish().unwrap();
     let mut spliced_chunks = sink.chunks.clone();
@@ -1947,12 +2375,11 @@ fn canonical_record_fanout_is_identical_bounded_and_rejects_every_transport_spli
 fn canonical_fanout_propagates_sink_error_before_record_commit() {
     let body = canonical_test_body(0x42);
     let header = test_record_header(body.len() + EVIDENCE_RECORD_DIGEST_BYTES_V1);
-    let mut set_hash = Keccak256::new();
     let mut sink = RecordingEvidenceSink {
         fail_chunk: Some(1),
         ..RecordingEvidenceSink::default()
     };
-    let mut writer = CanonicalRecordFanout::new(&mut set_hash, &mut sink, header).unwrap();
+    let mut writer = CanonicalRecordFanout::new(&mut sink, header).unwrap();
     assert_eq!(
         writer.write_body(&body),
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
@@ -1966,16 +2393,11 @@ fn canonical_source_preflight_rejects_attacker_lengths_before_polynomial_allocat
         .unwrap()
         .checked_add(1)
         .unwrap();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&SOURCE_EVIDENCE_RECORD_TAG_V1);
-    bytes.push(MKHE_VERSION_V1);
-    bytes.push(ZkAmsMkheCollectiveEvidenceRecordKindV1::RkgRoundOne as u8);
-    bytes.extend_from_slice(&oversized.to_be_bytes());
-    assert!(decode_source_evidence_record(&mut bytes.as_slice()).is_err());
+    assert!(source_stream::source_evidence_body_bytes_v1(oversized).is_err());
 
-    let minimum = (SOURCE_EVIDENCE_COMMON_BODY_BYTES_V1 + EVIDENCE_RECORD_DIGEST_BYTES_V1) as u64;
-    bytes[6..14].copy_from_slice(&minimum.to_be_bytes());
-    assert!(decode_source_evidence_record(&mut bytes.as_slice()).is_err());
+    let below_minimum =
+        (SOURCE_EVIDENCE_COMMON_BODY_BYTES_V1 + EVIDENCE_RECORD_DIGEST_BYTES_V1 - 1) as u64;
+    assert!(source_stream::source_evidence_body_bytes_v1(below_minimum).is_err());
 }
 
 #[test]
@@ -2015,6 +2437,50 @@ fn canonical_evidence_stream_rejects_omission_reorder_duplicate_and_splice() {
     }
     assert_ne!(other_context.finish(2, &mut sink).unwrap(), digest);
 }
+
+struct EvidenceTestRandom {
+    seed: [u8; 32],
+    counter: u64,
+}
+
+impl EvidenceTestRandom {
+    fn new(label: &[u8]) -> Self {
+        Self {
+            seed: keccak256(label),
+            counter: 0,
+        }
+    }
+}
+
+impl MaskedRelaxedRandomSourceV1 for EvidenceTestRandom {
+    fn fill_bytes(
+        &mut self,
+        destination: &mut [u8],
+    ) -> Result<(), super::super::MaskedRelaxedRandomErrorV1> {
+        let mut written = 0;
+        while written < destination.len() {
+            let mut frame = [0_u8; 40];
+            frame[..32].copy_from_slice(&self.seed);
+            frame[32..].copy_from_slice(&self.counter.to_be_bytes());
+            let block = keccak256(&frame);
+            let take = (destination.len() - written).min(block.len());
+            destination[written..written + take].copy_from_slice(&block[..take]);
+            written += take;
+            self.counter = self.counter.wrapping_add(1);
+        }
+        Ok(())
+    }
+}
+
+struct EvidenceCapabilityFixture {
+    roster: ZkAmsMkheGovernedActiveRosterV1,
+    source_context: ZkAmsMkheTrustedSourceContextV1,
+    cks_context: ZkAmsMkheTrustedCksContextV1,
+    entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
+    counts: evidence_set::EvidenceRecordCountsV1,
+}
+
+include!("collective_eval_keys_evidence_tests.rs");
 
 #[test]
 fn release_schedule_and_online_work_are_exact_and_roster_independent() {

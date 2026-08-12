@@ -1,5 +1,7 @@
 #![allow(unexpected_cfgs)]
 
+//! Runs the privileged local backend used by the Sora VPN client.
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 

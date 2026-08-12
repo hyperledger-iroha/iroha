@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "946223a56f68896ae0484ec2d46acc7d3337e17beeb1409f3167d39ab294a52a"
+    "429688a8ab3b0ec5d4359d0a1f266ec50f3b75c136fa06a641a2be2a9afecefc"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -572,6 +572,7 @@ ASYNC_LIVENESS_SHARDS = (
     ("SumeragiV2AsyncInstallRunnerContinuationProofs", None),
     ("SumeragiV2AsyncTimeoutKernelProofs", None),
     ("SumeragiV2AsyncRecoveryVoteEpochProofs", None),
+    ("SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs", None),
     ("SumeragiV2AsyncRecoveryVoteEpochContinuationProofs", None),
     ("SumeragiV2AsyncFairServiceProofs", None),
     ("SumeragiV2AsyncProgressOwnershipProofs", None),
@@ -1094,7 +1095,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256 = {
         "965b2f2b71534f09b8b2bcbc701729b44549edcd51f5d0d7ce3fe89da6c93584"
     ),
     SERVE_SCHEDULER_ORDINAL_MUTATION_RUNNER: (
-        "26dde32bedb3b54cdfa7ead672fa1498b853a936b6620a7715f9ba9ea77ea8e2"
+        "d392e465b526ffbb4b4aac0857582098a5c260d86db94dab9319f2cb8f35daaa"
     ),
 }
 SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
@@ -1102,7 +1103,7 @@ SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
         "configuration and shared result-contract binding",
         'readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"',
         "if (($#)); then",
-        "babab96e058fa452cd5e03cd38be6318e8af3d20e1aad2486b2093d1a853ca54",
+        "7ac3d1b857f36ed39d8e85247e3e083aebe574b7e7ba9fadc2aa3ad3d3989e4a",
     ),
     (
         "preflight and SANY execution",
@@ -1129,7 +1130,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "48e5be5235b5d745391e4b89b034976f79c830185c84e32d57327f2e73107c5e"
+        "c06e2d28f71c825d079bfa3e2e93bafc5a9b98ed7f2e91bfa1afc0a157fb8239"
     ),
 }
 PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS = (
@@ -1214,7 +1215,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_SHA256 = {
         "dabf0dfd92215a53e7acc51e974af2188aaa542bb437d7e81da77596a76300bc"
     ),
     COMMIT_IMPORT_PROVENANCE_MUTATION_RUNNER: (
-        "4bd77eed89bce194b308769b0267a814628a6596ab298d68bf1d3ca8f198eaaa"
+        "75466cd1d485d26237931a11ad62ba9f277f63fb162d2a49648e22731a2a420e"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
@@ -1224,18 +1225,18 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "48e5be5235b5d745391e4b89b034976f79c830185c84e32d57327f2e73107c5e"
+        "c06e2d28f71c825d079bfa3e2e93bafc5a9b98ed7f2e91bfa1afc0a157fb8239"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
         "8c657bd5ded3504285b50e7b726ab343f7f27643ba609daf1483a90b32b06c0e"
     ),
 }
 _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
-    "bash scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh",
-    "bash scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
-    "bash scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
-    "bash scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
-    "bash scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+    "run_formal_script scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh",
+    "run_formal_script scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+    "run_formal_script scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
+    "run_formal_script scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
+    "run_formal_script scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
 )
 SHARED_TLC_RESULT_CONTRACT = (
     "scripts/formal/sumeragi_v2_tlc_result_contract.sh"
@@ -1695,7 +1696,7 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2Revision4CertifiedFenceReservation.tla": (
-        "bcbd50bb32221a14d1c0a2f3a60d86ebb5287aa57a40b7959df1a637e4936719"
+        "fb29dcbe433d84f8c84453ea7e2537f4ef94abd13ed6083c435387f1aec54300"
     ),
     "revision4_certified_fence_reservation_fixed.cfg": (
         "c68d79877e268f761bbe2d173ab6e8cd672cb5aa8d7b713c631f959f1ef8d3c4"
@@ -2160,7 +2161,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "d842c8552094eff841e3c9c159399d680a50edbd63ff2c1b96ad6a3330a8f644"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "ff397f9c7360900ea85c35a1889309ca082b04ec3fc1c0aeca2c327789157e56"
+        "c3427e8773ca3955fd0a81e3d17787230ca19a4672e42fea69c2ea4ec395a04a"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -2259,7 +2260,7 @@ INDEXED_SERVICE_ACTIVATION_MUTATION_SHA256 = {
         "11091b99cbaa5ebce85065da07dfb46eb326243da412e715e6d5bb774f162d81"
     ),
     INDEXED_SERVICE_ACTIVATION_MUTATION_RUNNER: (
-        "88c03a575317b85ec59660d4a8e7164798d0ce11b59c8e8da5809f4d5b8132af"
+        "a167d46e931ebe08e8933c27a1cc2efb26898cd7fd5dbeb2b006924c590d31f6"
     ),
 }
 INDEXED_SERVICE_ACTIVATION_MUTATION_FORMAL_GLOBS = (
@@ -2290,7 +2291,7 @@ HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_SHA256 = {
         "bdd9613583893b49e8f5762ea3342a50f5cc289689b225ef8b55c2aac0e8c49d"
     ),
     HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_RUNNER: (
-        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
+        "96e2a255b699b3d60ba4fcd66cd212e7a8958adde9551b3fffc32118e9e31e02"
     ),
 }
 HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_FORMAL_GLOBS = (
@@ -2405,7 +2406,7 @@ REPLENISHMENT_REGRESSION_MUTATION_SHA256 = {
         "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
+        "96e2a255b699b3d60ba4fcd66cd212e7a8958adde9551b3fffc32118e9e31e02"
     ),
 }
 REPLENISHMENT_REGRESSION_MUTATION_FORMAL_GLOBS = (

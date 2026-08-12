@@ -191,6 +191,12 @@ const MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES: usize = 1024;
 const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
 const ROLLBACK_INTENT_FILE_NAME: &str = "rollback-intent.norito";
+/// Hard wire-size limit for the fixed-width version-one rollback record.
+///
+/// The record contains only four integer fields and one optional block hash.
+/// One KiB therefore leaves ample canonical-header/layout headroom while
+/// preventing a damaged startup marker from choosing the read allocation.
+const MAX_ROLLBACK_INTENT_V1_BYTES: usize = 1024;
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const DA_BLOCK_REWRITE_STAGE_FILE_NAME: &str = "da_block_rewrite_stage.norito";
@@ -443,13 +449,41 @@ pub(crate) const fn sumeragi_v2_validator_storage_supported() -> bool {
 
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = MAX_EXECUTED_BLOCK_WIRE_BYTES;
+/// V1 rewrite stage: at most one maximum old body, one maximum new body, and 1 MiB framing.
 const MAX_DA_BLOCK_REWRITE_STAGE_BYTES: u64 = STRICT_INIT_MAX_BLOCK_BYTES * 2 + 1024 * 1024;
 const MAX_DA_BLOCK_REWRITE_STAGE_ENTRIES: usize = 4_096;
+/// V1 association stage: one maximum block, one maximum merge entry, and 1 MiB framing.
 const MAX_CANONICAL_ASSOCIATION_STAGE_BYTES: u64 =
     STRICT_INIT_MAX_BLOCK_BYTES + MAX_MERGE_LEDGER_ENTRY_BYTES as u64 + 1024 * 1024;
+/// Decode-depth ceiling for Kura's version-one canonical recovery records.
+///
+/// Block bodies in these records are opaque byte fields. The remaining typed
+/// merge/rewrite envelopes are shallow, so this is deliberately below Norito's
+/// generic owned-value limit while retaining generous schema headroom.
+const RECOVERY_CONTROL_DECODE_DEPTH_V1: usize = 128;
 const EVICTED_BLOCK_START: u64 = u64::MAX;
 const PENDING_MERGE_ENTRIES_DIR: &str = "pending_merge_entries";
 const PENDING_QUEUE_PLAN_ADMISSIONS_DIR: &str = "pending_queue_plan_admissions";
+
+/// Build the conservative Norito budget at a recovery format's exact V1 wire cap.
+///
+/// `decode_canonical_with_limits` also installs its payload-derived budget, so
+/// a shorter damaged file inherits the stricter bound instead of gaining the
+/// full protocol maximum.
+fn recovery_control_decode_limits_v1(wire_limit: u64) -> Result<norito::DecodeLimits> {
+    let wire_limit = usize::try_from(wire_limit)?;
+    let defaults = norito::canonical_decode_limits(wire_limit);
+    Ok(norito::DecodeLimits::new(
+        defaults.max_sequence_elements(),
+        defaults.max_field_bytes(),
+        defaults.max_total_elements(),
+        defaults.max_total_allocated_bytes(),
+        defaults
+            .max_nesting_depth()
+            .min(RECOVERY_CONTROL_DECODE_DEPTH_V1),
+    ))
+}
+
 pub(crate) const MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES: usize =
     iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
 /// Release-default aggregate payload-byte bound used by the test-only indexed
@@ -1368,7 +1402,6 @@ impl MergeLedgerLog {
             self.total_entries = keep;
             self.latest_execution_entries = Self::execution_index_for_entries(&self.entries)?;
         }
-
         self.trim_cache();
         Ok(())
     }
@@ -3921,26 +3954,30 @@ impl Kura {
 
     fn read_canonical_association_stage(&self) -> Result<Option<CanonicalAssociationStageV1>> {
         let path = self.canonical_association_stage_path();
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(Error::IO(error, path)),
-        };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() > MAX_CANONICAL_ASSOCIATION_STAGE_BYTES
-        {
-            return Err(Error::IO(
+        let expected_directory = path.parent().ok_or_else(|| {
+            Error::IO(
                 std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "canonical association stage is not a bounded regular file",
+                    ErrorKind::InvalidInput,
+                    "canonical association stage has no parent directory",
                 ),
-                path,
-            ));
-        }
-        let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let stage = norito::decode_canonical::<CanonicalAssociationStageV1>(&bytes)
-            .map_err(|error| Error::NoritoFrame(error.into()))?;
+                path.clone(),
+            )
+        })?;
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            &path,
+            expected_directory,
+            usize::try_from(MAX_CANONICAL_ASSOCIATION_STAGE_BYTES)?,
+        )?
+        else {
+            return Ok(None);
+        };
+        let decode_limits =
+            recovery_control_decode_limits_v1(MAX_CANONICAL_ASSOCIATION_STAGE_BYTES)?;
+        let stage = norito::decode_canonical_with_limits::<CanonicalAssociationStageV1>(
+            &bytes,
+            decode_limits,
+        )
+        .map_err(|error| Error::NoritoFrame(error.into()))?;
         let _ = self.validate_canonical_association_stage(&stage)?;
         Ok(Some(stage))
     }
@@ -4345,8 +4382,17 @@ impl Kura {
 
             let da_before = Self::file_len_or_zero(&path)?;
             self.write_atomic_synced_replace(&path, &buffer)?;
-            let durable_wire =
-                std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let durable_wire = self
+                .read_regular_sidecar_bytes(&path, &da_blocks_dir, length)?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::NotFound,
+                            "eviction DA sidecar disappeared during bounded readback",
+                        ),
+                        path.clone(),
+                    )
+                })?;
             if durable_wire != buffer {
                 return Err(Error::IO(
                     std::io::Error::new(
@@ -7959,6 +8005,30 @@ impl Kura {
         expected_directory: &Path,
         byte_limit: usize,
     ) -> Result<Option<StableSidecarRead>> {
+        Self::read_regular_sidecar_snapshot_for_with_admission_hook(
+            store_root,
+            path,
+            expected_directory,
+            byte_limit,
+            || {},
+        )
+    }
+
+    /// Perform one stable, no-follow bounded read after invoking a post-admission hook.
+    ///
+    /// Production passes a no-op hook. Tests use the seam to grow a file after
+    /// its capped metadata has been admitted, proving that the reader allocates
+    /// only the admitted length and rejects the max-plus-one race.
+    fn read_regular_sidecar_snapshot_for_with_admission_hook<F>(
+        store_root: &Path,
+        path: &Path,
+        expected_directory: &Path,
+        byte_limit: usize,
+        after_admission: F,
+    ) -> Result<Option<StableSidecarRead>>
+    where
+        F: FnOnce(),
+    {
         let directory_before =
             Self::canonical_sidecar_directory_for(store_root, expected_directory)?;
         let Some(metadata) =
@@ -7984,6 +8054,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
+        after_admission();
         let mut file =
             std::fs::File::open(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let opened_metadata = file
@@ -17502,14 +17573,30 @@ impl Kura {
         blocks_root.join(ROLLBACK_INTENT_FILE_NAME)
     }
 
-    fn decode_rollback_intent(path: &Path) -> Result<KuraRollbackIntent> {
-        let bytes = std::fs::read(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        let intent = norito::decode_canonical::<KuraRollbackIntent>(&bytes).map_err(|err| {
-            Error::RollbackIntentInvalid {
-                path: path.to_path_buf(),
-                reason: format!("failed to decode rollback intent: {err}"),
-            }
+    fn decode_rollback_intent(blocks_root: &Path, path: &Path) -> Result<KuraRollbackIntent> {
+        let bytes = Self::read_regular_sidecar_bytes_for(
+            blocks_root,
+            path,
+            blocks_root,
+            MAX_ROLLBACK_INTENT_V1_BYTES,
+        )?
+        .ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "rollback intent disappeared during bounded read",
+                ),
+                path.to_path_buf(),
+            )
         })?;
+        let decode_limits =
+            recovery_control_decode_limits_v1(u64::try_from(MAX_ROLLBACK_INTENT_V1_BYTES)?)?;
+        let intent =
+            norito::decode_canonical_with_limits::<KuraRollbackIntent>(&bytes, decode_limits)
+                .map_err(|err| Error::RollbackIntentInvalid {
+                    path: path.to_path_buf(),
+                    reason: format!("failed to decode rollback intent: {err}"),
+                })?;
         intent.validate(path)?;
         Ok(intent)
     }
@@ -17521,12 +17608,12 @@ impl Kura {
         let path = Self::rollback_intent_path(blocks_root);
         let tmp_path = path.with_extension("norito.tmp");
         let main = if path.exists() {
-            Some(Self::decode_rollback_intent(&path))
+            Some(Self::decode_rollback_intent(blocks_root, &path))
         } else {
             None
         };
         let temp = if tmp_path.exists() {
-            Some(Self::decode_rollback_intent(&tmp_path))
+            Some(Self::decode_rollback_intent(blocks_root, &tmp_path))
         } else {
             None
         };
@@ -22886,7 +22973,8 @@ fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]
 ///
 /// While this file exists, normal startup first completes the rollback. The exact merge-log
 /// boundary is recorded separately from the block height because current merge storage is sparse:
-/// not every canonical block carries a merge-ledger entry.
+/// not every canonical block carries a merge-ledger entry. Its fixed-width V1
+/// wire is admitted under [`MAX_ROLLBACK_INTENT_V1_BYTES`] before allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct KuraRollbackIntent {
     version: u32,
@@ -30811,24 +30899,17 @@ impl Kura {
     fn decode_autonomous_lane_entrypoint_claim(
         path: &Path,
     ) -> std::result::Result<AutonomousLaneEntrypointClaimV3, &'static str> {
-        let metadata = std::fs::symlink_metadata(path)
-            .map_err(|_| "failed to inspect autonomous entrypoint claim")?;
-        if metadata.file_type().is_symlink()
-            || !metadata.file_type().is_file()
-            || !Self::sidecar_is_single_link(&metadata)
-        {
-            return Err("autonomous entrypoint claim is not a single-link regular no-follow file");
-        }
-        if metadata.len()
-            > u64::try_from(AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES).unwrap_or(u64::MAX)
-        {
-            return Err("autonomous entrypoint claim exceeds hard byte limit");
-        }
-        let bytes =
-            std::fs::read(path).map_err(|_| "failed to read autonomous entrypoint claim")?;
-        if bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
-            return Err("autonomous entrypoint claim exceeds hard byte limit");
-        }
+        let directory = path
+            .parent()
+            .ok_or("autonomous entrypoint claim has no parent directory")?;
+        let bytes = Self::read_regular_sidecar_bytes_for(
+            directory,
+            path,
+            directory,
+            AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES,
+        )
+        .map_err(|_| "failed stable bounded read of autonomous entrypoint claim")?
+        .ok_or("autonomous entrypoint claim disappeared during bounded read")?;
         let claim = norito::decode_canonical::<AutonomousLaneEntrypointClaimV3>(&bytes)
             .map_err(|_| "failed to decode autonomous entrypoint claim")?;
         if claim.version != AutonomousLaneEntrypointClaimV3::VERSION
@@ -41374,22 +41455,19 @@ impl BlockStore {
 
     fn read_da_block_rewrite_stage(&self) -> Result<Option<DaBlockRewriteStageV1>> {
         let path = self.da_block_rewrite_stage_path();
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(Error::IO(error, path)),
+        let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
+            &self.path_to_blockchain,
+            &path,
+            &self.path_to_blockchain,
+            usize::try_from(MAX_DA_BLOCK_REWRITE_STAGE_BYTES)?,
+        )?
+        else {
+            return Ok(None);
         };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.len() > MAX_DA_BLOCK_REWRITE_STAGE_BYTES
-        {
-            return Err(self.invalid_da_block_rewrite_stage(
-                "DA block rewrite stage is not a bounded regular file",
-            ));
-        }
-        let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let stage = norito::decode_canonical::<DaBlockRewriteStageV1>(&bytes)
-            .map_err(|error| Error::NoritoFrame(error.into()))?;
+        let decode_limits = recovery_control_decode_limits_v1(MAX_DA_BLOCK_REWRITE_STAGE_BYTES)?;
+        let stage =
+            norito::decode_canonical_with_limits::<DaBlockRewriteStageV1>(&bytes, decode_limits)
+                .map_err(|error| Error::NoritoFrame(error.into()))?;
         self.validate_da_block_rewrite_stage(&stage)?;
         Ok(Some(stage))
     }
@@ -44137,272 +44215,9 @@ impl BlockStore {
         debug!(start_height, end_height, "append_block_batch complete");
         Ok(())
     }
-
-    /// Prune the block storage to the given height
-    ///
-    /// Removes block entries higher than the given height from
-    /// the data file, index file, and hashes file.
-    ///
-    /// This function **does not** fail if the data in files is behind
-    /// the given height.
-    ///
-    /// # Errors
-    ///
-    /// - If files do not exist (call [`Self::create_files_if_they_do_not_exist`])
-    /// - Other IO errors
-    pub fn prune(&mut self, height: u64) -> Result<()> {
-        self.prune_with_failpoint(height, 0)
-    }
-
-    fn maybe_fail_prune_after_stage(fail_stage: usize, stage: usize) {
-        #[cfg(test)]
-        if fail_stage == stage {
-            panic!("injected block-store prune crash after stage {stage}");
-        }
-        #[cfg(not(test))]
-        let _ = (fail_stage, stage);
-    }
-
-    fn prune_with_failpoint(&mut self, height: u64, fail_stage: usize) -> Result<()> {
-        self.recover_canonical_storage_stages()?;
-        self.prune_durable(height, false, fail_stage)
-    }
-
-    fn validate_rollback_prefix(
-        &mut self,
-        intent: &KuraRollbackIntent,
-        intent_path: &Path,
-    ) -> Result<()> {
-        let invalid = |reason: String| Error::RollbackIntentInvalid {
-            path: intent_path.to_path_buf(),
-            reason,
-        };
-        let index_count = self.read_index_count()?;
-        let hashes_count = self.read_hashes_count()?;
-        if index_count < intent.target_height || hashes_count < intent.target_height {
-            return Err(invalid(format!(
-                "canonical prefix is shorter than rollback target: index={index_count}, hashes={hashes_count}, target={}",
-                intent.target_height
-            )));
-        }
-        if index_count > intent.from_height || hashes_count > intent.from_height {
-            return Err(invalid(format!(
-                "canonical files advanced beyond rollback source: index={index_count}, hashes={hashes_count}, source={}",
-                intent.from_height
-            )));
-        }
-        if intent.target_height > 0 {
-            let actual = self
-                .read_block_hashes(intent.target_height.saturating_sub(1), 1)?
-                .first()
-                .copied()
-                .ok_or_else(|| invalid("rollback target hash is missing".to_owned()))?;
-            if Some(actual) != intent.target_block_hash {
-                return Err(invalid(format!(
-                    "rollback target hash mismatch: expected {:?}, actual {actual}",
-                    intent.target_block_hash
-                )));
-            }
-        }
-        let data_len = self.data_file_len()?;
-        for index in 0..intent.target_height {
-            let entry = self.read_block_index(index)?;
-            if entry.is_evicted() {
-                continue;
-            }
-            let end = entry
-                .start
-                .checked_add(entry.length)
-                .ok_or_else(|| invalid(format!("block data range overflows at index {index}")))?;
-            if entry.length == 0 || end > data_len {
-                return Err(invalid(format!(
-                    "block data does not contain rollback target prefix at index {index}"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn prune_for_rollback(
-        &mut self,
-        intent: &KuraRollbackIntent,
-        intent_path: &Path,
-    ) -> Result<()> {
-        self.validate_rollback_prefix(intent, intent_path)?;
-        self.prune_durable(intent.target_height, true, 0)?;
-        self.verify_rollback_boundary(intent, intent_path)
-    }
-
-    fn verify_rollback_boundary(
-        &mut self,
-        intent: &KuraRollbackIntent,
-        intent_path: &Path,
-    ) -> Result<()> {
-        let index_count = self.read_index_count()?;
-        let hashes_count = self.read_hashes_count()?;
-        if index_count != intent.target_height || hashes_count != intent.target_height {
-            return Err(Error::RollbackIntentInvalid {
-                path: intent_path.to_path_buf(),
-                reason: format!(
-                    "rollback block boundary verification failed: index={index_count}, hashes={hashes_count}, target={}",
-                    intent.target_height
-                ),
-            });
-        }
-        let expected_data_len = self.data_end_for_index_prefix(intent.target_height)?;
-        let actual_data_len = self.data_file_len()?;
-        if actual_data_len != expected_data_len {
-            return Err(Error::RollbackIntentInvalid {
-                path: intent_path.to_path_buf(),
-                reason: format!(
-                    "rollback data boundary verification failed: data={actual_data_len}, expected={expected_data_len}"
-                ),
-            });
-        }
-        let marker_path = self.commit_marker_path();
-        let marker_bytes = Self::read_required_bounded_commit_marker_bytes(
-            &marker_path,
-            "rollback block marker is missing",
-        )?;
-        let marker =
-            norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|err| {
-                Error::RollbackIntentInvalid {
-                    path: intent_path.to_path_buf(),
-                    reason: format!("rollback commit marker is not decodable: {err}"),
-                }
-            })?;
-        if marker.version != BlockStoreCommitMarker::VERSION || marker.count != intent.target_height
-        {
-            return Err(Error::RollbackIntentInvalid {
-                path: intent_path.to_path_buf(),
-                reason: format!(
-                    "rollback commit marker boundary mismatch: version={}, count={}, target={}",
-                    marker.version, marker.count, intent.target_height
-                ),
-            });
-        }
-        if self.da_blocks_dir.exists() {
-            for entry in std::fs::read_dir(&self.da_blocks_dir)
-                .map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?
-            {
-                let entry = entry.map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?;
-                let path = entry.path();
-                if !entry
-                    .file_type()
-                    .map_err(|err| Error::IO(err, path.clone()))?
-                    .is_file()
-                {
-                    continue;
-                }
-                let Some(height) = path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .and_then(|stem| stem.parse::<u64>().ok())
-                else {
-                    continue;
-                };
-                if height > intent.target_height {
-                    return Err(Error::RollbackIntentInvalid {
-                        path: intent_path.to_path_buf(),
-                        reason: format!(
-                            "DA block artifact remains above rollback target at height {height}"
-                        ),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn prune_durable(&mut self, height: u64, rollback: bool, fail_stage: usize) -> Result<()> {
-        self.invalidate_data_mmap();
-        let logical_count = self.read_index_count_from_len()?;
-        let durable_count = self.read_durable_index_count()?;
-        let pruned_index_count = height.min(logical_count).min(durable_count);
-        if rollback && pruned_index_count != height {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "rollback target exceeds the durable canonical prefix",
-                ),
-                self.path_to_blockchain.clone(),
-            ));
-        }
-
-        // The prune marker is a forward-recovery authority and is published
-        // before destructive work. Legacy rollback intents instead retain the
-        // source marker until every canonical file reaches the target.
-        if !rollback {
-            self.publish_commit_marker(pruned_index_count)?;
-            Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_MARKER);
-        }
-
-        {
-            let mut file =
-                FileWrap::open_read_write(self.path_to_blockchain.join(INDEX_FILE_NAME))?;
-            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
-            let new_len = (BlockIndex::SIZE * pruned_index_count).min(len);
-            file.try_io(|file| {
-                file.set_len(new_len)?;
-                file.sync_data()
-            })?;
-        }
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_INDEX);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::BlockIndexSynced)?;
-        }
-
-        {
-            let mut file =
-                FileWrap::open_read_write(self.path_to_blockchain.join(HASHES_FILE_NAME))?;
-            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
-            let new_len = (SIZE_OF_BLOCK_HASH * pruned_index_count).min(len);
-            file.try_io(|file| {
-                file.set_len(new_len)?;
-                file.sync_data()
-            })?;
-        }
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_HASHES);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::BlockHashesSynced)?;
-        }
-
-        {
-            let mut file = FileWrap::open_read_write(self.path_to_blockchain.join(DATA_FILE_NAME))?;
-            let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
-            let new_len = self.data_end_for_index_prefix(pruned_index_count)?.min(len);
-            file.try_io(|file| {
-                file.set_len(new_len)?;
-                file.sync_data()
-            })?;
-        }
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_DATA);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::BlockDataSynced)?;
-        }
-
-        self.prune_da_block_files_above(pruned_index_count)?;
-        Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_DA_SIDECARS);
-        if rollback {
-            rollback_fault_point(RollbackFaultPoint::DaPruned)?;
-        }
-
-        self.commit_marker_pending = None;
-        self.commit_marker_count = pruned_index_count;
-        if rollback {
-            self.write_commit_marker(pruned_index_count)?;
-            rollback_fault_point(RollbackFaultPoint::CommitMarkerPublished)?;
-        }
-        if self
-            .read_verified_snapshot_tail_marker()?
-            .is_some_and(|marker| pruned_index_count < marker.snapshot_height)
-        {
-            self.remove_verified_snapshot_tail_marker()?;
-        }
-
-        Ok(())
-    }
 }
+
+include!("kura/prune_block_store_tail.rs");
 
 #[cfg(test)]
 include!("kura/test_fault_injection_state.rs");
@@ -44413,6 +44228,106 @@ include!("kura/file_error_support.rs");
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn stable_bounded_sidecar_read_rejects_post_admission_growth() {
+        let root = tempfile::tempdir().expect("create bounded-read root");
+        let path = root.path().join("bounded.norito");
+        std::fs::write(&path, [0_u8; 8]).expect("write admitted sidecar");
+
+        let error = super::Kura::read_regular_sidecar_snapshot_for_with_admission_hook(
+            root.path(),
+            &path,
+            root.path(),
+            8,
+            || {
+                use std::io::Write as _;
+
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .expect("open admitted sidecar for growth")
+                    .write_all(&[1])
+                    .expect("grow admitted sidecar by one byte");
+            },
+        )
+        .expect_err("post-admission growth must invalidate the bounded read");
+
+        assert!(matches!(
+            error,
+            super::Error::IO(ref source, _)
+                if source.kind() == std::io::ErrorKind::InvalidData
+        ));
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("inspect grown sidecar")
+                .len(),
+            9
+        );
+    }
+
+    #[test]
+    fn recovery_control_files_reject_cap_plus_one_before_decode() {
+        fn create_sparse(path: &std::path::Path, len: u64) {
+            std::fs::File::create(path)
+                .expect("create oversized recovery control file")
+                .set_len(len)
+                .expect("size oversized recovery control file");
+        }
+
+        let kura = super::Kura::blank_kura_for_testing();
+        let blocks_root = kura.active_blocks_dir.lock().clone();
+
+        let rollback_path = super::Kura::rollback_intent_path(&blocks_root);
+        let rollback_temp_path = rollback_path.with_extension("norito.tmp");
+        for path in [&rollback_path, &rollback_temp_path] {
+            create_sparse(
+                path,
+                u64::try_from(super::MAX_ROLLBACK_INTENT_V1_BYTES).expect("rollback cap fits u64")
+                    + 1,
+            );
+            assert!(
+                super::Kura::load_rollback_intent(&blocks_root).is_err(),
+                "main and temporary rollback intents must reject cap-plus-one metadata before reading"
+            );
+            std::fs::remove_file(path).expect("remove oversized rollback intent");
+        }
+
+        let association_path = kura.canonical_association_stage_path();
+        create_sparse(
+            &association_path,
+            super::MAX_CANONICAL_ASSOCIATION_STAGE_BYTES + 1,
+        );
+        assert!(
+            kura.read_canonical_association_stage().is_err(),
+            "canonical association stage must reject cap-plus-one metadata before reading"
+        );
+        std::fs::remove_file(&association_path)
+            .expect("remove oversized canonical association stage");
+
+        {
+            let block_store = kura.block_store.lock();
+            let rewrite_path = block_store.da_block_rewrite_stage_path();
+            create_sparse(&rewrite_path, super::MAX_DA_BLOCK_REWRITE_STAGE_BYTES + 1);
+            assert!(
+                block_store.read_da_block_rewrite_stage().is_err(),
+                "DA rewrite stage must reject cap-plus-one metadata before reading"
+            );
+            std::fs::remove_file(&rewrite_path).expect("remove oversized DA rewrite stage");
+        }
+
+        let claim_path = blocks_root.join("oversized-autonomous-claim.norito");
+        create_sparse(
+            &claim_path,
+            u64::try_from(super::AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES)
+                .expect("claim cap fits u64")
+                + 1,
+        );
+        assert!(
+            super::Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).is_err(),
+            "autonomous claim must reject cap-plus-one metadata before reading"
+        );
+    }
+
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/01_prune_capacity_support.rs");

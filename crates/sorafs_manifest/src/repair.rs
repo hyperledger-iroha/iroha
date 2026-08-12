@@ -71,6 +71,19 @@ const MAX_STRING_BYTES: usize = 256;
 pub struct RepairTicketId(pub String);
 
 impl RepairTicketId {
+    /// Return whether a borrowed ticket identifier satisfies the wire policy.
+    ///
+    /// This allocation-free predicate lets callers reject hostile source text
+    /// before constructing an owned [`RepairTicketId`].
+    #[must_use]
+    pub fn is_valid_str(ticket_id: &str) -> bool {
+        !ticket_id.is_empty()
+            && ticket_id.len() <= MAX_STRING_BYTES
+            && ticket_id.bytes().all(|byte| {
+                byte.is_ascii_uppercase() || byte.is_ascii_digit() || b"-_".contains(&byte)
+            })
+    }
+
     /// Validate the ticket identifier.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
         validate_non_empty_string(&self.0, "ticket_id")?;
@@ -81,11 +94,7 @@ impl RepairTicketId {
                 max: MAX_STRING_BYTES,
             });
         }
-        if !self
-            .0
-            .chars()
-            .all(|ch| matches!(ch, 'A'..='Z' | '0'..='9' | '-' | '_' ))
-        {
+        if !Self::is_valid_str(&self.0) {
             return Err(RepairValidationError::InvalidTicketId {
                 ticket_id: self.0.clone(),
             });
@@ -1288,6 +1297,16 @@ mod tests {
         assert!(matches!(
             id.validate(),
             Err(RepairValidationError::InvalidTicketId { .. })
+        ));
+    }
+
+    #[test]
+    fn borrowed_ticket_validation_rejects_before_ownership() {
+        assert!(RepairTicketId::is_valid_str("REP-351"));
+        assert!(!RepairTicketId::is_valid_str(""));
+        assert!(!RepairTicketId::is_valid_str("rep-351"));
+        assert!(!RepairTicketId::is_valid_str(
+            &"A".repeat(MAX_STRING_BYTES + 1)
         ));
     }
 
