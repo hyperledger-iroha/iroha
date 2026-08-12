@@ -36,7 +36,6 @@ enum RecoveredWalStartupProjectionV1<'authority> {
     PhaseVote(&'authority AuthenticatedRecoveredWalSignProjection),
     ControlSign(&'authority AuthenticatedRecoveredWalControlProjection),
     DecisionFetch(&'authority AuthenticatedRecoveredWalDecisionFetchProjection),
-    DecisionApply(&'authority super::replay_authority::RecoveredDecisionApplyCandidateLineageV1),
 }
 use crate::sumeragi::{
     v2::VerifiedHeightContext,
@@ -437,27 +436,6 @@ impl AuthenticatedLifecycleRecoveryCut {
             Some(&mut fetches),
         )?;
         Ok((recovery, fetches))
-    }
-
-    /// Assemble the exact complete recovered Decision body chain.
-    ///
-    /// Only the final live Apply row may cross the ordinary-row classifier;
-    /// the three exact predecessor tombstones remain inert durable history.
-    /// Every other live row still requires its independent storage authority.
-    #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_decision_apply(
-        ledger: LifecycleLedgerV1,
-        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
-        body_store: &mut V2BodyStore,
-        lineage: &super::replay_authority::RecoveredDecisionApplyCandidateLineageV1,
-    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
-        Self::assemble_storage_only_with_terminal_validate_outcomes(
-            ledger,
-            serve_payloads,
-            body_store,
-            RecoveredWalStartupProjectionV1::DecisionApply(lineage),
-            None,
-        )
     }
 
     #[allow(clippy::result_large_err)]
@@ -2143,9 +2121,6 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         RecoveredWalStartupProjectionV1::DecisionFetch(projection) => {
             projection.belongs_to_context(ledger.context())
         }
-        RecoveredWalStartupProjectionV1::DecisionApply(lineage) => {
-            lineage.is_exact(ledger.context())
-        }
     };
     if !belongs_to_context {
         return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
@@ -2200,15 +2175,9 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                     {
                         projection.splice_candidate_from_record(record, &mut candidates)
                     }
-                    RecoveredWalStartupProjectionV1::DecisionApply(lineage)
-                        if work_class == LifecycleWorkClass::Apply =>
-                    {
-                        lineage.splice_apply_candidate(record, &mut candidates)
-                    }
                     RecoveredWalStartupProjectionV1::PhaseVote(_)
                     | RecoveredWalStartupProjectionV1::ControlSign(_)
-                    | RecoveredWalStartupProjectionV1::DecisionFetch(_)
-                    | RecoveredWalStartupProjectionV1::DecisionApply(_) => false,
+                    | RecoveredWalStartupProjectionV1::DecisionFetch(_) => false,
                 };
                 if admitted_recovered_wal {
                     continue;
@@ -2260,18 +2229,6 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             if !projection.owns_spliced_candidate(&candidates) {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
                     "repaired frame has no exact live installed Decision Fetch",
-                ));
-            }
-        }
-        RecoveredWalStartupProjectionV1::DecisionApply(lineage) => {
-            if candidates.len() != 1
-                || !candidates.values().all(|candidate| {
-                    candidate.work_class == LifecycleWorkClass::Apply
-                        && lineage.is_exact(ledger.context())
-                })
-            {
-                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-                    "complete Decision body chain has no exact live Apply child",
                 ));
             }
         }

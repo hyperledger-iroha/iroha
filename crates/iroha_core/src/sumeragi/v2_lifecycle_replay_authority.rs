@@ -1159,23 +1159,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
             )
     }
 
-    /// Insert the final Apply candidate only when its exact live row owns it.
-    pub(super) fn splice_apply_candidate(
-        &self,
-        record: &LifecycleLedgerRecordV1,
-        candidates: &mut std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
-    ) -> bool {
-        Self::candidate_matches_record(
-            &self.apply,
-            record,
-            record.owner(),
-            None,
-            super::schema::DurableContinuation::None,
-        ) && candidates
-            .insert(self.apply.key, self.apply.clone())
-            .is_none()
-    }
-
 }
 
 impl RecoveredDecisionBodyPipelineReplayFamilyV1 {
