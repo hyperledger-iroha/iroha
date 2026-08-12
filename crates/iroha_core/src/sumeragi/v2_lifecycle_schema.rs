@@ -846,6 +846,7 @@ impl WaitToken {
 
 /// Stable terminal result retained as a tombstone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(variant_size_differences)] // Stable inline tombstones avoid allocation in the scheduler.
 pub(crate) enum TerminalOutcome {
     Advanced,
     Completed(Option<LifecycleDigest>),

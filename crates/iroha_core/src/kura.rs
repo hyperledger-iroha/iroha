@@ -15654,7 +15654,6 @@ impl Kura {
     /// # Errors
     ///
     /// Returns an error if finality, its association, or retained record is invalid.
-    #[cfg(test)]
     pub(crate) fn v2_finality_artifact_with_merge_reference(
         &self,
         height: u64,
@@ -38912,91 +38911,6 @@ impl Kura {
             && preflight.result_hashes != receipt.result_hashes
     }
 
-<<<<<<< HEAD
-    fn lane_block_application_receipt_matches_available_evidence(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => self
-                .lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                if repair_missing_sidecars {
-                    self.lane_block_application_receipt_matches_merge_log(artifact)
-                } else {
-                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(
-                        artifact,
-                    )
-                }
-            }
-        }
-    }
-
-    fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => self
-                .lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                if repair_missing_sidecars {
-                    self.lane_block_application_receipt_matches_merge_log_under_prune_guard(
-                        artifact,
-                    )
-                } else {
-                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
-                        artifact,
-                    )
-                }
-            }
-        }
-    }
-
-    fn lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                )
-            }
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => self
-                .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
-                    artifact,
-                ),
-        }
-    }
-
-=======
->>>>>>> origin/optimizations
     fn lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
         &self,
         frontier: &LaneMergeApplicationFrontierV1,

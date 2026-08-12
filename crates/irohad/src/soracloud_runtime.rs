@@ -19790,13 +19790,10 @@ mod tests {
             1_024,
         )?;
         let bounded_response = remote_manifest_response_for_fixture(&fixture)?;
+        let undersized_budget = bounded_response.content_length.saturating_sub(1);
         assert_report_contains(
-            validate_remote_manifest_response(
-                &source,
-                bounded_response.clone(),
-                bounded_response.content_length.saturating_sub(1),
-            )
-            .expect_err("remote manifest beyond the configured hydration budget must fail"),
+            validate_remote_manifest_response(&source, bounded_response, undersized_budget)
+                .expect_err("remote manifest beyond the configured hydration budget must fail"),
             "content length is zero, inconsistent, or exceeds",
         );
 

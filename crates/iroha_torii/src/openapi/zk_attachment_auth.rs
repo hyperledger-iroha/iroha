@@ -49,7 +49,7 @@ fn secure_runtime_governance_account_paths(paths: &mut Map) {
                 continue;
             };
             let parameters = operation
-                .entry("parameters")
+                .entry("parameters".to_owned())
                 .or_insert_with(|| Value::Array(Vec::new()));
             if let Value::Array(parameters) = parameters {
                 for parameter in canonical_request_auth_header_parameters() {

@@ -188,7 +188,12 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     let unit = encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1).expect("encode unit");
     for request in &mutating {
         assert_eq!(
-            validate_operation_result(request, STATUS_AMBIGUOUS_V1, &unit),
+            validate_operation_result(
+                request,
+                STATUS_AMBIGUOUS_V1,
+                &unit,
+                &server_test_network_id(),
+            ),
             Ok(()),
             "operation {}",
             request.operation
@@ -245,7 +250,12 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     ];
     for request in readonly {
         assert_eq!(
-            validate_operation_result(&request, STATUS_AMBIGUOUS_V1, &unit),
+            validate_operation_result(
+                &request,
+                STATUS_AMBIGUOUS_V1,
+                &unit,
+                &server_test_network_id(),
+            ),
             Err(BrokerError::Protocol),
             "operation {}",
             request.operation
@@ -1124,7 +1134,8 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
     )
     .expect("encode operation result");
     let response = operation_response(&request, STATUS_OK_V1, result);
-    validate_operation_response(&request, &response).expect("validate exact operation response");
+    validate_operation_response(&request, &response, &server_test_network_id())
+        .expect("validate exact operation response");
 
     for mutation in 0..11 {
         let mut confused = response.clone();
@@ -1144,7 +1155,7 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
         }
         reseal_response(&mut confused);
         assert_eq!(
-            validate_operation_response(&request, &confused),
+            validate_operation_response(&request, &confused, &server_test_network_id()),
             Err(BrokerError::Protocol),
             "mutation {mutation} must fail"
         );
@@ -1154,19 +1165,19 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
     wrong_result_digest.result_digest[0] ^= 1;
     reseal_response(&mut wrong_result_digest);
     assert_eq!(
-        validate_operation_response(&request, &wrong_result_digest),
+        validate_operation_response(&request, &wrong_result_digest, &server_test_network_id(),),
         Err(BrokerError::Protocol)
     );
     let mut wrong_response_digest = response;
     wrong_response_digest.response_digest[0] ^= 1;
     assert_eq!(
-        validate_operation_response(&request, &wrong_response_digest),
+        validate_operation_response(&request, &wrong_response_digest, &server_test_network_id(),),
         Err(BrokerError::Protocol)
     );
     let diagnostic_leak =
         operation_response(&request, STATUS_REJECTED_V1, b"provider secret".to_vec());
     assert_eq!(
-        validate_operation_response(&request, &diagnostic_leak),
+        validate_operation_response(&request, &diagnostic_leak, &server_test_network_id()),
         Err(BrokerError::Protocol),
         "provider diagnostics must never cross the broker boundary"
     );
@@ -1993,13 +2004,23 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         unit.clone(),
     );
     assert_eq!(
-        validate_operation_result(&publication, STATUS_AMBIGUOUS_V1, &unit,),
+        validate_operation_result(
+            &publication,
+            STATUS_AMBIGUOUS_V1,
+            &unit,
+            &server_test_network_id(),
+        ),
         Ok(()),
         "uncertain immutable publication is reconciled by lookup"
     );
     publication.operation = OPERATION_BILLING_LOOKUP_PUBLICATION_V1;
     assert_eq!(
-        validate_operation_result(&publication, STATUS_AMBIGUOUS_V1, &unit,),
+        validate_operation_result(
+            &publication,
+            STATUS_AMBIGUOUS_V1,
+            &unit,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::Protocol),
         "read-only publication lookup cannot be ambiguous"
     );
@@ -2011,12 +2032,22 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         unit.clone(),
     );
     assert_eq!(
-        validate_operation_result(&witness, STATUS_CONFLICT_V1, &unit),
+        validate_operation_result(
+            &witness,
+            STATUS_CONFLICT_V1,
+            &unit,
+            &server_test_network_id(),
+        ),
         Ok(())
     );
     witness.operation = OPERATION_BILLING_LOAD_LATEST_EPOCH_V1;
     assert_eq!(
-        validate_operation_result(&witness, STATUS_CONFLICT_V1, &unit),
+        validate_operation_result(
+            &witness,
+            STATUS_CONFLICT_V1,
+            &unit,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::Protocol)
     );
 }

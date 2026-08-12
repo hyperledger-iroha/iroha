@@ -2030,10 +2030,11 @@ mod tests {
         let config = runtime_config(root);
         let kura = Kura::blank_kura_for_testing();
         let network_id = network_id(0x64);
-        let state = Arc::new(State::new_with_chain_for_testing(
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
+            iroha_data_model::ChainId::from("reputation-finalized-query-test"),
             network_id,
         ));
         let replay_plan =
@@ -2083,10 +2084,11 @@ mod tests {
         }
         let kura = Kura::blank_kura_for_testing();
         let network_id = network_id(0x65);
-        let state = Arc::new(State::new_with_chain_for_testing(
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
+            iroha_data_model::ChainId::from("reputation-finalized-query-test"),
             network_id,
         ));
         let replay_plan =

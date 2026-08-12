@@ -1529,16 +1529,13 @@ mod tests {
     use super::*;
     use std::num::NonZeroU64;
 
-    use iroha_crypto::Algorithm;
+    use iroha_crypto::{Algorithm, HashOf, MerkleProof};
     use iroha_data_model::{
         Level,
-        block::{
-            BlockHeader,
-            consensus::{CertPhase, LaneBlockCommitment, Qc, QcAggregate},
-        },
+        block::{BlockHeader, consensus::LaneBlockCommitment},
         domain::DomainId,
         isi::Log,
-        nexus::{LaneId, LaneRelayEnvelope},
+        nexus::{LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
     };
     use iroha_primitives::numeric::Quantity;
 
@@ -1752,29 +1749,14 @@ mod tests {
         assert!(durable.relays.contains_key("pending"));
     }
 
-    fn attach_test_qc(envelope: &mut LaneRelayEnvelope) {
-        let validator_set = Vec::new();
-        envelope.qc = Some(Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: envelope.block_header.hash(),
-            parent_state_root: Hash::new(b"relay-worker-test-parent-state-root"),
-            post_state_root: Hash::new(b"relay-worker-test-post-state-root"),
-            height: envelope.block_header.height().get(),
-            view: envelope.block_header.view_change_index(),
-            epoch: 0,
-            chain_order_hash: Hash::new(b"relay-worker-test-chain-order"),
-            rechain_seq: 0,
-            mode_tag: envelope
-                .lane_finality_qc_mode_tag("relay-worker-test")
-                .expect("complete relay worker test finality statement"),
-            highest_qc: None,
-            validator_set_hash: iroha_crypto::HashOf::new(&validator_set),
-            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![1],
-                bls_aggregate_signature: vec![0xA5; 96],
-            },
+    fn attach_test_finality_authority(envelope: &mut LaneRelayEnvelope) {
+        envelope.finality_authority = Some(LaneFinalityAuthorityV1 {
+            version: 1,
+            global_block_height: envelope.block_header.height().get(),
+            finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"relay-worker-test-finality-artifact",
+            )),
+            statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
         });
     }
 
@@ -1782,19 +1764,20 @@ mod tests {
     fn status_relay_requires_exact_finality_authenticated_state_entry() {
         let pending = sample_envelope([0x40; 32]);
         let mut recorded_relays = LaneRelayStore::default();
-        recorded_relays
-            .insert(pending.clone())
-            .expect("insert pending diagnostic relay");
         assert!(
             authoritative_status_relay(&recorded_relays, &pending).is_none(),
-            "a QC-less status snapshot must not trigger proof generation"
+            "a pending status snapshot without an authoritative State entry must not trigger proof generation"
         );
 
-        let mut finalized = pending;
-        attach_test_qc(&mut finalized);
+        let mut finalized = pending.clone();
+        attach_test_finality_authority(&mut finalized);
         recorded_relays
             .insert(finalized.clone())
-            .expect("upgrade recorded relay with finality certificate");
+            .expect("insert relay with compact finality authority");
+        assert!(
+            authoritative_status_relay(&recorded_relays, &pending).is_none(),
+            "a pending status payload cannot borrow authority from a finalized State entry"
+        );
         assert_eq!(
             authoritative_status_relay(&recorded_relays, &finalized),
             Some(&finalized),
@@ -1981,8 +1964,16 @@ mod tests {
 
     #[test]
     fn lane_relay_worker_proof_verifies_and_binds_claim() -> Result<()> {
-        let envelope = sample_envelope([0x42; 32]);
-        let (proven, proof_blob) = prove_lane_relay_envelope(&envelope, 20, 7, &test_fastpq())?;
+        let mut envelope = sample_envelope([0x42; 32]);
+        attach_test_finality_authority(&mut envelope);
+        let (proven, proof_blob) = prove_lane_relay_envelope(
+            &envelope,
+            Hash::new(b"relay-worker-test-parent-state-root"),
+            Hash::new(b"relay-worker-test-post-state-root"),
+            20,
+            7,
+            &test_fastpq(),
+        )?;
         proven.validate_fastpq_proof_metadata()?;
         let proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
         let verified = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)?;

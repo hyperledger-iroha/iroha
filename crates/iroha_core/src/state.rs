@@ -38059,11 +38059,8 @@ impl State {
             .collect()
     }
 
-<<<<<<< HEAD
     state_passive_lane_diagnostic_methods!();
 
-=======
->>>>>>> origin/optimizations
     /// Derive bounded autonomous execution stages exclusively from current
     /// lifecycle State and independently revalidated durable Kura evidence.
     ///

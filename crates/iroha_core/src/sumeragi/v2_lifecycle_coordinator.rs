@@ -564,7 +564,9 @@ impl LifecycleCoordinator {
         let Some(first_ordinal) = self.high_water.checked_add(1) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
-        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_count - 1) else {
+        let ordinal_span =
+            u128::try_from(ordinal_count - 1).expect("bounded lifecycle record count fits in u128");
+        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_span) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
         let owner = self

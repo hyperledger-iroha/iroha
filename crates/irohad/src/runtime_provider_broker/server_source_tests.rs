@@ -1055,8 +1055,12 @@ fn stock_registry_projects_exact_streamed_provider_source_limits() {
 fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
     let payload = vec![0xD7; 4 * 1024 + 19];
     let (generic_authorization, manifest, plan) = test_source_material(payload.clone());
-    let (authorization, musubi) =
-        test_source_musubi_fetch_binding(&generic_authorization, &manifest, &plan);
+    let (authorization, musubi) = test_source_musubi_fetch_binding(
+        &generic_authorization,
+        &manifest,
+        &plan,
+        server_test_network_id(),
+    );
     let expected_musubi = musubi.clone();
     let observed_request = Arc::new(Mutex::new(None));
     let source_backend = ServerTestProviderSource {
@@ -1861,7 +1865,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
             None,
         )
         .expect("construct generic source request"),
-        "server-test-chain",
     )
     .expect("project generic V2 source wire");
     assert_eq!(
@@ -1869,27 +1872,30 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
             &generic,
             &binding,
             Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
-            Some("server-test-chain"),
+            &server_test_network_id(),
         ),
         Ok(())
     );
 
-    let (musubi_authorization, musubi) =
-        test_source_musubi_fetch_binding(&authorization, &manifest, &plan);
+    let (musubi_authorization, musubi) = test_source_musubi_fetch_binding(
+        &authorization,
+        &manifest,
+        &plan,
+        server_test_network_id(),
+    );
     let request = sorafs_node::ProviderIngestSourceRequestV1::new(
         musubi_authorization.clone(),
         SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
         Some(musubi.clone()),
     )
     .expect("construct Musubi source request");
-    let exact = source_request_to_wire(request, "server-test-chain")
-        .expect("project exact Musubi V2 source wire");
+    let exact = source_request_to_wire(request).expect("project exact Musubi V2 source wire");
     assert_eq!(
         validate_source_fetch_request(
             &exact,
             &binding,
             Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
-            Some("server-test-chain"),
+            &server_test_network_id(),
         ),
         Ok(())
     );
@@ -1908,7 +1914,7 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
             &later_cursor,
             &binding,
             Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
-            Some("server-test-chain"),
+            &server_test_network_id(),
         ),
         Ok(()),
         "a current informational claim may be newer than its retained admission"
@@ -1920,19 +1926,19 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
                 candidate,
                 &binding,
                 Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
-                Some("server-test-chain"),
+                &server_test_network_id(),
             ),
             Err(BrokerError::Rejected)
         );
     };
 
-    let mut zero_genesis = exact.clone();
-    zero_genesis
+    let mut inconsistent_network = exact.clone();
+    inconsistent_network
         .musubi_archive
         .as_mut()
         .expect("Musubi wire")
-        .genesis_block_hash = [0; 32];
-    rejects(&zero_genesis);
+        .network_id = test_network_id(0x17);
+    rejects(&inconsistent_network);
 
     let mut zero_cursor = exact.clone();
     zero_cursor
@@ -2028,14 +2034,23 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
     wrong_length_binding.archive_id = wrong_length_binding.commitment.archive_id();
     rejects(&wrong_length);
 
-    let wrong_chain_request = sorafs_node::ProviderIngestSourceRequestV1::new(
-        musubi_authorization,
+    let (foreign_authorization, foreign_musubi) =
+        test_source_musubi_fetch_binding(&authorization, &manifest, &plan, test_network_id(0x17));
+    let foreign_network_request = sorafs_node::ProviderIngestSourceRequestV1::new(
+        foreign_authorization,
         SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-        Some(musubi),
+        Some(foreign_musubi),
     )
-    .expect("construct chain-bound Musubi request");
+    .expect("construct internally consistent foreign-network Musubi request");
+    let foreign_network = source_request_to_wire(foreign_network_request)
+        .expect("project foreign-network Musubi source wire");
     assert_eq!(
-        source_request_to_wire(wrong_chain_request, "other-chain"),
+        validate_source_fetch_request(
+            &foreign_network,
+            &binding,
+            Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+            &server_test_network_id(),
+        ),
         Err(BrokerError::BindingMismatch)
     );
 }
@@ -2156,14 +2171,14 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         musubi_archive: None,
     };
     assert_eq!(
-        validate_source_fetch_request(&fetch, &binding, None, None),
+        validate_source_fetch_request(&fetch, &binding, None, &server_test_network_id()),
         Err(BrokerError::Rejected)
     );
     let mut too_many_sources = fetch;
     too_many_sources.authorization = test_source_authorization(16);
     too_many_sources.source_provider_ids.push([3; 32]);
     assert_eq!(
-        validate_source_fetch_request(&too_many_sources, &binding, None, None),
+        validate_source_fetch_request(&too_many_sources, &binding, None, &server_test_network_id(),),
         Err(BrokerError::Rejected)
     );
 }
@@ -2332,7 +2347,7 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
             .expect("decode qualification response");
     assert_eq!(observed.revision, qualification.revision);
     assert_eq!(observed.policy_digest, qualification.policy_digest);
-    validate_operation_result(&request, STATUS_OK_V1, &encoded)
+    validate_operation_result(&request, STATUS_OK_V1, &encoded, &state.network_id)
         .expect("validate stream-token gateway qualification response");
 }
 

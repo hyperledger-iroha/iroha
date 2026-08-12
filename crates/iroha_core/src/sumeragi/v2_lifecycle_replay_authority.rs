@@ -3301,11 +3301,11 @@ fn recovered_certified_serve_payload(
                     DurableServeNegativeOutcome::Failed(*code)
                 }
             };
-            ReplayPayloadBindingV1::CertifiedServeNegative {
-                request: *request_hash.as_ref(),
-                certificate: *certificate_hash.as_ref(),
+            ReplayPayloadBindingV1::from_payload(DurablePayloadReference::CertifiedServeNegative {
+                request: LifecycleDigest::new(*request_hash.as_ref()),
+                certificate: LifecycleDigest::new(*certificate_hash.as_ref()),
                 outcome,
-            }
+            })
         }
     })
 }
@@ -6755,11 +6755,11 @@ mod tests {
             ReplayPayloadBindingV1::CertifiedServeCompleted { .. }
         ));
         assert!(matches!(
-            negative.serve.payload,
-            ReplayPayloadBindingV1::CertifiedServeNegative {
+            negative.serve.payload.durable_payload(),
+            Some(DurablePayloadReference::CertifiedServeNegative {
                 outcome: DurableServeNegativeOutcome::Rejected(17),
                 ..
-            }
+            })
         ));
         assert_eq!(
             pending.serve.family.source.request,

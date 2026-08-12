@@ -160,7 +160,7 @@ pub(super) struct CertifiedFetchReplacementLocation {
 
 impl CertifiedFetchReplacementLocation {
     /// Seal one exact logical replacement at an already admitted address.
-    pub(super) const fn new(
+    pub(super) fn new(
         owner: OwnerId,
         ordinal: u128,
         slot: PhysicalSlotId,
@@ -1354,7 +1354,7 @@ pub(super) struct ReadyValidateCarrierSeal {
 
 impl ReadyValidateCarrierSeal {
     /// Return whether this seal names the exact coordinator-owned slot.
-    pub(super) const fn matches(
+    pub(super) fn matches(
         self,
         owner: OwnerId,
         ordinal: u128,
@@ -6889,7 +6889,7 @@ impl DurableValidateCompletionAuthority {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-impl PreparedExecutedDurableValidateCompletion<'_> {
+impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
     /// Borrow the sealed coordinator publication projection.
     pub(super) const fn authority(&self) -> DurableValidateCompletionAuthority {
         self.authority
@@ -6927,7 +6927,7 @@ impl PreparedExecutedDurableValidateCompletion<'_> {
     pub(super) fn stage_executable_carrier(
         self,
     ) -> Result<
-        StagedDurableValidateCompletion<'_>,
+        StagedDurableValidateCompletion<'a>,
         (
             DurableValidateCompletionPublicationError,
             ExecutedDurableValidateDispatch,

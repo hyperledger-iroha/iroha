@@ -33,7 +33,6 @@ use crate::sumeragi::{
     },
 };
 
-#[cfg(test)]
 use super::schema::{CausalRoot, DurableContinuation};
 
 /// Storage-authenticated identity of one terminal Validate with no successor.

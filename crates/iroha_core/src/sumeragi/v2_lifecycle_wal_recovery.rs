@@ -65,7 +65,7 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredWalVoteProjection {
 
 impl AuthenticatedRecoveredWalVoteProjection {
     /// Assemble the one successful result of the consuming runtime projection.
-    pub(in crate::sumeragi) const fn from_runtime_projection(
+    pub(in crate::sumeragi) fn from_runtime_projection(
         _permit: RecoveredWalCandidateProjectionPermit,
         successor: RecoveredWalVoteSuccessor,
         parent: CandidateAdmission,

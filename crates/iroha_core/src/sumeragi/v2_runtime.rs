@@ -69,7 +69,8 @@ use super::{
         DeferredOccurrenceOwnershipEvidence, DeferredRuntimeOwnershipSeal, DeferredServiceEvidence,
         LiveWalFrameIdentity, ProducerContinuationHandoffEvidence, RecoveredWalFrameIdentity,
         RecoveredWalVoteSign, RegisteredPrepareInvalidBodyReportCapability, SignRequest,
-        SumeragiV2Adapter, classify_decided_local_proposal, proposal_is_safe_for_lock,
+        SumeragiV2Adapter, VerifiedHeightContext, classify_decided_local_proposal,
+        proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
     v2_lifecycle_coordinator::{

@@ -1946,6 +1946,7 @@ impl CertifiedResponsePriorityCandidate {
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "this classification does not itself authorize selector debt"]
 #[cfg_attr(not(test), allow(dead_code))]
+#[allow(variant_size_differences)] // The move-only preflight branches retain their closed types.
 pub(crate) enum CertifiedResponsePriorityProbe {
     /// The response is provably outside claimed-response priority.
     DefinitelyNonPriority(CertifiedResponsePriorityNonPriority),

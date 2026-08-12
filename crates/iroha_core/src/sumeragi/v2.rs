@@ -376,7 +376,10 @@ impl LiveWalFrameIdentity {
 
     /// Return whether the live append has the canonical reducer relation.
     pub(super) const fn is_exact(&self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Project inert codec evidence without exposing locator scalar parts.
@@ -412,11 +415,14 @@ impl RecoveredWalFrameIdentity {
 
     /// Return whether this sealed frame has the canonical reducer persistence relation.
     pub(crate) const fn is_exact(self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Match another sealed WAL-frame identity without exposing its parts.
-    pub(crate) const fn exactly_matches(self, other: Self) -> bool {
+    pub(crate) fn exactly_matches(self, other: Self) -> bool {
         self.frame_sequence == other.frame_sequence
             && self.persistence_id == other.persistence_id
             && self.frame_hash == other.frame_hash
@@ -469,11 +475,14 @@ pub(crate) struct PersistedWalFrameLocatorV1 {
 impl PersistedWalFrameLocatorV1 {
     /// Check the canonical reducer persistence relation without authenticating provenance.
     pub(crate) const fn is_exact(self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Compare inert persisted evidence with one sealed runtime identity.
-    pub(crate) const fn exactly_matches_runtime(self, runtime: RecoveredWalFrameIdentity) -> bool {
+    pub(crate) fn exactly_matches_runtime(self, runtime: RecoveredWalFrameIdentity) -> bool {
         self.frame_sequence == runtime.frame_sequence
             && self.persistence_id == runtime.persistence_id
             && self.frame_hash == runtime.frame_hash
