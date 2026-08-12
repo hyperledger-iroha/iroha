@@ -1206,6 +1206,16 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::replay_resigns_same_subject_reproposal_fifo_without_relabelling_old_commit
   sumeragi::v2_core::tests::replay_accepts_strictly_higher_matching_prepare_qc_proposal
   sumeragi::v2_core::tests::future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership
+  sumeragi::v2_core::network_simulation::lossy_offline_leader_simulations_commit_for_4_7_and_10_validators
+  sumeragi::v2_core::network_simulation::two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits
+  sumeragi::v2_core::network_simulation::historical_prepare_qc_uses_current_consumer_tag_after_timeout_install
+  sumeragi::v2_core::network_simulation::responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc
+  sumeragi::v2_core::network_simulation::asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies
+  sumeragi::v2_core::network_simulation::leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum
+  sumeragi::v2_core::network_simulation::leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum
+  sumeragi::v2_core::network_simulation::corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission
+  sumeragi::v2_core::network_simulation::crash_after_proposal_wal_before_signature_replays_exact_intent
+  sumeragi::v2_core::network_simulation::taira_divergent_views_converge_and_commit_within_one_rotation
   sumeragi::v2_core::refinement::tests::durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations
   sumeragi::v2_core::refinement::tests::locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations
   sumeragi::v2_core::refinement::tests::lock_and_commit_requires_one_current_vote_and_proposal_round
@@ -1491,6 +1501,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
   sumeragi::v2_effects::tests::passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime
+  sumeragi::v2_effects::tests::late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps
   sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request
   sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot
   sumeragi::v2_effects::tests::full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
@@ -1717,6 +1728,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout
   sumeragi::v2_worker::tests::exact_serve_predecessor_episode_services_older_local_without_admitting_later_io
   sumeragi::v2_worker::tests::repeated_exact_serve_claims_close_all_older_sources_before_later_io
+  sumeragi::v2_worker::tests::completed_exact_serve_episode_reopens_once_for_new_runtime_witness
   sumeragi::v2_worker::tests::exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
   sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers
   sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal
@@ -1989,7 +2001,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=849
+readonly expected_production_liveness_test_count=861
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2088,7 +2100,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 849-test liveness inventory above. The later
+# not belong to the canonical 861-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -3011,6 +3023,7 @@ production_liveness_modules=(
   merge_sidecar::tests
   state::tests
   sumeragi::v2_core::tests
+  sumeragi::v2_core::network_simulation
   sumeragi::v2_core::refinement::tests
   sumeragi::v2_core::wal::byte_lifecycle_tests
   sumeragi::v2_core::reducer::source_link_tests
@@ -3053,6 +3066,7 @@ production_liveness_leg_ids=(
   production-merge-sidecar
   production-state-governance-unlock-audit
   production-v2-core
+  production-v2-core-network-simulation
   production-v2-core-refinement
   production-v2-core-wal
   production-v2-core-source-link
@@ -3200,6 +3214,10 @@ run_final_workspace_verification() {
     source-sealed-workspace-tests command 0 \
     "cargo +1.93.1 test -j1 --locked --offline --workspace" \
     run_cargo test --locked --offline --workspace
+  run_corridor_leg \
+    source-sealed-irohad-tests command 0 \
+    "cargo +1.93.1 test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \
+    run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
   run_corridor_leg \
     source-sealed-workspace-clippy command 0 \
     "cargo +1.93.1 clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \
@@ -3692,6 +3710,8 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_legacy_layout_only_claim
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_state_order_weakening
+  pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping
+  pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::test_inflight_composed_contract_rejects_missing_direct_release_action
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_layout_contract_rejects_action_inventory_weakening
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_per_key_prefix_skip_weakening
   pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping
@@ -3702,10 +3722,10 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 4,730 ledger/checker cases (including the
+# Collection is source-bound as 5,129 ledger/checker cases (including the
 # lexically executed case components), 28 pinned-Verus evidence cases,
 # 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 29 Native/passive
-# multilane source-contract cases, and eighteen cases from ten selected
+  # multilane source-contract cases, and eighteen cases from twelve selected
 # layout/wire selectors.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
@@ -3715,15 +3735,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^4828 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5227 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 4828 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5227 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 4828 \
+  preflight-proof-fidelity pytest 5227 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3800,10 +3820,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 40 production-module + 9 G-UNIT + 2 exact data-model + 5 source-sealed
+  # 41 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 87.
-  readonly expected_corridor_leg_count=87
+  # SDK + 6 diagnostics + 11 pytest legs = 89.
+  readonly expected_corridor_leg_count=89
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

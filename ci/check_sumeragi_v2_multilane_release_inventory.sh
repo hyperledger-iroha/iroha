@@ -49,7 +49,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=849
+readonly canonical_production_test_count=861
 
 require_nonignored_test() {
   local path="$1"
@@ -192,7 +192,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=87"
+  "  readonly expected_corridor_leg_count=89"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -352,6 +352,48 @@ if (
         f"{canonical_production_test_count} unique tests"
     )
 
+network_simulation_tests = (
+    "sumeragi::v2_core::network_simulation::"
+    "lossy_offline_leader_simulations_commit_for_4_7_and_10_validators",
+    "sumeragi::v2_core::network_simulation::"
+    "two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits",
+    "sumeragi::v2_core::network_simulation::"
+    "historical_prepare_qc_uses_current_consumer_tag_after_timeout_install",
+    "sumeragi::v2_core::network_simulation::"
+    "responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc",
+    "sumeragi::v2_core::network_simulation::"
+    "asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies",
+    "sumeragi::v2_core::network_simulation::"
+    "leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum",
+    "sumeragi::v2_core::network_simulation::"
+    "leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum",
+    "sumeragi::v2_core::network_simulation::"
+    "corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission",
+    "sumeragi::v2_core::network_simulation::"
+    "crash_after_proposal_wal_before_signature_replays_exact_intent",
+    "sumeragi::v2_core::network_simulation::"
+    "taira_divergent_views_converge_and_commit_within_one_rotation",
+)
+observed_network_simulation_tests = tuple(
+    test
+    for test in production_tests
+    if test.startswith("sumeragi::v2_core::network_simulation::")
+)
+if observed_network_simulation_tests != network_simulation_tests:
+    reject("production inventory must bind the exact ten network simulations")
+core_test_positions = [
+    index
+    for index, test in enumerate(production_tests)
+    if test.startswith("sumeragi::v2_core::tests::")
+]
+network_simulation_positions = [
+    production_tests.index(test) for test in network_simulation_tests
+]
+if not core_test_positions or network_simulation_positions != list(
+    range(max(core_test_positions) + 1, max(core_test_positions) + 11)
+):
+    reject("network simulations must immediately follow the v2 core test inventory")
+
 receipt_tree = ast.parse(receipt_source, filename=str(receipt_writer))
 receipt_assignments: dict[str, object] = {}
 for node in receipt_tree.body:
@@ -431,19 +473,52 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 40:
-    reject("receipt writer must bind exactly 40 production modules")
+if not isinstance(production_modules, tuple) or len(production_modules) != 41:
+    reject("receipt writer must bind exactly 41 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 40
+    len(module_counts) != 41
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
         "receipt writer production-module counts must sum exactly to "
         f"{canonical_production_test_count}"
     )
+network_simulation_module = (
+    "production-v2-core-network-simulation",
+    "sumeragi::v2_core::network_simulation",
+    10,
+)
+if production_modules.count(network_simulation_module) != 1:
+    reject("receipt writer must bind the exact network-simulation module leg")
+
+
+def shell_array(name: str) -> tuple[str, ...]:
+    declaration = f"{name}=("
+    if lines.count(declaration) != 1:
+        reject(f"{name} must be declared exactly once")
+    start = lines.index(declaration)
+    try:
+        end = lines.index(")", start + 1)
+    except ValueError:
+        reject(f"{name} is unterminated")
+    return tuple(
+        line.strip()
+        for line in lines[start + 1 : end]
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+runner_modules = shell_array("production_liveness_modules")
+runner_leg_ids = shell_array("production_liveness_leg_ids")
+receipt_modules = tuple(module for _leg_id, module, _count in production_modules)
+receipt_leg_ids = tuple(leg_id for leg_id, _module, _count in production_modules)
+if runner_modules != receipt_modules or len(set(runner_modules)) != 41:
+    reject("release runner must bind the exact 41 receipt production modules")
+if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 41:
+    reject("release runner must bind the exact 41 receipt production leg IDs")
 
 expected_apalache_refinement_results = (
     (
@@ -499,7 +574,7 @@ expected_changed_module_counts = {
     "kura::tests": 17,
     "sumeragi::authoritative_runtime_gate_tests": 43,
     "sumeragi::serviced_candidate_store::tests": 1,
-    "sumeragi::v2_effects::tests": 71,
+    "sumeragi::v2_effects::tests": 72,
     "sumeragi::v2::tests": 46,
     "sumeragi::v2_runtime::tests": 68,
     "merge_sidecar::tests": 118,
@@ -507,7 +582,8 @@ expected_changed_module_counts = {
     "sumeragi::v2_lane_work::tests": 60,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
-    "sumeragi::v2_worker::tests": 132,
+    "sumeragi::v2_worker::tests": 133,
+    "sumeragi::v2_core::network_simulation": 10,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -534,8 +610,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "15f837d911644b557c5a36064a1cff9c"
-    "512f0cf2b120f5cc6fb21e7cfa530d83"
+    "8c39cb3717a9cab79e4d442e8179030c3"
+    "af5af74947864d45838b80864290d2f"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -834,6 +910,11 @@ source_sealed_blocks = (
     run_cargo test --locked --offline --workspace""",
     """\
   run_corridor_leg \\
+    source-sealed-irohad-tests command 0 \\
+    "cargo +1.93.1 test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \\
+    run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control""",
+    """\
+  run_corridor_leg \\
     source-sealed-workspace-clippy command 0 \\
     "cargo +1.93.1 clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \\
     run_cargo clippy --locked --offline --workspace --all-targets -- -D warnings""",
@@ -854,7 +935,10 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 source_sealed_positions = [source.index(block) for block in source_sealed_blocks]
 if source_sealed_positions != sorted(source_sealed_positions):
-    reject("final workspace gates are not build/test/clippy/fmt/legacy in exact order")
+    reject(
+        "final workspace gates are not "
+        "build/test/irohad/clippy/fmt/legacy in exact order"
+    )
 
 expected_focus_counts = {
     "required_multilane_core_focus_tests": 318,
@@ -2070,4 +2154,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 87 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 524/524 G-UNIT (318 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 89 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 41 modules, exact 524/524 G-UNIT (318 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

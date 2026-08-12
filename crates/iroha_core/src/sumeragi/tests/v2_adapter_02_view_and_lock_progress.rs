@@ -108,17 +108,14 @@ fn enter_view_conversion_uses_effect_carried_lock_not_reducer_lock() {
     let AdapterEffect::EnterView {
         tag: converted_tag,
         certificate,
-        protected_body,
+        protected_lock,
     } = converted
     else {
         panic!("expected EnterView adapter effect");
     };
     assert_eq!(converted_tag, tag);
     assert_eq!(certificate.round, wire_round);
-    assert_eq!(
-        protected_body,
-        Some((carried_wire.round, carried_wire.subject))
-    );
+    assert_eq!(protected_lock, Some(carried_wire.clone()));
     assert_eq!(
         adapter.active_subject,
         Some((carried_reference.round(), carried_reference.subject()))
@@ -647,9 +644,9 @@ fn deferred_locked_commit_delivery_tracks_generation_after_tc() {
     assert!(matches!(
         &installed_effects[0],
         AdapterEffect::EnterView {
-            protected_body: Some((round, subject)),
+            protected_lock: Some(protected_lock),
             ..
-        } if *round == wire_round && *subject == locked_subject
+        } if protected_lock == &wire_prepare
     ));
     assert!(matches!(
         &installed_effects[1],

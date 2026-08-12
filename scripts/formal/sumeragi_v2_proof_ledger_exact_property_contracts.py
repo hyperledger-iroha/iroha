@@ -364,6 +364,26 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "packet, actionKind, actionSource)"
     ),
     (
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties",
+    ): (
+        "/\\ HistoricalDiscoveryPacketConcreteActionSelectionProperty( "
+        "specification) "
+        "/\\ HistoricalDiscoveryPacketConcreteActionServiceProperty( "
+        "specification) "
+        "/\\ HistoricalDiscoveryCandidateExactRunnerServiceProperty( "
+        "specification) "
+        "/\\ HistoricalDiscoveryServeExactWorkerServiceProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual",
+    ): (
+        "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties( "
+        "specification)"
+    ),
+    (
         "SumeragiV2TimeoutViewProgressProofs",
         "TimeoutFixedClockPacketConcreteActionPending",
     ): (
@@ -4209,6 +4229,15 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "\\A initialContext \\in AdmissibleContextRecords: "
         "IndexedHistoricalTransport(initialContext)! "
         "HistoricalTemporalFixedClockLeaves(IndexedChainSpec)"
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "IndexedHistoricalTransport(initialContext)! "
+        "HistoricalDiscoveryPacketConcreteActionSelectionProperty( "
+        "IndexedChainSpec)"
     ),
     (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",

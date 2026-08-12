@@ -378,23 +378,28 @@ pub(crate) struct LocalProposalDirective {
                     "submit_encoded_body",
                     "encoded-body executor admission bridge",
                 ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
+            (
                 (
                     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
-                    (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                    (),
                     ("#[test]",),
                     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
                     "exact replayed-proposal lock-owner regression",
                 ),
                 (
                     "locked_body_recovery_is_independent_of_reproposal_gates",
-                    (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                    (),
                     ("#[test]",),
                     "locked_body_recovery_is_independent_of_reproposal_gates",
                     "locked-body acquisition/reproposal split regression",
                 ),
                 (
                     "lane_production_duty_survives_successor_global_roster_removal",
-                    (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                    (),
                     ("#[test]",),
                     "lane_production_duty_survives_successor_global_roster_removal",
                     "successor-roster-independent lane duty regression",
@@ -417,7 +422,15 @@ pub(crate) struct LocalProposalDirective {
     production_items: dict[str, tuple[Path, RustItem | None]] = {}
     for relative, specs in production_specs:
         path = repo_root / relative
-        source = read_regular(path, "locked-body production refinement source")
+        if relative == "crates/iroha_core/src/sumeragi/v2_runner_tests.rs":
+            path, source = _read_reviewed_rust_source(
+                repo_root,
+                relative,
+                errors,
+                "locked-body runner regression source",
+            )
+        else:
+            source = read_regular(path, "locked-body production refinement source")
         if source is None:
             continue
         for item_name, context, attributes, digest_key, description in specs:

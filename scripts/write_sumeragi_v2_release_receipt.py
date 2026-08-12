@@ -391,7 +391,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 849
+_PRODUCTION_TEST_COUNT = 861
 _G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
@@ -478,6 +478,11 @@ _PRODUCTION_MODULES = (
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
+    (
+        "production-v2-core-network-simulation",
+        "sumeragi::v2_core::network_simulation",
+        10,
+    ),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     (
         "production-v2-core-wal",
@@ -503,7 +508,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 60),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
@@ -514,7 +519,7 @@ _PRODUCTION_MODULES = (
         5,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 133),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -886,6 +891,13 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "cargo +1.93.1 test -j1 --locked --offline --workspace",
             ),
             (
+                "source-sealed-irohad-tests",
+                "command",
+                0,
+                "cargo +1.93.1 test -j1 --locked --offline -p irohad "
+                "--bin irohad --features test-network-message-control",
+            ),
+            (
                 "source-sealed-workspace-clippy",
                 "command",
                 0,
@@ -1065,8 +1077,9 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                4828,
-                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider "
+                5227,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
                 "pytests/scripts/sumeragi_v2_verus_evidence_test.py "
                 "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py "
@@ -1077,6 +1090,10 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "test_inflight_composed_contract_rejects_legacy_layout_only_claim "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
                 "test_inflight_composed_contract_rejects_state_order_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::"
+                "test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping "
+                "pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::"
+                "test_inflight_composed_contract_rejects_missing_direct_release_action "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
                 "test_inflight_layout_contract_rejects_action_inventory_weakening "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"

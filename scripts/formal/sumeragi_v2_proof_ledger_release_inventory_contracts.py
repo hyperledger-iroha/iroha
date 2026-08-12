@@ -690,8 +690,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 431:
-        errors.append("internal release-regression seal must contain exactly 431 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 443:
+        errors.append("internal release-regression seal must contain exactly 443 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1691,25 +1691,48 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory to 849 tests across 40 modules.\n"
+            "current\ninventory to 861 tests across 41 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 849-test,\n40-module inventory. The complete source-sealed\n"
+            "current 861-test, 41-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory to 849 exact tests "
-            "across\n40 modules and "
-            f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
+            "current\nsource-bound inventory to 861 exact tests across 41 modules and "
+            f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
+        ),
+        repo_root / "specs" / "sumeragi_v2_multilane_closure_ledger.md": (
+            "`terminal_sweep_source_partitions_whole_units_before_any_mutation` in\n"
+            "`crates/iroha_core/src/sumeragi/tests/"
+            "v2_runner_lifecycle_startup_order.rs`,",
+            "source anchors are not the complete "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
+            "tests are mapped row evidence, not the complete "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
+            "contain exactly "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
+            "tests: 318 core, 143 queue-journal, 13 configuration, eight data-model, "
+            "39\nTorii, one Torii-shared, and two integration.",
+            "both require that exact\n"
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",
+            "The G-UNIT static inventory checks establish exact "
+            f"`{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}/"
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}` source consistency",
+            "execution of all "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} required tests",
+            "remain open even though the exact "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row\n  inventory",
+            "no complete\n  "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test execution",
         ),
     }
     for path, claims in documentation_claims.items():
@@ -1722,6 +1745,23 @@ def _production_liveness_release_inventory_errors(
                 errors.append(
                     f"{path}: release inventory documentation must contain exact "
                     f"claim {claim!r}"
+                )
+    closure_ledger_path = (
+        repo_root / "specs" / "sumeragi_v2_multilane_closure_ledger.md"
+    )
+    if closure_ledger_path.is_file() and not closure_ledger_path.is_symlink():
+        closure_ledger = closure_ledger_path.read_text(encoding="utf-8")
+        for stale_claim in (
+            "terminal_sweep_source_binds_chain_route_and_empty_post_readback",
+            "474-test",
+            "474-row",
+            "`474/474`",
+            "268 core",
+        ):
+            if stale_claim in closure_ledger:
+                errors.append(
+                    f"{closure_ledger_path}: multilane closure ledger retains "
+                    f"stale release claim {stale_claim!r}"
                 )
     return errors
 

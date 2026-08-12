@@ -51,10 +51,10 @@ not immutable-candidate execution or release receipts.
 
 ## 2026-08-09 mutable-development closure snapshot
 
-- The bound inventory contains exactly 849 production tests across 40 modules,
-  including 431 source-sealed ownership/regression names, plus 524 G-UNIT
+- The bound inventory contains exactly 861 production tests across 41 modules,
+  including 443 source-sealed ownership/regression names, plus 524 G-UNIT
   tests and 55 grouped Native negative controls. Its source-sealed pre-network
-  corridor contains 87 legs. These are source counts, not claims that any suite
+  corridor contains 89 legs. These are source counts, not claims that any suite
   was executed for this reconciliation.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
   former lifecycle-cursor marker is gone: signed lifecycle bootstrap,
@@ -783,9 +783,12 @@ are pinned by `kura_start_rejects_unbound_local_peer_identity`,
 now source-pins the actual-Kura path from refresh publication through exact-
 output backpressure, successful durable-handoff urgent wake-up, predecessor
 drop, successor retry, frozen exact recipients, and final Kura revalidation.
-The mutable focused inventory names 18 exact Kura replica tests and four exact
-configuration tests. This reconciliation makes no execution claim for them or
-for a multi-peer body-pruning corridor, so this row's evidence remains Open.
+Historical same-day isolated Rust 1.93.1 locked/offline slices passed the 18
+exact Kura replica tests and four exact configuration tests. The mutable
+focused inventory still names those tests, but this reconciliation makes no
+immutable-candidate execution claim for them or for a multi-peer body-pruning
+corridor. Those focused runs and source anchors are not the complete 524-test `G-UNIT` receipt,
+so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
 `KuraReplicaRetentionProductionRefinementObligation` and all fourteen exact
@@ -1225,15 +1228,18 @@ exercises one lane ID across B/A/B storage generations, including a deliberate
 incarnation-hash ABA with a fresh activation fence: delayed B/A recovery
 records, QCs, payloads, and physically copied archive bytes fail closed, the
 recreated-B evidence remains byte-exact, and restart recovers only recreated-B
-ownership. The mutable focused inventory also names this B/A/B regression, two
-startup-replay binding regressions, six bounded historical namespace/accounting
-cases, first-merge crash-window repair, Native post-WSV retention, and
-authenticated geometry refresh. These 12 mapped source tests are not claimed
-as executed, so this row's evidence remains Open.
+ownership. A historical current-source checkpoint passed this exact B/A/B
+regression (`1/1`), the startup-replay binding regressions (`2/2`), the bounded
+historical namespace/accounting suite (`6/6`), first-merge crash-window repair
+(`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
+(`1/1`) under isolated Rust 1.93.1 locked/offline execution. The mutable
+focused inventory still names those 12 tests, but this reconciliation makes no
+immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 524-test `G-UNIT` receipt,
+so this row's evidence remains Open.
 
 The source-bound focused inventory also includes
 `startup_reconciles_lifecycle_before_lane_work_activation` and
-`terminal_sweep_source_binds_chain_route_and_empty_post_readback` in
+`terminal_sweep_source_partitions_whole_units_before_any_mutation` in
 `crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs`,
 `generation_takeover_runs_crash_recover_and_rehydrate_then_stutters` and
 `prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side` plus
@@ -1684,6 +1690,7 @@ and
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
+The live resolver fails closed on untracked reviewed inputs.
 Rust-owned fixture regeneration, both OpenAPI regenerations, JavaScript
 distribution regeneration, parity hashes, and one complete immutable-candidate
 harness replay are all still pending. Neither the checked-in bytes nor any
@@ -1799,22 +1806,44 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 849 tests across 40 modules. The nine G-UNIT groups
-contain exactly 524 tests: 318 core, 143 queue-journal, nine configuration-lib,
-two configuration-runtime, two configuration-fixture, eight data-model, 39
-Torii, one Torii-shared, and two integration tests. The grouped Native corpus
-contains exactly 55 source-bound negative controls. The planned-association
-Rust coverage described under `ML-NAT-06` is present in the focused source
-inventory. The 17 merge-manifest cases under `ML-NAT-05` and 12
-passive-diagnostics/retry cases under `ML-AUT-06` and `ML-API-01` are static
-Python source tests outside the 524 G-UNIT count. Their presence does not claim
-that either file ran from an immutable candidate.
+inventory contains exactly 861 tests across 41 modules, including 443
+source-sealed ownership/regression names. The three Kura recovery regressions
+and governance-unlock audit are retained beside the prior source-bound closure.
+The seven additional Native AMX regressions bind finality-aware merge
+projection across canonical ordering, multi-height and same-height identity
+conflicts, coordinator-only receipts, route conflicts, duplicate sources, and
+decoded replay. The focused source inventory is now internally consistent. The
+nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 524 unique required
+tests: 318 core, 143 queue-journal, 13 configuration, eight data-model, 39
+Torii, one Torii-shared, and two integration. The runner and
+`ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
+524-row shape, including grouped Native prevote-budget rejection before
+Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
+index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
+Native signing-boundary drift rejection, atomic grouped reservation commit,
+checked snapshot replay file/owner sealing, exact QueuePlan obligation
+authentication, ApplyCarrier authorization, and canonical historical
+autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `524/524` source consistency and also source-
+bind the synchronized 55-control grouped corpus. The planned-
+association Rust coverage described under `ML-NAT-06` is present in the focused
+source inventory. The 17 merge-manifest cases under `ML-NAT-05` and 12 passive-
+diagnostics/retry cases under `ML-AUT-06` and `ML-API-01` are static Python
+source tests outside the 524 G-UNIT count.
 
-No Cargo command or immutable-candidate focused/full matrix execution is
-claimed by this reconciliation. The 849 production, 524 G-UNIT, and 55-control
-counts are mutable-development source inventory only; `G-UNIT` remains Open
-until the exact no-skip suites run through the compliant isolated wrapper and
-their logs and candidate identity are archived.
+On 2026-07-31, pinned Rust 1.93.1 locked/offline execution from isolated source
+`/tmp/iroha-kura-final3.dvOYAN` and isolated target
+`/tmp/iroha-kura-target2.Llklru` passed 12 then-current focused tests: six
+bounded historical namespace/accounting cases, two startup-replay binding
+cases, and one each for B/A/B historical recovery, first-merge crash-window
+repair, Native post-WSV retention, and authenticated geometry refresh. That
+checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
+covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
+configuration tests. These are historical partial results, not fresh archived
+execution of all 524 required tests. This reconciliation claims no immutable-
+candidate Cargo run or full matrix execution: the 861 production, 524 G-UNIT,
+and 55-control counts are mutable-development source inventory only. `G-UNIT`
+remains Open until the exact no-skip suites run through the compliant isolated
+wrapper and their logs and candidate identity are archived.
 
 ### G-FORMAL — source-bound models and expected mutations
 
@@ -2007,11 +2036,13 @@ before release. Generic consensus TODOs remain out of scope as recorded below.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 849-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 861-production-test,
   524-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
-  inventories only. No Cargo, SDK, formal-engine, or network execution receipt
-  is claimed by this reconciliation.
+  inventories only. Historical focused Rust and direct SDK subsets do not
+  substitute for a complete SDK harness, formal-engine result, or network
+  receipt; no complete 524-test execution from an immutable candidate is
+  claimed by this reconciliation.
 
 ### Explicitly out of scope
 

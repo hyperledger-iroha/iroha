@@ -1,4 +1,4 @@
-# Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
+# Executed lexically in check_sumeragi_v2_proof_ledger.py.
 
 def _timeout_vote_episode_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
@@ -562,11 +562,27 @@ if !recovering_interrupted_tip {
         1,
     )?;
 }
-older_predecessor_remains = executor
-    .older_runtime_lifecycle_predates_exact_serve(
+let completion_evidence = services
+    .certified_serve_predecessor_completion_evidence(
+        executor.remaining_completion_capacity() != 0,
+        serve_barrier.scheduler_ordinal(),
+    )
+    .map_err(V2RunnerError::Service)?;
+let predecessor_witness = executor
+    .exact_serve_predecessor_episode_witness(
         Instant::now(),
         serve_barrier.scheduler_ordinal(),
+        completion_evidence,
     )?;
+if let Some(witness) = predecessor_witness {
+    let _ = services
+        .observe_certified_serve_predecessor_episode_witness(
+            serve_barrier,
+            witness,
+        )
+        .map_err(V2RunnerError::Service)?;
+}
+older_predecessor_remains = predecessor_witness.is_some();
 services
     .finish_certified_serve_runtime_episode_turn(
         serve_barrier,
@@ -574,7 +590,9 @@ services
     )
     .map_err(V2RunnerError::Service)?;
 """,
-        "selected Serve certificate escape must remain inside the claimed older-runtime episode before that one-shot claim is finished",
+        "selected Serve certificate escape must freshly project, re-publish, and "
+        "consume the exact predecessor witness inside the claimed older-runtime "
+        "episode before that one-shot claim is finished",
         errors,
     )
     _require_rust_token_sequence(
@@ -1547,7 +1565,10 @@ assert_eq!(
         )
         return errors
     formal_source = formal_path.read_text(encoding="utf-8")
-    expected_operator_modules = {"SumeragiV2AsyncNetwork.tla"}
+    expected_operator_modules = {
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+    }
     observed_operator_modules = set(_TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256)
     if observed_operator_modules != expected_operator_modules:
         errors.append(
@@ -1557,6 +1578,7 @@ assert_eq!(
         )
     expected_theorem_modules = {
         "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
         "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
     }
     observed_theorem_modules = set(_TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256)
@@ -1582,6 +1604,9 @@ assert_eq!(
         "AsyncTimeoutRecoveryVoteAdmissionDispositions",
         "AsyncTimeoutRecoveryEpisodeKey",
         "AsyncTimeoutRecoveryEpisodeKeySet",
+        "AsyncTimeoutRecoveryEpisodeParameterSet",
+        "AsyncTimeoutRecoveryEpisodeFromParameters",
+        "AsyncTimeoutRecoveryEpisodeSet",
         "AsyncTimeoutRecoveryVoteOwnerSlot",
         "AsyncTimeoutRecoveryVoteOwnerUniverse",
         "AsyncTimeoutRecoveryVoteOwnerValidForEpisode",
@@ -1614,6 +1639,14 @@ assert_eq!(
         "AsyncTimeoutRecoveryAdmittedVoteSlots",
         "AsyncTimeoutRecoveryRemainingProducerSlots",
         "AsyncTimeoutRecoveryProducerEpisodeMeasure",
+        "AsyncTimeoutRecoveryEpisodeCreationReadyIn",
+        "AsyncTimeoutRecoveryTransitionGateIn",
+        "AsyncTimeoutRecoveryEpisodeRetiresThisStep",
+        "AsyncTimeoutRecoveryExistingCaptureClearsThisStep",
+        "AsyncTimeoutRecoveryEpisodeAfterTransition",
+        "AsyncTimeoutRecoveryRetainedEpisodesAfterTransition",
+        "AsyncTimeoutRecoveryNewEpisodeIn",
+        "AsyncTimeoutRecoveryNewEpisodesAfterTransition",
     }
     observed_formal_symbols = set(formal_seals)
     if observed_formal_symbols != expected_formal_symbols:
@@ -1715,6 +1748,653 @@ assert_eq!(
                 f"{formal_path}:{line}: timeout-vote episode theorem {symbol} "
                 f"must match reviewed digest {expected_sha256}; found "
                 f"{observed_sha256}"
+            )
+
+    boundary_filename = "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+    boundary_path = formal_dir / boundary_filename
+    boundary_seals = _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256.get(
+        boundary_filename, {}
+    )
+    expected_boundary_symbols = {
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+        "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+        "AsyncNextPreservesServeProducerEpisodeInvariants",
+        "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame",
+        "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape",
+        "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape",
+        "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+        "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+        "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary",
+        "AsyncTimeoutRecoveryNewEpisodeDecomposition",
+        "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary",
+        "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+        "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary",
+        "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary",
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+        "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary",
+        "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet",
+        "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet",
+        "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+        "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant",
+    }
+    observed_boundary_symbols = set(boundary_seals)
+    if observed_boundary_symbols != expected_boundary_symbols:
+        errors.append(
+            "timeout-recovery current-boundary theorem source-seal inventory "
+            "must be exact; "
+            f"missing={sorted(expected_boundary_symbols - observed_boundary_symbols)}, "
+            f"extra={sorted(observed_boundary_symbols - expected_boundary_symbols)}"
+        )
+    boundary_source: str | None = None
+    if not boundary_path.is_file() or boundary_path.is_symlink():
+        errors.append(
+            f"{boundary_path}: timeout-recovery current-boundary proofs must "
+            "be a regular formal source"
+        )
+    else:
+        try:
+            boundary_source = boundary_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{boundary_path}: cannot read timeout-recovery "
+                f"current-boundary proofs: {error}"
+            )
+    boundary_operator_bodies: dict[str, tuple[str, int]] = {}
+    boundary_theorem_bodies: dict[str, tuple[str, int]] = {}
+    if boundary_source is not None:
+        boundary_operator_seals = _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256.get(
+            boundary_filename, {}
+        )
+        expected_boundary_operator_symbols = {
+            "AsyncTimeoutRecoveryEpisodeBoundaryIn",
+            "AsyncTimeoutRecoveryBoundaryFrameShape",
+            "AsyncTimeoutRecoveryMutationFrameShape",
+            "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor",
+            "AsyncTimeoutRecoveryNewBaseEpisodeIn",
+            "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn",
+        }
+        observed_boundary_operator_symbols = set(boundary_operator_seals)
+        if observed_boundary_operator_symbols != expected_boundary_operator_symbols:
+            errors.append(
+                "timeout-recovery boundary operator source-seal inventory "
+                "must be exact; "
+                f"missing={sorted(expected_boundary_operator_symbols - observed_boundary_operator_symbols)}, "
+                f"extra={sorted(observed_boundary_operator_symbols - expected_boundary_operator_symbols)}"
+            )
+        for symbol, expected_sha256 in boundary_operator_seals.items():
+            extracted = _top_level_operator_body(
+                boundary_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{boundary_path}: missing source-sealed timeout-recovery "
+                    f"boundary operator {symbol}"
+                )
+                continue
+            boundary_operator_bodies[symbol] = extracted
+            body, line = extracted
+            observed_sha256 = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{boundary_path}:{line}: timeout-recovery boundary "
+                    f"operator {symbol} must match reviewed digest "
+                    f"{expected_sha256}; found {observed_sha256}"
+                )
+        for symbol, expected_sha256 in boundary_seals.items():
+            extracted = _top_level_theorem_body(
+                boundary_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{boundary_path}: missing source-sealed timeout-recovery "
+                    f"current-boundary theorem {symbol}"
+                )
+                continue
+            boundary_theorem_bodies[symbol] = extracted
+            body, line = extracted
+            observed_sha256 = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{boundary_path}:{line}: timeout-recovery current-boundary "
+                    f"theorem {symbol} must match reviewed digest "
+                    f"{expected_sha256}; found {observed_sha256}"
+                )
+
+    reviewed_timeout_transition_operator_sha256 = {
+        "SumeragiV2AsyncNetwork.tla": {
+            "AsyncTimeoutRecoveryEpisodeCreationReadyIn": (
+                "463fcd6b8a67c383cd62b258d220831cd60d0854df625b77b359ff3859827283"
+            ),
+            "AsyncTimeoutRecoveryTransitionGateIn": (
+                "02e689cac6c1aba321ea319591aff3feb1957c946608e9cc86f3826c854445ed"
+            ),
+            "AsyncTimeoutRecoveryEpisodeRetiresThisStep": (
+                "ec514a038cee6fb9f31e63409040bee22defb732edc7208e3a683779a24ad686"
+            ),
+            "AsyncTimeoutRecoveryExistingCaptureClearsThisStep": (
+                "92a31d4bd2a3c6b1a57c6bbbcf5d67d33da9b575922159aa12074e373226eb1d"
+            ),
+            "AsyncTimeoutRecoveryEpisodeAfterTransition": (
+                "043fa928e89e959c987aa19209e2c3ef68541a551017062b9f38ae1a0d267fbc"
+            ),
+            "AsyncTimeoutRecoveryRetainedEpisodesAfterTransition": (
+                "15b01a6485f2446a013ff833d7ed3831dca42ba6933642afa74bb123622d7f76"
+            ),
+            "AsyncTimeoutRecoveryNewEpisodeIn": (
+                "dfb0f545e1804325d054d841731c71e8da09565a9ae99177980e66b42f828b54"
+            ),
+            "AsyncTimeoutRecoveryNewEpisodesAfterTransition": (
+                "0bb56383a4306a31b7df629c7908fd37f772a5c31305ee641b887c287a46b3f2"
+            ),
+        },
+        boundary_filename: {
+            "AsyncTimeoutRecoveryEpisodeBoundaryIn": (
+                "a45ca5da201b0d81c538304cfbd4740029c9b8aaa17190f2c0f835a99ec5bc8a"
+            ),
+            "AsyncTimeoutRecoveryBoundaryFrameShape": (
+                "7b851fbaf17ebee465208fbde0c47b447c6cf9e278cc54b369ce00da2146eecf"
+            ),
+            "AsyncTimeoutRecoveryMutationFrameShape": (
+                "f85b7549b33097ba1cf31adbb63d48a85fdf0b61f409b60e128451acbf37656f"
+            ),
+            "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor": (
+                "5bb5d4962bbc9db7fcbe00c53e70d5532ed39550ee5da04acdac6048dc0fc5c3"
+            ),
+            "AsyncTimeoutRecoveryNewBaseEpisodeIn": (
+                "aebba5c89eb28cc959098eef0a148c0a3defe3818d71f7aacc07ab8f2fd73136"
+            ),
+            "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn": (
+                "e90869e129c22b6a56cdac3759bcf47be53b7c89276675019eeb1b7e39891d2b"
+            ),
+        },
+    }
+    reviewed_operator_sources = {
+        "SumeragiV2AsyncNetwork.tla": (formal_path, formal_bodies),
+        boundary_filename: (boundary_path, boundary_operator_bodies),
+    }
+    for filename, reviewed in reviewed_timeout_transition_operator_sha256.items():
+        source_path, bodies = reviewed_operator_sources[filename]
+        for symbol, expected_sha256 in reviewed.items():
+            extracted = bodies.get(symbol)
+            if extracted is None:
+                continue
+            body, line = extracted
+            observed_sha256 = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{source_path}:{line}: timeout-recovery operator {symbol} "
+                    "must retain its complete reviewed body after source-seal "
+                    f"refresh; expected {expected_sha256}, found "
+                    f"{observed_sha256}"
+                )
+
+    def require_boundary_theorem_statement(
+        symbol: str,
+        expected: str,
+    ) -> None:
+        extracted = boundary_theorem_bodies.get(symbol)
+        if extracted is None:
+            return
+        body, line = extracted
+        observed = _tla_statement_without_proof(body)
+        expected_normalized = " ".join(expected.split())
+        if observed != expected_normalized:
+            errors.append(
+                f"{boundary_path}:{line}: {symbol} must remain the exact "
+                "theorem-level ASSUME/PROVE current-boundary sequent with "
+                "arbitrary state records and the reviewed validator bound; "
+                f"expected {expected_normalized!r}; found {observed!r}"
+            )
+
+    require_boundary_theorem_statement(
+        "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+        r"""
+ASSUME NEW episode,
+       AsyncTimeoutRecoveryMutationFrameShape(episode),
+       AsyncTimeoutRecoveryEpisodeBoundaryIn(
+         episode, context', nodeView', generation', decisions')
+PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+           AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+             episode))
+      /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+             episode),
+           context', nodeView', generation', decisions')
+""",
+    )
+    require_boundary_theorem_statement(
+        "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+        r"""
+ASSUME NEW preClockState, NEW episode,
+       AsyncTimeoutRecoveryMutationFrameShape(episode),
+       AsyncTimeoutRecoveryEpisodeBoundaryIn(
+         episode, context', nodeView', generation', decisions')
+PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+           AsyncTimeoutRecoveryEpisodeAfterTransition(
+             preClockState, episode))
+      /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           AsyncTimeoutRecoveryEpisodeAfterTransition(
+             preClockState, episode),
+           context', nodeView', generation', decisions')
+""",
+    )
+    require_boundary_theorem_statement(
+        "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary",
+        r"""
+ASSUME NEW preClockState, NEW timeoutBaseState,
+       NEW node \in ValidatorIds,
+       AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+         preClockState, timeoutBaseState, node)
+PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+           AsyncTimeoutRecoveryNewBaseEpisodeIn(
+             preClockState, timeoutBaseState, node))
+      /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           AsyncTimeoutRecoveryNewBaseEpisodeIn(
+             preClockState, timeoutBaseState, node),
+           context', nodeView', generation', decisions')
+""",
+    )
+    require_boundary_theorem_statement(
+        "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+        r"""
+ASSUME NEW preClockState, NEW timeoutBaseState,
+       NEW node \in ValidatorIds,
+       AsyncTimeoutRecoveryEpisodeCreationReadyIn(
+         preClockState, timeoutBaseState, node)
+PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+           AsyncTimeoutRecoveryNewEpisodeIn(
+             preClockState, timeoutBaseState, node))
+      /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           AsyncTimeoutRecoveryNewEpisodeIn(
+             preClockState, timeoutBaseState, node),
+           context', nodeView', generation', decisions')
+""",
+    )
+    require_boundary_theorem_statement(
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+        r"""
+ASSUME NEW state, NEW episode,
+       AsyncTimeoutRecoveryMutationFrameShape(episode),
+       AsyncTimeoutRecoveryEpisodeBoundaryIn(
+         episode, context', nodeView', generation', decisions')
+PROVE /\ AsyncTimeoutRecoveryMutationFrameShape(
+           AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+             state, episode))
+      /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+           AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(
+             state, episode),
+           context', nodeView', generation', decisions')
+""",
+    )
+
+    def require_boundary_exact_statement(
+        symbol: str,
+        expected: str,
+    ) -> None:
+        extracted = boundary_theorem_bodies.get(symbol)
+        if extracted is None:
+            return
+        body, line = extracted
+        observed = _tla_statement_without_proof(body)
+        expected_normalized = " ".join(expected.split())
+        if observed != expected_normalized:
+            errors.append(
+                f"{boundary_path}:{line}: {symbol} must remain the exact "
+                "reviewed timeout-recovery boundary theorem statement; "
+                f"expected {expected_normalized!r}; found {observed!r}"
+            )
+
+    boundary_exact_statements = {
+        "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame": r"""
+\A episode:
+  AsyncTimeoutRecoveryMutationFrameShape(episode)
+    => AsyncTimeoutRecoveryBoundaryFrameShape(episode)
+""",
+        "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape": r"""
+\A parameters:
+  AsyncTimeoutRecoveryMutationFrameShape(
+    AsyncTimeoutRecoveryEpisodeFromParameters(parameters))
+""",
+        "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape": r"""
+\A episode \in AsyncTimeoutRecoveryEpisodeSet:
+  AsyncTimeoutRecoveryMutationFrameShape(episode)
+""",
+        "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary": r"""
+\A preClockState, state:
+  state.timeoutRecoveryEpisodes \subseteq AsyncTimeoutRecoveryEpisodeSet
+    => \A episode \in
+         AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+           preClockState, state):
+         /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+         /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+              episode, context', nodeView', generation', decisions')
+""",
+        "AsyncTimeoutRecoveryNewEpisodeDecomposition": r"""
+\A preClockState, timeoutBaseState, node:
+  AsyncTimeoutRecoveryNewEpisodeIn(
+    preClockState, timeoutBaseState, node)
+    = IF AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn(
+           preClockState, node)
+      THEN AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor(
+             AsyncTimeoutRecoveryNewBaseEpisodeIn(
+               preClockState, timeoutBaseState, node))
+      ELSE AsyncTimeoutRecoveryNewBaseEpisodeIn(
+             preClockState, timeoutBaseState, node)
+""",
+        "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary": r"""
+\A preClockState, timeoutBaseState:
+  AsyncTimeoutRecoveryTransitionGateIn(preClockState, timeoutBaseState)
+    => \A episode \in
+         AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+           preClockState, timeoutBaseState):
+         /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+         /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+              episode, context', nodeView', generation', decisions')
+""",
+        "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary": r"""
+ASSUME NEW preClockState, NEW timeoutBaseState, NEW state,
+       NEW episodes,
+       state.timeoutRecoveryEpisodes
+         \subseteq AsyncTimeoutRecoveryEpisodeSet,
+       AsyncTimeoutRecoveryTransitionGateIn(
+         preClockState, timeoutBaseState),
+       episodes =
+         AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(
+           preClockState, state)
+           \cup
+         AsyncTimeoutRecoveryNewEpisodesAfterTransition(
+           preClockState, timeoutBaseState)
+PROVE \A episode \in episodes:
+        /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+        /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+             episode, context', nodeView', generation', decisions')
+""",
+        "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary": r"""
+ASSUME NEW state, NEW episodes,
+       \A episode \in state.timeoutRecoveryEpisodes:
+         /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+         /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+              episode, context', nodeView', generation', decisions'),
+       episodes =
+         {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(state, episode):
+            episode \in state.timeoutRecoveryEpisodes}
+PROVE \A episode \in episodes:
+        /\ AsyncTimeoutRecoveryMutationFrameShape(episode)
+        /\ AsyncTimeoutRecoveryEpisodeBoundaryIn(
+             episode, context', nodeView', generation', decisions')
+""",
+        "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet": r"""
+AsyncControlServiceStateTypeInvariant
+  => asyncControlServiceState.timeoutRecoveryEpisodes
+       \subseteq AsyncTimeoutRecoveryEpisodeSet
+""",
+        "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet": r"""
+\A state, resetNodes:
+  state.timeoutRecoveryEpisodes
+    \subseteq AsyncTimeoutRecoveryEpisodeSet
+    => (AsyncControlServiceStateAfterReset(state, resetNodes))
+         .timeoutRecoveryEpisodes
+         \subseteq AsyncTimeoutRecoveryEpisodeSet
+""",
+        "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary": r"""
+ASSUME AsyncControlServiceStateTypeInvariant,
+       AsyncControlServiceSlotTransition
+PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+""",
+        "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant": r"""
+ASSUME AsyncControlServiceStateTypeInvariant,
+       AsyncNext
+PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+""",
+    }
+    for symbol, expected in boundary_exact_statements.items():
+        require_boundary_exact_statement(symbol, expected)
+
+    boundary_required_proof_dependencies = {
+        "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame": (
+            "AsyncTimeoutRecoveryMutationFrameShape",
+            "AsyncTimeoutRecoveryBoundaryFrameShape",
+        ),
+        "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape": (
+            "AsyncTimeoutRecoveryMutationFrameShape",
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "AsyncTimeoutRecoveryEpisode",
+        ),
+        "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape": (
+            "AsyncTimeoutRecoveryEpisodeSet",
+            "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape",
+        ),
+        "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary": (
+            "AsyncTimeoutRecoveryMutationFrameShape",
+            "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame",
+            "AsyncTimeoutRecoveryEpisodeBoundaryIn",
+            "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor",
+            "FunctionalReplacePreservesDomain",
+            "FunctionalUpdateAwayFromKey",
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary": (
+            "AsyncTimeoutRecoveryEpisodeAfterTransition",
+            "AsyncTimeoutRecoveryExistingCaptureClearsThisStep",
+            "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+            "FunctionalReplacePreservesDomain",
+            "FunctionalReplaceUpdateAtKey",
+            "FunctionalUpdateAwayFromKey",
+        ),
+        "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary": (
+            "AsyncTimeoutRecoveryRetainedEpisodesAfterTransition",
+            "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape",
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryEpisodeRetiresThisStep",
+            "AsyncNodeHasDecisionIn",
+        ),
+        "AsyncTimeoutRecoveryNewEpisodeDecomposition": (
+            "AsyncTimeoutRecoveryNewEpisodeIn",
+            "AsyncTimeoutRecoveryNewBaseEpisodeIn",
+            "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn",
+            "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor",
+        ),
+        "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary": (
+            "AsyncTimeoutRecoveryMutationFrameShape",
+            "AsyncTimeoutRecoveryNewBaseEpisodeIn",
+            "AsyncTimeoutRecoveryEpisode",
+            "AsyncTimeoutRecoveryEpisodeKey",
+            "AsyncTimeoutRecoveryEpisodeCreationReadyIn",
+            "AsyncTimeoutRecoveryEpisodeBoundaryIn",
+        ),
+        "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary": (
+            "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary",
+            "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryNewEpisodeDecomposition",
+        ),
+        "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary": (
+            "AsyncTimeoutRecoveryNewEpisodesAfterTransition",
+            "AsyncTimeoutRecoveryTransitionGateIn",
+            "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+        ),
+        "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary": (
+            "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary",
+            "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary",
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary": (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            "AsyncTimeoutRecoveryMutationFrameShape",
+            "AsyncTimeoutRecoveryEpisodeBoundaryIn",
+            "FunctionalReplacePreservesDomain",
+            "FunctionalUpdateAwayFromKey",
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary": (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+        ),
+        "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet": (
+            "AsyncControlServiceStateTypeInvariant",
+            "AsyncTimeoutRecoveryEpisodeTypeInvariantIn",
+            "AsyncTimeoutRecoveryEpisodesIn",
+        ),
+        "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet": (
+            "AsyncControlServiceStateAfterReset",
+            "FS_Subset",
+        ),
+        "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary": (
+            "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet",
+            "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet",
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary",
+            "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "AsyncTimeoutRecoveryEpisodesIn",
+            "AsyncNodeHasDecisionIn",
+        ),
+        "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant": (
+            "AsyncNext",
+            "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+        ),
+    }
+    boundary_exact_proof_dependency_counts = {
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryExistingCaptureClearsThisStep",
+        ): 2,
+    }
+    for symbol, dependencies in boundary_required_proof_dependencies.items():
+        extracted = boundary_theorem_bodies.get(symbol)
+        if extracted is None:
+            continue
+        body, line = extracted
+        parts = THEOREM_PROOF_MARKER_RE.split(body, maxsplit=1)
+        proof = parts[1] if len(parts) == 2 else ""
+        missing = []
+        for dependency in dependencies:
+            expected_count = boundary_exact_proof_dependency_counts.get(
+                (symbol, dependency)
+            )
+            if expected_count is None:
+                if not _tla_dependency_present(proof, dependency):
+                    missing.append(dependency)
+                continue
+            observed_count = len(
+                re.findall(rf"\b{re.escape(dependency)}\b", proof)
+            )
+            if observed_count != expected_count:
+                missing.append(
+                    f"{dependency} (expected {expected_count}, "
+                    f"found {observed_count})"
+                )
+        if missing:
+            errors.append(
+                f"{boundary_path}:{line}: timeout-recovery boundary theorem "
+                f"{symbol} must retain the exact reviewed proof dependencies; "
+                f"missing={missing!r}"
+            )
+
+    producer_bridge_exact_statements = {
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue": r"""
+\A node \in ValidatorIds:
+  /\ AsyncTypeInvariant
+  /\ asyncServeProducerEpisodeDue[node]
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+  /\ AsyncNetworkStep
+  => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+""",
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue": r"""
+\A node \in ValidatorIds:
+  /\ AsyncTypeInvariant
+  /\ asyncServeProducerEpisodeDue[node]
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+  /\ AsyncNext
+  => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+""",
+        "AsyncNextPreservesServeProducerEpisodeTypeInvariant": r"""
+/\ AsyncServeProducerEpisodeTypeInvariant
+/\ AsyncNext
+=> AsyncServeProducerEpisodeTypeInvariant'
+""",
+        "AsyncNextPreservesServeProducerEpisodeInvariants": r"""
+/\ AsyncStrongTypeInvariant
+/\ AsyncNext
+=> /\ AsyncServeProducerEpisodeTypeInvariant'
+   /\ AsyncServeProducerEpisodeOwnershipInvariant'
+""",
+    }
+    producer_bridge_required_proof_dependencies = {
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
+            "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+            "PopSelectedIngressDoesNotCreateServeIngressOwners",
+            "HiddenIngressAdmissionPreservesOtherNodeOwners",
+            "ServeIngressAdmissionStutterPreservesOwnerIdentities",
+            "AcceptOrReserveExactServeIngressVia",
+            "ReserveExactServeCapacityVia",
+            "AdvanceExactServeCapacityVia",
+            "AsyncServeLifecycleAdmissionRequired",
+            "ExactServeTransportAdmissionCanAdvanceVia",
+        ),
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "RunnerStepPreservesEmptyServeIngressOwners",
+            "FaultStepPreservesEmptyServeIngressOwners",
+            "PopSelectedIngressDoesNotCreateServeIngressOwners",
+            "ServeReceiverCloseRollbackDoesNotCreateIngressOwners",
+            "HiddenIngressAdmissionPreservesOtherNodeOwners",
+            "ServeIngressAdmissionStutterPreservesOwnerIdentities",
+            "AsyncNext",
+        ),
+        "AsyncNextPreservesServeProducerEpisodeTypeInvariant": (
+            "AsyncNext",
+            "AsyncServeProducerEpisodeTransition",
+            "FunctionValueHasCodomain",
+        ),
+        "AsyncNextPreservesServeProducerEpisodeInvariants": (
+            "AsyncStrongTypeProjectsAsyncType",
+            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+            "AsyncNextPreservesSchedulerType",
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "AsyncServeProducerEpisodeFinalRetirementStep",
+            "AsyncServeProducerEpisodeTransition",
+            "AsyncServeIngressAdmissionOwned",
+        ),
+    }
+    for symbol, expected in producer_bridge_exact_statements.items():
+        extracted = boundary_theorem_bodies.get(symbol)
+        if extracted is None:
+            continue
+        body, line = extracted
+        statement = _tla_statement_without_proof(body)
+        expected_statement = " ".join(expected.split())
+        if statement != expected_statement:
+            errors.append(
+                f"{boundary_path}:{line}: producer-episode bridge theorem "
+                f"{symbol} must retain the exact reviewed statement; "
+                f"found {statement!r}"
+            )
+    for symbol, dependencies in (
+        producer_bridge_required_proof_dependencies.items()
+    ):
+        extracted = boundary_theorem_bodies.get(symbol)
+        if extracted is None:
+            continue
+        body, line = extracted
+        parts = THEOREM_PROOF_MARKER_RE.split(body, maxsplit=1)
+        proof = parts[1] if len(parts) == 2 else ""
+        missing = [
+            dependency
+            for dependency in dependencies
+            if not _tla_dependency_present(proof, dependency)
+        ]
+        if missing:
+            errors.append(
+                f"{boundary_path}:{line}: producer-episode bridge theorem "
+                f"{symbol} must retain the exact reviewed proof dependencies; "
+                f"missing={missing!r}"
             )
 
     def require_formal_exact(
@@ -1838,6 +2518,44 @@ IF item.kind = "TimeoutVote" THEN NoSubject ELSE DeliverySubject(item)
  phase: {"TimeoutVote"}]
 """,
         "TimeoutVote episode key set with only the normalized NoSubject",
+    )
+    require_formal_exact(
+        "AsyncTimeoutRecoveryEpisodeParameterSet",
+        r"""
+[node: ValidatorIds,
+ timeoutOwnerOrigin: AsyncCandidateCausalOriginSet,
+ generation: Generations,
+ timeoutOwnerOrdinal: Nat \ {0},
+ physicalCut: Nat \ {0},
+ preFrozenRetransmitOrdinal: Nat,
+ preFrozenRetransmitPhysicalCut: Nat,
+ admittedTimeoutVoteOwners:
+   SUBSET AsyncTimeoutRecoveryVoteOwnerSet]
+""",
+        "exact eight-field timeout-recovery episode parameter universe",
+    )
+    require_formal_exact(
+        "AsyncTimeoutRecoveryEpisodeFromParameters",
+        r"""
+AsyncTimeoutRecoveryEpisode(
+  parameters.node,
+  parameters.timeoutOwnerOrigin,
+  parameters.generation,
+  parameters.timeoutOwnerOrdinal,
+  parameters.physicalCut,
+  parameters.preFrozenRetransmitOrdinal,
+  parameters.preFrozenRetransmitPhysicalCut,
+  parameters.admittedTimeoutVoteOwners)
+""",
+        "exact ordered eight-field timeout-recovery episode constructor projection",
+    )
+    require_formal_exact(
+        "AsyncTimeoutRecoveryEpisodeSet",
+        r"""
+{AsyncTimeoutRecoveryEpisodeFromParameters(parameters):
+   parameters \in AsyncTimeoutRecoveryEpisodeParameterSet}
+""",
+        "exact one-binder timeout-recovery episode image",
     )
     require_formal_exact(
         "AsyncTimeoutRecoveryVoteOwnerSlot",

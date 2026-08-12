@@ -4295,6 +4295,39 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "IndexedHistoricalFixedClockNonPacketServiceProperty"
     ),
     (
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
+    ): (
+        "\\A specification: "
+        "/\\ (specification => "
+        "[]AsyncCandidateProducerContinuationExternalCoverageInvariant) "
+        "/\\ (specification => "
+        "[]AsyncCandidateProducerContinuationLocalReplayCapacityInvariant) "
+        "/\\ HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual( "
+        "specification) => "
+        "/\\ HistoricalDiscoveryFixedClockPacketServiceProperty( "
+        "specification) "
+        "/\\ HistoricalDiscoveryCandidateServeIdentityBudgetProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+    ): (
+        "IndexedChainSpec => "
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties"
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedPacketServiceResidualProvidesPhysicalKernels",
+    ): (
+        "IndexedHistoricalFixedClockPacketCorridorTemporalResidual => "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "IndexedHistoricalTransport(initialContext)! "
+        "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties( "
+        "IndexedChainSpec)"
+    ),
+    (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface",
     ): (

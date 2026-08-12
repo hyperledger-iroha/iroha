@@ -1262,6 +1262,29 @@ Ok(command_minimum)
     require_item_sequence(
         "runtime",
         runtime_items,
+        "minimum_runnable_lifecycle_ordinal",
+        """
+if let Some(evidence) = completion_evidence {
+    if !evidence.validate_exact()
+        || !self
+            .ingress
+            .lifecycle_ordinals
+            .recognizes_minted(evidence.lifecycle_ordinal())
+            .map_err(|_| EnqueueError::FailClosed)?
+    {
+        return Err(EnqueueError::FailClosed);
+    }
+    let lifecycle_ordinal = evidence.lifecycle_ordinal();
+    minimum =
+        Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));
+}
+""",
+        "serviced-candidate runnable selection must admit only exact minted "
+        "completion evidence into the least-owner minimum",
+    )
+    require_item_sequence(
+        "runtime",
+        runtime_items,
         "dormant_local_fifo_replacement",
         """
 self.dormant_local_fifo_replacement_inner(command, false)
@@ -1314,6 +1337,43 @@ self.finish_dispatched_step(
 )
 """,
         "runtime step must transfer the exact parent statement and handoff into shared completion",
+    )
+    require_item_order(
+        "runtime",
+        runtime_items,
+        "finish_dispatched_step",
+        (
+            """
+self.retain_effect_ownership(
+    effect_source,
+    Some(&effect_parent),
+    effect_parent_statement.as_ref(),
+    &effects,
+)
+""",
+            """
+if token.identity().admission_ordinal() != effect_parent.lifecycle_ordinal()
+    || token.identity().causal_lifecycle_key()
+        != effect_parent.causal_origin().lifecycle_key
+{
+    self.latch_fail_closed("producer handoff changed its selected lifecycle identity");
+    return Err(RuntimeError::FailClosed);
+}
+""",
+            "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
+            "self.driver.acknowledge_producer_handoff(token, evidence)",
+            """
+self.complete_driver_dispatch_leader_wire_owners(
+    &effect_parent,
+    retained_deferred_ingress,
+    completed_producer_handoff,
+)
+""",
+            "self.observe_effects(now, &effects)",
+        ),
+        "live dispatch completion must retain successors, acknowledge the exact producer, "
+        "terminalize the selected parent before adapter-side orphans, and publish every "
+        "terminal before observing effects",
     )
     require_item_order(
         "runtime",

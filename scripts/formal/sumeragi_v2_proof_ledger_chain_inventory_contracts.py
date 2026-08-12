@@ -3596,6 +3596,7 @@ def _production_liveness_release_inventory_guard_errors(
         "sumeragi::serviced_candidate_store::tests",
         "sumeragi::v2_effects::tests",
         "sumeragi::v2::tests",
+        "sumeragi::v2_core::network_simulation",
         "sumeragi::v2_runtime::tests",
         "merge_sidecar::tests",
         "state::tests",

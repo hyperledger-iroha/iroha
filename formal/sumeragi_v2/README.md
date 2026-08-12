@@ -1345,8 +1345,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 849 named tests
-across 40 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 861 named tests
+across 41 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1451,9 +1451,19 @@ restart selector with its two distinct raw/coalesced crash boundaries and
 restoring two implemented certified-ingress regressions adds three real rows,
 bringing the inventory to the 829-test checkpoint. Autonomous-lifecycle
 terminal-outcome and startup-recovery coverage plus final source reconciliation
-bring the current inventory to 849 tests across 40 modules.
+bring the 837-test checkpoint across 39 modules. Ten unignored deterministic
+network simulations now cover lossy/offline leaders, symmetric and asymmetric
+partitions, current-owner QC redelivery, leader crashes, bounded corrupted-chunk
+recovery, WAL-intent replay, and divergent Taira views, bringing the inventory
+to the 847-test checkpoint across 40 modules. The source-bound terminal-sweep
+partition regression brings the 848-test checkpoint. The late passive-Fetch
+completion and one-shot completed-Serve reopening regressions bring the
+850-test checkpoint. Seven Native AMX finality-bound merge-projection
+regressions bring the 857-test checkpoint across 40 modules. Three Kura recovery
+regressions and the governance-unlock audit bring the current
+inventory to 861 tests across 41 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 87 legs. The
+corridor contains 89 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1526,7 +1536,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`15f837d911644b557c5a36064a1cff9c512f0cf2b120f5cc6fb21e7cfa530d83`.
+`8c39cb3717a9cab79e4d442e8179030c3af5af74947864d45838b80864290d2f`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1563,15 +1573,16 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 87 legs, including the autonomous
-lifecycle-recovery module and separate exact
+the complete pre-network corridor now spans 89 legs, including the dedicated
+ten-test V2 core network-simulation leg, the governance-unlock audit module, the
+autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
 command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those forty modules or eighty-seven legs. The
+geometry tests as part of those forty-one modules or eighty-nine legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1701,8 +1712,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 87 pre-network legs and the exact
-849-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 89 pre-network legs and the exact
+861-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

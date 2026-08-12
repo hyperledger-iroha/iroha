@@ -1639,12 +1639,8 @@ mod tests {
             producer_key.private_key(),
         )
         .expect("construct valid autonomous candidate payload");
-        crate::lane_consensus::autonomous_lane_payload_envelope(
-            &payload,
-            network_id,
-            context.epoch,
-        )
-        .expect("construct valid autonomous candidate envelope")
+        crate::lane_consensus::autonomous_lane_payload_envelope(&payload, network_id, context.epoch)
+            .expect("construct valid autonomous candidate envelope")
     }
 
     fn snapshot_parent_fixture() -> (

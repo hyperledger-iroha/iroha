@@ -53,12 +53,20 @@ work is limited to:
   canaries before reopening public traffic; source tests or a partial cohort
   replacement do not satisfy this gate.
 - Finish source-seal, proof, and release validation for the selected-Serve
-  Taira `missing_proposal` repair. The focused composed regression now drives a
-  completed predecessor claim, local absolute timeout, two responsive remote
-  TimeoutVotes, grouped three-signer TC, and `EnterView`; the post-retirement
-  queue handoff also blocks fresh Serve replenishment until one ordinary
-  producer turn runs. The remaining closure is the digest-refreshed mutation
-  matrix, strict non-promotional proof pass, complete four-peer release build,
+  Taira `missing_proposal` repair. Live evidence showed a responsive pacemaker
+  rotating views while proposal scheduling stayed behind one selected Serve:
+  a passive Fetch could complete after its predecessor episode was sealed and
+  re-enter `BodyAvailable` under an older ordinal which the completed episode
+  could no longer service. The process-local repair now issues one exact
+  target/predecessor/episode witness on each real `no older -> older`
+  transition, coalesces repeated observations, rejects gaps or evidence drift,
+  and reopens `Complete` once for the next witnessed prefix. Passive Fetch
+  remains outside the runnable minimum, so an unresponsive source cannot block
+  the pacemaker. The earlier focused regression still drives local timeout,
+  responsive remote TimeoutVotes, grouped TC, and `EnterView`; the final queue
+  handoff still blocks fresh Serve replenishment until one ordinary producer
+  turn runs. The remaining closure is the digest-refreshed mutation matrix,
+  strict non-promotional proof pass, complete four-peer release build,
   deployment, and observed Taira height advancement. Keep exact semantic
   retries on their immutable owner, reject owner replacement before refinement,
   and retain only the separately typed monotone Fetch/Store/Validate authority
@@ -672,8 +680,8 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
-On the current tree, the independent 86-leg release inventory contract is
-sealed at 837 production tests across 39 modules, 524 G-UNIT rows, and four
+On the current tree, the independent 87-leg release inventory contract is
+sealed at 857 production tests across 40 modules, 524 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -717,14 +725,15 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `837/837` production tests across 39
+The static release inventory now matches `857/857` production tests across 40
 modules and `524/524` focused `G-UNIT` entries. Its canonical 525-line TSV has
 SHA-256
 `bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
 The separate canonical production module/test TSV has SHA-256
-`7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf`;
-the six new rows bind crash-safe autonomous lifecycle terminal completion and
-startup reconciliation before lane-work activation.
+`090d4aa1d2ed4be9a55f4d6f265c51896034077f2f1bc7e33d80bba5cd440afd`;
+the newest rows bind crash-safe autonomous lifecycle terminal completion,
+startup reconciliation before lane-work activation, ten deterministic network
+simulations, and the exact pre-mutation terminal-sweep partition.
 The 318-entry core group additionally source-seals grouped Native prevote
 budget rejection before Kura/WSV mutation, historical source-bundle
 authentication, crash-safe latest-index and prune-V2 recovery, cross-route
@@ -767,7 +776,7 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_no_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 837-test production inventory, 524-test G-UNIT source inventory, 12
+exact 857-test production inventory, 524-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
@@ -814,8 +823,8 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 837-test,
-  39-module production inventory legs and archived G-UNIT execution.
+  mutations before promotion, then finish the remaining 857-test,
+  40-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.

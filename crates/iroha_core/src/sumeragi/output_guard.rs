@@ -202,6 +202,17 @@ impl ConsensusOutputGuard {
 }
 
 impl<'a> ConsensusOutputPermit<'a> {
+    /// Return whether this live permit belongs to the exact guard.
+    ///
+    /// Borrow-bound prepared transactions use this immediately before their
+    /// infallible mutation tail. A foreign or already-consumed permit cannot
+    /// authorize output. Restart activation which begins after acquisition
+    /// does not retroactively revoke this permit: activation drains every
+    /// operation which already crossed the open gate.
+    pub(crate) fn authorizes(&self, output_guard: &ConsensusOutputGuard) -> bool {
+        std::ptr::eq(self.output_guard, output_guard) && self.armed && self.read_guard.is_some()
+    }
+
     fn take_for_explicit_activation(&mut self) -> RwLockReadGuard<'a, ()> {
         self.armed = false;
         self.read_guard
@@ -454,6 +465,24 @@ mod tests {
 
         assert!(!guard.restart_required());
         assert!(guard.acquire().is_some());
+    }
+
+    #[test]
+    fn permit_authorizes_only_its_exact_guard_for_its_full_lifetime() {
+        let guard = ConsensusOutputGuard::isolated();
+        let foreign = ConsensusOutputGuard::isolated();
+        let permit = guard.acquire().expect("admit exact output permit");
+
+        assert!(permit.authorizes(&guard));
+        assert!(!permit.authorizes(&foreign));
+        guard.close_admission_for_restart();
+        assert!(
+            permit.authorizes(&guard),
+            "restart drains rather than revokes already-admitted output"
+        );
+        assert!(guard.acquire().is_none());
+        drop(permit);
+        assert!(guard.restart_required());
     }
 
     #[test]

@@ -101,7 +101,7 @@ fn same_tag_higher_lock_retires_all_local_proposal_owners() {
     let mut state = LocalProposalState {
         attempted: Some(owner_a),
         submitted: Some((owner_a, subject_a)),
-        heartbeat_only: Some(owner_a),
+        non_empty_retry: Some(owner_a),
         candidate_work_wait: Some(CandidateWorkWait {
             owner: owner_a,
             started_at: now,
@@ -119,13 +119,13 @@ fn same_tag_higher_lock_retires_all_local_proposal_owners() {
 
     assert!(state.attempted.is_none());
     assert!(state.submitted.is_none());
-    assert!(state.heartbeat_only.is_none());
+    assert!(state.non_empty_retry.is_none());
     assert!(state.candidate_work_wait.is_none());
     assert!(state.pending_events.is_none());
 }
 
 #[test]
-fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
+fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
     let (context, _) = context();
     let owner = proposal_owner(
         &context,
@@ -138,7 +138,7 @@ fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
     let mut state = LocalProposalState::default();
 
     state.defer_candidate_work(owner, started_at, wait_bound);
-    assert_eq!(state.heartbeat_only, None);
+    assert_eq!(state.non_empty_retry, None);
     assert!(
         state
             .candidate_work_wait
@@ -149,21 +149,29 @@ fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
         .checked_add(wait_bound)
         .expect("fixture wait deadline is representable");
     state.defer_candidate_work(owner, expired_at, wait_bound);
-    assert_eq!(state.heartbeat_only, Some(owner));
+    assert_eq!(state.non_empty_retry, Some(owner));
     assert!(state.candidate_work_wait.is_none());
 
     state.defer_candidate_work(owner, expired_at, wait_bound);
     assert_eq!(
-        state.heartbeat_only,
+        state.non_empty_retry,
         Some(owner),
-        "repeated timeout handling must never re-arm ordinary candidate work"
+        "repeated timeout handling must retain the same single retry"
     );
     assert!(state.candidate_work_wait.is_none());
 
-    claim_certified_execution_proposal_turn(&mut state, true);
-    assert_eq!(
-        state.heartbeat_only, None,
-        "a certified execution carrier must supersede stale heartbeat classification"
+    assert!(state.retire_unsubmitted_non_empty_retry(owner));
+    assert_eq!(state.non_empty_retry, None);
+    state.defer_candidate_work(owner, expired_at, wait_bound);
+    assert!(
+        state.candidate_work_wait.is_some_and(|wait| {
+            wait.owner == owner && wait.started_at == expired_at && wait.next_retry > expired_at
+        }),
+        "an unsubmitted retry must cross a fresh bounded observation window"
+    );
+    assert!(
+        !state.retire_unsubmitted_non_empty_retry(owner),
+        "a consumed retry cannot be retired twice"
     );
 }
 
@@ -249,7 +257,7 @@ fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
 }
 
 #[test]
-fn late_old_rejection_cannot_arm_heartbeat_for_replacement_lock() {
+fn late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 5, Generation::new(12));
     let subject_a = proposal_subject(b"rejected old A");
@@ -270,19 +278,19 @@ fn late_old_rejection_cannot_arm_heartbeat_for_replacement_lock() {
         state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
         LocalValidationDisposition::Ignored
     );
-    assert_eq!(state.heartbeat_only, None);
+    assert_eq!(state.non_empty_retry, None);
 
     state.submitted = Some((owner_b, subject_b));
     assert_eq!(
         state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-        LocalValidationDisposition::RetryHeartbeat
+        LocalValidationDisposition::RetryNonEmpty
     );
-    assert_eq!(state.heartbeat_only, Some(owner_b));
+    assert_eq!(state.non_empty_retry, Some(owner_b));
 
     state.submitted = Some((owner_b, subject_b));
     assert_eq!(
         state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-        LocalValidationDisposition::FatalHeartbeat
+        LocalValidationDisposition::FatalNonEmpty
     );
 }
 
@@ -296,7 +304,7 @@ fn decision_retires_local_work_before_prepared_delivery() {
     let mut state = LocalProposalState {
         attempted: Some(active),
         submitted: Some((active, subject)),
-        heartbeat_only: None,
+        non_empty_retry: None,
         candidate_work_wait: None,
         pending_events: Some(PendingLocalEvents {
             owner: active,
@@ -423,21 +431,24 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         height: context.height,
         view: tag.view(),
     };
+    let body = b"replayed proposal payload";
     let subject = wire::BlockSubject {
         parent_block_hash: None,
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replayed proposal block")),
-        payload_hash: Hash::new(b"replayed proposal payload"),
+        payload_hash: Hash::new(body),
     };
-    let manifest = wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
-        .expect("fixture manifest");
+    let manifest = encode_payload(&context, round, subject, body)
+        .expect("encode replayed proposal fixture payload")
+        .manifest()
+        .clone();
     let proposal = wire::Proposal {
         round,
         proposer: context.leader(round.view),
         subject,
         manifest,
-        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
-            certificate: None,
-        }),
+        justification: wire::ProposalJustification::ParentCommit(
+            wire::ParentCommitJustification { certificate: None },
+        ),
         signature: Vec::new(),
     };
     let effects = [
@@ -585,14 +596,10 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
     );
     assert!(v2_payload_is_terminal_reducer_control(&response));
 
-    let manifest = wire::PayloadManifest::derive(
-        &context,
-        round,
-        subject,
-        u64::try_from(body.len()).expect("fixture body length fits u64"),
-        std::slice::from_ref(&body),
-    )
-    .expect("terminal body manifest");
+    let manifest = encode_payload(&context, round, subject, &body)
+        .expect("encode terminal body fixture payload")
+        .manifest()
+        .clone();
     assert!(!v2_payload_is_terminal_reducer_control(
         &wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
     ));
@@ -885,11 +892,13 @@ fn complete_tip_recovery_uses_the_same_live_successor_boundary() {
             Hash::new(b"foreign recovered successor context"),
         ));
     let predecessor = test_predecessor(&parent_context, b"complete tip recovery");
-    let foreign_activation =
-        PendingSuccessorActivation::recovered(RecoveredSuccessorActivationAuthority::CompleteTip(
-            test_successor_authority(predecessor, foreign_context_id),
-        ))
-        .expect("authenticate complete-tip retry lifecycle");
+    let foreign_activation = PendingSuccessorActivation::recovered(
+        RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
+            predecessor,
+            foreign_context_id,
+        )),
+    )
+    .expect("authenticate complete-tip retry lifecycle");
     assert!(
         open_ingress_for_active_height(
             output_guard.as_ref(),
@@ -906,11 +915,13 @@ fn complete_tip_recovery_uses_the_same_live_successor_boundary() {
         "rejected recovery must not publish a successor"
     );
 
-    let activation =
-        PendingSuccessorActivation::recovered(RecoveredSuccessorActivationAuthority::CompleteTip(
-            test_successor_authority(predecessor, successor.height_context_id),
-        ))
-        .expect("authenticate complete-tip retry lifecycle");
+    let activation = PendingSuccessorActivation::recovered(
+        RecoveredSuccessorActivationAuthority::CompleteTip(test_successor_authority(
+            predecessor,
+            successor.height_context_id,
+        )),
+    )
+    .expect("authenticate complete-tip retry lifecycle");
     open_ingress_for_active_height(
         output_guard.as_ref(),
         &ready,

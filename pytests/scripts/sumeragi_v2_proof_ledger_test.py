@@ -80,6 +80,76 @@ def _execute_test_component(filename: str) -> None:
     exec(compile(source, str(path), "exec"), globals())
 
 
+def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
+    """Reject lexical test shadows and ownership drift across case components."""
+
+    expected_component_providers = {
+        "test_async_source_fidelity_pins_validator_progress_capacity":
+            "sumeragi_v2_proof_ledger_async_source_cases.py",
+        "test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry":
+            "sumeragi_v2_proof_ledger_async_source_cases.py",
+        "test_leader_wire_physical_ingress_rejects_semantic_mutations":
+            "sumeragi_v2_proof_ledger_async_source_cases.py",
+        "test_exact_serve_runtime_episode_rejects_semantic_mutations":
+            "sumeragi_v2_proof_ledger_async_source_cases.py",
+        "test_local_runner_service_contract_rejects_production_loop_mutations":
+            "sumeragi_v2_proof_ledger_async_fairness_cases.py",
+        "test_async_source_fidelity_rejects_reviewed_theorem_omission":
+            "sumeragi_v2_proof_ledger_async_fairness_cases.py",
+        "test_exact_output_production_source_mutations_fail_closed":
+            "sumeragi_v2_proof_ledger_exact_output_cases.py",
+    }
+
+    def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
+        providers: dict[str, list[str]] = {}
+        for path, source in sources:
+            tree = ast.parse(source, filename=str(path))
+            for node in tree.body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if not node.name.startswith("test_"):
+                    continue
+                providers.setdefault(node.name, []).append(path.name)
+
+        errors = [
+            f"test provider {name} is not unique: {locations!r}"
+            for name, locations in sorted(providers.items())
+            if len(locations) != 1
+        ]
+        for name, expected_provider in expected_component_providers.items():
+            if providers.get(name) != [expected_provider]:
+                errors.append(
+                    f"test provider {name} must be owned by "
+                    f"{expected_provider}; found {providers.get(name)!r}"
+                )
+        return errors
+
+    main_path = Path(__file__)
+    canonical_sources = (
+        (main_path, main_path.read_text(encoding="utf-8")),
+        *(
+            (path, path.read_text(encoding="utf-8"))
+            for path in (
+                main_path.with_name(filename)
+                for filename in PROOF_LEDGER_TEST_COMPONENT_FILES
+            )
+        ),
+    )
+    assert provider_errors(canonical_sources) == []
+
+    target = "test_exact_output_production_source_mutations_fail_closed"
+    shadow = f"\n\ndef {target}():\n    pass\n"
+    mutated_sources = (
+        (canonical_sources[0][0], canonical_sources[0][1] + shadow),
+        *canonical_sources[1:],
+    )
+    errors = provider_errors(mutated_sources)
+    assert any(
+        error.startswith(f"test provider {target} is not unique:")
+        for error in errors
+    ), errors
+
+
 def checker_source_paths() -> tuple[Path, ...]:
     """Return the canonical checker and its exact lexical component inventory."""
 
@@ -87,6 +157,59 @@ def checker_source_paths() -> tuple[Path, ...]:
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
     assert len(filenames) == len(set(filenames)) == 25
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
+
+
+def test_release_inventory_checker_has_one_component_owned_provider() -> None:
+    """Reject a monolithic shadow of the release-inventory component."""
+
+    component_name = "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
+    expected_provider_name = component_name
+
+    def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
+        providers = [
+            (path.name, node.lineno)
+            for path, source in sources
+            for node in ast.parse(source, filename=str(path)).body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_production_liveness_release_inventory_errors"
+        ]
+        if len(providers) == 1 and providers[0][0] == expected_provider_name:
+            return []
+        return [
+            "release-inventory checker provider must be unique and component-owned; "
+            f"found {providers!r}"
+        ]
+
+    canonical_sources = tuple(
+        (path, path.read_text(encoding="utf-8")) for path in checker_source_paths()
+    )
+    assert provider_errors(canonical_sources) == []
+
+    shadow = (
+        "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
+        "    return []\n"
+    )
+    mutated_sources = tuple(
+        (path, source + shadow if path == SCRIPT else source)
+        for path, source in canonical_sources
+    )
+    errors = provider_errors(mutated_sources)
+    component_provider = next(
+        provider
+        for provider in [
+            (path.name, node.lineno)
+            for path, source in canonical_sources
+            for node in ast.parse(source, filename=str(path)).body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_production_liveness_release_inventory_errors"
+        ]
+        if provider[0] == expected_provider_name
+    )
+    assert errors == [
+        "release-inventory checker provider must be unique and component-owned; "
+        f"found [({SCRIPT.name!r}, "
+        f"{len(canonical_sources[0][1].splitlines()) + 3}), {component_provider!r}]"
+    ]
 
 
 def test_checker_remains_python39_compatible() -> None:
@@ -119,6 +242,7 @@ def copy_transport_hardening_fixture(tmp_path: Path) -> None:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
 
 
 def copy_process_lifetime_worker_launch_fixture(tmp_path: Path) -> Path:
@@ -429,6 +553,10 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
         Path("formal/sumeragi_v2/SumeragiV2AsyncNetwork.tla"),
         Path(
             "formal/sumeragi_v2/"
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+        ),
+        Path(
+            "formal/sumeragi_v2/"
             "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
         ),
         Path(
@@ -442,79 +570,98 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
     return tmp_path / "formal" / "sumeragi_v2"
 
 
-def approve_timeout_vote_episode_fixture_seals(
-    module, repo_root: Path, formal_dir: Path
+def rebind_timeout_vote_episode_rust_item_seal(
+    module,
+    repo_root: Path,
+    relative: Path,
+    item_name: str,
 ) -> None:
-    """Bind test-local seals so mutations must fail their semantic contracts."""
+    """Rebind only the deliberately mutated timeout-episode Rust item."""
 
-    role_paths = {
-        "ingress": repo_root / "crates/iroha_core/src/sumeragi/mod.rs",
-        "runner": repo_root / "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "runtime": repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+    relative = Path(relative)
+    path = repo_root / relative
+    items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1, (relative, item_name)
+    digest = module._rust_item_token_sha256(items[0])
+    rebound: list[str] = []
+    role_relatives = {
+        "ingress": Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        "runner": Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        "runtime": Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
     }
     for key in module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256:
         role, qualified_name = key.split("::", 1)
-        item_name = qualified_name.rsplit("::", 1)[-1]
-        source = role_paths[role].read_text(encoding="utf-8")
-        items = module.rust_items(source, item_name)
-        assert len(items) == 1, key
-        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = (
-            module._rust_item_token_sha256(items[0])
-        )
+        if (
+            role_relatives[role] == relative
+            and qualified_name.rsplit("::", 1)[-1] == item_name
+        ):
+            module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = digest
+            rebound.append(key)
 
-    regression_groups = (
+    for seals, group_relative in (
         (
             module._TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256,
-            role_paths["runtime"],
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
         ),
         (
             module._TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256,
-            role_paths["ingress"],
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
         ),
         (
             module._TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256,
-            repo_root / "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         ),
-    )
-    for seals, path in regression_groups:
-        source = path.read_text(encoding="utf-8")
-        for name in seals:
-            items = module.rust_items(source, name)
-            assert len(items) == 1, name
-            seals[name] = module._rust_item_token_sha256(items[0])
+    ):
+        if group_relative == relative and item_name in seals:
+            seals[item_name] = digest
+            rebound.append(item_name)
+    assert rebound, (relative, item_name)
 
-    for filename, formal_seals in (
-        module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256.items()
-    ):
-        formal_path = formal_dir / filename
-        formal_source = formal_path.read_text(encoding="utf-8")
-        for symbol in formal_seals:
-            extracted = module._top_level_operator_body(
-                formal_source,
-                symbol,
-                preserve_string_contents=True,
-            )
-            assert extracted is not None, symbol
-            body, _ = extracted
-            formal_seals[symbol] = hashlib.sha256(
-                " ".join(body.split()).encode("utf-8")
-            ).hexdigest()
-    for filename, theorem_seals in (
-        module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256.items()
-    ):
-        formal_path = formal_dir / filename
-        formal_source = formal_path.read_text(encoding="utf-8")
-        for symbol in theorem_seals:
-            extracted = module._top_level_theorem_body(
-                formal_source,
-                symbol,
-                preserve_string_contents=True,
-            )
-            assert extracted is not None, symbol
-            body, _ = extracted
-            theorem_seals[symbol] = hashlib.sha256(
-                " ".join(body.split()).encode("utf-8")
-            ).hexdigest()
+
+def rebind_timeout_vote_episode_tla_operator_seal(
+    module,
+    formal_dir: Path,
+    filename: str,
+    symbol: str,
+) -> None:
+    """Rebind only the deliberately mutated timeout-episode operator."""
+
+    seals = module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256[filename]
+    assert symbol in seals, (filename, symbol)
+    source = (formal_dir / filename).read_text(encoding="utf-8")
+    extracted = module._top_level_operator_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None, symbol
+    body, _ = extracted
+    seals[symbol] = hashlib.sha256(
+        " ".join(body.split()).encode("utf-8")
+    ).hexdigest()
+
+
+def rebind_timeout_vote_episode_tla_theorem_seal(
+    module,
+    formal_dir: Path,
+    filename: str,
+    symbol: str,
+) -> None:
+    """Rebind only the deliberately mutated timeout-episode theorem."""
+
+    seals = module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[filename]
+    assert symbol in seals, (filename, symbol)
+    source = (formal_dir / filename).read_text(encoding="utf-8")
+    extracted = module._top_level_theorem_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None, symbol
+    body, _ = extracted
+    seals[symbol] = hashlib.sha256(
+        " ".join(body.split()).encode("utf-8")
+    ).hexdigest()
 
 
 def copy_async_source_fidelity_fixture(
@@ -528,6 +675,7 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
         Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
@@ -553,7 +701,9 @@ def copy_async_source_fidelity_fixture(
         Path("scripts/render_taira_validator_bundle.py"),
         Path("scripts/verify_sumeragi_v2.sh"),
         Path("defaults/kagami/iroha3-taira/config.toml"),
+        Path("defaults/kagami/iroha3-taira/genesis.json"),
         Path("configs/soranexus/taira/config.toml"),
+        Path("configs/soranexus/taira/genesis.json"),
         Path("configs/soranexus/taira/README.md"),
     ):
         destination = tmp_path / relative
@@ -1150,6 +1300,10 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "progress-witness-preservation",
             "post-gst-starvation-freedom",
         ),
+        "successor-activation-starvation-freedom": (
+            "epoch-boundary",
+            "async-type-invariant",
+        ),
         "successor-activation-exact-recovery-production-refinement": (
             "epoch-boundary",
             "decision-recovery-across-restart",
@@ -1498,6 +1652,8 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         ("post-gst-deadlock-freedom", "progress-witness-preservation"),
         ("post-gst-deadlock-freedom", "protected-service-rank"),
         ("timeout-view-liveness", "post-gst-deadlock-freedom"),
+        ("successor-activation-starvation-freedom", "epoch-boundary"),
+        ("successor-activation-starvation-freedom", "async-type-invariant"),
     ):
         original_dependent_status = by_id[dependent_id]["status"]
         original_prerequisite_status = by_id[prerequisite_id]["status"]
@@ -1597,6 +1753,8 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         ),
         ("post-gst-deadlock-freedom", "protected-service-rank"),
         ("timeout-view-liveness", "post-gst-deadlock-freedom"),
+        ("successor-activation-starvation-freedom", "epoch-boundary"),
+        ("successor-activation-starvation-freedom", "async-type-invariant"),
     ):
         obligations = copy.deepcopy(module.load_ledger()["obligations"])
         dependent = next(
@@ -2824,7 +2982,7 @@ def test_ingress_claim_binds_materialization_leader_wire_and_candidate_evidence(
     assert effect_call["mutation_authorization_indices"] == [0]
     assert len(
         module._cross_tool_source_item_seal_payload(claim, root_dir=ROOT_DIR)
-    ) == 61
+    ) == 63
 
 
 @pytest.mark.parametrize("mutation", ("missing", "reordered", "weakened_gate"))
@@ -5022,6 +5180,56 @@ def _superseded_progress_witness_legacy_builder_mutations(
         )
 
 
+def test_body_service_runtime_step_source_seal_is_canonical() -> None:
+    """The body-service step seal binds both reviewed retry-latch expressions."""
+
+    module = load_checker()
+    claim = next(
+        claim
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.constant == "ProductionBodyServiceRefinesAsyncFairness"
+    )
+    step_seals = tuple(
+        seal
+        for seal in claim.source_item_seals
+        if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        and seal.item == "step"
+    )
+    assert len(step_seals) == 1
+    step_seal = step_seals[0]
+    assert not step_seal.item_token_sha256.startswith("PENDING")
+    assert len(step_seal.required_expressions) == 2
+
+    source = (ROOT_DIR / step_seal.source).read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, step_seal.item)
+        if item.brace_context == step_seal.brace_context
+    )
+    assert len(items) == 1
+    observed_sha256 = module._rust_sealed_item_token_sha256(items[0])
+    assert step_seal.item_token_sha256 == observed_sha256
+
+    payload_claim = replace(claim, source_item_seals=(step_seal,))
+    assert module._cross_tool_source_item_seal_payload(
+        payload_claim,
+        root_dir=ROOT_DIR,
+    ) == [
+        {
+            "source": step_seal.source,
+            "item": step_seal.item,
+            "kind": step_seal.kind,
+            "brace_context": [list(header) for header in step_seal.brace_context],
+            "item_token_sha256": observed_sha256,
+            "required_expressions": [
+                module._normalized_rust_contract(expression)
+                for expression in step_seal.required_expressions
+            ],
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected_error"),
     (
@@ -6012,6 +6220,108 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
 
 
 @pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            """if self
+                        .exact_serve_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                    {
+                        self.exact_serve_predecessor_retry_attempted = true;
+                    }""",
+            """if self
+                        .exact_serve_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() > target)
+                    {
+                        self.exact_serve_predecessor_retry_attempted = true;
+                    }""",
+        ),
+        (
+            """if self
+                        .retained_response_predecessor_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                    {
+                        self.retained_response_predecessor_retry_attempted = true;
+                    }""",
+            """if self
+                        .retained_response_predecessor_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() > target)
+                    {
+                        self.retained_response_predecessor_retry_attempted = true;
+                    }""",
+        ),
+    ),
+)
+def test_body_service_retry_latches_survive_source_seal_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    """Body-service fairness binds both finite retry-unadmitted episodes."""
+
+    module = load_checker()
+    claim = next(
+        claim
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.constant == "ProductionBodyServiceRefinesAsyncFairness"
+    )
+    step_seals = tuple(
+        seal
+        for seal in claim.source_item_seals
+        if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        and seal.item == "step"
+    )
+    assert len(step_seals) == 1
+    step_seal = step_seals[0]
+    assert len(step_seal.required_expressions) == 2
+    relative = Path("crates/iroha_core/src/sumeragi/v2_runtime.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    context = (
+        (
+            "impl",
+            "<",
+            "D",
+            ":",
+            "RuntimeDriver",
+            ">",
+            "SerializedV2Runtime",
+            "<",
+            "D",
+            ">",
+        ),
+    )
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        "step",
+        context,
+        old,
+        new,
+    )
+    source = path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, "step")
+        if item.brace_context == context
+    )
+    assert len(items) == 1
+    live_seal = replace(
+        step_seal,
+        item_token_sha256=module._rust_sealed_item_token_sha256(items[0]),
+    )
+    live_claim = replace(claim, source_item_seals=(live_seal,))
+
+    with pytest.raises(ValueError, match="exact required expression"):
+        module._cross_tool_source_item_seal_payload(
+            live_claim,
+            root_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
     (
         "claim_constant",
         "relative",
@@ -6968,6 +7278,104 @@ def test_reliable_flush_transitive_seals_reject_weakened_identity_helpers(
             )
 
 
+def test_terminal_application_runner_call_site_seal_is_canonical() -> None:
+    """The terminal-application gate binds the authoritative runner item."""
+
+    module = load_checker()
+    claim = next(
+        claim
+        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.constant
+        == "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal"
+    )
+    authoritative_call_sites, linked_consumers = module._total_gate_call_sites(
+        claim.constant
+    )
+    assert linked_consumers == ()
+    assert claim.production_call_sites == authoritative_call_sites
+    assert len(authoritative_call_sites) == 1
+    call_site = authoritative_call_sites[0]
+    assert (
+        call_site.source,
+        call_site.item,
+        call_site.projection,
+        call_site.brace_context,
+    ) == (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "run_inner",
+        "terminal_application",
+        (),
+    )
+    assert call_site.item_token_sha256 == module._TOTAL_GATE_CALL_ITEM_SHA256[
+        "terminal_application"
+    ]
+    assert not call_site.item_token_sha256.startswith("PENDING")
+
+    source = (ROOT_DIR / call_site.source).read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, call_site.item)
+        if item.brace_context == call_site.brace_context
+    )
+    assert len(items) == 1
+    assert call_site.item_token_sha256 == module._rust_sealed_item_token_sha256(
+        items[0]
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            """(IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE) => {
+        12u8
+    };""",
+            """(IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE) => {
+        11u8
+    };""",
+            "must equal its unique production u8 constant",
+        ),
+        (
+            "    IDENTITY_KIND_RUNTIME_CAUSAL_CANDIDATE,\n",
+            "",
+            "arms must exactly equal the ordered compile-time production-tag assertion",
+        ),
+    ),
+)
+def test_refinement_tag_value_shared_macro_survives_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Shared tag arms remain tied to the exact production constants."""
+
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    source = path.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+    mutated_source = path.read_text(encoding="utf-8")
+    items = module.rust_macro_items(mutated_source, "refinement_tag_value")
+    assert len(items) == 1
+    expected = ((
+        "refinement_tag_value",
+        module._rust_item_token_sha256(items[0]),
+    ),)
+
+    with pytest.raises(ValueError, match=expected_error):
+        module._shared_macro_payload(
+            mutated_source,
+            path=path,
+            expected=expected,
+            description="refinement-tag mutation",
+        )
+
+
 def test_terminal_application_without_successor_activation_claim_rejects_runner_mutations(
     tmp_path: Path,
 ) -> None:
@@ -6981,7 +7389,6 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
         if claim.constant
         == "ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal"
     )
-    claim = freeze_cross_tool_claim_call_sites(module, claim)
     assert claim.verified_kernel_source is not None
     paths = {
         *claim.production_sources,
@@ -7037,6 +7444,11 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
         source = path.read_text(encoding="utf-8")
         assert source.count(old) == 1
         path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        mutated_claim = freeze_cross_tool_claim_call_sites(
+            module,
+            claim,
+            mutation_root,
+        )
         verus_evidence = {
             "sources": [
                 {
@@ -7050,13 +7462,13 @@ def test_terminal_application_without_successor_activation_claim_rejects_runner_
         }
         with pytest.raises(
             ValueError,
-            match=(
-                "authorization before|checked-gate seam|"
-                "reviewed item token seal"
-            ),
+                match=(
+                    "authorization before|checked-gate seam|direct boolean kernel|"
+                    "exact projection binding"
+                ),
         ):
             module._cross_tool_claim_payload(
-                claim,
+                mutated_claim,
                 verus_evidence=verus_evidence,
                 root_dir=mutation_root,
             )
@@ -7586,7 +7998,27 @@ def test_release_module_list_covers_every_present_module_with_theorems() -> None
             )
         )
         assert actual_theorems == expected_theorems
-    assert async_theorems == module.ASYNC_NETWORK_RELEASE_THEOREMS
+    reviewed_async_additions = tuple(
+        symbol
+        for additions in (
+            module._ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ADDITIONS_AFTER.values()
+        )
+        for symbol in additions
+    )
+    reviewed_async_theorems = (
+        *module.ASYNC_NETWORK_RELEASE_THEOREMS,
+        *reviewed_async_additions,
+    )
+    assert (
+        len(reviewed_async_theorems)
+        == len(frozenset(reviewed_async_theorems))
+        == module._ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_COUNT
+    )
+    assert frozenset(async_theorems) == frozenset(reviewed_async_theorems)
+    assert (
+        hashlib.sha256("\n".join(async_theorems).encode("utf-8")).hexdigest()
+        == module._ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ORDER_SHA256
+    )
 
 
 @pytest.mark.parametrize(
@@ -9971,6 +10403,9 @@ def test_effect_capacity_checker_rejects_late_fetch_owner_gate(
 _RUNTIME_STATEMENT_IMPL = (("impl", "RuntimeCandidateSemanticStatement"),)
 _RUNTIME_BINDING_IMPL = (("impl", "RuntimeEffectCandidateBinding"),)
 _RUNTIME_OWNERSHIP_IMPL = (("impl", "RuntimeEffectOwnership"),)
+_RUNTIME_BODY_COMPLETION_PLAN_IMPL = (
+    ("impl", "RuntimeBodyCompletionOwnershipPlan"),
+)
 _RUNTIME_DEFERRED_IMPL = (("impl", "RuntimeDeferredLifecycleOwnership"),)
 _RUNTIME_DRIVER_IMPL = (("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),)
 _RUNTIME_SERIALIZED_IMPL = (
@@ -9989,6 +10424,9 @@ _RUNTIME_SERIALIZED_IMPL = (
 )
 _RUNTIME_PRODUCTION_SERIALIZED_IMPL = (
     ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+)
+_PRODUCTION_EFFECT_RUNTIME_IMPL = (
+    ("impl", "EffectRuntime", "for", "SerializedV2Runtime"),
 )
 _RUNTIME_BOUNDED_INGRESS_IMPL = (
     ("impl", "BoundedIngress", "<", "AdapterCommand", ">"),
@@ -10130,10 +10568,14 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "production_adapter_effect_candidate_statement",
             (),
-            """            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
-            RuntimeCandidateSemanticStatement::new(*round, *round, Some(*subject), None, None),""",
-            """            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
-            RuntimeCandidateSemanticStatement::new(*round, *round, None, None, None),""",
+            """        AdapterEffect::ValidateBody { round, subject, .. } => (
+            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+            RuntimeCandidateSemanticStatement::new(*round, *round, Some(*subject), None, None),
+        ),""",
+            """        AdapterEffect::ValidateBody { round, subject, .. } => (
+            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
+            RuntimeCandidateSemanticStatement::new(*round, *round, None, None, None),
+        ),""",
             "all eleven adapter-effect classes must map through the exact seven-candidate statement table",
         ),
         (
@@ -10211,8 +10653,36 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "effect_candidate_semantic_binding",
             _RUNTIME_DRIVER_IMPL,
             "production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())",
+            "production_adapter_effect_candidate_binding(effect, inherited)",
+            "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
+        ),
+        (
+            "effect_candidate_semantic_binding",
+            _RUNTIME_DRIVER_IMPL,
+            "production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())",
             "Ok(production_adapter_effect_candidate_statement(effect).map(|(kind, statement)| RuntimeEffectCandidateSemantic { kind, semantic_identity: statement.semantic_identity(), statement: Some(statement) }))",
             "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
+        ),
+        (
+            "effect_candidate_semantic_binding",
+            _RUNTIME_DRIVER_IMPL,
+            "if *round == proposal_round && *subject == decision_subject =>",
+            "if *round == proposal_round || *subject == decision_subject =>",
+            "durable Decision body recovery must reconstruct Commit authority only for the exact proposal round and subject",
+        ),
+        (
+            "effect_candidate_semantic_binding",
+            _RUNTIME_DRIVER_IMPL,
+            "parent.commit_refinement_to(decision_statement).is_none()",
+            "parent.commit_refinement_to(decision_statement).is_some()",
+            "durable Decision body recovery must reject an incompatible inherited authority before publication",
+        ),
+        (
+            "effect_candidate_semantic_binding",
+            _RUNTIME_DRIVER_IMPL,
+            "Some(_) | None => inherited.copied(),",
+            "Some(_) | None => None,",
+            "nonmatching or absent durable Decision recovery must preserve only the inherited authority",
         ),
         (
             "runtime_effect_candidate_binding_projection_hash",
@@ -10289,8 +10759,8 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "production_adapter_effect_candidate_trace_projection",
             (),
-            "binding.candidate_statement.as_ref())?",
-            "None)?",
+            "binding.candidate_statement.as_ref())?;",
+            "None)?;",
             "effect-to-candidate refinement must recompute from the independently retained typed statement",
         ),
         (
@@ -10342,8 +10812,15 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "body_pipeline_completion_is_owned_by",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
             "let result = (plan.retained_owner.clone(), plan.effective_statement());",
+            "let result = (ownership.owner().clone(), plan.effective_statement());",
+            "in-flight body completion coalescence must resolve, refine, and return its one exact incumbent owner",
+        ),
+        (
+            "body_pipeline_completion_is_owned_by",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "let result = (plan.retained_owner.clone(), plan.effective_statement());",
             "let result = (ownership.owner().clone(), ownership.candidate_semantic_statement());",
-            "in-flight body completion coalescence must return and commit its resolved exact runtime owner",
+            "in-flight body completion coalescence must resolve, refine, and return its one exact incumbent owner",
         ),
         (
             "resolve_body_pipeline_completion_owner",
@@ -10382,6 +10859,17 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "body-terminal batch commit must revalidate every target, prepare atomically, and then commit the checked authorities",
         ),
         ("commit_body_pipeline_candidate_terminal", _RUNTIME_PRODUCTION_SERIALIZED_IMPL, "self.commit_body_pipeline_candidate_terminals(&[(effect, ownership)])", "Ok(())", "single body-terminal commit must delegate to the atomic batch boundary"),
+        (
+            "enqueue_body_pipeline_completion_with_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            """self
+            .body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
+            .is_some()""",
+            """self
+            .body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
+            .is_none()""",
+            "owned body-completion retries must compare the incumbent before queue coalescence",
+        ),
         (
             "enqueue_body_pipeline_completion_with_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
@@ -10456,9 +10944,18 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "reserve_body_available_with_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            """                retained_owner,
+                retained_statement,""",
+            """                ownership.owner().clone(),
+                ownership.candidate_semantic_statement(),""",
+            "an inexact unpublished retry must retain the exact incumbent lifecycle owner and effective authority",
+        ),
+        (
+            "reserve_body_available_with_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
             "if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {",
             "if preflight.is_coalescence() {",
-            "owned BodyAvailable tombstone coalescence must pass the exact retained-owner gate",
+            "an inexact unpublished retry must fail closed before ordinary queue or tombstone coalescence",
         ),
         (
             "validate_exact",
@@ -10582,6 +11079,177 @@ def test_effect_capacity_runtime_candidate_fidelity_rejects_mutants(
         encoding="utf-8",
     )
 
+    rebound_seal_items = {
+        ("projection_parts", _RUNTIME_BINDING_IMPL),
+        (
+            "resolve_body_pipeline_completion_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+        ),
+        (
+            "plan_body_pipeline_candidate_terminal",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+        ),
+        (
+            "commit_body_pipeline_candidate_terminals",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+        ),
+    }
+    if (item_name, context) in rebound_seal_items:
+        mutated_source = runtime_path.read_text(encoding="utf-8")
+        mutated_items = tuple(
+            candidate
+            for candidate in module.rust_items(mutated_source, item_name)
+            if candidate.brace_context == context
+        )
+        assert len(mutated_items) == 1, (item_name, context)
+        canonical_seals = tuple(
+            seal
+            for seal in module._EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS
+            if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+            and seal.item == item_name
+            and seal.brace_context == context
+        )
+        assert len(canonical_seals) == 1, (item_name, context)
+        live_seal = replace(
+            canonical_seals[0],
+            item_token_sha256=module._rust_sealed_item_token_sha256(
+                mutated_items[0]
+            ),
+        )
+        claim, _view = effect_candidate_auxiliary(module)
+        live_claim = replace(claim, source_item_seals=(live_seal,))
+        assert len(
+            module._cross_tool_source_item_seal_payload(
+                live_claim,
+                root_dir=repo_root,
+            )
+        ) == 1
+
+    errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
+    assert any(diagnostic in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    (
+        "relative",
+        "item_name",
+        "context",
+        "old",
+        "new",
+        "diagnostic",
+    ),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "effective_statement",
+            _RUNTIME_BODY_COMPLETION_PLAN_IMPL,
+            "self.replacement_statement.or(self.retained_statement)",
+            "self.retained_statement.or(self.replacement_statement)",
+            "body-terminal authority selection must prefer a checked replacement over the retained statement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "adopt_effect_ownership",
+            _RUNTIME_BODY_COMPLETION_PLAN_IMPL,
+            "RuntimeEffectOwnership::inherited(self.retained_owner.clone())",
+            "RuntimeEffectOwnership::inherited(incoming.owner().clone())",
+            "body-terminal adoption must retain the runtime terminal owner for every causality class",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "body_pipeline_candidate_terminal_ownership_plan",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "if !ownership.exactly_binds_adapter_effect(effect) {",
+            "if false && !ownership.exactly_binds_adapter_effect(effect) {",
+            "body-terminal lookup must reject a missing exact Store or Validate predecessor before scanning terminals",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "plan_body_pipeline_candidate_terminal",
+            _PRODUCTION_EFFECT_RUNTIME_IMPL,
+            "SerializedV2Runtime::plan_body_pipeline_candidate_terminal(self, effect, ownership)",
+            "Ok(None)",
+            "production EffectRuntime body-terminal incumbent-owner plan forwarding",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "commit_body_pipeline_candidate_terminals",
+            _PRODUCTION_EFFECT_RUNTIME_IMPL,
+            "SerializedV2Runtime::commit_body_pipeline_candidate_terminals(self, terminals)",
+            "Ok(())",
+            "production EffectRuntime atomic body-terminal authority commit forwarding",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "prepare_body_pipeline_completion_refinements",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "if !replacement.validate_exact() || !targets.insert(plan.target) {",
+            "if !replacement.validate_exact() && !targets.insert(plan.target) {",
+            "body-terminal preparation must reject invalid authority or duplicate targets before staging refinements",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "commit_prepared_body_pipeline_completion_refinements",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            """        if !ingress_targets_exist
+            || !prepared""",
+            """        if !ingress_targets_exist
+            && !prepared""",
+            "prepared body-terminal commit must validate every ingress and deferred target before assignment",
+        ),
+    ),
+)
+def test_effect_candidate_terminal_semantics_survive_source_seal_digest_refresh(
+    tmp_path: Path,
+    relative: str,
+    item_name: str,
+    context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    diagnostic: str,
+) -> None:
+    """A refreshed item digest cannot conceal terminal-owner semantic drift."""
+
+    module = load_checker()
+    repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    path = repo_root / relative
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        item_name,
+        context,
+        old,
+        new,
+    )
+
+    source = path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == context
+    )
+    assert len(items) == 1, (relative, item_name, context)
+    canonical_seals = tuple(
+        seal
+        for seal in module._EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS
+        if seal.source == relative
+        and seal.item == item_name
+        and seal.brace_context == context
+    )
+    assert len(canonical_seals) == 1, (relative, item_name, context)
+    live_seal = replace(
+        canonical_seals[0],
+        item_token_sha256=module._rust_sealed_item_token_sha256(items[0]),
+    )
+    claim, _view = effect_candidate_auxiliary(module)
+    live_claim = replace(claim, source_item_seals=(live_seal,))
+    assert len(
+        module._cross_tool_source_item_seal_payload(
+            live_claim,
+            root_dir=repo_root,
+        )
+    ) == 1
+
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
     assert any(diagnostic in error for error in errors), errors
 
@@ -10636,6 +11304,78 @@ def test_effect_capacity_adapter_tombstone_fidelity_rejects_owner_mutants(
     )
 
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
+    assert any(diagnostic in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "diagnostic"),
+    (
+        (
+            "retire_restored_producer_continuation",
+            "self.persist_restored_body_producer_retirement(*address, record)?;",
+            "let _ = (address, record);",
+            "persistent producer retirement must select one exact record before delegating durable removal",
+        ),
+        (
+            "persist_restored_body_producer_retirement",
+            "record.identity().address() != address",
+            "record.identity().address() == address",
+            "persistent producer retirement must own one exact dormant durable stage-7 volatile-body record with no live alias",
+        ),
+        (
+            "persist_restored_body_producer_retirement",
+            "|| self.pending_producer_handoffs.contains_key(&address)",
+            "|| false",
+            "persistent producer retirement must own one exact dormant durable stage-7 volatile-body record with no live alias",
+        ),
+        (
+            "persist_restored_body_producer_retirement",
+            """            if dormant_removed {
+                self.restored_dormant_producer_continuations.insert(address);
+            }""",
+            """            let _ = dormant_removed;""",
+            "stage-7 retirement must persist process/durable/dormant removal and roll all memory back on persistence failure",
+        ),
+        (
+            "assert_restored_stage_seven_retirement_does_not_resurrect",
+            ".retire_restored_body_fetch_parent(&reconstructed_fetch, &fetch_ownership)",
+            ".retire_unpublished_body_available(restarted_tag, round, body_subject)",
+            "pre-reservation restored Fetch cancellation must persist its dormant stage-7 parent before returning",
+        ),
+        (
+            "assert_restored_stage_seven_retirement_does_not_resurrect",
+            "manifest: (marker != 0xBD).then_some(manifest.clone()),",
+            "manifest: Some(manifest.clone()),",
+            "the restart regression must make BD the unique manifest-less restored Fetch case",
+        ),
+        (
+            "restored_body_available_terminal_retirement_is_persistent_before_token_release",
+            "assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);",
+            "assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);",
+            "the public regression must cover unpublished, materialized, failed, manifest-bound pre-reservation, and manifest-less pre-reservation stage-7 retirement",
+        ),
+    ),
+)
+def test_restart_retirement_semantics_reject_digest_independent_mutants(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    diagnostic: str,
+) -> None:
+    """Restart retirement contracts reject drift without relying on a seal error."""
+
+    module = load_checker()
+    repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    baseline_errors = module._effect_capacity_production_source_fidelity_errors(
+        repo_root
+    )
+    assert not any(diagnostic in error for error in baseline_errors), baseline_errors
+
+    adapter_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    mutate_rust_item_source(module, adapter_path, item_name, old, new)
+    errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
+
     assert any(diagnostic in error for error in errors), errors
 
 
@@ -10709,6 +11449,32 @@ def test_effect_capacity_runtime_candidate_struct_fidelity_rejects_mutants(
         + source[item_end:],
         encoding="utf-8",
     )
+
+    if struct_name == "RuntimeEffectCandidateBindingProjectionParts":
+        mutated_source = runtime_path.read_text(encoding="utf-8")
+        mutated_items = module.rust_struct_items(mutated_source, struct_name)
+        assert len(mutated_items) == 1
+        canonical_seals = tuple(
+            seal
+            for seal in module._EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS
+            if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+            and seal.item == struct_name
+        )
+        assert len(canonical_seals) == 1, struct_name
+        live_seal = replace(
+            canonical_seals[0],
+            item_token_sha256=module._rust_sealed_item_token_sha256(
+                mutated_items[0]
+            ),
+        )
+        claim, _view = effect_candidate_auxiliary(module)
+        live_claim = replace(claim, source_item_seals=(live_seal,))
+        assert len(
+            module._cross_tool_source_item_seal_payload(
+                live_claim,
+                root_dir=repo_root,
+            )
+        ) == 1
 
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
     assert any(diagnostic in error for error in errors), errors
@@ -12037,9 +12803,9 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
         ),
         (
             "accept_driver_dispatch",
-            "retained.insert(ordinal, parent.clone());",
+            "retained.insert(ordinal, ownership);",
             "retained.remove(&ordinal);",
-            "Busy deferral transfers rather than replaces the predecessor owner",
+            "Busy deferral transfers the predecessor into an exact sealed runtime owner",
         ),
         (
             "minimum_active_lifecycle_ordinal_excluding",
@@ -12049,9 +12815,15 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
         ),
         (
             "scheduler_arbitration_inputs",
-            "let fifo_ready = fifo_minimum.is_some();",
-            "let fifo_ready = false;",
+            "let mut fifo_ready = fifo_minimum.is_some();",
+            "let mut fifo_ready = false;",
             "passive lifecycle capabilities cannot suppress runnable FIFO classes",
+        ),
+        (
+            "scheduler_arbitration_inputs",
+            "            && !self.driver.deferred_work_is_serviceable()\n",
+            "            && true\n",
+            "scheduler arbitration may suppress FIFO readiness only for an exact unserviceable fence-blocked physical occurrence",
         ),
     ),
 )
@@ -14800,6 +15572,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
 
     runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
     source = runner.read_text(encoding="utf-8")
@@ -14845,7 +15618,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
     ("relative_path", "region_marker", "old", "new", "error_fragment"),
     (
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "fn open_ingress_for_active_height(",
             "activation.publish(successor)",
             "drop(activation); let _ = successor",
@@ -14890,7 +15663,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "historical ingress routing omits production refinement tokens",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "fn initial_block_sync_deadline(",
             "if eager_recovery {\n        height_started_at\n    } else {",
             "if eager_recovery {\n"
@@ -14917,7 +15690,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "CommitQC recovery and clear ordinary live finality",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "const fn retain_eager_block_sync(",
             "recovering_interrupted_tip || admitted_discovered_commit_qc",
             "{ let _ = admitted_discovered_commit_qc; recovering_interrupted_tip }",
@@ -15214,6 +15987,7 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         "crates/iroha_core/src/sumeragi/v2.rs",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
     )
 
@@ -15227,6 +16001,7 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             destination = repo_root / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT_DIR / name, destination)
+        copy_reviewed_rust_include_components(repo_root)
         return repo_root, formal_dir
 
     formal_mutants = (
@@ -15452,7 +16227,7 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         ),
         (
             "runner_recovery_regression_self_compares_request",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
             "locked_body_recovery_is_independent_of_reproposal_gates",
             "assert_eq!(plan.request, expected_request);",
             "assert_eq!(plan.request, plan.request);",
@@ -15460,7 +16235,7 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         ),
         (
             "runner_lane_duty_regression_accepts_no_work",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_upstream_recovery.rs",
             "lane_production_duty_survives_successor_global_roster_removal",
             "autonomous_lane_view: Some(tag.view()),",
             "autonomous_lane_view: None,",
@@ -15468,7 +16243,7 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         ),
         (
             "runner_replay_regression_accepts_foreign_subject",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
             "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
             'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
             "let foreign_lock = directive(Some(subject), None);",
@@ -19001,6 +19776,154 @@ def test_timeout_and_historical_closure_statements_reject_weakening(
 
 
 @pytest.mark.parametrize(
+    ("target_module", "symbol", "old", "new"),
+    (
+        (
+            "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+            "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties",
+            "/\\ HistoricalDiscoveryServeExactWorkerServiceProperty(\n"
+            "       specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+            "HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual",
+            "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(\n"
+            "    specification)",
+            "TRUE",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedHistoricalFixedClockPacketActionSelectionProperties",
+            "HistoricalDiscoveryPacketConcreteActionSelectionProperty(\n"
+            "        IndexedChainSpec)",
+            "TRUE",
+        ),
+    ),
+)
+def test_historical_packet_physical_kernel_operator_mutations_fail_closed(
+    target_module: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Physical packet kernels retain every exact nested property."""
+
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {
+            target_module: mutate_tla_operator(
+                source,
+                symbol,
+                old,
+                new,
+            )
+        },
+    )
+
+    assert any(f"{symbol} must equal only" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol", "old", "new"),
+    (
+        (
+            "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+            "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
+            "/\\ HistoricalDiscoveryFixedClockPacketServiceProperty(\n"
+            "               specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+            "=> IndexedHistoricalFixedClockPacketActionSelectionProperties",
+            "=> TRUE",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedPacketServiceResidualProvidesPhysicalKernels",
+            "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(\n"
+            "             IndexedChainSpec)",
+            "TRUE",
+        ),
+    ),
+)
+def test_historical_packet_physical_kernel_statements_fail_closed(
+    target_module: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Physical packet-kernel bridge conclusions cannot be weakened."""
+
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutate_tla_theorem(source, symbol, old, new)},
+    )
+
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol", "token"),
+    (
+        (
+            "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+            "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
+            "HistoricalDiscoveryPhysicalKernelsDischargeLifecycleService",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+            "HistoricalDiscoveryPacketTailHasFrozenConcreteAction",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedPacketServiceResidualProvidesPhysicalKernels",
+            "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedHistoricalFixedClockPacketResidualClosesPacketLeaves",
+            "IndexedPacketServiceResidualProvidesPhysicalKernels",
+        ),
+    ),
+)
+def test_historical_packet_physical_kernel_dependencies_fail_closed(
+    target_module: str,
+    symbol: str,
+    token: str,
+) -> None:
+    """Every physical-kernel bridge keeps its reviewed provider edge."""
+
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: delete_tla_theorem_token(source, symbol, token)},
+    )
+
+    assert any(
+        f"{symbol} must retain reviewed proof dependencies" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
     ("target_module", "symbol", "token"),
     (
         (
@@ -21591,15 +22514,21 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
 
     mutations = (
         (
-            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
             "u128::from(source_physical_ordinal) >= physical_cut",
             "u128::from(source_physical_ordinal) < physical_cut",
-            "post-cut replay reservation predicate declaration",
+            "paired immutable clock reservation blocker kernel declaration",
+        ),
+        (
+            "clock_owner_reservation_blockers_occurrence",
+            "lifecycle_ordinal <= owner.lifecycle_ordinal()",
+            "lifecycle_ordinal > owner.lifecycle_ordinal()",
+            "paired immutable clock reservation blocker kernel declaration",
         ),
         (
             "clock_owner_reservation_blocks_occurrence",
-            "lifecycle_ordinal <= owner.lifecycle_ordinal()",
-            "lifecycle_ordinal > owner.lifecycle_ordinal()",
+            ".map(RuntimeClockReservationBlockers::any)",
+            ".map(|_| false)",
             "post-cut replay reservation predicate declaration",
         ),
         (
@@ -21748,8 +22677,8 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
         ),
         (
             "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
-            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
-            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "restored_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "restored_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(false),",
             "the retained case must exercise the strict physical-replay helper",
         ),
         (
@@ -21809,6 +22738,38 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
     ),
     (
         (
+            "validate_clock_owner_physical_cuts",
+            "episode.timeout_vote_owner_universe\n                            == self.driver.timeout_vote_owner_universe()",
+            "episode.timeout_vote_owner_universe\n                            != self.driver.timeout_vote_owner_universe()",
+            "_PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256",
+            "validate_clock_owner_physical_cuts",
+            "clock-cut validation must bind the finite timeout-recovery episode",
+        ),
+        (
+            "clock_owner_reservation_blockers_occurrence",
+            "u128::from(source_physical_ordinal) >= physical_cut",
+            "u128::from(source_physical_ordinal) < physical_cut",
+            "_PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256",
+            "clock_owner_reservation_blockers_occurrence",
+            "paired clock blocker kernel must combine physical non-precedence",
+        ),
+        (
+            "clock_owner_reservation_blocks_occurrence",
+            ".map(RuntimeClockReservationBlockers::any)",
+            ".map(|_| false)",
+            "_PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256",
+            "clock_owner_reservation_blocks_occurrence",
+            "post-cut replay reservation predicate must project the exact paired clock-blocker kernel",
+        ),
+        (
+            "enqueue_after_clock_reservation",
+            "if command.lifecycle_ordinal.is_some() {",
+            "if false {",
+            "_PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256",
+            "enqueue_after_clock_reservation",
+            "post-cut replay gate must backpressure inherited owners while fresh owners validate",
+        ),
+        (
             "enqueue_network_with_ingress_ownership",
             "episode.admitted_timeout_vote_owners = prospective;",
             "let _ = prospective;",
@@ -21833,6 +22794,20 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "fair-ingress post-cut replay preflight gate",
         ),
         (
+            "network_admission_uses_exact_normal_and_progress_reservations",
+            "assert_eq!(\n"
+            "            network_admission_class(&commit_response),\n"
+            "            Some(CommandClass::Progress)\n"
+            "        );",
+            "assert_eq!(\n"
+            "            network_admission_class(&commit_response),\n"
+            "            Some(CommandClass::Normal)\n"
+            "        );",
+            "_AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256",
+            "network_admission_uses_exact_normal_and_progress_reservations",
+            "the CommitCertificateResponse regression must classify only through the protected Progress admission seam",
+        ),
+        (
             "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
             "let post_snapshot_source = context.roster[2].validator.clone();",
             "let post_snapshot_source = context.roster[1].validator.clone();",
@@ -21840,9 +22815,17 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
             "the TC regression must use distinct restored and real post-snapshot validator sources",
         ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "        runtime\n            .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())\n            .expect(\"refresh the live receiver high-water mark after freezing the timeout cut\");\n",
+            "",
+            "_PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256",
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "the real post-snapshot TC fixture must refresh the live receiver high-water mark",
+        ),
     ),
 )
-def test_runtime_clock_reservation_semantics_survive_pending_digest_refresh(
+def test_runtime_clock_reservation_semantics_survive_digest_refresh(
     tmp_path: Path,
     item_name: str,
     old: str,
@@ -21851,7 +22834,7 @@ def test_runtime_clock_reservation_semantics_survive_pending_digest_refresh(
     digest_key: str,
     expected_error: str,
 ) -> None:
-    """Pending replay seals cannot hide a semantic mutation behind a new digest."""
+    """Reviewed replay seals cannot hide a semantic mutation behind a new digest."""
 
     module = load_checker()
     formal_dir = local_runner_service_fixture(tmp_path, module)
@@ -21872,6 +22855,220 @@ def test_runtime_clock_reservation_semantics_survive_pending_digest_refresh(
         == "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner"
     ):
         module._TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256[item_name] = digest
+
+    errors = module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "digest_key", "serve_digest_key", "expected_error"),
+    (
+        (
+            "freeze_due_clock_owners",
+            "timeout_vote_owner_universe: self.driver.timeout_vote_owner_universe(),",
+            "timeout_vote_owner_universe: BTreeSet::new(),",
+            "freeze_due_clock_owners",
+            "freeze_due_clock_owners",
+            "freezing an absolute timeout must atomically bind its physical cut",
+        ),
+        (
+            "step",
+            "if self.supersede_pre_timeout_retransmit(&owner).is_err()",
+            "if false",
+            "runtime_step",
+            "step",
+            "clock dispatch must consume the captured pre-timeout retransmit",
+        ),
+        (
+            "step",
+            "episode.pre_frozen_retransmit = None;",
+            "let _ = episode;",
+            "runtime_step",
+            "step",
+            "clock dispatch must consume the captured pre-timeout retransmit",
+        ),
+    ),
+)
+def test_timeout_recovery_clock_semantics_survive_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    digest_key: str,
+    serve_digest_key: str,
+    expected_error: str,
+) -> None:
+    """A refreshed runtime seal cannot detach the finite timeout episode."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    mutate_rust_item_source(module, runtime_path, item_name, old, new)
+    mutated = module.rust_items(
+        runtime_path.read_text(encoding="utf-8"), item_name
+    )[0]
+    digest = module._rust_item_token_sha256(mutated)
+    module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256[digest_key] = digest
+    module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256[serve_digest_key] = digest
+
+    errors = module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    (
+        (
+            "default",
+            "synthetic runtime drivers must reject Busy-deferred authenticated aliases by default",
+        ),
+        (
+            "production",
+            "production runtime driver must recognize only authenticated commands",
+        ),
+        (
+            "dispatch",
+            "distinguish certified fence escapes, exact Busy aliases",
+        ),
+    ),
+)
+def test_pacemaker_busy_alias_semantics_survive_digest_refresh(
+    tmp_path: Path,
+    case: str,
+    expected_error: str,
+) -> None:
+    """A refreshed seal cannot reintroduce the Busy-alias retry spin."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    if case == "default":
+        context = (("pub", "(", "crate", ")", "trait", "RuntimeDriver"),)
+        mutate_rust_item_source_in_context(
+            module,
+            runtime_path,
+            "command_matches_deferred_authenticated_owner",
+            context,
+            "        false\n",
+            "        true\n",
+        )
+        item = next(
+            item
+            for item in module.rust_items(
+                runtime_path.read_text(encoding="utf-8"),
+                "command_matches_deferred_authenticated_owner",
+            )
+            if item.brace_context == context
+        )
+        module._PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+            "runtime_driver_default_command_matches_deferred_authenticated_owner"
+        ] = module._rust_item_token_sha256(item)
+    elif case == "production":
+        context = (("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),)
+        mutate_rust_item_source_in_context(
+            module,
+            runtime_path,
+            "command_matches_deferred_authenticated_owner",
+            context,
+            ".is_some(),",
+            ".is_none(),",
+        )
+        item = next(
+            item
+            for item in module.rust_items(
+                runtime_path.read_text(encoding="utf-8"),
+                "command_matches_deferred_authenticated_owner",
+            )
+            if item.brace_context == context
+        )
+        module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+            "runtime_driver_command_matches_deferred_authenticated_owner"
+        ] = module._rust_item_token_sha256(item)
+    else:
+        mutate_rust_item_source(
+            module,
+            runtime_path,
+            "dispatch_one_pacemaker_progress",
+            "                    certified\n                        || deferred_alias\n",
+            "                    certified\n",
+        )
+        item = module.rust_items(
+            runtime_path.read_text(encoding="utf-8"),
+            "dispatch_one_pacemaker_progress",
+        )[0]
+        digest = module._rust_item_token_sha256(item)
+        module._PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256[
+            "dispatch_one_pacemaker_progress"
+        ] = digest
+        module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256[
+            "dispatch_one_pacemaker_progress"
+        ] = digest
+
+    errors = module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "let second = runtime\n"
+            "            .try_step_pacemaker_escape(now)\n"
+            "            .expect(\"duplicate pacemaker selection must not fail closed\")",
+            "let second = runtime\n"
+            "            .step(now)\n"
+            "            .expect(\"duplicate pacemaker selection must not fail closed\")",
+            "prequeued duplicate Busy alias must receive one bounded pacemaker retirement turn",
+        ),
+        (
+            "assert_eq!(\n"
+            "            second_scheduler.selected,\n"
+            "            RuntimeSelectedOwnerKind::PacemakerProgress\n"
+            "        );\n"
+            "        assert_eq!(runtime.queued_commands(), 0);\n"
+            "        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);",
+            "assert_eq!(\n"
+            "            second_scheduler.selected,\n"
+            "            RuntimeSelectedOwnerKind::PacemakerProgress\n"
+            "        );\n"
+            "        assert_eq!(runtime.queued_commands(), 1);\n"
+            "        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);",
+            "duplicate retirement must remove only its FIFO occurrence",
+        ),
+        (
+            "first_receipt.owner().admission_ordinal(),\n"
+            "                first_receipt.clone(),",
+            "second_receipt.owner().admission_ordinal(),\n"
+            "                second_receipt.clone(),",
+            "duplicate retirement must retain only the canonical route receipt",
+        ),
+    ),
+)
+def test_pacemaker_busy_alias_regression_semantics_survive_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The sealed regression cannot swap or retain the wrong Busy route."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    item_name = (
+        "pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_"
+        "into_live_busy_producer"
+    )
+    mutate_rust_item_source(module, runtime_path, item_name, old, new)
+    mutated = module.rust_items(
+        runtime_path.read_text(encoding="utf-8"), item_name
+    )[0]
+    module._PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256[item_name] = (
+        module._rust_item_token_sha256(mutated)
+    )
 
     errors = module._production_causal_fifo_source_fidelity_errors(formal_dir)
 
@@ -21917,6 +23114,89 @@ def test_effect_capacity_semantics_survive_pending_digest_refresh(
     ] = module._rust_item_token_sha256(mutated_items[0])
 
     errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    (
+        "relative",
+        "item_name",
+        "brace_context",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "reserve_body_available_with_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            """                retained_owner,
+                retained_statement,""",
+            """                ownership.owner().clone(),
+                ownership.candidate_semantic_statement(),""",
+            "an inexact unpublished retry must retain the exact incumbent lifecycle owner and effective authority",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner",
+            None,
+            "assert_eq!(retry, rebound_reservation);",
+            "assert_ne!(retry, rebound_reservation);",
+            "unpublished-token regression must preserve its physical admission source across rebind and retry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "commit_pending_fetch_retirement",
+            None,
+            "if !retired_completion {",
+            "if retired_completion {",
+            "pending Fetch retirement must release its token or restored stage-7 parent before local ownership",
+        ),
+    ),
+)
+def test_effect_capacity_lifecycle_semantics_survive_pending_digest_refresh(
+    tmp_path: Path,
+    relative: str,
+    item_name: str,
+    brace_context: tuple[tuple[str, ...], ...] | None,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Lifecycle contracts remain effective after one reviewed seal refresh."""
+
+    module = load_checker()
+    repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    source_path = repo_root / relative
+    if brace_context is None:
+        mutate_rust_item_source(module, source_path, item_name, old, new)
+        mutated_items = module.rust_items(
+            source_path.read_text(encoding="utf-8"), item_name
+        )
+    else:
+        mutate_rust_item_source_in_context(
+            module,
+            source_path,
+            item_name,
+            brace_context,
+            old,
+            new,
+        )
+        mutated_items = [
+            item
+            for item in module.rust_items(
+                source_path.read_text(encoding="utf-8"), item_name
+            )
+            if item.brace_context == brace_context
+        ]
+    assert len(mutated_items) == 1, (item_name, brace_context)
+    module._EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[item_name] = (
+        module._rust_item_token_sha256(mutated_items[0])
+    )
+
+    errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
 
     assert any(expected_error in error for error in errors), errors
 
@@ -22103,16 +23383,16 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         ),
     ),
 )
-def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
+def test_run_inner_semantics_survive_all_reviewed_alias_digest_refreshes(
     tmp_path: Path,
     mutation: str,
     checker_name: str,
     expected_error: str,
 ) -> None:
-    """Every pending run-loop alias retains an independent semantic mutation."""
+    """Every reviewed run-loop alias retains an independent semantic mutation."""
 
     module = load_checker()
-    formal_dir = pending_run_inner_fixture(tmp_path, module, checker_name)
+    formal_dir = reviewed_run_inner_fixture(tmp_path, module, checker_name)
     runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
     if mutation == "reply_route_geometry":
         mutate_rust_item_source(
@@ -22237,10 +23517,9 @@ def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
     ] = digest
     module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256["runner::run_inner"] = digest
     module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256["run_inner"] = digest
-    module._SERVICED_CANDIDATE_RUNNER_ITEM_SHA256["run_inner"] = digest
     module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
-    errors = pending_run_inner_source_fidelity_errors(
+    errors = reviewed_run_inner_source_fidelity_errors(
         module, tmp_path, formal_dir, checker_name
     )
 
@@ -22267,6 +23546,12 @@ def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
             "if false",
             "leader_wire",
             "carrier correspondence must be total before ordering by physical ordinal",
+        ),
+        (
+            "owner.token.source_class == FairV2IngressLeaderWireSourceClass::Control",
+            "owner.token.source_class == FairV2IngressLeaderWireSourceClass::Chunk",
+            "leader_wire",
+            "only an exact Control-class leader-wire owner may authorize dependency bypass",
         ),
         (
             "let dependency_bypass = !ingress_barrier_allows",
@@ -22325,7 +23610,7 @@ def test_classified_ingress_semantics_survive_all_pending_alias_digest_refreshes
     assert any(expected_error in error for error in errors), errors
 
 
-def test_drain_v2_ingress_semantics_survive_all_pending_alias_digest_refreshes(
+def test_drain_v2_ingress_semantics_survive_all_reviewed_alias_digest_refreshes(
     tmp_path: Path,
 ) -> None:
     """A refreshed drain seal still proves exact-Serve runtime suppression."""
@@ -22384,6 +23669,16 @@ def test_drain_v2_ingress_semantics_survive_all_pending_alias_digest_refreshes(
             "if false {",
             "non-Ordinary drain must reject every item outside its selected reviewed predicate",
         ),
+        (
+            "if mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress {",
+            "if false {",
+            "non-Ordinary modes must skip Completion and Runtime turns",
+        ),
+        (
+            "network_ingress_is_certified_fence_escape(&message.payload)",
+            "true",
+            "CertifiedFenceEscape and TimeoutVoteEpisode must be pure disjoint drains with only their reviewed predicate",
+        ),
     ),
 )
 def test_async_drain_three_mode_policy_mutations_fail_closed(
@@ -22407,14 +23702,48 @@ def test_async_drain_three_mode_policy_mutations_fail_closed(
         old,
         new,
     )
+    mutated_items = module.rust_items(
+        runner_path.read_text(encoding="utf-8"), "drain_v2_ingress"
+    )
+    assert len(mutated_items) == 1
+    digest = module._rust_item_token_sha256(mutated_items[0])
+    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256[
+        "drain_v2_ingress"
+    ] = digest
+    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
+        "runner::drain_v2_ingress"
+    ] = digest
 
-    errors = module._async_source_fidelity_errors(formal_dir)
+    errors = [
+        *module._async_source_fidelity_errors(formal_dir),
+        *module._timeout_vote_episode_source_fidelity_errors(
+            tmp_path, formal_dir
+        ),
+    ]
 
     assert any(expected_error in error for error in errors), errors
 
 
-def test_rollover_finalized_outputs_semantics_survive_pending_digest_refresh(
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ("if retired == 0 {", "if retired > 0 {"),
+        (
+            """        let retired = services
+            .handoff_applied_height_output_to_durable_reconstruction(
+                receipt,
+                artifact,
+                &durable_lane_authority,
+            )
+            .map_err(V2RunnerError::Service)?;""",
+            """        let retired = 1;""",
+        ),
+    ),
+)
+def test_rollover_finalized_outputs_semantics_survive_reviewed_digest_refresh(
     tmp_path: Path,
+    old: str,
+    new: str,
 ) -> None:
     """The extracted rollover helper remains semantic after resealing itself."""
 
@@ -22428,8 +23757,8 @@ def test_rollover_finalized_outputs_semantics_survive_pending_digest_refresh(
         module,
         runner_path,
         "rollover_finalized_height_outputs",
-        "if retired == 0 {",
-        "if retired > 0 {",
+        old,
+        new,
     )
     items = module.rust_items(
         runner_path.read_text(encoding="utf-8"),
@@ -22483,6 +23812,35 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
 
 
 @pytest.mark.parametrize(
+    ("operation", "key"),
+    (
+        ("remove", "drain_v2_ingress"),
+        ("add", "unexpected_exact_output_runner_item"),
+    ),
+)
+def test_exact_output_runner_inventory_is_exact_and_non_crashing(
+    tmp_path: Path,
+    operation: str,
+    key: str,
+) -> None:
+    """The exact-output runner inventory cannot omit or invent an item."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    if operation == "remove":
+        module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256.pop(key)
+    else:
+        module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256[key] = "0" * 64
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(
+        "exact-output runner source-seal inventory must be exact" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
     (
         "digest_key",
         "relative_path",
@@ -22509,6 +23867,15 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
             (("impl", "LeaderWireIngressBinding"),),
             ".unbind_leader_wire_lifecycle_gate(gate)",
             ".unbind_leader_wire_lifecycle_gate_for_test(gate)",
+            "standalone leader-wire retirement must close admission",
+        ),
+        (
+            "runner::LeaderWireIngressBinding::retire",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "retire",
+            (("impl", "LeaderWireIngressBinding"),),
+            "close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);",
+            "let _ = (&self.ingress_ready, &self.block_ingress);",
             "standalone leader-wire retirement must close admission",
         ),
         (
@@ -22570,6 +23937,51 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
             (("impl", "FairV2Ingress"),),
             "state.leader_wire_lifecycle_gate = None;",
             "let _ = state.leader_wire_lifecycle_gate.as_ref();",
+            "standalone leader-wire unbind must require closed empty ingress",
+        ),
+        (
+            "ingress::unbind_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "unbind_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "if state.open || state.len != 0 {",
+            "if false {",
+            "standalone leader-wire unbind must require closed empty ingress",
+        ),
+        (
+            "ingress::unbind_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "unbind_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {",
+            "if false {",
+            "standalone leader-wire unbind must require closed empty ingress",
+        ),
+        (
+            "ingress::unbind_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "unbind_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "state.leader_wire_lifecycle_ordinals = None;",
+            "let _ = state.leader_wire_lifecycle_ordinals.as_ref();",
+            "standalone leader-wire unbind must require closed empty ingress",
+        ),
+        (
+            "ingress::unbind_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "unbind_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "state.leader_wire_context = None;",
+            "let _ = state.leader_wire_context.as_ref();",
+            "standalone leader-wire unbind must require closed empty ingress",
+        ),
+        (
+            "ingress::unbind_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "unbind_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "state.leader_wire_lifecycles.clear();",
+            "let _ = &state.leader_wire_lifecycles;",
             "standalone leader-wire unbind must require closed empty ingress",
         ),
         (
@@ -22642,7 +24054,7 @@ def test_joint_height_ingress_semantics_survive_pending_digest_refresh(
     (
         (
             "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
             "height_ingress_bindings_retire_both_gates_in_one_closed_cut",
             ".expect(\"retire both per-height ingress gates atomically\");",
             ".expect(\"retire both per-height ingress gates atomically\");\n"
@@ -22651,7 +24063,7 @@ def test_joint_height_ingress_semantics_survive_pending_digest_refresh(
         ),
         (
             "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
             "height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership",
             "bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));",
             "bindings.leader_wire.ingress_ready = Arc::clone(&ingress_ready);",
@@ -22750,6 +24162,47 @@ def test_joint_height_ingress_inventory_is_exact_and_non_crashing(
     assert any(expected_error in error for error in errors), errors
 
 
+def test_lane_anchor_certificate_semantics_survive_item_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """Lane persistence cannot replace checked autonomous authority when resealed."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    lane_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    item_name = "persist_anchored_sessions"
+    context = (("impl", "V2LaneWorkAdapter"),)
+    mutate_rust_item_source_in_context(
+        module,
+        lane_path,
+        item_name,
+        context,
+        "let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(\n"
+        "                &session.prepare_qc,\n"
+        "                autonomous_anchor,\n"
+        "            )?;",
+        "let autonomous_certificate = autonomous_anchor;",
+    )
+    item = next(
+        candidate
+        for candidate in module.rust_items(
+            lane_path.read_text(encoding="utf-8"), item_name
+        )
+        if candidate.brace_context == context
+    )
+    module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256[
+        "V2LaneWorkAdapter::persist_anchored_sessions"
+    ] = module._rust_item_token_sha256(item)
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+    assert any(
+        "anchored lane persistence must derive autonomous execution authority "
+        "from the checked PrepareQC role" in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
 def test_physical_leader_wire_replay_mutation_survives_item_digest_refresh(
     tmp_path: Path,
 ) -> None:
@@ -22809,7 +24262,6 @@ def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
 
     assert (
         module._timeout_vote_episode_source_fidelity_errors(
@@ -22841,6 +24293,30 @@ def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
     )
     with pytest.raises(PropagatedTimeoutEpisodeError):
         module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+
+def test_production_causal_fifo_source_fidelity_is_current() -> None:
+    """The canonical causal-FIFO aggregate accepts every declared seal."""
+
+    module = load_checker()
+    assert (
+        module._production_causal_fifo_source_fidelity_errors(
+            module.FORMAL_DIR
+        )
+        == []
+    )
+
+
+def test_retained_response_escape_latch_source_fidelity_is_current(
+    tmp_path: Path,
+) -> None:
+    """The retained-response run-loop alias matches the canonical source."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    assert module._retained_response_escape_latch_source_fidelity_errors(
+        tmp_path
+    ) == []
 
 
 @pytest.mark.parametrize(
@@ -23179,7 +24655,6 @@ def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
     assert (
         module._timeout_vote_episode_source_fidelity_errors(
             tmp_path, formal_dir
@@ -23194,7 +24669,12 @@ def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
         old,
         new,
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_rust_item_seal(
+        module,
+        tmp_path,
+        relative,
+        item_name,
+    )
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
     )
@@ -23215,7 +24695,6 @@ def test_timeout_vote_episode_runner_mode_inventory_mutation(
         "    CertifiedFenceEscape,\n",
         "",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -23297,7 +24776,12 @@ def test_timeout_vote_episode_runner_schedule_mutations(
         source = source.replace(before, under_claim, 1)
 
     runner.write_text(source, encoding="utf-8")
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_rust_item_seal(
+        module,
+        tmp_path,
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        "run_inner",
+    )
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
     )
@@ -23374,6 +24858,121 @@ def test_timeout_vote_episode_runner_schedule_mutations(
             "subject: {NoSubject}",
             "subject: SubjectOrNone",
             "key set with only the normalized NoSubject",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "node: ValidatorIds",
+            "node: SUBSET ValidatorIds",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "timeoutOwnerOrigin: AsyncCandidateCausalOriginSet",
+            "timeoutOwnerOrigin: SUBSET AsyncCandidateCausalOriginSet",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "generation: Generations",
+            "generation: SUBSET Generations",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "timeoutOwnerOrdinal: Nat \\ {0}",
+            "timeoutOwnerOrdinal: Nat",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "physicalCut: Nat \\ {0}",
+            "physicalCut: Nat",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "preFrozenRetransmitOrdinal: Nat",
+            "preFrozenRetransmitOrdinal: Nat \\ {0}",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "preFrozenRetransmitPhysicalCut: Nat",
+            "preFrozenRetransmitPhysicalCut: Nat \\ {0}",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeParameterSet",
+            "SUBSET AsyncTimeoutRecoveryVoteOwnerSet",
+            "AsyncTimeoutRecoveryVoteOwnerSet",
+            "exact eight-field timeout-recovery episode parameter universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.node,",
+            "parameters.timeoutOwnerOrigin,",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.timeoutOwnerOrigin,",
+            "parameters.node,",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.generation,",
+            "parameters.timeoutOwnerOrdinal,",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.timeoutOwnerOrdinal,",
+            "parameters.physicalCut,",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.physicalCut,",
+            "parameters.timeoutOwnerOrdinal,",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.preFrozenRetransmitOrdinal,",
+            "parameters.preFrozenRetransmitPhysicalCut,",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.preFrozenRetransmitPhysicalCut,",
+            "parameters.preFrozenRetransmitOrdinal,",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+            "parameters.admittedTimeoutVoteOwners)",
+            "{})",
+            "exact ordered eight-field timeout-recovery episode constructor projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeSet",
+            "{AsyncTimeoutRecoveryEpisodeFromParameters(parameters):\n"
+            "     parameters \\in AsyncTimeoutRecoveryEpisodeParameterSet}",
+            "{AsyncTimeoutRecoveryEpisode(\n"
+            "   node, timeoutOwnerOrigin, generation, timeoutOwnerOrdinal,\n"
+            "   physicalCut, preFrozenRetransmitOrdinal,\n"
+            "   preFrozenRetransmitPhysicalCut, admittedTimeoutVoteOwners):\n"
+            "   node \\in ValidatorIds,\n"
+            "   timeoutOwnerOrigin \\in AsyncCandidateCausalOriginSet,\n"
+            "   generation \\in Generations,\n"
+            "   timeoutOwnerOrdinal \\in Nat \\ {0},\n"
+            "   physicalCut \\in Nat \\ {0},\n"
+            "   preFrozenRetransmitOrdinal \\in Nat,\n"
+            "   preFrozenRetransmitPhysicalCut \\in Nat,\n"
+            "   admittedTimeoutVoteOwners\n"
+            "     \\in SUBSET AsyncTimeoutRecoveryVoteOwnerSet}",
+            "exact one-binder timeout-recovery episode image",
         ),
         (
             "AsyncTimeoutRecoveryVoteOwnerValidForEpisode",
@@ -23614,6 +25213,13 @@ def test_timeout_vote_episode_runner_schedule_mutations(
             "only FirstAdmission may increase",
         ),
         (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            "           ELSE episode",
+            "           ELSE [episode EXCEPT\n"
+            "                   !.admittedTimeoutVoteOwners = {}]",
+            "exact first-insert/coalesced-stutter episode transformer",
+        ),
+        (
             "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission",
             "{AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(state, episode):\n"
             "          episode \\in state.timeoutRecoveryEpisodes}",
@@ -23680,7 +25286,12 @@ def test_timeout_vote_episode_formal_mutations_survive_digest_refresh(
         mutate_tla_operator(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_operator_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncNetwork.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -24351,12 +25962,656 @@ def test_timeout_vote_episode_theorem_mutations_survive_digest_refresh(
         mutate_tla_theorem(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncNetwork.tla",
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
     )
     assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("filename", "symbol", "old", "new"),
+    (
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryEpisodeCreationReadyIn",
+            "/\\ context' = context",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryTransitionGateIn",
+            "\\A node \\in ValidatorIds:",
+            "\\E node \\in ValidatorIds:",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryEpisodeRetiresThisStep",
+            "\\/ AsyncPersistInstallCommandsForNodeThisStep(episode.node) # {}",
+            "\\/ FALSE",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryExistingCaptureClearsThisStep",
+            "/\\ \\/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)\n"
+            "     \\/ AsyncTimeoutLifecycleTransfersThisStep(node)",
+            "/\\ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)\n"
+            "     /\\ AsyncTimeoutLifecycleTransfersThisStep(node)",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryEpisodeAfterTransition",
+            "ELSE episode",
+            "ELSE [episode EXCEPT !.generation = generation'[episode.node]]",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryRetainedEpisodesAfterTransition",
+            "~AsyncTimeoutRecoveryEpisodeRetiresThisStep(retained)",
+            "TRUE",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryNewEpisodeIn",
+            "IN IF /\\ preOrdinal # 0",
+            "IN IF \\/ preOrdinal # 0",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "AsyncTimeoutRecoveryNewEpisodesAfterTransition",
+            "AsyncTimeoutRecoveryEpisodeCreationRequiredIn(\n"
+            "            timeoutBaseState, candidate)",
+            "TRUE",
+        ),
+        (
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "AsyncTimeoutRecoveryEpisodeBoundaryIn",
+            "/\\ episode.key.context = currentContext",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "AsyncTimeoutRecoveryBoundaryFrameShape",
+            '"timeoutOwnerOrigin"',
+            '"physicalCut"',
+        ),
+        (
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "AsyncTimeoutRecoveryMutationFrameShape",
+            '"admittedTimeoutVoteOwners"',
+            '"route"',
+        ),
+        (
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor",
+            "!.preFrozenRetransmitPhysicalCut = 0",
+            "!.physicalCut = 0",
+        ),
+        (
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "AsyncTimeoutRecoveryNewBaseEpisodeIn",
+            "generation'[node]",
+            "generation[node]",
+        ),
+        (
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn",
+            "preClockState.retransmitLifecycleOrdinal[node] # 0",
+            "preClockState.retransmitLifecycleOrdinal[node] = 0",
+        ),
+    ),
+)
+def test_timeout_recovery_operator_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    filename: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Every boundary/transition helper keeps its complete reviewed body."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = formal_dir / filename
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    rebind_timeout_vote_episode_tla_operator_seal(
+        module,
+        formal_dir,
+        filename,
+        symbol,
+    )
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(
+        symbol in error
+        and "must retain its complete reviewed body after source-seal refresh"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "=> AsyncServeIngressLifecycleOwnerIdentities(node)' = {}",
+            "=> TRUE",
+            "must retain the exact reviewed statement",
+        ),
+        (
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "=> AsyncServeIngressLifecycleOwnerIdentities(node)' = {}",
+            "=> TRUE",
+            "must retain the exact reviewed statement",
+        ),
+        (
+            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+            "=> AsyncServeProducerEpisodeTypeInvariant'",
+            "=> TRUE",
+            "must retain the exact reviewed statement",
+        ),
+        (
+            "AsyncNextPreservesServeProducerEpisodeInvariants",
+            "=> /\\ AsyncServeProducerEpisodeTypeInvariant'",
+            "=> /\\ TRUE",
+            "must retain the exact reviewed statement",
+        ),
+        (
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+            "MutationBlocksFreshServeAdmission",
+            "must retain the exact reviewed proof dependencies",
+        ),
+        (
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "MutationNetworkStepPreservesEmptyOwners",
+            "must retain the exact reviewed proof dependencies",
+        ),
+        (
+            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+            "FunctionValueHasCodomain",
+            "MutationFunctionValueHasCodomain",
+            "must retain the exact reviewed proof dependencies",
+        ),
+        (
+            "AsyncNextPreservesServeProducerEpisodeInvariants",
+            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+            "MutationPreservesProducerEpisodeType",
+            "must retain the exact reviewed proof dependencies",
+        ),
+        (
+            "AsyncNextPreservesServeProducerEpisodeInvariants",
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "MutationPreservesEmptyServeIngressOwners",
+            "must retain the exact reviewed proof dependencies",
+        ),
+    ),
+)
+def test_serve_producer_episode_bridge_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each intermediate producer bridge remains semantic after resealing."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = (
+        formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+    )
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(
+        symbol in error and expected_error in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+            "ASSUME NEW episode,\n"
+            "         AsyncTimeoutRecoveryMutationFrameShape(episode),\n"
+            "         AsyncTimeoutRecoveryEpisodeBoundaryIn(\n"
+            "           episode, context', nodeView', generation', decisions')\n"
+            "  PROVE",
+            "\\A episode \\in ValidatorIds:\n"
+            "    /\\ AsyncTimeoutRecoveryMutationFrameShape(episode)\n"
+            "    /\\ AsyncTimeoutRecoveryEpisodeBoundaryIn(\n"
+            "         episode, context', nodeView', generation', decisions')\n"
+            "    =>",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "ASSUME NEW preClockState, NEW episode,\n"
+            "         AsyncTimeoutRecoveryMutationFrameShape(episode),\n"
+            "         AsyncTimeoutRecoveryEpisodeBoundaryIn(\n"
+            "           episode, context', nodeView', generation', decisions')\n"
+            "  PROVE",
+            "\\A preClockState, episode \\in ValidatorIds:\n"
+            "    /\\ AsyncTimeoutRecoveryMutationFrameShape(episode)\n"
+            "    /\\ AsyncTimeoutRecoveryEpisodeBoundaryIn(\n"
+            "         episode, context', nodeView', generation', decisions')\n"
+            "    =>",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary",
+            "ASSUME NEW preClockState, NEW timeoutBaseState,\n"
+            "         NEW node \\in ValidatorIds,\n"
+            "         AsyncTimeoutRecoveryEpisodeCreationReadyIn(\n"
+            "           preClockState, timeoutBaseState, node)\n"
+            "  PROVE",
+            "\\A preClockState, timeoutBaseState, node \\in ValidatorIds:\n"
+            "    AsyncTimeoutRecoveryEpisodeCreationReadyIn(\n"
+            "      preClockState, timeoutBaseState, node)\n"
+            "      =>",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+            "ASSUME NEW preClockState, NEW timeoutBaseState,\n"
+            "         NEW node \\in ValidatorIds,\n"
+            "         AsyncTimeoutRecoveryEpisodeCreationReadyIn(\n"
+            "           preClockState, timeoutBaseState, node)\n"
+            "  PROVE",
+            "\\A preClockState, timeoutBaseState, node \\in ValidatorIds:\n"
+            "    AsyncTimeoutRecoveryEpisodeCreationReadyIn(\n"
+            "      preClockState, timeoutBaseState, node)\n"
+            "      =>",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+            "ASSUME NEW state, NEW episode,\n"
+            "         AsyncTimeoutRecoveryMutationFrameShape(episode),\n"
+            "         AsyncTimeoutRecoveryEpisodeBoundaryIn(\n"
+            "           episode, context', nodeView', generation', decisions')\n"
+            "  PROVE",
+            "\\A state, episode \\in ValidatorIds:\n"
+            "    /\\ AsyncTimeoutRecoveryMutationFrameShape(episode)\n"
+            "    /\\ AsyncTimeoutRecoveryEpisodeBoundaryIn(\n"
+            "         episode, context', nodeView', generation', decisions')\n"
+            "    =>",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary",
+            "NEW node \\in ValidatorIds,",
+            "NEW node,",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+            "NEW node \\in ValidatorIds,",
+            "NEW node,",
+        ),
+    ),
+)
+def test_timeout_recovery_boundary_sequent_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Boundary proofs retain arbitrary states and the exact validator bound."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = (
+        formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+    )
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(
+        symbol in error
+        and "must remain the exact theorem-level ASSUME/PROVE "
+        "current-boundary sequent with arbitrary state records and the "
+        "reviewed validator bound"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame",
+            "=> AsyncTimeoutRecoveryBoundaryFrameShape(episode)",
+            "=> TRUE",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape",
+            "AsyncTimeoutRecoveryMutationFrameShape(\n"
+            "      AsyncTimeoutRecoveryEpisodeFromParameters(parameters))",
+            "TRUE",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape",
+            "\\A episode \\in AsyncTimeoutRecoveryEpisodeSet:\n"
+            "    AsyncTimeoutRecoveryMutationFrameShape(episode)",
+            "\\A episode \\in AsyncTimeoutRecoveryEpisodeSet: TRUE",
+        ),
+        (
+            "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary",
+            "state.timeoutRecoveryEpisodes \\subseteq "
+            "AsyncTimeoutRecoveryEpisodeSet\n      =>",
+            "TRUE\n      =>",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewEpisodeDecomposition",
+            "IF AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn(\n"
+            "             preClockState, node)",
+            "IF FALSE",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary",
+            "AsyncTimeoutRecoveryTransitionGateIn("
+            "preClockState, timeoutBaseState)\n      =>",
+            "TRUE\n      =>",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary",
+            "state.timeoutRecoveryEpisodes\n"
+            "           \\subseteq AsyncTimeoutRecoveryEpisodeSet,",
+            "TRUE,",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary",
+            "episodes =\n"
+            "           {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission("
+            "state, episode):\n"
+            "              episode \\in state.timeoutRecoveryEpisodes}",
+            "episodes = {}",
+        ),
+        (
+            "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet",
+            "=> asyncControlServiceState.timeoutRecoveryEpisodes\n"
+            "         \\subseteq AsyncTimeoutRecoveryEpisodeSet",
+            "=> TRUE",
+        ),
+        (
+            "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet",
+            "=> (AsyncControlServiceStateAfterReset(state, resetNodes))\n"
+            "           .timeoutRecoveryEpisodes\n"
+            "           \\subseteq AsyncTimeoutRecoveryEpisodeSet",
+            "=> TRUE",
+        ),
+        (
+            "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+            "PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'",
+            "PROVE TRUE",
+        ),
+        (
+            "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant",
+            "PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'",
+            "PROVE TRUE",
+        ),
+    ),
+)
+def test_timeout_recovery_boundary_chain_statements_fail_closed_after_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Every newly sealed boundary-chain statement survives digest refresh."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = (
+        formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+    )
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(
+        symbol in error
+        and "must remain the exact reviewed timeout-recovery boundary "
+        "theorem statement" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame",
+            "DEF AsyncTimeoutRecoveryMutationFrameShape,\n"
+            "       AsyncTimeoutRecoveryBoundaryFrameShape",
+            "DEF AsyncTimeoutRecoveryMutationFrameShape",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape",
+            "AsyncTimeoutRecoveryEpisodeFromParameters,\n"
+            "       AsyncTimeoutRecoveryEpisode",
+            "AsyncTimeoutRecoveryEpisodeFromParameters",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape",
+            "BY AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape",
+            "BY Zenon",
+        ),
+        (
+            "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame",
+            "MutationFrameProjectsBoundaryFrame",
+        ),
+        (
+            "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+            "FunctionalReplacePreservesDomain",
+            "",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryClearedFrozenPredecessorPreservesCurrentBoundary",
+            "MutationClearedFrozenPredecessorPreservesCurrentBoundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryExistingCaptureClearsThisStep",
+            "MutationExistingCaptureClearsThisStep",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "FunctionalReplacePreservesDomain",
+            "MutationFunctionalReplacePreservesDomain",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "FunctionalReplaceUpdateAtKey",
+            "MutationFunctionalReplaceUpdateAtKey",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
+            "FunctionalUpdateAwayFromKey",
+            "MutationFunctionalUpdateAwayFromKey",
+        ),
+        (
+            "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary",
+            "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape",
+            "MutationEpisodeSetHasMutationFrameShape",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewEpisodeDecomposition",
+            "DEF AsyncTimeoutRecoveryNewEpisodeIn,\n"
+            "       AsyncTimeoutRecoveryNewBaseEpisodeIn,\n"
+            "       AsyncTimeoutRecoveryNewEpisodeClearsFrozenPredecessorIn,\n"
+            "       AsyncTimeoutRecoveryEpisodeWithClearedFrozenPredecessor",
+            "DEF AsyncTimeoutRecoveryNewBaseEpisodeIn",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewBaseEpisodeInHasCurrentBoundary",
+            "AsyncTimeoutRecoveryEpisodeKey",
+            "",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+            "AsyncTimeoutRecoveryNewEpisodeDecomposition",
+            "MutationTimeoutRecoveryNewEpisodeDecomposition",
+        ),
+        (
+            "AsyncTimeoutRecoveryNewEpisodesHaveCurrentBoundary",
+            "AsyncTimeoutRecoveryNewEpisodeInHasCurrentBoundary",
+            "MutationNewEpisodeInHasCurrentBoundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary",
+            "AsyncTimeoutRecoveryRetainedEpisodesHaveCurrentBoundary",
+            "MutationRetainedEpisodesHaveCurrentBoundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+            "FunctionalReplacePreservesDomain",
+            "MutationFunctionalReplacePreservesDomain",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+            "MutationEpisodeAfterVoteAdmissionPreservesCurrentBoundary",
+        ),
+        (
+            "AsyncControlServiceTypeProjectsTimeoutRecoveryEpisodeSet",
+            "AsyncTimeoutRecoveryEpisodeTypeInvariantIn",
+            "MutationTimeoutRecoveryEpisodeTypeInvariantIn",
+        ),
+        (
+            "AsyncControlServiceResetPreservesTimeoutRecoveryEpisodeSet",
+            "FS_Subset",
+            "MutationSubset",
+        ),
+        (
+            "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+            "AsyncTimeoutRecoveryEpisodeUnionEstablishesCurrentBoundary",
+            "MutationEpisodeUnionEstablishesCurrentBoundary",
+        ),
+        (
+            "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+            "AsyncTimeoutRecoveryVoteOwnerImagePreservesCurrentBoundary",
+            "MutationVoteOwnerImagePreservesCurrentBoundary",
+        ),
+        (
+            "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant",
+            "AsyncControlServiceSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+            "MutationSlotTransitionEstablishesTimeoutRecoveryCurrentBoundary",
+        ),
+    ),
+)
+def test_timeout_recovery_boundary_chain_dependencies_fail_closed_after_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Every sealed boundary theorem keeps a reviewed proof dependency."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = (
+        formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+    )
+    source = formal_path.read_text(encoding="utf-8")
+    mutated = (
+        mutate_tla_theorem(source, symbol, old, new)
+        if new
+        else delete_tla_theorem_token(source, symbol, old)
+    )
+    formal_path.write_text(mutated, encoding="utf-8")
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+        symbol,
+    )
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(
+        symbol in error
+        and "must retain the exact reviewed proof dependencies" in error
+        for error in errors
+    ), errors
+
+
+def test_timeout_recovery_boundary_source_cannot_be_empty(
+    tmp_path: Path,
+) -> None:
+    """A regular zero-byte proof source cannot bypass its theorem seals."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    filename = "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+    (formal_dir / filename).write_text("", encoding="utf-8")
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    expected_symbols = set(
+        module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[filename]
+    )
+    rejected_symbols = {
+        symbol
+        for symbol in expected_symbols
+        if any(
+            "missing source-sealed timeout-recovery current-boundary theorem "
+            f"{symbol}" in error
+            for error in errors
+        )
+    }
+    assert rejected_symbols == expected_symbols, errors
 
 
 @pytest.mark.parametrize(
@@ -24551,7 +26806,12 @@ def test_timeout_vote_episode_adequate_leader_bridge_mutations(
         mutate_tla_theorem(source, symbol, old, new),
         encoding="utf-8",
     )
-    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    rebind_timeout_vote_episode_tla_theorem_seal(
+        module,
+        formal_dir,
+        filename,
+        symbol,
+    )
 
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -27832,6 +30092,106 @@ def test_serviced_candidate_production_contract_rejects_mutations(
 
 
 @pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "with_driver_and_lifecycle_ordinals",
+            """ingress
+            .install_dormant_local_fifo_reservations(dormant_local_fifo_reservations)
+            .map_err(|_| RuntimeConfigError::InvalidLifecycleOwnership)?;""",
+            "let _ = dormant_local_fifo_reservations;",
+            "restart must install dormant FIFO owners before startup successors",
+        ),
+        (
+            "step",
+            """self.finish_dispatched_step(
+            now,
+            effects,
+            effect_source,
+            effect_parent,
+            effect_parent_statement,
+            producer_handoff,
+            retained_deferred_ingress,
+        )""",
+            """self.finish_dispatched_step(
+            now,
+            effects,
+            effect_source,
+            effect_parent,
+            None,
+            producer_handoff,
+            retained_deferred_ingress,
+        )""",
+            "runtime step must transfer the exact parent statement and handoff into shared completion",
+        ),
+        (
+            "minimum_runnable_lifecycle_ordinal",
+            "            if !evidence.validate_exact()\n",
+            "            if false && !evidence.validate_exact()\n",
+            "serviced-candidate runnable selection must admit only exact minted completion evidence into the least-owner minimum",
+        ),
+    ),
+)
+def test_serviced_candidate_reviewed_runtime_items_survive_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Reviewed V4 runtime seals cannot hide a semantic mutation."""
+
+    module = load_checker()
+    copy_serviced_candidate_production_fixture(tmp_path)
+    assert (
+        module._serviced_candidate_production_source_fidelity_errors(tmp_path)
+        == []
+    )
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    context = (
+        (
+            "impl",
+            "<",
+            "D",
+            ":",
+            "RuntimeDriver",
+            ">",
+            "SerializedV2Runtime",
+            "<",
+            "D",
+            ">",
+        ),
+    )
+    mutate_rust_item_source_in_context(
+        module,
+        runtime_path,
+        item_name,
+        context,
+        old,
+        new,
+    )
+    source = runtime_path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == context
+    )
+    assert len(items) == 1
+    module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256[item_name] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._serviced_candidate_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
     (
         "relative",
         "old",
@@ -28012,7 +30372,6 @@ def test_serviced_candidate_v4_semantics_survive_item_digest_refresh(
     digest = module._rust_item_token_sha256(items[0])
     getattr(module, digest_name)[digest_key] = digest
     if relative == Path("crates/iroha_core/src/sumeragi/v2_runner.rs"):
-        module._SERVICED_CANDIDATE_RUNNER_ITEM_SHA256["run_inner"] = digest
         module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
     errors = module._serviced_candidate_production_source_fidelity_errors(
@@ -34148,6 +36507,41 @@ def test_async_original_state_erasure_keeps_producer_journal(
     ), errors
 
 
+def test_async_original_state_erasure_keeps_serve_episode_debt(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for name in (
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2ChainEpochRefinement.tla",
+    ):
+        (formal_dir / name).write_text(
+            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "AsyncOriginalAllVars",
+            ",\n    asyncServeProducerEpisodeDue",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "AsyncOriginalAllVars must equal only" in error
+        and "asyncServeProducerEpisodeDue" in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     "decoy",
     (
@@ -35436,7 +37830,7 @@ def test_async_deductive_and_finite_specs_cannot_be_conflated(tmp_path: Path) ->
 AsyncSchedulerVars == <<schedulerState>>
 AsyncRecoveryVars == <<recoveryPhase, recoveryQueue>>
 AsyncProducerVars == <<producerKnown, producerConsumed, producerHistory>>
-AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines>>
+AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>
 AsyncFairnessAt(initialContext) == WF_AsyncAllVars(AsyncNext)
 AsyncFairness == AsyncFairnessAt(ContextRecord(0, <<>>))
 AsyncBaseInitAt(initialContext) == TRUE
@@ -35472,19 +37866,25 @@ AsyncFiniteSpecAt(initialContext) == AsyncFiniteInitAt(initialContext) /\\ [][As
     (
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines>>",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, asyncFixedCorridorDeadlines>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines>>",
-            "<<gst, vars, AsyncRecoveryVars, AsyncSchedulerVars, AsyncProducerVars, asyncFixedCorridorDeadlines>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncRecoveryVars, AsyncSchedulerVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines>>",
+            "AsyncAllVars must equal only",
+        ),
+        (
+            "AsyncAllVars",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
             "<<gst, coreState, schedulerState, recoveryPhase, recoveryQueue, producerKnown>>",
             "AsyncAllVars must equal only",
         ),
@@ -35804,6 +38204,7 @@ def test_async_source_fidelity_requires_configuration_before_capacity_theorems(
             0,
         ),
         ("AsyncProducerProjectionStep", "AsyncCoreOuterFrame", 0),
+        ("AsyncServeProducerEpisodeTransition", "AsyncCoreOuterFrame", 0),
         ("AsyncCoreOuterFrame", "AsyncNonCrashOuterFrame", 0),
         ("AsyncCoreOuterFrame", "AsyncRecoveryOuterFrame", 0),
         ("AsyncNonCrashOuterFrame", "AsyncNonRunnerOuterFrame", 0),
@@ -35908,8 +38309,23 @@ def test_async_source_fidelity_requires_configuration_before_capacity_theorems(
             1,
         ),
         ("AsyncSchedulerTypeInvariant", "AsyncStrongTypeInvariant", 0),
+        (
+            "AsyncServeProducerEpisodeTypeInvariant",
+            "AsyncStrongTypeInvariant",
+            0,
+        ),
+        (
+            "AsyncServeProducerEpisodeOwnershipInvariant",
+            "AsyncStrongTypeInvariant",
+            0,
+        ),
         ("AsyncServiceActivationPairInvariant", "AsyncStrongTypeInvariant", 0),
         ("AsyncControlServiceStateTypeInvariant", "AsyncStrongTypeInvariant", 0),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "AsyncStrongTypeInvariant",
+            0,
+        ),
         (
             "AsyncCandidateLifecycleSchedulerCoverageInvariant",
             "AsyncStrongTypeInvariant",
@@ -36017,6 +38433,336 @@ def test_async_source_fidelity_pins_sany_provider_dependency_and_order(
         and f"must retain its reviewed dependency on {provider}" in error
         for error in dependency_errors
     ), dependency_errors
+
+
+@pytest.mark.parametrize(
+    "conjunct",
+    (
+        "AsyncServeProducerEpisodeTypeInvariant",
+        "AsyncServeProducerEpisodeOwnershipInvariant",
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+    ),
+)
+def test_async_strong_type_invariant_retains_producer_episode_conjuncts(
+    tmp_path: Path,
+    conjunct: str,
+) -> None:
+    """Each new debt/boundary conjunct survives source-seal replacement."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "AsyncStrongTypeInvariant",
+            f"  /\\ {conjunct}\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "AsyncStrongTypeInvariant must equal only its exact reviewed base "
+        "asynchronous invariant body" in error
+        and conjunct in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncInitEstablishesServeProducerEpisodeInvariants",
+            "=> /\\ AsyncServeProducerEpisodeTypeInvariant",
+            "=> /\\ TRUE",
+        ),
+        (
+            "AsyncInitEstablishesTimeoutRecoveryCurrentBoundary",
+            "=> AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "=> TRUE",
+        ),
+        (
+            "AsyncNextPreservesServeProducerEpisodeInvariants",
+            "=> /\\ AsyncServeProducerEpisodeTypeInvariant'",
+            "=> /\\ TRUE",
+        ),
+        (
+            "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant",
+            "PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'",
+            "PROVE TRUE",
+        ),
+    ),
+)
+def test_strong_type_producer_timeout_bridge_statements_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Producer-debt and timeout-boundary bridge conclusions stay exact."""
+
+    module = load_checker()
+    formal_dir = copy_flat_async_architecture_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncInitEstablishesStrongTypeInvariant",
+            "AsyncInitEstablishesServeProducerEpisodeInvariants",
+            "TRUE",
+            "must use the exact finite Serve-producer episode init bridge",
+        ),
+        (
+            "AsyncInitEstablishesStrongTypeInvariant",
+            "AsyncInitEstablishesTimeoutRecoveryCurrentBoundary",
+            "TRUE",
+            "must use the exact timeout-recovery boundary init bridge",
+        ),
+        (
+            "AsyncInitEstablishesStrongTypeInvariant",
+            "<2>3d, <2>3e, <2>3p, <2>3t, <2>4,",
+            "<2>3d, <2>3e, <2>4,",
+            "must retain the exact candidate/Serve/producer/timeout/leader/"
+            "ordinary scheduler-coverage QED dependency set",
+        ),
+        (
+            "AsyncAllVarsStutterPreservesStrongTypeInvariant",
+            "AsyncServeProducerEpisodeOwnershipInvariant,\n"
+            "             AsyncServeIngressLifecycleOwnerIdentities",
+            "TRUE,\n             AsyncServeIngressLifecycleOwnerIdentities",
+            "must retain the exact Serve-producer episode stutter bridge",
+        ),
+        (
+            "AsyncAllVarsStutterPreservesStrongTypeInvariant",
+            "AsyncNodeHasDecisionIn\n",
+            "TRUE\n",
+            "must retain the exact timeout-recovery boundary stutter bridge",
+        ),
+        (
+            "AsyncAllVarsStutterPreservesStrongTypeInvariant",
+            "<2>7, <2>8, <2>8p, <2>8t",
+            "<2>7, <2>8",
+            "must retain producer-episode and timeout-boundary prime steps "
+            "as exact QED dependencies",
+        ),
+        (
+            "AsyncNextPreservesStrongTypeInvariant",
+            "AsyncNextPreservesServeProducerEpisodeInvariants",
+            "TRUE",
+            "must retain the exact finite Serve-producer episode prime step",
+        ),
+        (
+            "AsyncNextPreservesStrongTypeInvariant",
+            "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant",
+            "TRUE",
+            "must retain the exact timeout-recovery current-boundary prime step",
+        ),
+        (
+            "AsyncNextPreservesStrongTypeInvariant",
+            "<2>4b, <2>4c, <2>4d, <2>4e, <2>5",
+            "<2>4b, <2>4c, <2>5",
+            "candidate-lifecycle, producer-episode, and timeout-boundary "
+            "prime step an exact QED dependency",
+        ),
+    ),
+)
+def test_strong_type_producer_timeout_bridge_dependencies_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Every new invariant bridge remains a named proof/QED dependency."""
+
+    module = load_checker()
+    formal_dir = copy_flat_async_architecture_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+
+    assert any(
+        symbol in error and expected_error in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncServeProducerEpisodeTransition",
+            "       IF AsyncServeProducerEpisodeRestartStep(node)\n"
+            "            \\/ AsyncServeProducerEpisodeReceiverCloseStep(node)\n"
+            "       THEN FALSE\n"
+            "       ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)\n"
+            "            THEN TRUE",
+            "       IF AsyncServeProducerEpisodeFinalRetirementStep(node)\n"
+            "       THEN TRUE\n"
+            "       ELSE IF AsyncServeProducerEpisodeRestartStep(node)\n"
+            "            \\/ AsyncServeProducerEpisodeReceiverCloseStep(node)\n"
+            "            THEN FALSE",
+        ),
+        (
+            "AsyncServeProducerEpisodeTransition",
+            "               ELSE asyncServeProducerEpisodeDue[node]",
+            "               ELSE FALSE",
+        ),
+        (
+            "AsyncServeProducerEpisodeActiveThisStep",
+            "   \\/ RunHistoricalServer(node)",
+            "   \\/ RunHistoricalServer(node)\n"
+            "   \\/ (\\E source \\in AsyncIngressSources:\n"
+            "         CoalesceHiddenPacket(node, source))",
+        ),
+        (
+            "AsyncServeProducerEpisodeOwnershipInvariant",
+            "       /\\ AsyncServeOffQueueReservations(node) = {}",
+            "       /\\ TRUE",
+        ),
+    ),
+)
+def test_serve_producer_episode_transition_mutations_are_rejected(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Restart/close precedence, retry stutter, and ownership stay exact."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        symbol in error
+        and "must retain the exact one-shot producer-debt ownership, "
+        "classifier, and transition semantics" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    (
+        "ReserveExactServeCapacityVia",
+        "AdvanceExactServeCapacityVia",
+        "ExactServeTransportAdmissionCanAdvanceVia",
+    ),
+)
+def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
+    tmp_path: Path,
+    symbol: str,
+) -> None:
+    """Every fresh logical/transport admission observes the due boundary."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            symbol,
+            "~asyncServeProducerEpisodeDue[node]",
+            "TRUE",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        symbol in error
+        and "must block fresh Serve admission exactly once" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncSchedulerTypeInvariant",
+            "  /\\ AsyncProducerTypeInvariant\n",
+            "",
+        ),
+        (
+            "AsyncTypeInvariant",
+            "  /\\ AsyncServeProducerEpisodeTypeInvariant\n",
+            "",
+        ),
+        (
+            "AsyncServiceActivationFrameVars",
+            ", asyncServeProducerEpisodeDue",
+            "",
+        ),
+    ),
+)
+def test_producer_episode_state_surfaces_cannot_omit_debt(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Typing and activation frames retain every producer-debt coordinate."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(f"{symbol} must equal only" in error for error in errors), errors
 
 
 @pytest.mark.parametrize(
@@ -36313,6 +39059,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     formal_dir.mkdir(parents=True)
     for relative in (
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
@@ -37000,8 +39747,8 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     adapter.write_text(
         mutate_adapter_item(
             "budget",
-            "Self::InstallTimeout => PersistenceMacroStepBudget::new(2, 4),",
-            "Self::InstallTimeout => PersistenceMacroStepBudget::new(2, 5),",
+            "Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 4),",
+            "Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 5),",
         ),
         encoding="utf-8",
     )
@@ -37012,6 +39759,33 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         for error in errors
     ), errors
     adapter.write_text(canonical_adapter, encoding="utf-8")
+
+    adapter.write_text(
+        mutate_adapter_item(
+            "budget",
+            "Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 4),",
+            "Self::InstallTimeout => PersistenceMacroStepBudget::new(2, 4),",
+        ),
+        encoding="utf-8",
+    )
+    mutated_budget = module.rust_items(
+        adapter.read_text(encoding="utf-8"), "budget"
+    )[0]
+    module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256["budget"] = (
+        module._rust_item_token_sha256(mutated_budget)
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "persistence macro-step budgets must retain the exact reviewed "
+        "initial/continuation bounds" in error
+        for error in errors
+    ), errors
+    adapter.write_text(canonical_adapter, encoding="utf-8")
+    module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256["budget"] = (
+        module._rust_item_token_sha256(
+            module.rust_items(canonical_adapter, "budget")[0]
+        )
+    )
 
     for deferred_owner in (
         "            && self.deferred_completions.is_empty()\n",
@@ -37719,8 +40493,8 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
-            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
-            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "restored_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "restored_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(false),",
             "the retained case must exercise the strict physical-replay helper",
         ),
         (
@@ -38477,2526 +41251,6 @@ for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:
 del _proof_ledger_test_component
 
 
-# Preserve incoming tests changed after the lexical component split.
-@pytest.mark.parametrize(
-    ("relative_path", "region_marker", "old", "new", "error_fragment"),
-    (
-        (
-            "crates/iroha_core/src/lib.rs",
-            "pub enum NetworkMessage",
-            "CertifiedMergeSidecar(Arc<CertifiedMergeSidecarMessage>),",
-            "CertifiedMergeSidecar(Box<CertifiedMergeSidecarMessage>),",
-            "every exact-output network payload class must use an immutable shared carrier",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct OutboundTransfer",
-            "chunks: Vec<Arc<CertifiedMergeSidecarMessage>>",
-            "chunks: Vec<CertifiedMergeSidecarMessage>",
-            "sidecar responses must cache each immutable fixed-boundary payload once for every source cursor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn drain_outbound_chunks_inner(",
-            "let message = Arc::clone(\n"
-            "                            transfer\n"
-            "                                .chunks\n"
-            "                                .get(index)\n"
-            "                                .expect(\"bounded sidecar cursor names a cached chunk\"),\n"
-            "                        );",
-            "let message = Arc::new(\n"
-            "                            transfer\n"
-            "                                .chunks\n"
-            "                                .get(index)\n"
-            "                                .expect(\"bounded sidecar cursor names a cached chunk\")\n"
-            "                                .as_ref()\n"
-            "                                .clone(),\n"
-            "                        );",
-            "sidecar drainage must clone only the cached Arc",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "let projection = admission.projection();",
-            "let _rebuilt_payload = Vec::<u8>::new().to_vec();\n"
-            "        let projection = admission.projection();",
-            "per-source sidecar drainage and acknowledgement must never reconstruct cached payload bytes",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) enum V2LaneWorkEffect",
-            "message: Arc<CertifiedMergeSidecarMessage>,",
-            "message: CertifiedMergeSidecarMessage,",
-            "the lane effect must preserve the exact immutable sidecar carrier",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
-            "let data = NetworkMessage::CertifiedMergeSidecar(message);",
-            "let data = NetworkMessage::CertifiedMergeSidecar(Arc::new((*message).clone()));",
-            "worker sidecar dispatch must install the existing Arc without reconstruction",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effect(",
-            "Arc::clone(&message),",
-            "Arc::new((*message).clone()),",
-            "runner sidecar dispatch must preserve the exact peer, complete route set, and immutable message pointer",
-        ),
-        (
-            "crates/iroha_config/src/parameters/defaults.rs",
-            "V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE",
-            "nonzero!(2_usize)",
-            "nonzero!(3_usize)",
-            "certified sidecar per-source sessions must remain exactly two",
-        ),
-        (
-            "crates/iroha_config/src/parameters/defaults.rs",
-            "V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE",
-            "nonzero!(16_usize * 1024 * 1024)",
-            "nonzero!(17_usize * 1024 * 1024)",
-            "certified sidecar per-source bytes must remain exactly 16 MiB",
-        ),
-        (
-            "crates/iroha_config/src/parameters/defaults.rs",
-            "V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE",
-            "nonzero!(4_usize)",
-            "nonzero!(5_usize)",
-            "certified sidecar per-source request gates must remain exactly four",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn from_admitted_reply(",
-            "semantic_target: flush_identity.semantic_target().clone(),",
-            "semantic_target: chunk.responder.clone(),",
-            "sidecar writer-flush admission must bind the opaque source, exact route, actor ticket and clone-shared claim with immutable payload and cursors",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_reply_flushes(",
-            "check_production_reliable_flush_worker_transition(flush_trace)\n"
-            "                            .ok_or_else",
-            "Some(flush_trace)\n"
-            "                            .ok_or_else",
-            "writer-flush ownership must consume the checked transition token before removing its target-local witness",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_reply_flushes(",
-            ".bind_confirmed_worker_trace(flush_trace)",
-            ".bind_confirmed_worker_trace(ProductionReliableFlushTraceProjection::default())",
-            "a successful writer occurrence must bind its exact confirmed worker trace before lane admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_reply_flushes(",
-            "if let Some(admission) = pending_flush.sidecar_admission.take() {\n"
-            "                        self.admitted_sidecar_chunks.push_back(admission);\n"
-            "                    }",
-            "let _ = pending_flush.sidecar_admission.take();",
-            "only a successful peer-writer flush may create a sidecar cursor receipt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_reply_flushes(",
-            "let route_state = self\n"
-            "                        .fanouts",
-            "if let Some(admission) = pending_flush.sidecar_admission.take() {\n"
-            "                        self.admitted_sidecar_chunks.push_back(admission);\n"
-            "                    }\n"
-            "                    let route_state = self\n"
-            "                        .fanouts",
-            "closed writer ownership must not manufacture a sidecar cursor receipt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn project_sidecar_receipt_completions(",
-            "admission.matches_materialized_chunk(message) && admission.is_bound_to_source(route)",
-            "admission.matches_materialized_chunk(message)",
-            "retained sidecar flush completion must match the immutable chunk and exact authenticated source before advancing only that route",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn drive_with_budget_ack<Attempt>(",
-            "CertifiedMergeSidecarMessage::Request(_)\n"
-            "                    | CertifiedMergeSidecarMessage::Close(_)\n"
-            "                    | CertifiedMergeSidecarMessage::CloseAck(_)\n"
-            "                    | CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
-            "CertifiedMergeSidecarMessage::Request(_) => Some((\n"
-            "                        post.clone(),\n"
-            "                        reply_route.clone(),\n"
-            "                        message_cursor_before,\n"
-            "                        message_cursor_after,\n"
-            "                    )),\n"
-            "                    CertifiedMergeSidecarMessage::Close(_)\n"
-            "                    | CertifiedMergeSidecarMessage::CloseAck(_)\n"
-            "                    | CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
-            "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn drive_with_budget_ack<Attempt>(",
-            "self.sidecar_control_units() >= self.sidecar_admission_capacity",
-            "self.sidecar_control_units() > self.sidecar_admission_capacity",
-            "sidecar receipt capacity must reject at the exact full boundary",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn admit_network_exact_output(",
-            ".post_reply_recoverable_with_flush_ack_at_attempt(\n"
-            "                        post,\n"
-            "                        reply_route,\n"
-            "                        ticket,\n"
-            "                        reply_writer_timeout_attempt,\n"
-            "                    )?",
-            ".post_reply_recoverable(post, reply_route, ticket)\n"
-            "                .map(|()| None)?",
-            "production reply output must retain every exact writer-flush witness",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn admit_network_exact_output(",
-            "Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack))",
-            "{ drop(flush_ack); Ok(ExactOutputAttemptOutcome::Admitted) }",
-            "production reply output must retain every exact writer-flush witness",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn drain_certified_merge_sidecar_chunk_admissions(",
-            "limit.min(pending.admitted_sidecar_chunks.len())",
-            "limit.min(pending.flushing_sidecar_chunks.len())",
-            "receipt drainage may consume only successfully flushed sidecar admissions",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "check_production_reliable_flush_link_transition(worker_trace, occurrence).ok_or(",
-            "check_production_reliable_flush_link_transition(worker_trace, worker_trace).ok_or(",
-            "lane application must consume checked worker/link tokens for the exact accepted occurrence before inspecting mutable transport state",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "if !admission.projection_matches_identity(&admission.flush_identity) {",
-            "if false {",
-            "lane application must consume checked worker/link tokens for the exact accepted occurrence before inspecting mutable transport state",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "|| projection.chunk_cursor_before != chunk_index",
-            "|| false",
-            "lane application must validate the immutable message and chunk cursors before transport preflight",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "preflight_reliable_flush_outbound(self, admission, &gate, chunk_index, count)?",
-            "preflight_reliable_flush_outbound(self, admission, &gate, 0, count)?",
-            "the exact gate, source route, shared bytes and cursors must preflight into one immutable application plan before claiming completion",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct ServerRequestGateAttempt {",
-            "cursor: ServerResponseCursor,",
-            "cursor: usize,",
-            "sidecar request gates must retain exact materialization authority, retry state, and a source-local pending-or-terminal cursor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "enum ServerResponseCursor {",
-            "Complete,",
-            "PendingZero,",
-            "sidecar gate history must preserve terminal completion across exact, later-delivery, and reconnected observations",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn prune_server_gates(",
-            "let reclaimed = self.reclaim_inactive_outbound_attempts(now)?;",
-            "let reclaimed = 0;",
-            "sidecar gate pruning must preserve semantic ownership until an authenticated close floor retires it",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn route_update(",
-            ".source_update_from(prior)",
-            ".source_update_from(candidate)",
-            "same-source sidecar route update must use the canonical monotonic update kernel",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "if prior.cursor == ServerResponseCursor::Complete {",
-            "if false && prior.cursor == ServerResponseCursor::Complete {",
-            "an exact, later-delivery, or reconnected completed source must remain terminal while only its observed route may update",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn enqueue_response(",
-            "let ServerResponseCursor::Pending(resume_chunk) = attempt.cursor else {\n"
-            "                continue;\n"
-            "            };",
-            "let resume_chunk = match attempt.cursor {\n"
-            "                ServerResponseCursor::Pending(chunk) => chunk,\n"
-            "                ServerResponseCursor::Complete => 0,\n"
-            "            };",
-            "completed sidecar sources must never regain materialized output",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn drain_outbound_chunks_inner(",
-            "cursor = ServerResponseCursor::Complete;",
-            "cursor = ServerResponseCursor::Pending(0);",
-            "sidecar drainage must persist terminal completion rather than a replayable chunk-zero cursor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "if !admission.flush_identity.claim_writer_flush_once() {",
-            "if false {",
-            "the clone-shared writer claim must be the sole linearization point before the exact checked application is compared and durably published",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "check_production_reliable_flush_application_transition(prospective_application)",
-            "check_production_reliable_flush_worker_transition(worker_trace)",
-            "the clone-shared writer claim must remain behind the checked application/link gates and opaque-token consumption",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "check_production_reliable_flush_link_transition(worker_trace, prospective_application)",
-            "check_production_reliable_flush_link_transition(worker_trace, occurrence)",
-            "the clone-shared writer claim must remain behind the checked application/link gates and opaque-token consumption",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "let prospective_application = checked_application.into_projection();",
-            "let prospective_application = prospective_application;",
-            "the clone-shared writer claim must remain behind the checked application/link gates and opaque-token consumption",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "attempt.materialization_retryable = false;\n"
-            "                    return Ok(ServerRequestAdmission::Existing);",
-            "attempt.materialization_retryable = true;\n"
-            "                    return Ok(ServerRequestAdmission::Existing);",
-            "an exact, later-delivery, or reconnected completed source must remain terminal while only its observed route may update",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "let retry_chunk = attempt.in_flight_chunk.unwrap_or(attempt.next_chunk);",
-            "let retry_chunk = 0;",
-            "a replacement writer tenure must retry the source's current chunk",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "if attempt.in_flight_chunk.is_none() && !attempt.queued {",
-            "if !attempt.queued {",
-            "a later delivery with an in-flight chunk must refresh only its source route without queueing a concurrent copy",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "attempt.cursor = ServerResponseCursor::Pending(retry_chunk);",
-            "attempt.cursor = ServerResponseCursor::Pending(0);",
-            "an observed source update must never reset a retained sidecar cursor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn enqueue_response(",
-            "candidate.same_delivery(admitted)",
-            "candidate.same_tenure(admitted)",
-            "materialization must consume the exact admitted delivery capability",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn enqueue_response(",
-            "let mut remaining_global_sessions = self\n"
-            "            .outbound_session_capacity\n"
-            "            .saturating_sub(self.outbound_attempt_count());",
-            "let mut remaining_global_sessions = usize::MAX;",
-            "sidecar materialization must preflight global and per-source session and byte bounds",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn enqueue_response(",
-            "self.source_outbound_count(source) >= self.limits.outbound_sessions_per_source",
-            "self.source_outbound_count(source) > self.limits.outbound_sessions_per_source",
-            "sidecar materialization must preflight global and per-source session and byte bounds",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn enqueue_response(",
-            ".saturating_add(response_len)\n"
-            "                    > self.limits.outbound_bytes_per_source",
-            ".saturating_add(response_len)\n                    > usize::MAX",
-            "sidecar materialization must preflight global and per-source session and byte bounds",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "if admitted_attempts.is_empty()",
-            "> self.outbound_byte_capacity",
-            "> usize::MAX",
-            "sidecar materialization must preflight global and per-source session and byte bounds",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "if remaining_global_sessions == 0",
-            "capacity_rejected_attempts.push(source.clone());",
-            "return Err(MergeSidecarError::Capacity(\"outbound response budget\"));",
-            "one saturated sidecar source must not erase independently admissible same-request sources",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "if !Self::alternate_source_is_authorized",
-            "next_chunk: 0,",
-            "next_chunk: prior.resume_chunk,",
-            "a newly observed alternate sidecar source must begin at chunk zero",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn drain_outbound_chunks_inner(",
-            "attempt.in_flight_chunk = Some(index);",
-            "attempt.next_chunk = index.saturating_add(1);",
-            "preserve the exact source route, and mark only an in-flight cursor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "!existing.request.same_occurrence_except_close_floor(request)",
-            "false && !existing.request.same_occurrence_except_close_floor(request)",
-            "duplicate sidecar admission must preserve canonical occurrence identity",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn alternate_source_is_authorized(",
-            "match candidate {",
-            "return true; match candidate {",
-            "alternate sidecar sources must retain live route authority without treating recovered peer ownership as a process-local capability",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "if &request.requester != sender || &request.responder != local_peer {",
-            "if false && (&request.requester != sender || &request.responder != local_peer) {",
-            "sidecar request admission must bind authenticated sender, responder, semantic target, and active route",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn cancel_unmaterialized_server_request(",
-            "Self::release_authorized_server_request_attempts(gate);",
-            "let _ = gate;",
-            "failed sidecar materialization must preserve route/cursor history",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "if !prior.materialization_retryable {",
-            "if false && !prior.materialization_retryable {",
-            "an exact failed-materialization retry must preserve only its source-local retryability and re-enter durable fair selection",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn release_unsent_request(",
-            "let attempt = assembly\n"
-            "            .current\n"
-            "            .take()",
-            "return; let attempt = assembly\n            .current\n            .take()",
-            "an unsent sidecar request must restore the exact holder cursor, close its durable sequence, and persist before retry",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn acknowledge_certified_merge_sidecar_chunk_admission(",
-            "if acknowledged {",
-            "if true {",
-            "lane work may schedule the next chunk only after the exact receipt and next pending writer identity are durable",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn acknowledge_certified_merge_sidecar_chunk_admission(",
-            "operation.complete();",
-            "drop(operation);",
-            "lane sidecar ACK application may complete only after every successor post is retained",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn effect_count(",
-            "self.effects\n"
-            "            .len()\n"
-            "            .saturating_add(self.sidecar_effects.len())",
-            "0",
-            "lane scan rank must count both ordinary and source-owned sidecar effects",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn requeue_effect(",
-            "match effect {",
-            "drop(effect); return true; match effect {",
-            "lane requeue must return the exact unserviceable occurrence to its bounded owner lane",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_merge_sidecar_post(",
-            "let MergeSidecarPost {\n"
-            "            peer,\n"
-            "            reply_route,\n"
-            "            message,\n"
-            "        } = post;",
-            "let MergeSidecarPost {\n"
-            "            peer: _,\n"
-            "            reply_route,\n"
-            "            message,\n"
-            "        } = post;\n"
-            "        let peer = self.local_peer.clone();",
-            "lane sidecar post conversion must preserve the exact peer and message while stripping only GenerationHint reply-route ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn prune_finalized_merge_sidecars(",
-            ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;",
-            ".ok();",
-            "finalized sidecar pruning must remain fail-stop and Kura-bound",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(",
-            "let (retained, receipt) = routes.retain_active_with_receipt();",
-            "let retained = routes.retain_active();\n"
-            "    let receipt = NetworkReplyRouteHistoryReceipt::default();",
-            "runner pruning must retain every live source attempt and its tombstones",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn is_pending(",
-            "fanout.has_dispatchable_target()",
-            "false",
-            "pending exact output must include dispatchable fanouts, writer flushes, and undrained receipts without spinning on parked ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn handoff_applied_height_to_durable_reconstruction(",
-            "self.admitted_sidecar_chunks.clear();",
-            "let _ = &self.admitted_sidecar_chunks;",
-            "applied-height handoff must retire every volatile sidecar completion state",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn retain_returned(",
-            "if HashOf::new(&post.data) != *expected_hash {",
-            "if false && HashOf::new(&post.data) != *expected_hash {",
-            "returned actor post must retain the exact pinned payload identity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn handoff_applied_height_to_durable_reconstruction(",
-            ".any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)",
-            ".any(|(message, expected_hash)| false && HashOf::new(message) != *expected_hash)",
-            "applied-height handoff must preflight every pinned payload before classification",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn drive_with_budget_ack<Attempt>(",
-            "blocked_sources.insert(attempted_source);",
-            "let _ = attempted_source;",
-            "exact-output drive_with_budget_ack declaration and complete control flow",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn apply_reply_route_update(",
-            "self.current = None;",
-            "self.message_index = 0; self.current = None;",
-            "a same-source reconnect must not reset its retained exact-output cursor",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn coalesce_reservation_additions_for_plan(",
-            "ReplyTargetMerge::Update { .. } => 0,",
-            "ReplyTargetMerge::Update { .. } => full_mask,",
-            "ordinary same-source updates retain reservation ownership while only a new source charges the candidate cursor suffix",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn preview_coalesce_plan(",
-            "target.2 = false;",
-            "target.1 = 0; target.2 = false;",
-            "the coalesce preview must preserve the retained message cursor",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn outstanding_sources_excluding(",
-            "for (target_index, target) in self.targets.iter().enumerate() {",
-            "for (target_index, target) in self.targets.iter().enumerate().filter(|(_, target)| !target.parked) {",
-            "parked attempts must retain every outstanding source/FIFO class",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn outstanding_reservation_counts(",
-            "for (target_index, target) in self.targets.iter().enumerate() {",
-            "for (target_index, target) in self.targets.iter().enumerate().filter(|(_, target)| !target.parked) {",
-            "parked attempts must retain their reservation ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan(&self, candidate: &Self)",
-            "self.reply_target_merge_plan_with_hooks(candidate, |_| {}, || {})",
-            "self.reply_target_merge_plan_after_candidate_prune(candidate, |_| {})",
-            "the no-hook production coalescing wrapper must delegate to the receipt-bound route-history kernel",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            ".project_retained_reply_routes(prune_receipt)",
-            ".project_retained_reply_routes(prune_receipt.clone())",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            ".merge_with_receipt(&candidate_routes)",
-            ".merge(&candidate_routes)",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            ".any(|route| route.same_delivery(candidate_route))",
-            ".any(|route| route.same_source(candidate_route))",
-            "the authoritative merged route snapshot must reuse the immutable joint tenure/delivery freshness kernel",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "                    update,\n                });",
-            "                    update: NetworkReplyRouteSourceUpdate::Exact,\n"
-            "                });",
-            "same-source coalescing must preserve the retained source cursor while updating only its authenticated route capability",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_coalesce_plan(",
-            "message_index: candidate_target.message_index,\n"
-            "                        reply_writer_timeout_attempt: candidate_target.reply_writer_timeout_attempt,\n"
-            "                        current: None,",
-            "message_index: 0,\n"
-            "                        reply_writer_timeout_attempt: candidate_target.reply_writer_timeout_attempt,\n"
-            "                        current: None,",
-            "an appended source must preserve its candidate cursor and parked state while starting without actor-post, admission-ticket, or writer-flush ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capacity_available_for(",
-            "pending.coalesce_reservation_additions_for_plan(fanout, &plan.targets)?",
-            "fanout.admission_reservation_counts()?",
-            "capacity preflight must enforce route-source geometry before charging only newly appended source ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn coalesced_target_geometry_available(",
-            "&& target_count <= plan.reply_routes.source_capacity()",
-            "&& true",
-            "coalesced reply attempts must fit both the configured fanout bound and the actor-derived source-capacity geometry",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            ".source_update_from_snapshot(prior_route)",
-            ".source_update_from(prior_route)",
-            "the authoritative merged route snapshot must reuse the immutable joint tenure/delivery freshness kernel",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn classified_with_reply_routes(",
-            "Self::classified_with_route_history(messages, peers, routes, Some(reply_routes))",
-            "Self::classified_with_route_history(messages, peers, routes, None)",
-            "reply fanout construction must preserve the complete bounded route history",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn classified_with_route_history(",
-            "            reply_routes,\n"
-            "            ingress_ownership: None,\n"
-            "            current_source_targets: BTreeMap::new(),",
-            "            reply_routes: None,\n"
-            "            ingress_ownership: None,\n"
-            "            current_source_targets: BTreeMap::new(),",
-            "fanout construction must store the complete authoritative live-and-tombstone reply history",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "let retained_routes = self.reply_routes.clone().ok_or_else",
-            "let retained_routes = candidate.reply_routes.clone().ok_or_else",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "plan.push(ReplyTargetMerge::Update {",
-            "plan.push(ReplyTargetMerge::Reactivate {",
-            "no coalescing path may reset a retained terminal reply cursor from a newly materialized candidate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "if plan.targets.is_empty()",
-            ".commit_coalesce_plan(&fanout, &plan, preview.current_source_targets);",
-            ".coalesce_retry(&fanout)?;",
-            "a route-history-only update must atomically commit its previewed cursor and FIFO ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "if plan.targets.is_empty()",
-            "self.source_fifo_owners = next_source_fifo_owners;",
-            "let _ = next_source_fifo_owners;",
-            "a route-history-only update must atomically commit its previewed cursor and FIFO ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_coalesce_plan(",
-            "self.reply_routes = Some(plan.reply_routes.clone());",
-            "self.reply_routes = None;",
-            "atomic coalesce commit must install the complete route and fair-ingress histories",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn exact_target_geometry(",
-            "Some(reply_routes.clone()),",
-            "None,",
-            "lane preflight expands every authenticated source into an independent exact target",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn advance_after_attempt(",
-            "self.unregister_source_fifo_owner(fifo_id, source)?;",
-            "let _ = (fifo_id, source);",
-            "admission advances only the completed class/source ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn start(",
-            ".map(|entry| entry.validator.clone())",
-            ".filter(|_| false).map(|entry| entry.validator.clone())",
-            "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn enqueue_owned_exact_reply_routes_while_guarded(",
-            "PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(",
-            "PendingExactFanout::claimed_with_routes(",
-            "exact replies expand all authenticated sources without changing semantic identity and preserve bounded route",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn applied_height_reconstruction_covers(",
-            "rollover_claim.validate_fanout(messages, peers)?;",
-            "let _ = (messages, peers);",
-            "durable rollover requires a validated typed claim in the exact creation scope",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn applied_height_reconstruction_covers(",
-            "if !scope.covers(artifact) {",
-            "if false && !scope.covers(artifact) {",
-            "durable rollover requires a validated typed claim in the exact creation scope",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn enqueue_exact_fanout_while_guarded(",
-            "PendingExactFanout::claimed(messages, peers, rollover_claim)?",
-            "PendingExactFanout::claimed(messages, peers, ExactOutputRolloverClaim::Exact)?",
-            "every production exact fanout must enter the corridor with its typed claim",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn applied_height_reconstruction_covers(",
-            "durable_history.ok_or_else(|| {",
-            "Some(durable_history.unwrap()).ok_or_else(|| {",
-            "applied-height handoff must independently reread every durable Kura response source",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn durable_history_source_covers(",
-            "|| response.certificate != source.commit_qc",
-            "|| false",
-            "durable CommitQC response must match its exact Kura finality source",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn durable_history_source_covers(",
-            "|| canonical_wire != response.body",
-            "|| false",
-            "durable body response must match its exact canonical Kura block",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn durable_history_source_covers(",
-            "|| certificate.commit_qc != source.commit_qc",
-            "|| false",
-            "durable lane certificate must match its exact certified Kura source",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn post_durable_history_response_with_routes(",
-            "durable_history_source_covers(",
-            "durable_history_source_covers_unchecked(",
-            "global historical response must validate Kura before exact-output admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn post_durable_lane_certificate_with_routes(",
-            "durable_history_source_covers(",
-            "durable_history_source_covers_unchecked(",
-            "historical lane response must validate Kura before exact-output admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn handoff_applied_height_output_to_durable_reconstruction(",
-            "Some(self.kura.as_ref()),",
-            "None,",
-            "production handoff must pass exact lane and Kura authorities into retirement",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn applied_height_reconstruction_covers(",
-            "round.context_id == context_id && round.height == height",
-            "round.context_id == context_id",
-            "durable rollover classification must bind the exact artifact context and height",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn applied_height_reconstruction_covers(",
-            "ProgressReconstruction::Retransmit",
-            "ProgressReconstruction::Exact",
-            "exact-output applied_height_reconstruction_covers declaration",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn validate_applied_height_output_handoff_authority(",
-            "|| receipt.artifact_hash() != HashOf::new(artifact)",
-            "|| false",
-            "applied-height handoff requires the exact Kura receipt and finality artifact",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn covered_source_hash(",
-            "self.finality_artifact_hash != HashOf::new(finality_artifact)",
-            "false && self.finality_artifact_hash != HashOf::new(finality_artifact)",
-            "lane rollover authority must bind the exact finality artifact and height",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn covered_source_hash(",
-            "self.durable_sessions.get(&proposal_hash)",
-            "self.durable_sessions.values().next()",
-            "winning lane output must use its proposal-keyed durable session witness",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn covered_source_hash(",
-            "validate_superseded_lane_output(message)?;",
-            "let _ = message;",
-            "non-winning lane output must be validated before artifact-bound supersession",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn persistent(",
-            "application_receipt_hash.as_ref(),",
-            "durable_artifact_hash.as_ref(),",
-            "lane durable source must commit finality, certificate, and application receipt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn durable_lane_rollover_authority(",
-            "block.header().height().get() != finality_artifact.height\n"
-            "            || block.hash() != finality_artifact.block_hash",
-            "false",
-            "lane authority builder must derive its bounded ordinary and autonomous "
-            "winner set from the exact canonical block",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn durable_lane_rollover_authority(",
-            "|| receipt.application_block_hash != finality_artifact.block_hash",
-            "|| false",
-            "lane authority builder must bind every winner to the exact applied artifact",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn reconstruct_durable_lane_certificate(",
-            "self.kura.read_certified_lane_block_artifact(",
-            "self.kura.read_certified_lane_block_artifact_unchecked(",
-            "lane recovery reconstruction must begin from the exact certified Kura artifact",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn serve_durable_lane_certificate(",
-            "reply_routes: Some(reply_routes),",
-            "reply_routes: None,",
-            "lane recovery emitter retains every authenticated source route",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn merge_optional_reply_routes(",
-            "let mut merged = retained.clone();",
-            "let mut merged = candidate.clone();",
-            "lane effect coalescence atomically commits canonical history maintenance and reports success only for a retained live candidate delivery",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn merge_optional_reply_routes(",
-            "merged.merge_observed_with_receipt(candidate)",
-            "merged.merge(candidate)",
-            "lane effect coalescence atomically commits canonical history maintenance and reports success only for a retained live candidate delivery",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn merge_lane_work_effect_reply_routes_after_route_merge<AfterRouteMerge>(",
-            "if !lane_work_effect_reply_routes_have_valid_shape(candidate) {",
-            "if !lane_work_effect_reply_routes_are_valid(candidate) {",
-            "inactive duplicates still reach maintenance",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn lane_work_effect_key(",
-            "encoded.push(4);",
-            "encoded.push(0);",
-            "durable lane response effect identity must include its distinct tag, peer, and certificate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "services.post_durable_history_response_on_reply_routes_with_permit(",
-            "services.post_durable_history_response_with_permit(",
-            "historical global responses preserve the complete prevalidated route set",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effect(",
-            ".post_durable_lane_certificate_on_reply_routes(\n"
-            "                    peer,\n"
-            "                    reply_routes,\n"
-            "                    ingress_ownership,\n"
-            "                    certificate,\n"
-            "                )",
-            ".post_lane_block(peer, BlockMessage::LaneBlockCertificate(Box::new(certificate)))",
-            "historical lane dispatch preserves every authenticated source route",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effects(",
-            "let scan_limit = lane_work.effect_count();",
-            "let scan_limit = limit.max(1);",
-            "lane scheduler must scan past unserviceable heads without losing ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effects(",
-            "continue;",
-            "break;",
-            "lane scheduler must scan past unserviceable heads without losing ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effects(",
-            "apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;",
-            "let _ = (lane_work, services, limit);",
-            "runner lane dispatch must apply writer receipts before selecting owned work",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "match dispatch_lane_work_effect(services, next_effect)? {",
-            "apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;",
-            "let _ = (lane_work, services, limit);",
-            "runner lane dispatch must apply writer receipts after complete and source-retained exact handoffs",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
-            "fn rollover_finalized_height_outputs(",
-            "let _ = retry_exact_output_and_apply_sidecar_admissions(\n"
-            "        &mut lane_work,\n"
-            "        services,\n"
-            "        control_queue_capacity,\n"
-            "    )?;",
-            "let _ = services.retry_pending_exact_output();",
-            "durable finalization must retry and apply sidecar receipts before reconstructing rollover authority",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn persist_anchored_sessions(",
-            "self.hydrate_canonical_lane_artifacts()?;",
-            "let _ = &self.lane_sessions;",
-            "late canonical lane hydration must precede committed-session collection",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn new_with_output_guard_and_transport(",
-            "adapter.ensure_globally_applied_lane_receipts_durable()?;\n"
-            "        construction.complete();",
-            "adapter.ensure_globally_applied_lane_receipts_durable()?;\n"
-            "        adapter.hydrate_canonical_lane_artifacts()?;\n"
-            "        construction.complete();",
-            "production constructor must remain carrier-silent before exact Queue installation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn activate_after_lane_drain_queue_install(",
-            "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;",
-            "let _ = installed_queue;",
-            "one-shot startup activation must authenticate the installed Queue",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn claim_runner_lifecycle_process_generation(",
-            "kura.claim_autonomous_lifecycle_process_generation(",
-            "kura.read_autonomous_lifecycle_process_generation(",
-            "the configured-role process generation helper must durably claim validator ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn claim_runner_lifecycle_process_generation(",
-            "match role {",
-            "if local_validator_index(context, local_peer, role)?.is_none() {\n"
-            "        return Ok(None);\n"
-            "    }\n"
-            "    match role {",
-            "the configured-role process generation helper must not consult height-local roster membership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
-            "let _ = &queue;",
-            "runner startup must install the exact Queue before the one-shot carrier activation seam",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn hydrate_canonical_lane_artifacts(",
-            "let _ = self\n"
-            "                .lane_sessions\n"
-            "                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);",
-            "let _ = proposal;",
-            "late canonical lane hydration must retain the exact proposal as bounded recovery work",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
-            "fn rollover_finalized_height_outputs(",
-            "lane_work.persist_anchored_sessions()?;",
-            "let _ = &lane_work;",
-            "finalized output rollover must durably reconstruct every predecessor owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
-            "fn rollover_finalized_height_outputs(",
-            ".durable_lane_rollover_authority(artifact)?",
-            "None",
-            "finalized output rollover must durably reconstruct every predecessor owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
-            "fn rollover_finalized_height_outputs(",
-            "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;",
-            "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority.clone())?;",
-            "finalized output rollover must durably reconstruct every predecessor owner",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn with_limits_and_server_stream_capacity(",
-            "reply_source_capacity,\n"
-            "            server_roster_digest,\n"
-            "            server_stream_capacity,\n"
-            "            outbound_session_capacity,",
-            "reply_source_capacity,\n"
-            "            server_roster_digest,\n"
-            "            server_stream_capacity,\n"
-            "            outbound_session_capacity: 0,",
-            "sidecar source geometry must reject zero and install every checked corridor bound",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn with_limits_and_server_stream_capacity(",
-            "tick_close_next: false,",
-            "tick_close_next: true,",
-            "sidecar request/close fairness must service an initial progress-bearing request before alternating closes",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn tick_bounded(",
-            "if self.timeout_retry_close_deferred {",
-            "if false {",
-            "a newly timed-out sidecar fetch may preempt administrative closure only once before retained Close debt wins the bounded service slot",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn begin_request_or_close(",
-            "self.timeout_retry_close_deferred = false;",
-            "let _ = &self.timeout_retry_close_deferred;",
-            "servicing a sidecar Close must discharge retained timeout-preemption debt",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn release_authorized_server_request_attempts(",
-            "matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
-            "false;",
-            "transiently rejected response work must release materialization authority",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn park_authorized_server_request_attempts(",
-            "for attempt in gate\n            .attempts",
-            "return; for attempt in gate\n            .attempts",
-            "parking a materialized response must consume retryability while retaining each source route and resume cursor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "if admitted_attempts.is_empty() && capacity_rejected_attempts.is_empty()",
-            "Self::park_authorized_server_request_attempts(gate, now);",
-            "let _ = (gate, now);",
-            "completed-race and admitted materialized response work must pass through terminal parking",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn enqueue_response(",
-            "attempt.materialization_retryable =\n"
-            "                matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
-            "attempt.materialization_retryable = false;",
-            "partial materialization must keep capacity-partitioned pending sources retryable after shared bytes retire",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn reclaim_inactive_outbound_attempts(",
-            "gate_attempt.cursor = ServerResponseCursor::Pending(resume_chunk);",
-            "let _ = resume_chunk;",
-            "inactive sidecar parking must remain pending at the exact unacknowledged source cursor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn reclaim_inactive_outbound_attempts(",
-            "self.persist_lifecycle_projection(projected)?;",
-            "drop(projected);",
-            "inactive sidecar reclamation must publish every projected durable cursor before removing ephemeral writers or shared bytes",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn with_limits_and_server_stream_capacity(",
-            ".checked_mul(limits.outbound_sessions_per_source)",
-            ".saturating_mul(limits.outbound_sessions_per_source)",
-            "sidecar global capacity must be checked from the configured authenticated-source geometry",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn derive_server_request_capacities(",
-            ".checked_mul(reply_source_capacity)",
-            ".saturating_mul(reply_source_capacity)",
-            "sidecar responder gates and per-source attempts must use checked products of the immutable roster and authenticated-source geometry",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn next_server_request_materialization(",
-            "self.persist_lifecycle_projection(projected)?;",
-            "drop(projected);",
-            "fair sidecar materialization must persist the selected requester cursor before granting any live terminating lookup authority",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "next_chunk: resume_chunk,",
-            "next_chunk: 0,",
-            "merge-sidecar source-isolated production seam",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn apply_reliable_flush_application(",
-            "attempt.queued = true;\n            transport\n"
-            "                .outbound_order\n"
-            "                .push_back((plan.gate.key.clone(), plan.gate.source.clone()));",
-            "let _ = &attempt.queued;",
-            "merge-sidecar source-isolated production seam",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn drain_outbound_chunks_durable(",
-            "self.persist_lifecycle_state()?;",
-            "let _ = &lifecycle_changed;",
-            "production sidecar drainage must durably publish every changed pending identity",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "#[cfg(test)]\n    fn drain_outbound_chunks(",
-            "#[cfg(test)]",
-            "#[cfg(any())]",
-            "raw non-durable sidecar drainage must remain exactly #[cfg(test)]",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize",
-            "MAX_VALIDATORS_PER_HEIGHT;",
-            "1;",
-            "certified merge semantic request history must have exactly one top-level protocol-roster bound",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct MergeSidecarRuntimeGeometryV3",
-            "semantic_peer_capacity: u64,",
-            "semantic_peer_capacity: u32,",
-            "durable sidecar geometry must advertise its validator-scoped semantic-peer bound",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn lifecycle_runtime_geometry_v3(",
-            "semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,",
-            "semantic_peer_capacity: as_u64(self.reply_source_capacity)?,",
-            "lifecycle geometry must fingerprint the validator-scoped semantic-peer bound independently of concurrent reply sources",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn lifecycle_max_snapshot_bytes_for_attempt_capacity(",
-            ".checked_mul(2)",
-            ".checked_mul(1)",
-            "lifecycle byte geometry must reserve requester and responder stream records for every semantic validator",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn advance_piggybacked_close_floor(",
-            "!retained_request.same_occurrence_except_close_floor(request)",
-            "retained_request.same_occurrence_except_close_floor(request)",
-            "accept only the same immutable occurrence and reject regression",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn advance_piggybacked_close_floor(",
-            "self.persist_lifecycle_projection(projected)?;",
-            "drop(projected);",
-            "publish the sole V2 projection before updating live cancellation, gate, or transfer state without rematerializing",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn restore_lifecycle_snapshot(",
-            "snapshot.request_streams.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS",
-            "snapshot.request_streams.len() > self.reply_source_capacity",
-            "lifecycle restoration must bound both semantic stream maps independently from concurrent authenticated-source gates",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn allocate_request_sequence(",
-            "&& reclaim.is_none()",
-            "&& reclaim.is_some()",
-            "requester-side holder rotation must reclaim only quiescent roster-bounded streams",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn ensure_server_stream_slot(",
-            "self.server_streams.len() < self.server_stream_capacity",
-            "self.server_streams.len() < self.server_request_gate_capacity",
-            "stream-slot helper must reject immutable-capacity exhaustion without independently rolling the generation",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn server_generation_is_terminal(",
-            "&& self.server_request_gates.is_empty()",
-            "|| self.server_request_gates.is_empty()",
-            "every stream terminal and every gate, transfer, flush-order, and pending-closure owner empty",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn server_generation_is_terminal(",
-            "&& self.pending_server_closures.is_empty()",
-            "|| self.pending_server_closures.is_empty()",
-            "every stream terminal and every gate, transfer, flush-order, and pending-closure owner empty",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn transition_server_service_generation(",
-            "if !self.server_generation_is_terminal() {",
-            "if false && !self.server_generation_is_terminal() {",
-            "ordinary responder generation rollover must occur only for a full terminal table",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "self.ensure_server_stream_slot(sender)?;",
-            "let _ = sender;",
-            "full current-generation responder table rejects before pruning or mutating lifecycle state",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_close(",
-            "if !self.server_streams.contains_key(sender) {\n"
-            "            return Ok(close_ack());\n"
-            "        }",
-            "if !self.server_streams.contains_key(sender) {\n"
-            "            let _ = close_ack();\n"
-            "        }",
-            "unknown current-generation Close must be acknowledged without allocating responder stream geometry",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn new(payload: MergeSidecarLifecyclePayloadV3)",
-            "let payload_hash = HashOf::new(&payload);",
-            "let payload_hash = HashOf::new(&());",
-            "merge-sidecar crash-safe lifecycle production seam",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn integrity_is_valid(&self)",
-            "self.payload_hash == HashOf::new(&self.payload)",
-            "self.payload_hash != HashOf::new(&self.payload)",
-            "the durable sidecar snapshot integrity check must bind the complete canonical payload",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn decode_snapshot(",
-            "if !snapshot.integrity_is_valid() {",
-            "if false && !snapshot.integrity_is_valid() {",
-            "lifecycle recovery must accept only canonical integrity-bound V3 state",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn decode_snapshot(",
-            "decode_from_bytes::<MergeSidecarLifecycleSnapshotV3>",
-            "decode_from_bytes::<UnsupportedMergeSidecarLifecycleSnapshotV1>",
-            "production lifecycle recovery must never decode the legacy V1 negative-test fixture",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn legacy_lifecycle_v1_snapshot_is_rejected_without_migration(",
-            'error.contains("migration is not supported")',
-            'error.contains("payload digest mismatch") '
-            '/* error.contains("migration is not supported") */',
-            "the retired-layout regression must require an explicit no-migration recovery failure",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn source_gate_count(",
-            "retained.shares_budget_with(source)",
-            "!retained.shares_budget_with(source)",
-            "per-source sidecar gate accounting must share one stable authenticated-peer budget across every semantic origin",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn source_gate_count_after_close(",
-            "&key.0 != sender",
-            "&key.0 == sender",
-            "close-aware per-source gate accounting must retain every gate from another semantic origin",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn restore_lifecycle_snapshot(",
-            "BTreeMap::<ServerRequestBudgetSource, usize>::new()",
-            "BTreeMap::<(PeerId, ServerRequestBudgetSource), usize>::new()",
-            "durable recovery must aggregate gate ownership by stable authenticated source rather than by semantic requester/source pairs",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "self.source_gate_count(&source)",
-            "self.server_request_gates.len()",
-            "alternate-source sidecar admission must retain route-set, global-gate, and per-source-gate bounds",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn fifth_gate_from_one_hub_is_rejected_while_another_hub_progresses(",
-            "for index in 0..MAX_SERVER_REQUEST_GATES_PER_SOURCE {",
-            "for index in 0..1 {",
-            "the exact source-cap regression must fill all four gates through one authenticated hub while varying semantic origins",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn restore_lifecycle_snapshot(",
-            "if !snapshot.integrity_is_valid() {",
-            "if false && !snapshot.integrity_is_valid() {",
-            "lifecycle restoration must independently reject a stale typed payload digest before interpreting any semantic floor",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn persist_next(",
-            "snapshot.payload_hash = HashOf::new(&snapshot.payload);",
-            "snapshot.payload_hash = HashOf::new(&());",
-            "V3 lifecycle publication must recompute the typed payload digest before each state-slot publication",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn persist_next(",
-            "Self::sync_directory(&self.directory)?;",
-            "let _ = &self.directory;",
-            "V3 lifecycle publication must sync the replaced state slot before publishing its root",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub enum CertifiedMergeSidecarMessage",
-            "GenerationHint(CertifiedMergeSidecarGenerationHintV1),",
-            "GenerationHint(CertifiedMergeSidecarCloseAckV1),",
-            "the certified sidecar wire enum must expose request, close, close acknowledgement, generation fence, and chunk as distinct exhaustive variants",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) enum ServerRequestAdmission",
-            "GenerationHint(MergeSidecarPost),",
-            "GenerationHint,",
-            "server request admission must explicitly distinguish materialization, existing ownership, and a stateless generation hint",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn canonical_hint_id(&self)",
-            "self.observed_message_hash.as_ref(),",
-            "&version,",
-            "the generation hint identity must bind both generations, the exact observed message, and both authenticated peers",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub struct CertifiedMergeSidecarSemanticSequenceV1",
-            "pub struct CertifiedMergeSidecarSemanticSequenceV1(pub NonZeroU64);",
-            "pub struct CertifiedMergeSidecarSemanticSequenceV1(pub u64);",
-            "every exact semantic occurrence coordinate must use a nonzero typed wire value",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub struct CertifiedMergeSidecarRequestV1",
-            "pub semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
-            "pub semantic_sequence: u64,",
-            "Request wire occurrence must carry typed nonzero generation, epoch, and semantic sequence",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub struct CertifiedMergeSidecarChunkV1",
-            "pub semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
-            "pub semantic_sequence: u64,",
-            "Chunk wire occurrence must copy the typed nonzero generation, epoch, and semantic sequence",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct ServerPendingChunkIdentity",
-            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
-            "semantic_sequence: u64,",
-            "process-local pending flush identity must retain the typed nonzero request occurrence",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct ServerPendingChunkLifecycleV3",
-            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
-            "semantic_sequence: u64,",
-            "the durable pending marker must bind the complete generation-scoped request, response, payload, and chunk identity",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct ServerRequestGate",
-            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
-            "semantic_sequence: u64,",
-            "live responder gate must retain the full canonical request and every generation-scoped occurrence coordinate",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct ServerRequestGateLifecycleV3",
-            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
-            "semantic_sequence: u64,",
-            "each durable responder gate must retain the full canonical request and every generation, epoch, sequence, source, and pending-marker coordinate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "struct CertifiedSidecarTransferIdentity",
-            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
-            "semantic_sequence: u64,",
-            "worker exact-transfer identity must retain the typed nonzero sidecar occurrence",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "struct MergeSidecarLifecyclePayloadV3",
-            "server_service_generation: CertifiedMergeSidecarServiceGenerationV1,",
-            "server_service_generation: u64,",
-            "the sole V3 durable sidecar snapshot must bind canonical runtime, root generation, and roster geometry",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn open(",
-            "for legacy in LEGACY_LIFECYCLE_JOURNAL_DIRS {",
-            "for legacy in [] {",
-            "lifecycle startup must fail closed on every legacy directory before opening or creating sole V3 state",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn open(",
-            "journal.publish_bootstrap_marker()?;",
-            "let _ = &journal;",
-            "lifecycle startup must durably publish the generation-zero root before creating the V3 state directory",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn open(",
-            "let marker = journal.decode_root_high_water(&journal.root_high_water_path())?;",
-            "let marker = MergeSidecarLifecycleRootHighWaterV3::bootstrap();",
-            "existing V3 lifecycle state must be selected by the exact durable root high-water",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn decode_snapshot(",
-            "snapshot.payload.version != LIFECYCLE_JOURNAL_VERSION_V3",
-            "snapshot.payload.version == LIFECYCLE_JOURNAL_VERSION_V3",
-            "lifecycle recovery must accept only canonical integrity-bound V3 state",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn restore_lifecycle_snapshot(",
-            "gate.request.request_id != gate.request.canonical_request_id()",
-            "false",
-            "responder recovery must recompute the full canonical request and bind its generation, epoch, and semantic sequence to the durable gate",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn restore_lifecycle_snapshot(",
-            "gate.attempts.len() > source_capacity.unwrap_or(1)",
-            "false",
-            "responder recovery must reject a gate whose durable attempts exceed its authenticated route-set capacity",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn restore_lifecycle_snapshot(",
-            "if source_capacity.is_none() && peer == gate.requester",
-            "if source_capacity.is_some() && peer == gate.requester",
-            "responder recovery must reject synthetic/authenticated source-kind drift and synthetic requester impersonation",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn restore_lifecycle_snapshot(",
-            "usize::try_from(pending.chunk_count).ok() != Some(expected_chunk_count)",
-            "usize::try_from(pending.chunk_count).ok() != Some(index)",
-            "responder recovery must reject any pending marker whose generation-scoped request metadata or exact chunk geometry differs from its gate",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_generation_hint(",
-            "self.persist_lifecycle_projection(snapshot)?;",
-            "drop(snapshot);",
-            "requester generation replacement must persist the new generation and unique epoch before retiring any process-local old-generation attempt",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn commit_server_service_generation_transition(",
-            "self.persist_lifecycle_projection(snapshot)?;",
-            "drop(snapshot);",
-            "publish the incremented generation and empty responder tables in the root-anchored V3 snapshot before mutating memory",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "request.service_generation > self.server_service_generation",
-            "request.service_generation < self.server_service_generation",
-            "a canonical future-generation request must reject atomically, while stale input or terminal full-table compaction returns an exact route-free hint before ordinary request-state mutation",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_request(",
-            "request.service_generation < self.server_service_generation",
-            "request.service_generation > self.server_service_generation",
-            "a canonical future-generation request must reject atomically, while stale input or terminal full-table compaction returns an exact route-free hint before ordinary request-state mutation",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_close(",
-            "close.service_generation > self.server_service_generation",
-            "close.service_generation < self.server_service_generation",
-            "a canonical future-generation Close must be rejected while a stale-generation Close returns a stateless exact hint before allocating or mutating a responder stream",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn admit_server_close(",
-            "close.service_generation < self.server_service_generation",
-            "close.service_generation > self.server_service_generation",
-            "a canonical future-generation Close must be rejected while a stale-generation Close returns a stateless exact hint before allocating or mutating a responder stream",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn sidecar_effect_slots(",
-            ".filter(|effect| retryable_sidecar_server_control_peer(effect).is_none())",
-            ".filter(|effect| retryable_sidecar_server_control_peer(effect).is_some())",
-            "reproducible responder controls must not consume progress reservations while all physical sidecar effects remain relay bounded",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn next_sidecar_effect_selection(",
-            ".position(|effect| retryable_sidecar_server_control_peer(effect).is_none())",
-            ".position(|effect| retryable_sidecar_server_control_peer(effect).is_some())",
-            "sidecar scheduling must prioritize progress while granting retryable responder control a bounded weighted turn",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;",
-            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;",
-            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 0;",
-            "the sidecar scheduler must give retryable responder control one bounded turn after exactly three progress-bearing drains",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn new_with_output_guard_and_transport(",
-            "MergeSidecarTransport::open_durable_with_server_stream_capacity(",
-            "MergeSidecarTransport::open_durable(",
-            "lane construction must derive the canonical responder roster and restore or open only its exact durable source and stream geometry",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn rehydrate_for_successor(",
-            "self.successor_context_id != successor.id()",
-            "self.successor_context_id == successor.id()",
-            "retained sidecar ownership must bind the exact successor context and consume its durable output handoff before roster-aware rehydration",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn new_with_output_guard_and_transport(",
-            "sidecar_progress_drain_credit: SIDECAR_PROGRESS_DRAIN_WEIGHT,",
-            "sidecar_progress_drain_credit: 0,",
-            "lane construction must initialize the bounded sidecar progress/control drain credit",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn next_sidecar_effect_selection(",
-            "if self.sidecar_progress_drain_credit == 0 {",
-            "if self.sidecar_progress_drain_credit > 0 {",
-            "sidecar scheduling must prioritize progress while granting retryable responder control a bounded weighted turn",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn retryable_sidecar_server_control_peer(",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_some()",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
-            "lane retryable responder controls must retain exact reply ownership for CloseAck and GenerationHint during per-peer coalescing",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn retryable_sidecar_server_control_peer(",
-            "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_some()",
-            "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_none()",
-            "lane retryable responder controls must retain exact reply ownership for CloseAck and GenerationHint during per-peer coalescing",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_merge_sidecar_post_or_restart(",
-            "if retryable_server_control {",
-            "if false && retryable_server_control {",
-            "reserved sidecar handoff may nonfatally drop only reproducible responder control or an inactive response, and must roll back an unsent request before fail-stop",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_merge_sidecar_effect(",
-            ".any(|queued| retryable_sidecar_server_control_peer(queued) == Some(peer))",
-            ".any(|queued| retryable_sidecar_server_control_peer(queued).is_some())",
-            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_merge_sidecar_effect(",
-            "if self.sidecar_effects.len() >= self.limits.relay_capacity.get() {",
-            "if self.sidecar_effects.len() > self.limits.relay_capacity.get() {",
-            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_merge_sidecar_effect(",
-            "if self.sidecar_effect_slots() == 0 {",
-            "if false && self.sidecar_effect_slots() == 0 {",
-            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_merge_sidecar_effect(",
-            ".rposition(|queued| retryable_sidecar_server_control_peer(queued).is_some())",
-            ".rposition(|queued| retryable_sidecar_server_control_peer(queued).is_none())",
-            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_merge_sidecar_effect(",
-            "self.sidecar_effect_keys\n"
-            "                    .remove(&lane_work_effect_key(&evicted));",
-            "let _ = evicted;",
-            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn next_effect(",
-            "self.next_sidecar_effect_selection()\n"
-            "                .and_then(|(index, _)| self.sidecar_effects.get(index))\n"
-            "                .cloned()",
-            "self.sidecar_effects.front().cloned()",
-            "lane effect peek must clone the exact weighted progress/control sidecar selection without consuming its credit",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn drain_effects(",
-            "let (index, retryable_control) = self\n"
-            "                    .next_sidecar_effect_selection()\n"
-            "                    .expect(\"sidecar effect selected only when present\");",
-            "let (index, retryable_control) = (0, false);",
-            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn drain_effects(",
-            "self.sidecar_progress_drain_credit = SIDECAR_PROGRESS_DRAIN_WEIGHT;",
-            "self.sidecar_progress_drain_credit = 0;",
-            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn drain_effects(",
-            "self.sidecar_progress_drain_credit.saturating_sub(1);",
-            "self.sidecar_progress_drain_credit.saturating_add(1);",
-            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn accept_certified_merge_sidecar_request(",
-            "return Ok(if self.push_merge_sidecar_post(post) {",
-            "self.push_merge_sidecar_post_or_restart(post)?;\n"
-            "            return Ok(if true {",
-            "lane ingress must treat a stale-generation hint as bounded retryable output while persisting every materialize/existing gate before fair service",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn accept_certified_merge_sidecar_close(",
-            "let _ = self.service_next_certified_merge_sidecar_materialization(now)?;",
-            "let _ = now;",
-            "an authenticated Close must expose its durable prefix, give fair pending materialization one turn, and preserve both progress and bounded retryable control outcomes",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn from_admitted_reply(",
-            "reply_writer_timeout_attempt: flush_identity.reply_writer_timeout_attempt(),",
-            "reply_writer_timeout_attempt: 0,",
-            "sidecar writer-flush admission must bind the opaque source, exact route, actor ticket and clone-shared claim with immutable payload and cursors",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn drive_with_budget_ack<Attempt>(",
-            "match attempt(post, ticket, &route, reply_writer_timeout_attempt) {",
-            "match attempt(post, ticket, &route, 0) {",
-            "worker dispatch must pass the target-local adaptive timeout attempt into actor admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn drive_with_budget_ack<Attempt>(",
-            "|| flush_ack.identity().reply_writer_timeout_attempt()\n"
-            "                            != reply_writer_timeout_attempt",
-            "|| flush_ack.identity().reply_writer_timeout_attempt()\n"
-            "                            != 0",
-            "ordinary reply cursor must remain unchanged while retaining its exact admission and writer-flush witness",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn drive_with_budget_ack<Attempt>(",
-            "if flush_ack.identity().reply_writer_timeout_attempt()\n"
-            "                        != reply_writer_timeout_attempt",
-            "if flush_ack.identity().reply_writer_timeout_attempt()\n"
-            "                        != 0",
-            "sidecar cursor may advance only after retaining its exact admission and writer-flush witness",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_reply_flushes(",
-            "pending_flush.reply_writer_timeout_attempt != current_timeout_attempt",
-            "pending_flush.reply_writer_timeout_attempt != 0",
-            "terminal reply-flush polling must bind the mutable target, retained writer occurrence, and actor acknowledgement to one adaptive timeout attempt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_reply_flushes(",
-            "!= pending_flush.reply_writer_timeout_attempt",
-            "!= current_timeout_attempt",
-            "terminal reply-flush polling must bind the mutable target, retained writer occurrence, and actor acknowledgement to one adaptive timeout attempt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn handoff_applied_height_to_durable_reconstruction(",
-            "!= target.reply_writer_timeout_attempt",
-            "!= 0",
-            "finality handoff must revalidate target, retained writer occurrence, and actor acknowledgement against the same adaptive timeout attempt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn handoff_applied_height_to_durable_reconstruction(",
-            "!= pending_flush.reply_writer_timeout_attempt",
-            "!= target.reply_writer_timeout_attempt",
-            "finality handoff must revalidate target, retained writer occurrence, and actor acknowledgement against the same adaptive timeout attempt",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn covers(&self, other: &Self)",
-            "self.requester == other.requester",
-            "self.requester != other.requester",
-            "sidecar close-prefix dominance must bind the requester",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_close(",
-            "return Ok(false);",
-            "return Err(MergeSidecarError::UnsolicitedResponse);",
-            "a canonical duplicate CloseAck may be a bounded no-op",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_close(",
-            "if ack.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {",
-            "if ack.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1 {",
-            "merge-sidecar crash-safe lifecycle production seam MergeSidecarTransport::acknowledge_close declaration and complete control flow must match the exact reviewed token digest",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn drain_closed_server_prefixes(",
-            "std::mem::take(&mut self.pending_server_closures)",
-            "self.pending_server_closures.clone()",
-            "merge transport must move every coalesced authenticated close prefix exactly once",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn accept_certified_merge_sidecar_request(",
-            "let _ = self.apply_closed_server_prefixes();",
-            "let _ = false;",
-            "lane ingress must treat a stale-generation hint as bounded retryable output while persisting every materialize/existing gate before fair service",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn accept_certified_merge_sidecar_close(",
-            "let close_progress = self.apply_closed_server_prefixes();",
-            "let close_progress = false;",
-            "an authenticated Close must expose its durable prefix",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn drain_closed_sidecar_prefixes(",
-            "std::mem::take(&mut self.closed_sidecar_prefixes)",
-            "self.closed_sidecar_prefixes.clone()",
-            "lane work must move each dominant close prefix exactly once",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn close_certified_sidecar_prefix(",
-            "&transfer.requester,",
-            "&prefix.requester,",
-            "worker close-prefix projection must bind the exact requester",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn close_certified_merge_sidecar_prefix(",
-            "pending.close_certified_sidecar_prefix(prefix)",
-            "Ok(0)",
-            "production close-prefix bridge must serialize",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn apply_certified_merge_sidecar_closed_prefixes(",
-            ".close_certified_merge_sidecar_prefix(prefix)",
-            ".retry_pending_exact_output()",
-            "runner must move every lane close prefix into the worker exact-output owner before later dispatch",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn service_next_certified_merge_sidecar_materialization(",
-            ".next_server_request_materialization(now)",
-            ".authorized_server_request_materialization()",
-            "only the transport's durable fair materialization selection may cross into the terminating Kura lookup",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn retryable_certified_sidecar_responder_control_target(",
-            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
-            "                | CertifiedMergeSidecarMessage::GenerationHint(_) => self",
-            "CertifiedMergeSidecarMessage::CloseAck(_) => self",
-            "worker retryable responder control must use exact reply ownership for CloseAck and GenerationHint",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn retryable_certified_sidecar_responder_control_target(",
-            ".all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
-            ".all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
-            "worker retryable responder control must use exact reply ownership for CloseAck and GenerationHint",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn retains_retryable_sidecar_responder_control_for(",
-            "retained.retryable_certified_sidecar_responder_control_target()\n"
-            "                        == Some(candidate_target)",
-            "retained.retryable_certified_sidecar_responder_control_target()\n"
-            "                        .is_some()",
-            "worker responder-control suppression must require an already-retained retryable control for the same semantic target",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn retains_retryable_sidecar_responder_control_for(",
-            "== Some(candidate_target)",
-            "!= Some(candidate_target)",
-            "worker responder-control suppression must require an already-retained retryable control for the same semantic target",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn can_enqueue(&self, fanout: &PendingExactFanout)",
-            "if self.retains_retryable_sidecar_responder_control_for(fanout) {",
-            "if false && self.retains_retryable_sidecar_responder_control_for(fanout) {",
-            "lane-effect preflight must validate geometry, consume only a same-target duplicate responder control, and otherwise charge reservation capacity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn can_enqueue_owned_reply_transfer(",
-            "if self.retains_retryable_sidecar_responder_control_for(&fanout) {",
-            "if false && self.retains_retryable_sidecar_responder_control_for(&fanout) {",
-            "owned reply capacity preflight must consume only a same-target duplicate responder control without charging capacity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn enqueue_validated(",
-            "if self.retains_retryable_sidecar_responder_control_for(&fanout) {",
-            "if false && self.retains_retryable_sidecar_responder_control_for(&fanout) {",
-            "worker exact output may retain at most one retryable responder control per semantic target while preserving independent controls and ordinary progress for other targets",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn accept_certified_merge_sidecar(",
-            "self.accept_certified_merge_sidecar_generation_hint(sender, reply_route, &hint)",
-            "Ok(V2LaneIngressOutcome::Rejected)",
-            "lane sidecar ingress must exhaustively route the authenticated generation hint alongside every request, close, acknowledgement, and chunk variant",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn drive_with_budget_ack<Attempt>(",
-            "| CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
-            "=> None,",
-            "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
-            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
-            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
-            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
-            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
-            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
-            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
-            "worker sidecar dispatch must keep Request and Close on topology while CloseAck, GenerationHint, and Chunk retain exact reply routes",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn dispatch_lane_work_effect(",
-            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
-            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
-            "runner sidecar dispatch must reject missing or extraneous route ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn next_effect(",
-            "if take_sidecar {",
-            "if !take_sidecar {",
-            "lane effect peek must clone the exact fairly selected queue head",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_effect(",
-            "if !lane_work_effect_reply_routes_have_valid_shape(&effect) {",
-            "if !lane_work_effect_reply_routes_are_valid(&effect) {",
-            "maintenance-only duplicate lane effects must reach canonical reconciliation before live-delivery admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn apply_bounded_sidecar_admissions<T, Error>(",
-            "let mut applied = 0usize;",
-            "return Ok(0); let mut applied = 0usize;",
-            "runner exact-output ownership/ACK production seam",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn has_pending_exact_output(",
-            "self.lock_pending_exact_output()",
-            "return Ok(false); self.lock_pending_exact_output()",
-            "worker exact-output ownership/ACK production seam",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "after_candidate_prune(merge_attempt);",
-            "let _ = merge_attempt;",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "if candidate_routes.len() >= live_before_merge {",
-            "if false && candidate_routes.len() >= live_before_merge {",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
-        ),
-        (
-            "crates/iroha_config/src/parameters/defaults.rs",
-            "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
-            "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
-            "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 2;",
-            "exact-output defaults must retain the reviewed completion divisor, reducer batch, and three-class geometry",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
-            "pub const MAX_EFFECTS_PER_STEP: usize = 8;",
-            "pub const MAX_EFFECTS_PER_STEP: usize = 8;",
-            "pub const MAX_EFFECTS_PER_STEP: usize = 7;",
-            "the dependency-free reducer refinement must retain the reviewed maximum effect batch",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_core.rs",
-            "const _: [(); refinement::MAX_EFFECTS_PER_STEP]",
-            "[(); iroha_config::parameters::defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP]",
-            "[(); iroha_config::parameters::defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT]",
-            "the production embedded reducer must bind its dependency-free batch to configured exact-output geometry",
-        ),
-        (
-            "crates/iroha_config/src/parameters/actual.rs",
-            "pub fn sumeragi_v2_exact_output_shared_ownership_capacity(",
-            ".checked_add(certified_request_capacity)",
-            ".saturating_add(certified_request_capacity)",
-            "the shared exact-output owner must reserve both bounded producers and one complete reducer batch with checked arithmetic",
-        ),
-        (
-            "crates/iroha_config/src/parameters/actual.rs",
-            "pub fn validate_sumeragi_v2_exact_output_geometry(",
-            ".checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)",
-            ".saturating_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)",
-            "the geometry kernel must reject zero, multiplication overflow, and any corridor smaller than source-count times exact classes",
-        ),
-        (
-            "crates/iroha_config/src/parameters/user.rs",
-            "pub fn parse(self) -> Result<actual::Root, ParseError> {",
-            ".max_total_connections\n",
-            ".max_connections_per_peer\n",
-            "root configuration must derive the authenticated-source bound from network geometry and fail parsing",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn start(",
-            "validate_shared_ownership_geometry(\n"
-            "            shared_pending_ownership_unit_capacity,\n"
-            "            reply_route_source_capacity,\n"
-            "        )?;",
-            "validate_shared_ownership_geometry(\n"
-            "            shared_pending_ownership_unit_capacity,\n"
-            "            max_peers_per_fanout,\n"
-            "        )?;",
-            "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "pub(crate) fn matches_semantic_origin(",
-            "self.validate_exact() && self.first.semantic_origin.as_ref() == origin",
-            "self.validate_exact()",
-            "semantic-origin validation must compare the independently retained canonical request origin",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "pub(crate) fn advance_reply_cursors(",
-            "if message_cursor < attempt.message_cursor || chunk_cursor < attempt.chunk_cursor {",
-            "if false && (message_cursor < attempt.message_cursor || chunk_cursor < attempt.chunk_cursor) {",
-            "a source attempt may advance but never reset either exact-output cursor",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(crate) fn accept_payload_chunk_with_ingress_ownership",
-            "|| !ingress_ownership.matches_semantic_origin(Some(authenticated_sender))",
-            "|| false",
-            "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(crate) fn accept_certified_body_response_with_ingress_ownership",
-            "|| !ingress_ownership.matches_semantic_origin(Some(authenticated_responder))",
-            "|| false",
-            "certified body response effect consumption must reject a changed envelope or semantic origin before mutation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn claimed_with_reply_routes_and_ingress_ownership(",
-            "if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {",
-            "if false {",
-            "exact reply construction must attach only a validated fair-ingress carrier matching the complete per-source route set",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn serve_certified_request_on_routes(",
-            "|| !ingress_ownership.matches_semantic_origin(Some(&admission.request.requester))",
-            "|| false",
-            "certified request service must bind canonical request, immutable requester origin, and every requester-targeted return source before queued local work",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn serve_certified_request_on_routes(",
-            "|| reply_routes.semantic_target() != &admission.request.requester",
-            "|| false",
-            "certified request service must bind canonical request, immutable requester origin, and every requester-targeted return source before queued local work",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_serve(",
-            ".merge_downstream_with_observed_receipt(ingress_ownership, receipt)",
-            ".merge_downstream(ingress_ownership)\n"
-            "                .then_some(route_candidate)",
-            "exact Serve retries must consume one observed-route receipt into cloned ingress ownership and atomically install the resulting route/ownership pair",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_serve(",
-            "tracked.ingress_ownership = Some(ownership_candidate);",
-            "drop(ownership_candidate);",
-            "exact Serve retries must consume one observed-route receipt into cloned ingress ownership and atomically install the resulting route/ownership pair",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_serve(\n"
-            "        &self,\n"
-            "        admission: &CertifiedServeAdmission,\n"
-            "        reply_routes: NetworkReplyRoutes,\n"
-            "        ingress_ownership: FairV2IngressOwnershipEvidence,\n"
-            "    ) -> Result<CertifiedServeCommit, String> {\n"
-            "        self.queue",
-            "self.queue\n"
-            "            .commit_serve(admission, reply_routes, ingress_ownership)",
-            "let _ = reply_routes.clone().merge_observed_with_receipt(&reply_routes);\n"
-            "        self.queue\n"
-            "            .commit_serve(admission, reply_routes, ingress_ownership)",
-            "the exact Serve retry must be the sole worker-side observed-history reconciliation seam",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn post_to_peer_on_reply_routes(",
-            "if reply_routes.semantic_target() != &peer",
-            "if false",
-            "certified response emission must validate the semantic target and exact route history under one fail-stop output operation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn post_to_peer_on_reply_routes(",
-            "|| !ingress_ownership.matches_reply_routes(Some(&reply_routes))",
-            "|| false",
-            "certified response emission must validate the semantic target and exact route history under one fail-stop output operation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn post_to_peer_on_reply_routes(",
-            "operation.complete();\n"
-            "        Ok(())",
-            "drop(operation);\n"
-            "        Ok(())",
-            "certified response emission preserves the complete authenticated route set until the guarded enqueue has completed",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn route_payload_chunk<R: EffectRuntime>(",
-            "|| !ingress_ownership.matches_semantic_origin(Some(&sender))",
-            "|| false",
-            "payload chunk routing must bind canonical bytes and semantic sender before buffering or effect mutation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn buffer_orphan_payload_chunk_inner(",
-            "if !retained.merge_downstream(candidate) {",
-            "drop(candidate); if false {",
-            "orphan chunk duplicates must merge alternate source ownership without replacing canonical semantic identity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn replay_buffered_chunks<R: EffectRuntime>(",
-            "buffered.ingress_ownership.ok_or_else(|| {",
-            "None.ok_or_else(|| {",
-            "orphan replay must preserve the exact ownership carrier into live chunk delivery",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn accept_lane_message_owned(",
-            "|| !ownership.matches_semantic_origin(sender.as_ref())",
-            "|| false",
-            "lane ingress must bind semantic origin, canonical message, and the complete source route set before service",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "|| !ingress_ownership.matches_semantic_origin(inbound.sender())",
-            "|| false",
-            "runner ingress must retain canonical message, semantic origin, and source-isolated routes in one exact ownership carrier",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "if turn == OuterIngressTurn::Runtime {",
-            "if false && turn == OuterIngressTurn::Runtime {",
-            "an admitted or provisional exact Serve must suppress every later runtime-producer turn",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            ".try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound| {",
-            ".try_recv_if_at_checked_classified(|inbound| {",
-            "ingress drain must use the gate-bound checked selector",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "|| !ingress_ownership.matches_semantic_origin(Some(sender))",
-            "|| false",
-            "exact Serve ingress must validate complete transport ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "Err(CertifiedServePrepareError::Backpressure) => {\n"
-            "                        // `prepare_certified_request` installs the off-queue debt",
-            "Err(CertifiedServePrepareError::Backpressure) => {\n"
-            "                        return true;\n"
-            "                        // `prepare_certified_request` installs the off-queue debt",
-            "exact Serve ingress must validate complete transport ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));",
-            "drop(admission);",
-            "exact Serve ingress must validate complete transport ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "None => {\n"
-            "                            return Err(V2RunnerError::Service(",
-            "None => {\n"
-            "                            continue;\n"
-            "                            return Err(V2RunnerError::Service(",
-            "a current-height exact request may cross ingress removal only with its already-prepared lifecycle admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn bind(\n"
-            "        ingress_ready: Arc<AtomicBool>,\n"
-            "        block_ingress: Arc<FairV2Ingress>,\n"
-            "        gate: CertifiedServeIngressGate,\n"
-            "    ) -> Result<Self, V2RunnerError> {",
-            ".bind_certified_serve_gate(gate.clone())",
-            ".bind_certified_serve_gate_for_test(gate.clone())",
-            "the per-height ingress owner must bind the exact Serve reservation gate before becoming live",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn certified_serve_ingress_gate(&self) -> CertifiedServeIngressGate {",
-            "queue: Arc::clone(&self.command_tx.queue),",
-            "queue: Arc::new(V2IoCommandQueue::default()),",
-            "the I/O handle must expose a gate over its exact command queue rather than a detached reservation owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn certified_serve_ingress_gate(&self) -> Result<CertifiedServeIngressGate, String> {",
-            ".map(V2IoHandle::certified_serve_ingress_gate)",
-            ".map(|_| panic!(\"detached gate\"))",
-            "production services must bind ingress to the live I/O handle's exact Serve queue",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn retire(&mut self) -> Result<(), V2RunnerError>",
-            "close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);",
-            "let _ = (&self.ingress_ready, &self.block_ingress);",
-            "ingress rollover must close selection before unbinding the exact Serve reservation gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "impl Drop for CertifiedServeIngressBinding {\n"
-            "    fn drop(&mut self) {",
-            "if let Err(error) = self.retire() {",
-            "if let Err(error) = Ok::<(), V2RunnerError>(()) {",
-            "every abnormal binding drop must attempt the same ordered ingress retirement",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            "HeightIngressBindings::new(",
-            "HeightIngressBindings::new_for_test(",
-            "the runner must bind Serve and leader-wire ingress to one joint per-height queue owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            "height_ingress_bindings.retire()?;",
-            "let _ = height_ingress_bindings.retire();",
-            "every clean shutdown and finality path must atomically retire both per-height ingress bindings",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn v2_ingress_head_can_drain(",
-            "executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
-            "executor.can_admit_network_message(message)",
-            "runner preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)",
-            "retained.merge_downstream(candidate)",
-            "retained fair-ingress ownership must consume the strict receipt and yield the sole authoritative route snapshot",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn target_reservation(",
-            "ExactTargetReservationKind::SidecarTopologyProgress",
-            "ExactTargetReservationKind::Reliable",
-            "reservation identity must isolate requester-owned topology progress from reliable reply-source ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn seal(&self) -> Result<(), String>",
-            ".compare_exchange(false, true, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)",
-            ".compare_exchange(false, false, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)",
-            "durable exact-output handoff must seal its unique service owner exactly once",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn seal_applied_height_output_handoff(",
-            "if pending.is_pending() {",
-            "if false && pending.is_pending() {",
-            "final exact-output handoff must validate durable authority, atomically empty the corridor, and one-shot seal every later enqueue",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "pub(crate) fn into_retained_merge_sidecars(",
-            ".is_bound_to_transport_owner(&self.exact_output_handoff_owner)",
-            ".matches_predecessor_context(&self.context)",
-            "lane rollover must consume only its paired service receipt for the exact predecessor artifact and immediate successor",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn require_peeked_lane_work_effect(",
-            "drained.ok_or(V2RunnerError::RestartRequired)",
-            "drained.ok_or(V2RunnerError::Service(\"lost peek\".to_owned()))",
-            "runner lane dispatch must fail stop if its guarded peek loses the exact queued owner before drain",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn rehydrate_with_exact_geometry_after_durable_handoff(",
-            "self.requeue_retained_outbound_after_height_rollover();",
-            "let _ = &self;",
-            "durable sidecar rehydration must preserve and requeue retained exact outbound ownership after validating the rollover authority",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn transition_server_service_generation(",
-            "if !self.server_generation_is_terminal() {",
-            "if false && !self.server_generation_is_terminal() {",
-            "ordinary responder generation transition must prepare without mutation, reject nonterminal state, and only then commit the prepared fence",
-        ),
-    ),
-)
-def test_exact_output_production_source_mutations_fail_closed(
-    tmp_path: Path,
-    relative_path: str,
-    region_marker: str,
-    old: str,
-    new: str,
-    error_fragment: str,
-) -> None:
-    module = load_checker()
-    exact_output_production_fixture(tmp_path)
-
-    path = tmp_path / relative_path
-    source = path.read_text(encoding="utf-8")
-    region_start = source.find(region_marker)
-    assert region_start >= 0
-    mutation = source.find(old, region_start)
-    assert mutation >= 0
-    next_item = re.search(
-        r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?fn[ \t]+",
-        source[region_start + len(region_marker) :],
-    )
-    if next_item is not None:
-        next_item_start = region_start + len(region_marker) + next_item.start()
-        assert mutation < next_item_start, (
-            "mutation escaped the production Rust item selected by its region marker",
-            relative_path,
-            region_marker,
-            old,
-        )
-    path.write_text(
-        source[:mutation] + new + source[mutation + len(old) :],
-        encoding="utf-8",
-    )
-
-    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
-    assert any(error_fragment in error for error in errors), errors
-
-def test_async_source_fidelity_pins_validator_progress_capacity(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
-    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
-        encoding="utf-8"
-    )
-    (formal_dir / "SumeragiV2AsyncNetwork.tla").write_text(
-        source.replace(
-            "AsyncIngressCapacity >= 5 * N + 2",
-            "AsyncIngressCapacity >= N + 2",
-            1,
-        ).replace(
-            "           /\\ Len(lanes[recipient][source]) =\n"
-            "                Cardinality(\n"
-            "                  IngressProtectedClassesPresentIn(\n"
-            "                    lanes, recipient, source))\n",
-            "           /\\ Len(lanes[recipient][source]) = 4\n",
-            1,
-        ).replace(
-            "       /\\ \\A source \\in AsyncIngressSources:\n"
-            "            IngressLaneDepth(recipient, source) <=\n"
-            "              AsyncIngressCapacity\n",
-            "",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "AsyncConfiguration omits required production behavior" in error
-        for error in errors
-    )
-    assert any(
-        "IngressContinuationProtectedSourcesFor must equal only" in error
-        for error in errors
-    )
-    assert any(
-        "AsyncIngressCapacityTypeInvariant must equal only" in error
-        for error in errors
-    )
-
-def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    path = formal_dir / "ownership_n1.cfg"
-    source = (module.FORMAL_DIR / path.name).read_text(encoding="utf-8")
-    path.write_text(source, encoding="utf-8")
-    shutil.copyfile(
-        module.FORMAL_DIR / "SumeragiV2OwnershipInvariantCheck.tla",
-        formal_dir / "SumeragiV2OwnershipInvariantCheck.tla",
-    )
-    assert module._ownership_n1_configuration_errors(formal_dir) == []
-    assert len(module._OWNERSHIP_N1_DEFINITION_OVERRIDES) == 15
-    assert all(
-        helper in module._OWNERSHIP_N1_STRUCTURAL_OPERATOR_SHA256
-        for _, helper in module._OWNERSHIP_N1_DEFINITION_OVERRIDES
-    )
-
-    path.write_text(
-        source.replace("  AsyncIngressCapacity = 7\n", "  AsyncIngressCapacity = 6\n", 1),
-        encoding="utf-8",
-    )
-    errors = module._ownership_n1_configuration_errors(formal_dir)
-    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
-
-    path.write_text(
-        source.replace(
-            "  AsyncDeferredProgressCapacity = 5\n",
-            "  AsyncDeferredProgressCapacity = 4\n",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    errors = module._ownership_n1_configuration_errors(formal_dir)
-    assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
-
-    path.write_text(
-        source.replace("  N = 1\n", "  N = 2\n", 1),
-        encoding="utf-8",
-    )
-    errors = module._ownership_n1_configuration_errors(formal_dir)
-    assert any("must remain the N=1 boundary" in error for error in errors)
-    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
-    assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
-
-    path.write_text(
-        source.replace(
-            "  ProductionSchedulerTraceRefinesProtectedOwnership = TRUE\n",
-            "",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    errors = module._ownership_n1_configuration_errors(formal_dir)
-    assert any(
-        "must assign ProductionSchedulerTraceRefinesProtectedOwnership = TRUE "
-        "exactly once" in error
-        for error in errors
-    )
-
-    for refinement_constant in (
-        "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
-        "ProductionTwoStageRelayRetryTraceRefinesSourceFairness",
-        "ProductionReliableFlushTraceRefinesOutboundOwnership",
-    ):
-        path.write_text(
-            source.replace(
-                f"  {refinement_constant} = TRUE\n",
-                "",
-                1,
-            ),
-            encoding="utf-8",
-        )
-        errors = module._ownership_n1_configuration_errors(formal_dir)
-        assert any(
-            f"must assign {refinement_constant} = TRUE exactly once" in error
-            for error in errors
-        )
-
-    for old, new in (
-        ('  ValidSubjects = {"A"}\n', '  ValidSubjects = {"B"}\n'),
-        (
-            "  AcquisitionSubjects = {AcquisitionSubjectA}\n",
-            "  AcquisitionSubjects = {}\n",
-        ),
-        (
-            "  InitialAcquisitionSubject = AcquisitionSubjectA\n",
-            "  InitialAcquisitionSubject = AcquisitionSubjectB\n",
-        ),
-        ("  MaxAcquisitionId = 4\n", "  MaxAcquisitionId = 5\n"),
-    ):
-        path.write_text(source.replace(old, new, 1), encoding="utf-8")
-        errors = module._ownership_n1_configuration_errors(formal_dir)
-        assert any(
-            "ownership search must retain exact closed assignment" in error
-            for error in errors
-        ), errors
-
-    for old, new in (
-        (
-            "  InstallTcFromEvidence <- OwnershipInstallTcFromEvidence\n",
-            "",
-        ),
-        (
-            "  InstallTcFromEvidence <- OwnershipInstallTcFromEvidence\n",
-            "  InstallTcFromEvidence <- OwnershipInstallTcEvidenceMatches\n",
-        ),
-    ):
-        path.write_text(source.replace(old, new, 1), encoding="utf-8")
-        errors = module._ownership_n1_configuration_errors(formal_dir)
-        assert any(
-            "ordered fifteen-entry structural definition inventory" in error
-            for error in errors
-        ), errors
-
-    for invariant in (
-        "AsyncTypeInvariant",
-        "AsyncProgressOwnershipInvariant",
-    ):
-        path.write_text(
-            source.replace(f"INVARIANT {invariant}\n", "", 1),
-            encoding="utf-8",
-        )
-        errors = module._ownership_n1_configuration_errors(formal_dir)
-        assert any(
-            f"exact closed assignment 'INVARIANT {invariant}' once" in error
-            for error in errors
-        ), errors
-
 def exact_output_production_fixture(tmp_path: Path) -> None:
     """Copy every production source consumed by the exact-output checker."""
 
@@ -41009,6 +41263,8 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
         Path("crates/iroha_config/src/parameters/defaults.rs"),
@@ -41019,116 +41275,6 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         shutil.copy2(ROOT_DIR / relative, destination)
     copy_reviewed_rust_include_components(tmp_path)
 
-@pytest.mark.parametrize(
-    ("relative", "old", "new", "expected_error"),
-    (
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "                incumbent.ingress_predecessors = ingress_predecessors;\n",
-            "                incumbent.ingress_predecessors.clear();\n",
-            "freshly frozen physical prefix",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            ".map(|(source, lane)| (source.clone(), lane.entries.len()))\n",
-            ".map(|(source, _lane)| (source.clone(), 0))\n",
-            "complete current physical source prefix",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "token.admission_ordinal > restore.last_admission_ordinal()",
-            "token.admission_ordinal < restore.last_admission_ordinal()",
-            "every restored durable token must remain at or below the restored physical admission high-watermark",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            ".max(restore.last_admission_ordinal());",
-            ".max(0);",
-            "restart binding must preserve the durable physical admission high-watermark",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "let admission_ordinal = state\n"
-            "        .last_admission_ordinal\n"
-            "        .checked_add(1)\n"
-            "        .ok_or(FairV2IngressLeaderWireAdmissionError::Exhausted)?;",
-            "let admission_ordinal = state\n"
-            "        .last_admission_ordinal\n"
-            "        .wrapping_add(1);",
-            "fresh leader-wire lifecycle admission must use the next physical high-watermark ordinal",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "                if durable_ordinals != active_ordinals {\n",
-            "                if false {\n",
-            "complete durable and in-memory logical Ingress owner sets",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "            active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);\n",
-            "            active_leader_wire_carriers\n"
-            "                .sort_by_key(|(owner, _)| owner.token.scheduler_ordinal);\n",
-            "ordering by physical ordinal",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "                    .remove(&owner.token)\n",
-            "                    .get(&owner.token)\n"
-            "                    .copied()\n",
-            "consume its one exact physical carrier",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "            if !leader_wire_carrier_ordinals.is_empty() {\n",
-            "            if false {\n",
-            "correspondence must be total before ordering",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "match active_leader_wire_carriers.into_iter().next() {\n",
-            "match active_leader_wire_carriers.into_iter().last() {\n",
-            "minimum physical carrier",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
-            ".filter(|record| record.status == LeaderWireLifecycleStatus::Ingress)\n",
-            ".filter(|record| record.status != LeaderWireLifecycleStatus::Terminal)\n",
-            "every active logical scheduler owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
-            ".map(|record| record.token.scheduler_ordinal)\n"
-            "            .collect())\n",
-            ".map(|record| record.token.scheduler_ordinal)\n"
-            "            .take(1)\n"
-            "            .collect())\n",
-            "every active logical scheduler owner",
-        ),
-    ),
-)
-def test_leader_wire_physical_ingress_rejects_semantic_mutations(
-    tmp_path: Path,
-    relative: str,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    """Every replay-ordering boundary fails the aggregate checker closed."""
-
-    module = load_checker()
-    local_runner_service_fixture(tmp_path, module)
-    path = tmp_path / relative
-    source = path.read_text(encoding="utf-8")
-    assert source.count(old) == 1, old
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = (
-        module._leader_wire_physical_ingress_production_source_fidelity_errors(
-            tmp_path
-        )
-    )
-
-    assert any(expected_error in error for error in errors), errors
 
 def test_restart_physical_high_water_mutation_survives_item_digest_refresh(
     tmp_path: Path,
@@ -41283,182 +41429,38 @@ def test_restored_productive_retry_mutations_survive_regression_digest_refresh(
 
     assert any(expected_error in error for error in errors), errors
 
-@pytest.mark.parametrize(
-    ("relative", "old", "new", "expected_error"),
-    (
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "enum CertifiedServeRuntimeEpisodeState {\n"
-            "    Ready,\n"
-            "    Claimed {\n",
-            "enum CertifiedServeRuntimeEpisodeState {\n"
-            "    Claimed {\n",
-            "distinct ready, one-owner claimed, and irreversible complete states",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "self.projection.request_hash == barrier.request_hash",
-            "true",
-            "episode claims must retain the exact Serve request hash",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "self.carrier_ordinal == Some(barrier.carrier_ordinal)",
-            "self.carrier_ordinal.is_some()",
-            "episode claims must retain the selected physical carrier occurrence",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "&& self.handed_off.is_some()",
-            "&& true",
-            "episode claims must retain the live fair-ingress handoff",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "                    if command_ordinal >= reservation.id.0 {\n",
-            "                    if command_ordinal > reservation.id.0 {\n",
-            "equal or later causal work must not enter",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "                        } if existing == command_ordinal => Some(command_ordinal),\n",
-            "                        } if existing <= command_ordinal => Some(command_ordinal),\n",
-            "already-selected owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "        if exact_target_active && exact_predecessor_ordinal.is_none() {\n",
-            "        if false {\n",
-            "later causal, Control, Completion, and priority work must be blocked",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                let claimed_older_runtime_episode = services\n"
-            "                    .claim_certified_serve_runtime_episode(serve_barrier)\n",
-            "                let claimed_older_runtime_episode = services\n"
-            "                    .claim_certified_serve_runtime_episode_unchecked(serve_barrier)\n",
-            "an exact target turn must claim before selecting one completed predecessor",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                    services.drain_exact_serve_runtime_predecessor(\n"
-            "                        &mut executor,\n"
-            "                        serve_barrier.scheduler_ordinal(),\n"
-            "                    )?;\n",
-            "                    services.drain_exact_serve_runtime_predecessor(\n"
-            "                        &mut executor,\n"
-            "                        serve_barrier.lifecycle_ordinal(),\n"
-            "                    )?;\n",
-            "an exact target turn must claim before selecting one completed predecessor",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                    if executor.older_runtime_lifecycle_predates_exact_serve(\n"
-            "                        Instant::now(),\n"
-            "                        serve_barrier.scheduler_ordinal(),\n"
-            "                    )? && services\n",
-            "                    if executor.older_runtime_lifecycle_predates_exact_serve(\n"
-            "                        Instant::now(),\n"
-            "                        serve_barrier.lifecycle_ordinal(),\n"
-            "                    )? && services\n",
-            "serialized predecessor step must require both an older owner and physical capacity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                    older_predecessor_remains = executor\n"
-            "                        .older_runtime_lifecycle_predates_exact_serve(\n"
-            "                            Instant::now(),\n"
-            "                            serve_barrier.scheduler_ordinal(),\n"
-            "                        )?;\n",
-            "                    older_predecessor_remains = executor\n"
-            "                        .older_runtime_lifecycle_predates_exact_serve(\n"
-            "                            Instant::now(),\n"
-            "                            serve_barrier.lifecycle_ordinal(),\n"
-            "                        )?;\n",
-            "every claimed turn must re-publish/recheck the full owner set before settlement",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "            else {\n"
-            "                // Exact admission won the queue-locked race after the\n"
-            "                // observation above. Restart at the dedicated target turn.\n"
-            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                continue;\n"
-            "            };\n",
-            "            else {\n"
-            "                continue;\n"
-            "            };\n",
-            "queue-locked handoff to an exact target which won the admission race must retain the finite wake bound",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                        .certified_serve_runtime_predecessor_capacity_available(serve_barrier)\n",
-            "                        .certified_serve_runtime_predecessor_capacity_unchecked(serve_barrier)\n",
-            "serialized predecessor step must require both an older owner and physical capacity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                        .finish_certified_serve_runtime_episode_turn(\n",
-            "                        .finish_certified_serve_runtime_episode_turn_unchecked(\n",
-            "re-publish/recheck the full owner set before settlement",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-            "self.ingress.oldest_active_lifecycle_ordinal()?",
-            "self.ingress.oldest_lifecycle_ordinal()?",
-            "complete runtime minimum must include latent Local FIFO reservations",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-            "self.dormant_local_fifo_reservations.iter().try_fold(\n"
-            "            command_minimum,",
-            "self.commands.iter().try_fold(\n"
-            "            command_minimum,",
-            "latent Local FIFO reservations must participate in the oldest active owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-            "if self\n"
-            "            .dormant_local_fifo_reservations\n"
-            "            .iter()\n"
-            "            .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)",
-            "if self\n"
-            "            .commands\n"
-            "            .iter()\n"
-            "            .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)",
-            "latent Local FIFO reservations must collide with reused exact-Serve ordinals",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-            "Ok(minimum) => Ok(minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal)),\n",
-            "Ok(minimum) => Ok(minimum.is_some_and(|ordinal| ordinal <= serve_lifecycle_ordinal)),\n",
-            "complete owner minimum must be strictly older than the ticket",
-        ),
-    ),
-)
-def test_exact_serve_runtime_episode_rejects_semantic_mutations(
-    tmp_path: Path,
-    relative: str,
-    old: str,
-    new: str,
-    expected_error: str,
+
+def rebind_changed_same_round_expanded_source_seal(
+    module, repo_root: Path
 ) -> None:
-    """Every lasso-closing ownership boundary fails closed under mutation."""
+    """Rebind only the include-expanded source changed by one mutation."""
 
-    module = load_checker()
-    local_runner_service_fixture(tmp_path, module)
-    path = tmp_path / relative
-    source = path.read_text(encoding="utf-8")
-    assert source.count(old) == 1, old
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = (
-        module._exact_serve_runtime_episode_production_source_fidelity_errors(
-            tmp_path
+    rebound_relatives: list[str] = []
+    for relative, expected_sha256 in (
+        module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.items()
+    ):
+        expansion_errors: list[str] = []
+        _path, source = module._read_reviewed_rust_source(
+            repo_root,
+            relative,
+            expansion_errors,
+            "same-round semantic kernel mutation fixture",
         )
-    )
+        assert not expansion_errors, expansion_errors
+        observed_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        if observed_sha256 != expected_sha256:
+            module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256[relative] = (
+                observed_sha256
+            )
+            rebound_relatives.append(relative)
+    assert len(rebound_relatives) == 1, rebound_relatives
+    errors = module._same_round_semantic_kernel_source_fidelity_errors(repo_root)
+    assert not any(
+        "same-round semantic kernel source must match exact reviewed SHA-256"
+        in error
+        for error in errors
+    ), errors
 
-    assert any(expected_error in error for error in errors), errors
 
 @pytest.mark.parametrize(
     (
@@ -41480,8 +41482,29 @@ def test_exact_serve_runtime_episode_rejects_semantic_mutations(
             "V2IoCertifiedServeIngressReservation",
             "    lifecycle_id: CertifiedServeLifecycleId,\n",
             "    lifecycle_id: CertifiedServeIngressReservationId,\n",
-            "physical scheduler ticket, logical lifecycle, payload, carrier, "
-            "and bounded runtime episode",
+            "logical lifecycle, payload, carrier, bounded runtime turn, and last "
+            "consumed predecessor witness",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256",
+            "V2IoCertifiedServeIngressReservation",
+            "struct",
+            "",
+            "V2IoCertifiedServeIngressReservation",
+            "    last_predecessor_episode_witness: Option<ExactServePredecessorEpisodeWitness>,\n",
+            "    last_predecessor_episode_witness: bool,\n",
+            "logical lifecycle, payload, carrier, bounded runtime turn, and last "
+            "consumed predecessor witness",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256",
+            "V2IoCommandQueueState",
+            "struct",
+            "",
+            "V2IoCommandQueueState",
+            "    producer_episode_due: bool,\n",
+            "    producer_episode_due: u8,\n",
+            "distinct one-shot due and finite active producer-episode fields",
         ),
         (
             "_EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256",
@@ -41560,6 +41583,100 @@ def test_exact_serve_runtime_episode_rejects_semantic_mutations(
         ),
         (
             "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::reserve_serve_ingress",
+            "method",
+            "V2IoCommandQueue",
+            "reserve_serve_ingress",
+            "            last_predecessor_episode_witness: None,\n",
+            "            last_predecessor_episode_witness: Some(\n"
+            "                ExactServePredecessorEpisodeWitness::for_test(3, 1, 1),\n"
+            "            ),\n",
+            "must start ready with no consumed predecessor witness",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::reserve_serve_ingress",
+            "method",
+            "V2IoCommandQueue",
+            "reserve_serve_ingress",
+            "        let ordinal = match self.lifecycle_ordinals.reserve_one() {\n",
+            "        let ordinal = match Ok(\n"
+            "            state.next_serve_ingress_reservation_ordinal.saturating_add(1),\n"
+            "        ) {\n",
+            "exact-Serve tickets must use a fresh actor-global monotone ordinal",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::reserve_serve_ingress",
+            "method",
+            "V2IoCommandQueue",
+            "reserve_serve_ingress",
+            "            runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,\n",
+            "            runtime_episode: CertifiedServeRuntimeEpisodeState::Complete,\n",
+            "must start ready with no consumed predecessor witness",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::observe_serve_predecessor_episode_witness",
+            "method",
+            "V2IoCommandQueue",
+            "observe_serve_predecessor_episode_witness",
+            "            if witness.episode() != expected_episode {\n",
+            "            if witness.episode() < expected_episode {\n",
+            "must advance by exactly one checked consumer episode",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::observe_serve_predecessor_episode_witness",
+            "method",
+            "V2IoCommandQueue",
+            "observe_serve_predecessor_episode_witness",
+            "                if witness != previous {\n",
+            "                if witness == previous {\n",
+            "conflicting or regressing evidence fails closed",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::observe_serve_predecessor_episode_witness",
+            "method",
+            "V2IoCommandQueue",
+            "observe_serve_predecessor_episode_witness",
+            "                return Ok(false);\n",
+            "                return Ok(true);\n",
+            "repeated witness must stutter",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::observe_serve_predecessor_episode_witness",
+            "method",
+            "V2IoCommandQueue",
+            "observe_serve_predecessor_episode_witness",
+            "            reservation.runtime_episode = CertifiedServeRuntimeEpisodeState::Ready;\n",
+            "            reservation.runtime_episode = CertifiedServeRuntimeEpisodeState::Complete;\n",
+            "newly consumed witness may reopen a sealed Complete target to Ready",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::observe_serve_predecessor_episode_witness",
+            "method",
+            "V2IoCommandQueue",
+            "observe_serve_predecessor_episode_witness",
+            "            || witness.serve_lifecycle_ordinal() != barrier.scheduler_ordinal()\n",
+            "            || witness.serve_lifecycle_ordinal() == barrier.scheduler_ordinal()\n",
+            "must validate the exact target and strict predecessor before consuming a witness",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::observe_serve_predecessor_episode_witness",
+            "method",
+            "V2IoCommandQueue",
+            "observe_serve_predecessor_episode_witness",
+            "        } else if witness.episode() != 1 {\n",
+            "        } else if witness.episode() != 0 {\n",
+            "the first consumed predecessor witness must begin at one and become immutable reservation evidence",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
             "V2IoCommandQueue::serve_runtime_predecessor_capacity_available",
             "method",
             "V2IoCommandQueue",
@@ -41588,7 +41705,7 @@ def test_exact_serve_runtime_episode_rejects_semantic_mutations(
             "        } else {\n"
             "            CertifiedServeRuntimeEpisodeState::Ready\n"
             "        };\n",
-            "mandatory full recheck must either reopen one bounded turn or irreversibly complete",
+            "mandatory full recheck must either reopen one bounded turn or seal the occurrence",
         ),
         (
             "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
@@ -41642,6 +41759,16 @@ def test_exact_serve_runtime_episode_rejects_semantic_mutations(
             "            .claim_serve_runtime_episode(barrier)\n",
             "            .serve_runtime_predecessor_capacity_available(barrier)\n",
             "production exact-Serve claim wrapper must fail closed and forward the exact barrier",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::observe_certified_serve_predecessor_episode_witness",
+            "method",
+            "ProductionV2Services",
+            "observe_certified_serve_predecessor_episode_witness",
+            "            .observe_serve_predecessor_episode_witness(barrier, witness)\n",
+            "            .claim_serve_runtime_episode(barrier)\n",
+            "production predecessor-witness wrapper must fail closed and forward the exact barrier and witness",
         ),
         (
             "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
@@ -41768,6 +41895,36 @@ def test_exact_serve_runtime_episode_rejects_semantic_mutations(
             "                } => self.take_exact_serve_predecessor_completion(\n",
             "separately inclusive timeout-recovery selector",
         ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            "if disposition == CompletionDisposition::Accepted {",
+            "if disposition == CompletionDisposition::Rejected {",
+            "only an accepted application completion may refresh the exact durable Kura tip and refresh failures must fail closed",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            "Some((source_height, source_block_hash)),",
+            "None,",
+            "only an accepted application completion may refresh the exact durable Kura tip and refresh failures must fail closed",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            ".map_err(|reason| executor.external_service_failed(reason, self))?;",
+            ".map_err(|reason| executor.external_service_failed(reason, self));",
+            "only an accepted application completion may refresh the exact durable Kura tip and refresh failures must fail closed",
+        ),
     ),
 )
 def test_exact_serve_checker_boundaries_survive_item_digest_refresh(
@@ -41819,6 +41976,7 @@ def test_exact_serve_checker_boundaries_survive_item_digest_refresh(
     getattr(module, seal_group)[seal_key] = module._rust_item_token_sha256(
         mutated_items[0]
     )
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -41831,6 +41989,513 @@ def test_exact_serve_checker_boundaries_survive_item_digest_refresh(
         for error in errors
     ), errors
 
+
+@pytest.mark.parametrize(
+    ("item_kind", "seal_group", "seal_key", "item_name", "old", "new", "expected_error"),
+    (
+        (
+            "struct",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_STRUCT_SHA256",
+            "ExactServePredecessorCompletionEvidence",
+            "ExactServePredecessorCompletionEvidence",
+            "    lifecycle_ordinal_complement: u128,\n",
+            "    lifecycle_ordinal_checksum: u128,\n",
+            "completion evidence must bind one immutable ordinal and its exact integrity complement",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorCompletionEvidence::try_new",
+            "try_new",
+            "            lifecycle_ordinal_complement: !lifecycle_ordinal,\n",
+            "            lifecycle_ordinal_complement: lifecycle_ordinal,\n",
+            "completion-evidence construction must derive its exact integrity complement",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorCompletionEvidence::validate_exact",
+            "validate_exact",
+            "        self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal\n",
+            "        self.lifecycle_ordinal > 0 && true\n",
+            "completion evidence must reject zero or a mismatched integrity complement",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorCompletionEvidence::lifecycle_ordinal",
+            "lifecycle_ordinal",
+            "        self.lifecycle_ordinal\n",
+            "        self.lifecycle_ordinal_complement\n",
+            "completion evidence must project exactly its validated lifecycle ordinal",
+        ),
+        (
+            "struct",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_STRUCT_SHA256",
+            "ExactServePredecessorEpisodeWitness",
+            "ExactServePredecessorEpisodeWitness",
+            "    serve_lifecycle_ordinal: u128,\n",
+            "    serve_target: u128,\n",
+            "witness must bind the immutable target, strict predecessor, and monotone episode",
+        ),
+        (
+            "struct",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_STRUCT_SHA256",
+            "ExactServePredecessorEpisodeWitness",
+            "ExactServePredecessorEpisodeWitness",
+            "    predecessor_lifecycle_ordinal: u128,\n",
+            "    predecessor_target: u128,\n",
+            "witness must bind the immutable target, strict predecessor, and monotone episode",
+        ),
+        (
+            "struct",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_STRUCT_SHA256",
+            "ExactServePredecessorEpisodeWitness",
+            "ExactServePredecessorEpisodeWitness",
+            "    episode: u128,\n",
+            "    episode_sequence: u128,\n",
+            "witness must bind the immutable target, strict predecessor, and monotone episode",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorEpisodeWitness::try_new",
+            "try_new",
+            "        witness.validate_exact().then_some(witness)\n",
+            "        Some(witness)\n",
+            "witness construction must validate the complete immutable evidence before publication",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorEpisodeWitness::validate_exact",
+            "validate_exact",
+            "            && self.predecessor_lifecycle_ordinal < self.serve_lifecycle_ordinal\n",
+            "            && self.predecessor_lifecycle_ordinal <= self.serve_lifecycle_ordinal\n",
+            "witness validation must require nonzero target, strict nonzero predecessor, and nonzero episode",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorEpisodeWitness::validate_exact",
+            "validate_exact",
+            "        self.serve_lifecycle_ordinal > 0\n",
+            "        true\n",
+            "witness validation must require nonzero target, strict nonzero predecessor, and nonzero episode",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorEpisodeWitness::validate_exact",
+            "validate_exact",
+            "            && self.predecessor_lifecycle_ordinal > 0\n",
+            "            && true\n",
+            "witness validation must require nonzero target, strict nonzero predecessor, and nonzero episode",
+        ),
+        (
+            "method",
+            "_EXACT_SERVE_PREDECESSOR_WITNESS_ITEM_SHA256",
+            "ExactServePredecessorEpisodeWitness::validate_exact",
+            "validate_exact",
+            "            && self.episode > 0\n",
+            "            && true\n",
+            "witness validation must require nonzero target, strict nonzero predecessor, and nonzero episode",
+        ),
+    ),
+)
+def test_exact_serve_witness_identity_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    item_kind: str,
+    seal_group: str,
+    seal_key: str,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Witness identity and validation stay semantic after individual reseal."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    source = path.read_text(encoding="utf-8")
+    if item_kind == "struct":
+        items = module.rust_struct_items(source, item_name)
+    else:
+        owner = seal_key.rsplit("::", 1)[0]
+        items = tuple(
+            item
+            for item in module.rust_items(source, item_name)
+            if item.brace_context
+            == (("impl", owner),)
+        )
+    assert len(items) == 1
+    item = items[0]
+    assert item.source.count(old) == 1, (seal_key, old)
+    path.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    mutated_source = path.read_text(encoding="utf-8")
+    if item_kind == "struct":
+        mutated_items = module.rust_struct_items(mutated_source, item_name)
+    else:
+        owner = seal_key.rsplit("::", 1)[0]
+        mutated_items = tuple(
+            candidate
+            for candidate in module.rust_items(mutated_source, item_name)
+            if candidate.brace_context
+            == (("impl", owner),)
+        )
+    assert len(mutated_items) == 1
+    getattr(module, seal_group)[seal_key] = module._rust_item_token_sha256(
+        mutated_items[0]
+    )
+
+    errors = module._exact_serve_runtime_episode_production_source_fidelity_errors(
+        tmp_path
+    )
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("item_kind", "seal_key", "item_name", "context", "old", "new", "expected_error"),
+    (
+        (
+            "struct",
+            "V2IoCompletionOwnership",
+            "V2IoCompletionOwnership",
+            (),
+            "    runtime_lifecycle_ordinal: Option<u128>,\n",
+            "    runtime_lifecycle_owner: Option<u128>,\n",
+            "completion ownership must retain time/debt, runtime-capacity class",
+        ),
+        (
+            "method",
+            "V2IoCommand::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::Sign { task, .. } => Some(task.lifecycle_ordinal()),\n",
+            "            Self::Sign { .. } => None,\n",
+            "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
+        ),
+        (
+            "method",
+            "V2IoCommand::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::Store(task) => Some(task.lifecycle_ordinal()),\n",
+            "            Self::Store(_) => None,\n",
+            "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
+        ),
+        (
+            "method",
+            "V2IoCommand::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::Validate(task) => Some(task.lifecycle_ordinal()),\n",
+            "            Self::Validate(_) => None,\n",
+            "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
+        ),
+        (
+            "method",
+            "V2IoCommand::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::Apply(task) => Some(task.lifecycle_ordinal()),\n",
+            "            Self::Apply(_) => None,\n",
+            "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
+        ),
+        (
+            "method",
+            "V2IoAdmission::retain_completion",
+            "retain_completion",
+            (("impl", "V2IoAdmission"),),
+            "            requires_runtime_capacity,\n"
+            "            runtime_lifecycle_ordinal,\n",
+            "            requires_runtime_capacity: false,\n"
+            "            runtime_lifecycle_ordinal,\n",
+            "completion publication must atomically retain the exact capacity class",
+        ),
+        (
+            "method",
+            "V2IoAdmission::retain_completion",
+            "retain_completion",
+            (("impl", "V2IoAdmission"),),
+            "            runtime_lifecycle_ordinal,\n"
+            "        });\n",
+            "            runtime_lifecycle_ordinal: None,\n"
+            "        });\n",
+            "completion publication must atomically retain the exact capacity class",
+        ),
+        (
+            "method",
+            "V2IoAdmission::abandon_latest_completion",
+            "abandon_latest_completion",
+            (("impl", "V2IoAdmission"),),
+            "            .pop_back()\n",
+            "            .pop_front()\n",
+            "failed send must abandon only the just-retained completion tail",
+        ),
+        (
+            "method",
+            "V2IoAdmission::completion_ownership_at",
+            "completion_ownership_at",
+            (("impl", "V2IoAdmission"),),
+            "            .get(position)\n",
+            "            .front()\n",
+            "completion ownership projection must copy the exact indexed record without consuming it",
+        ),
+        (
+            "method",
+            "V2IoHandle::completion_ownership_at",
+            "completion_ownership_at",
+            (("impl", "V2IoHandle"),),
+            "        self.admission.completion_ownership_at(position)\n",
+            "        self.admission.completion_ownership_at(0)\n",
+            "I/O handle must delegate the exact non-consuming ownership position",
+        ),
+        (
+            "method",
+            "V2IoHandle::spawn",
+            "spawn",
+            (("impl", "V2IoHandle"),),
+            "                    let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();\n",
+            "                    let runtime_lifecycle_ordinal = None;\n",
+            "I/O worker must capture exact completion provenance before moving",
+        ),
+        (
+            "method",
+            "V2IoHandle::spawn",
+            "spawn",
+            (("impl", "V2IoHandle"),),
+            "                                            send_completion_with_lifecycle_ordinal(\n"
+            "                                                &completion_tx,\n"
+            "                                                &worker_admission,\n"
+            "                                                Ok(completion),\n"
+            "                                                runtime_lifecycle_ordinal,\n"
+            "                                            );\n",
+            "                                            send_completion_with_lifecycle_ordinal(\n"
+            "                                                &completion_tx,\n"
+            "                                                &worker_admission,\n"
+            "                                                Ok(completion),\n"
+            "                                                None,\n"
+            "                                            );\n",
+            "I/O worker must forward the pre-execution runtime lifecycle ordinal unchanged",
+        ),
+        (
+            "method",
+            "LocalCompletion::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "LocalCompletion"),),
+            "            Self::Reconstructed { task, .. } => task.lifecycle_ordinal(),\n",
+            "            Self::Reconstructed { .. } => 0,\n",
+            "every local completion must project the immutable lifecycle ordinal",
+        ),
+        (
+            "method",
+            "send_completion_with_lifecycle_ordinal",
+            "send_completion_with_lifecycle_ordinal",
+            (),
+            "        runtime_lifecycle_ordinal,\n"
+            "    );\n",
+            "        None,\n"
+            "    );\n",
+            "production completion wrapper must forward the captured runtime lifecycle ordinal unchanged",
+        ),
+        (
+            "method",
+            "send_tracked_completion_with_lifecycle_ordinal",
+            "send_tracked_completion_with_lifecycle_ordinal",
+            (),
+            "        runtime_lifecycle_ordinal,\n"
+            "    );\n",
+            "        None,\n"
+            "    );\n",
+            "blocking completion publication must retain exact ownership before send",
+        ),
+        (
+            "method",
+            "send_tracked_completion_with_lifecycle_ordinal",
+            "send_tracked_completion_with_lifecycle_ordinal",
+            (),
+            "        admission.abandon_latest_completion();\n",
+            "        let _ = admission;\n",
+            "blocking completion publication must retain exact ownership before send",
+        ),
+        (
+            "method",
+            "try_send_tracked_completion_with_lifecycle_ordinal",
+            "try_send_tracked_completion_with_lifecycle_ordinal",
+            (),
+            "        runtime_lifecycle_ordinal,\n"
+            "    );\n",
+            "        None,\n"
+            "    );\n",
+            "nonblocking completion publication must retain exact ownership before send",
+        ),
+        (
+            "method",
+            "try_send_tracked_completion_with_lifecycle_ordinal",
+            "try_send_tracked_completion_with_lifecycle_ordinal",
+            (),
+            "        admission.abandon_latest_completion();\n",
+            "        let _ = admission;\n",
+            "nonblocking completion publication must retain exact ownership before send",
+        ),
+    ),
+)
+def test_exact_serve_completion_provenance_survives_digest_refresh(
+    tmp_path: Path,
+    item_kind: str,
+    seal_key: str,
+    item_name: str,
+    context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Completion provenance remains exact after each individual item reseal."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = path.read_text(encoding="utf-8")
+    if item_kind == "struct":
+        items = module.rust_struct_items(source, item_name)
+    else:
+        items = tuple(
+            item
+            for item in module.rust_items(source, item_name)
+            if item.brace_context == context
+        )
+    assert len(items) == 1, (seal_key, [item.brace_context for item in items])
+    item = items[0]
+    assert item.source.count(old) == 1, (seal_key, old)
+    path.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    mutated_source = path.read_text(encoding="utf-8")
+    if item_kind == "struct":
+        mutated_items = module.rust_struct_items(mutated_source, item_name)
+        seal_group = module._EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256
+    else:
+        mutated_items = tuple(
+            candidate
+            for candidate in module.rust_items(mutated_source, item_name)
+            if candidate.brace_context == context
+        )
+        seal_group = module._EXACT_SERVE_COMPLETION_PROVENANCE_ITEM_SHA256
+    assert len(mutated_items) == 1
+    seal_group[seal_key] = module._rust_item_token_sha256(mutated_items[0])
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
+
+    errors = module._exact_serve_runtime_episode_production_source_fidelity_errors(
+        tmp_path
+    )
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    ("seal_key", "item_name", "context", "old", "new", "expected_error"),
+    (
+        (
+            "build_v2_io_command_channel",
+            "build_v2_io_command_channel",
+            (),
+            "            producer_episode_due: false,\n",
+            "            producer_episode_due: true,\n",
+            "the command channel initializer must clear producer-episode due "
+            "immediately before active",
+        ),
+        (
+            "build_v2_io_command_channel",
+            "build_v2_io_command_channel",
+            (),
+            "            producer_episode_due: false,\n"
+            "            producer_episode_active: false,\n",
+            "            producer_episode_active: false,\n"
+            "            producer_episode_due: false,\n",
+            "the command channel initializer must clear producer-episode due "
+            "immediately before active",
+        ),
+        (
+            "V2IoCommandQueue::close_receiver",
+            "close_receiver",
+            (("impl", "V2IoCommandQueue"),),
+            "        state.producer_episode_due = false;\n",
+            "        state.producer_episode_due = true;\n",
+            "receiver teardown must clear producer-episode due before active "
+            "and Serve rollback",
+        ),
+        (
+            "V2IoCommandQueue::close_receiver",
+            "close_receiver",
+            (("impl", "V2IoCommandQueue"),),
+            "        state.producer_episode_due = false;\n"
+            "        state.producer_episode_active = false;\n",
+            "        state.producer_episode_active = false;\n"
+            "        state.producer_episode_due = false;\n",
+            "receiver teardown must clear producer-episode due before active "
+            "and Serve rollback",
+        ),
+    ),
+)
+def test_exact_serve_channel_lifecycle_boundaries_survive_item_digest_refresh(
+    tmp_path: Path,
+    seal_key: str,
+    item_name: str,
+    context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Channel initialization and teardown remain semantic after resealing."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == context
+    )
+    assert len(items) == 1
+    item = items[0]
+    assert item.source.count(old) == 1, (seal_key, old)
+    path.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    mutated_items = tuple(
+        candidate
+        for candidate in module.rust_items(
+            path.read_text(encoding="utf-8"), item_name
+        )
+        if candidate.brace_context == context
+    )
+    assert len(mutated_items) == 1
+    module._EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256[seal_key] = (
+        module._rust_item_token_sha256(mutated_items[0])
+    )
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
 def test_exact_serve_producer_episode_must_use_survives_digest_refresh(
     tmp_path: Path,
 ) -> None:
@@ -41916,6 +42581,95 @@ def test_exact_serve_producer_episode_drop_survives_digest_refresh(
         for error in errors
     ), errors
 
+
+def test_exact_serve_boolean_projection_remains_test_only_after_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The legacy boolean projection cannot re-enter the production runtime."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    source = path.read_text(encoding="utf-8")
+    old = (
+        "    #[cfg(test)]\n"
+        "    pub(crate) fn older_lifecycle_predates_exact_serve(\n"
+    )
+    new = "    pub(crate) fn older_lifecycle_predates_exact_serve(\n"
+    assert source.count(old) == 1
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    context = (
+        ("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),
+    )
+    items = tuple(
+        item
+        for item in module.rust_items(
+            path.read_text(encoding="utf-8"),
+            "older_lifecycle_predates_exact_serve",
+        )
+        if item.brace_context == context
+    )
+    assert len(items) == 1
+    module._EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256[
+        "older_lifecycle_predates_exact_serve"
+    ] = module._rust_item_token_sha256(items[0])
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+    assert any(
+        "exact-Serve runtime seam older_lifecycle_predates_exact_serve "
+        "must have exact reviewed attributes"
+        in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
+def test_exact_serve_executor_duplicate_boolean_seam_stays_absent(
+    tmp_path: Path,
+) -> None:
+    """Production cannot regain a second mutable projection of witness state."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    source = path.read_text(encoding="utf-8")
+    marker = (
+        "    /// Publish executor-retained owners and compare the retained-response\n"
+    )
+    assert source.count(marker) == 1
+    duplicate = """    pub(crate) fn older_runtime_lifecycle_predates_exact_serve(
+        &mut self,
+        now: Instant,
+        serve_lifecycle_ordinal: u128,
+    ) -> Result<bool, EffectExecutorError> {
+        self.ensure_open()?;
+        self.publish_external_lifecycle_owners()?;
+        self.runtime
+            .older_lifecycle_predates_exact_serve(now, serve_lifecycle_ordinal)
+            .map_err(EffectExecutorError::Runtime)
+    }
+
+"""
+    path.write_text(source.replace(marker, duplicate + marker, 1), encoding="utf-8")
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+    assert any(
+        "duplicate executor boolean projection must remain absent" in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
 @pytest.mark.parametrize(
     (
         "relative",
@@ -41928,6 +42682,18 @@ def test_exact_serve_producer_episode_drop_survives_digest_refresh(
         "expected_error",
     ),
     (
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RESTORE_ITEM_SHA256",
+            "restore_certified_serve_tombstones",
+            "restore_certified_serve_tombstones",
+            (),
+            "            last_predecessor_episode_witness: None,\n",
+            "            last_predecessor_episode_witness: Some(\n"
+            "                ExactServePredecessorEpisodeWitness::for_test(3, 1, 1),\n"
+            "            ),\n",
+            "restart-restored reservations must begin Ready with no live carrier and no synthetic consumed predecessor witness",
+        ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
@@ -41951,12 +42717,197 @@ def test_exact_serve_producer_episode_drop_survives_digest_refresh(
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256",
-            "older_runtime_lifecycle_predates_exact_serve",
-            "older_runtime_lifecycle_predates_exact_serve",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
             (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),),
             "        self.publish_external_lifecycle_owners()?;\n",
             "        let _ = self.external_lifecycle_owners()?;\n",
-            "executor-retained owners must publish before the runtime freezes and deeply validates the complete owner set",
+            "primary executor witness publisher must fail closed, publish every external owner first",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
+            (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),),
+            "            .exact_serve_predecessor_episode_witness(\n"
+            "                now,\n"
+            "                serve_lifecycle_ordinal,\n"
+            "                completion_evidence,\n"
+            "            )\n",
+            "            .exact_serve_predecessor_episode_witness(\n"
+            "                now,\n"
+            "                serve_lifecycle_ordinal.saturating_add(1),\n"
+            "                completion_evidence,\n"
+            "            )\n",
+            "primary executor witness publisher must fail closed, publish every external owner first, forward exact completion evidence",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
+            (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),),
+            "                completion_evidence,\n"
+            "            )\n",
+            "                None,\n"
+            "            )\n",
+            "primary executor witness publisher must fail closed, publish every external owner first, forward exact completion evidence",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
+            (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),),
+            "            .map_err(EffectExecutorError::Runtime)\n",
+            "            .map_err(EffectExecutorError::Contract)\n",
+            "primary executor witness publisher must fail closed, publish every external owner first",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256",
+            "older_runtime_lifecycle_predates_retained_response",
+            "older_runtime_lifecycle_predates_retained_response",
+            (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),),
+            "            .older_lifecycle_predates_retained_response(now, target_lifecycle_ordinal)\n",
+            "            .older_lifecycle_predates_exact_serve(now, target_lifecycle_ordinal)\n",
+            "retained-response probe must publish complete external ownership and delegate only to its isolated runtime state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_predecessor_completion_evidence",
+            "certified_serve_predecessor_completion_evidence",
+            (("impl", "ProductionV2Services"),),
+            "        let io_ordinal = io_ordinal.filter(|ordinal| *ordinal < serve_lifecycle_ordinal);\n",
+            "        let io_ordinal = io_ordinal.filter(|ordinal| *ordinal <= serve_lifecycle_ordinal);\n",
+            "completion projection must be non-consuming, capacity-gated, strictly older, least-ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_predecessor_completion_evidence",
+            "certified_serve_predecessor_completion_evidence",
+            (("impl", "ProductionV2Services"),),
+            "            .filter(|owned| runtime_capacity_available || !owned.requires_runtime_capacity)\n",
+            "            .filter(|_| true)\n",
+            "completion projection must be non-consuming, capacity-gated, strictly older, least-ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_predecessor_completion_evidence",
+            "certified_serve_predecessor_completion_evidence",
+            (("impl", "ProductionV2Services"),),
+            "        if runtime_capacity_available {\n"
+            "            for completion in &self.local_completions {\n",
+            "        if false && runtime_capacity_available {\n"
+            "            for completion in &self.local_completions {\n",
+            "completion projection must be non-consuming, capacity-gated, strictly older, least-ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_predecessor_completion_evidence",
+            "certified_serve_predecessor_completion_evidence",
+            (("impl", "ProductionV2Services"),),
+            "                        Some(local_ordinal.map_or(ordinal, |current: u128| current.min(ordinal)));\n",
+            "                        Some(local_ordinal.map_or(ordinal, |current: u128| current.max(ordinal)));\n",
+            "completion projection must be non-consuming, capacity-gated, strictly older, least-ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_predecessor_completion_evidence",
+            "certified_serve_predecessor_completion_evidence",
+            (("impl", "ProductionV2Services"),),
+            "            (Some(io), Some(local)) => Some(io.min(local)),\n",
+            "            (Some(io), Some(local)) => Some(io.max(local)),\n",
+            "completion projection must be non-consuming, capacity-gated, strictly older, least-ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_predecessor_completion_evidence",
+            "certified_serve_predecessor_completion_evidence",
+            (("impl", "ProductionV2Services"),),
+            "    pub(crate) fn certified_serve_predecessor_completion_evidence(\n"
+            "        &self,\n",
+            "    pub(crate) fn certified_serve_predecessor_completion_evidence(\n"
+            "        &mut self,\n",
+            "completion projection must be non-consuming, capacity-gated, strictly older, least-ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "with_driver_and_lifecycle_ordinals",
+            "with_driver_and_lifecycle_ordinals",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            retained_response_predecessor_retry_attempted: false,\n",
+            "            retained_response_predecessor_retry_attempted: true,\n",
+            "runtime construction must initialize the isolated retained-response probe and selected-Serve predecessor episode without synthetic state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "with_driver_and_lifecycle_ordinals",
+            "with_driver_and_lifecycle_ordinals",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            exact_serve_target_ordinal: None,\n",
+            "            exact_serve_target_ordinal: Some(1),\n",
+            "runtime construction must initialize the isolated retained-response probe and selected-Serve predecessor episode without synthetic state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "with_driver_and_lifecycle_ordinals",
+            "with_driver_and_lifecycle_ordinals",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            exact_serve_predecessor_retry_attempted: false,\n",
+            "            exact_serve_predecessor_retry_attempted: true,\n",
+            "runtime construction must initialize the isolated retained-response probe and selected-Serve predecessor episode without synthetic state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "with_driver_and_lifecycle_ordinals",
+            "with_driver_and_lifecycle_ordinals",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            retained_response_predecessor_target_ordinal: None,\n",
+            "            retained_response_predecessor_target_ordinal: Some(1),\n",
+            "runtime construction must initialize the isolated retained-response probe and selected-Serve predecessor episode without synthetic state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "with_driver_and_lifecycle_ordinals",
+            "with_driver_and_lifecycle_ordinals",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            exact_serve_predecessor_physically_present: false,\n",
+            "            exact_serve_predecessor_physically_present: true,\n",
+            "runtime construction must initialize the isolated retained-response probe and selected-Serve predecessor episode without synthetic state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "with_driver_and_lifecycle_ordinals",
+            "with_driver_and_lifecycle_ordinals",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            exact_serve_predecessor_episode: 0,\n",
+            "            exact_serve_predecessor_episode: 1,\n",
+            "runtime construction must initialize the isolated retained-response probe and selected-Serve predecessor episode without synthetic state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "with_driver_and_lifecycle_ordinals",
+            "with_driver_and_lifecycle_ordinals",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            exact_serve_predecessor_witness: None,\n",
+            "            exact_serve_predecessor_witness:\n"
+            "                ExactServePredecessorEpisodeWitness::try_new(2, 1, 1),\n",
+            "runtime construction must initialize the isolated retained-response probe and selected-Serve predecessor episode without synthetic state",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -41992,6 +42943,36 @@ def test_exact_serve_producer_episode_drop_survives_digest_refresh(
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
             "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "minimum_runnable_lifecycle_ordinal",
+            "minimum_runnable_lifecycle_ordinal",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            if !evidence.validate_exact()\n",
+            "            if false && !evidence.validate_exact()\n",
+            "completion evidence must validate its integrity and shared-source mint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "minimum_runnable_lifecycle_ordinal",
+            "minimum_runnable_lifecycle_ordinal",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "                    .recognizes_minted(evidence.lifecycle_ordinal())\n",
+            "                    .recognizes_minted(1)\n",
+            "completion evidence must validate its integrity and shared-source mint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "minimum_runnable_lifecycle_ordinal",
+            "minimum_runnable_lifecycle_ordinal",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));\n",
+            "                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.max(lifecycle_ordinal)));\n",
+            "completion evidence must validate its integrity and shared-source mint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
             "active_lifecycle_uses_ordinal",
             "active_lifecycle_uses_ordinal",
             (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
@@ -42009,9 +42990,280 @@ def test_exact_serve_producer_episode_drop_survives_digest_refresh(
             "older_lifecycle_predates_exact_serve",
             "older_lifecycle_predates_exact_serve",
             (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
-            "                let older = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);\n",
-            "                let older = minimum.is_some_and(|ordinal| ordinal <= serve_lifecycle_ordinal);\n",
-            "runnable owner minimum must be strictly older than the ticket",
+            "            .map(|witness| witness.is_some())\n",
+            "            .map(|witness| witness.is_none())\n",
+            "selected-Serve boolean projection must delegate exclusively to the witnessed producer seam",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        if !self.exact_serve_predecessor_physically_present {\n",
+            "        if self.exact_serve_predecessor_physically_present {\n",
+            "only an observed absence-to-presence transition may checked-increment the producer episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        if self.exact_serve_predecessor_retry_attempted {\n",
+            "        if false && self.exact_serve_predecessor_retry_attempted {\n",
+            "retry-unadmitted suppression must retain physical presence and cannot mint another witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "            !evidence.validate_exact() || evidence.lifecycle_ordinal() >= serve_lifecycle_ordinal\n",
+            "            !evidence.validate_exact() || evidence.lifecycle_ordinal() > serve_lifecycle_ordinal\n",
+            "completion evidence must be exact and strictly older than its immutable Serve target",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "exact_serve_predecessor_episode_witness",
+            "exact_serve_predecessor_episode_witness",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, completion_evidence) {\n",
+            "        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, None) {\n",
+            "exact-Serve comparison must use only owners runnable by one serialized turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "older_lifecycle_predates_retained_response",
+            "older_lifecycle_predates_retained_response",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        if self.retained_response_predecessor_target_ordinal != Some(serve_lifecycle_ordinal) {\n",
+            "        if self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal) {\n",
+            "retained-response predecessor probe must not mutate or read the other target's episode state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "step",
+            "step",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "                    if self\n"
+            "                        .retained_response_predecessor_target_ordinal\n"
+            "                        .is_some_and(|target| owner.lifecycle_ordinal() < target)\n"
+            "                    {\n"
+            "                        self.retained_response_predecessor_retry_attempted = true;\n"
+            "                    }\n",
+            "",
+            "must latch each independently active exact target whose ordinal it predates",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "step",
+            "step",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "                    if self\n"
+            "                        .exact_serve_target_ordinal\n"
+            "                        .is_some_and(|target| owner.lifecycle_ordinal() < target)\n"
+            "                    {\n"
+            "                        self.exact_serve_predecessor_retry_attempted = true;\n"
+            "                    }\n",
+            "",
+            "must latch each independently active exact target whose ordinal it predates",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            """                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(
+                    Instant::now(),
+                    serve_barrier.scheduler_ordinal(),
+                    completion_evidence,
+                )? {
+                    // A passive Fetch is intentionally absent from the
+                    // runnable-owner set. A completed strict predecessor is
+                    // projected without consuming it; its exact local ordinal
+                    // lets the runtime issue one newer episode witness before
+                    // the worker claims capacity and admits the completion.
+                    let _ = services
+                        .observe_certified_serve_predecessor_episode_witness(serve_barrier, witness)
+                        .map_err(V2RunnerError::Service)?;
+                }
+                let claimed_older_runtime_episode = services
+                    .claim_certified_serve_runtime_episode(serve_barrier)
+                    .map_err(V2RunnerError::Service)?;
+""",
+            """                let claimed_older_runtime_episode = services
+                    .claim_certified_serve_runtime_episode(serve_barrier)
+                    .map_err(V2RunnerError::Service)?;
+                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(
+                    Instant::now(),
+                    serve_barrier.scheduler_ordinal(),
+                    completion_evidence,
+                )? {
+                    // A passive Fetch is intentionally absent from the
+                    // runnable-owner set. A completed strict predecessor is
+                    // projected without consuming it; its exact local ordinal
+                    // lets the runtime issue one newer episode witness before
+                    // the worker claims capacity and admits the completion.
+                    let _ = services
+                        .observe_certified_serve_predecessor_episode_witness(serve_barrier, witness)
+                        .map_err(V2RunnerError::Service)?;
+                }
+""",
+            "publish and consume a late predecessor witness before attempting to claim",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "                let mut older_predecessor_remains = false;\n",
+            "                let mut older_predecessor_remains = false;\n"
+            "                let _ = super::v2_runtime::ExactServePredecessorCompletionEvidence::try_new(\n"
+            "                    serve_barrier.scheduler_ordinal(),\n"
+            "                );\n",
+            "completion evidence must be minted exactly once and only by the reviewed non-consuming ProductionV2Services projection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "                let completion_evidence = services\n"
+            "                    .certified_serve_predecessor_completion_evidence(\n"
+            "                        executor.remaining_completion_capacity() != 0,\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                    )\n"
+            "                    .map_err(V2RunnerError::Service)?;\n"
+            "                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(\n",
+            "                let completion_evidence = services\n"
+            "                    .certified_serve_predecessor_completion_evidence(\n"
+            "                        executor.remaining_completion_capacity() == 0,\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                    )\n"
+            "                    .map_err(V2RunnerError::Service)?;\n"
+            "                if let Some(witness) = executor.exact_serve_predecessor_episode_witness(\n",
+            "runner must freshly project exact completion ownership before each of its three selected-Serve witness observations",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "                    let completion_evidence = services\n"
+            "                        .certified_serve_predecessor_completion_evidence(\n"
+            "                            executor.remaining_completion_capacity() != 0,\n"
+            "                            serve_barrier.scheduler_ordinal(),\n"
+            "                        )\n"
+            "                        .map_err(V2RunnerError::Service)?;\n"
+            "                    let predecessor_witness = executor.exact_serve_predecessor_episode_witness(\n"
+            "                        Instant::now(),\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                        completion_evidence,\n"
+            "                    )?;\n"
+            "                    if let Some(witness) = predecessor_witness {\n"
+            "                        let _ = services\n"
+            "                            .observe_certified_serve_predecessor_episode_witness(\n"
+            "                                serve_barrier,\n"
+            "                                witness,\n"
+            "                            )\n"
+            "                            .map_err(V2RunnerError::Service)?;\n"
+            "                    }\n"
+            "                    if predecessor_witness.is_some()\n",
+            "                    let completion_evidence = None;\n"
+            "                    let predecessor_witness = executor.exact_serve_predecessor_episode_witness(\n"
+            "                        Instant::now(),\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                        completion_evidence,\n"
+            "                    )?;\n"
+            "                    if let Some(witness) = predecessor_witness {\n"
+            "                        let _ = services\n"
+            "                            .observe_certified_serve_predecessor_episode_witness(\n"
+            "                                serve_barrier,\n"
+            "                                witness,\n"
+            "                            )\n"
+            "                            .map_err(V2RunnerError::Service)?;\n"
+            "                    }\n"
+            "                    if predecessor_witness.is_some()\n",
+            "runner must freshly project exact completion ownership before each of its three selected-Serve witness observations",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "                let mut older_predecessor_remains = false;\n",
+            "                let mut older_predecessor_remains = false;\n"
+            "                services.drain_exact_serve_runtime_predecessor(\n"
+            "                    &mut executor,\n"
+            "                    serve_barrier.scheduler_ordinal(),\n"
+            "                )?;\n",
+            "runner must drain exactly one strict completion only inside the successfully claimed selected-Serve predecessor episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "                    services.drain_exact_serve_runtime_predecessor(\n"
+            "                        &mut executor,\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                    )?;\n",
+            "                    let _ = serve_barrier;\n",
+            "runner must drain exactly one strict completion only inside the successfully claimed selected-Serve predecessor episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "                    if predecessor_witness.is_some()\n"
+            "                        && services\n",
+            "                    if predecessor_witness.is_none()\n"
+            "                        && services\n",
+            "serialized predecessor step must consume the stable witness and require both that witness and physical capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "                    older_predecessor_remains = predecessor_witness.is_some();\n",
+            "                    older_predecessor_remains = predecessor_witness.is_none();\n",
+            "every claimed turn must re-publish, consume, and recheck the full witnessed owner set before settlement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "run_inner",
+            "run_inner",
+            (),
+            "            else {\n"
+            "                // Exact admission won the queue-locked race after the\n"
+            "                // observation above. Restart at the dedicated target turn.\n"
+            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "                continue;\n"
+            "            };\n",
+            "            else {\n"
+            "                // Exact admission won the queue-locked race after the\n"
+            "                // observation above. Restart at the dedicated target turn.\n"
+            "                let _ = wake_rx.recv();\n"
+            "                continue;\n"
+            "            };\n",
+            "queue-locked handoff to an exact target which won the admission race must retain the finite wake bound",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -42084,9 +43336,35 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
         if candidate.brace_context == context
     )
     assert len(mutated_items) == 1
-    getattr(module, seal_group)[seal_key] = module._rust_item_token_sha256(
-        mutated_items[0]
-    )
+    rebound_digest = module._rust_item_token_sha256(mutated_items[0])
+    getattr(module, seal_group)[seal_key] = rebound_digest
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
+    if relative == "crates/iroha_core/src/sumeragi/v2_runtime.rs":
+        if item_name == "with_driver_and_lifecycle_ordinals":
+            module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256[
+                "with_driver_and_lifecycle_ordinals"
+            ] = rebound_digest
+        elif item_name == "step":
+            module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256["runtime_step"] = (
+                rebound_digest
+            )
+            module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256["step"] = (
+                rebound_digest
+            )
+    if relative == "crates/iroha_core/src/sumeragi/v2_runner.rs" and item_name == "run_inner":
+        for alias_group, alias_key in (
+            ("_PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256", "run_inner"),
+            ("_PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256", "run_inner"),
+            ("_PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256", "run_inner"),
+            ("_TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256", "runner::run_inner"),
+            (
+                "_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256",
+                "runner::run_inner",
+            ),
+            ("_SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256", "run_inner"),
+            ("_LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256", "run_inner"),
+        ):
+            getattr(module, alias_group)[alias_key] = rebound_digest
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -42122,11 +43400,42 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "            Some(older_task.lifecycle_ordinal()),\n"
+            "            \"the least strict local predecessor must reopen the exact Serve episode\"\n",
+            "            None,\n"
+            "            \"the least strict local predecessor must reopen the exact Serve episode\"\n",
+            "completion-evidence regression must project the least strict local predecessor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "                .certified_serve_predecessor_completion_evidence(false, first_ticket_ordinal,)\n",
+            "                .certified_serve_predecessor_completion_evidence(true, first_ticket_ordinal,)\n",
+            "completion requiring runtime capacity must not reopen Serve while capacity is unavailable",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "            Some(later_ordinal),\n"
+            "            \"the exact I/O completion becomes eligible only below a later ticket\"\n",
+            "            None,\n"
+            "            \"the exact I/O completion becomes eligible only below a later ticket\"\n",
+            "I/O completion must become evidence only below a strictly later ticket",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
             "repeated_exact_serve_claims_close_all_older_sources_before_later_io",
             (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
             "            .finish_certified_serve_runtime_episode_turn(barrier, false)\n",
             "            .finish_certified_serve_runtime_episode_turn(barrier, true)\n",
-            "repeated exact-Serve claims must become irreversible after the complete older-owner set is exhausted",
+            "repeated exact-Serve claims must stay sealed after the complete older-owner set is exhausted unless a newer witness arrives",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -42171,13 +43480,285 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
             "drained exact retransmission must receive a fresh scheduler ordinal",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_worker_certified_serve_budget_cases.rs",
             "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
             "certified_serve_future_slot_blocks_control_and_consensus_replenishment",
-            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            (),
             "            for class in [V2IoAdmissionClass::Consensus, V2IoAdmissionClass::Control] {\n",
             "            for class in [V2IoAdmissionClass::Control] {\n",
             "reserved future Serve slot must block both later Consensus and Control replenishment",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        let replenished =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);\n",
+            "        let replenished =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 3);\n",
+            "witness regression must model the exact next producer episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        let first =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 1, 1);\n",
+            "        let first =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);\n",
+            "witness regression must begin with exact predecessor one at episode one",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        let conflicting =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);\n",
+            "        let conflicting =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);\n",
+            "witness regression must model a same-episode exact-evidence conflict",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        let skipped =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 3);\n",
+            "        let skipped =\n"
+            "            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);\n",
+            "witness regression must model a skipped producer episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "            !command_tx\n"
+            "                .observe_serve_predecessor_episode_witness(barrier, first)\n"
+            "                .expect(\"same physical episode must coalesce\")\n",
+            "            command_tx\n"
+            "                .observe_serve_predecessor_episode_witness(barrier, first)\n"
+            "                .expect(\"same physical episode must coalesce\")\n",
+            "witness regression must prove that Complete remains sealed for an identical episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "                .observe_serve_predecessor_episode_witness(barrier, conflicting)\n"
+            "                .is_err(),\n",
+            "                .observe_serve_predecessor_episode_witness(barrier, conflicting)\n"
+            "                .is_ok(),\n",
+            "witness regression must reject conflicting evidence within one episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "                .observe_serve_predecessor_episode_witness(barrier, skipped)\n"
+            "                .is_err(),\n",
+            "                .observe_serve_predecessor_episode_witness(barrier, skipped)\n"
+            "                .is_ok(),\n",
+            "witness regression must reject a skipped consumer episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "            !command_tx\n"
+            "                .observe_serve_predecessor_episode_witness(barrier, replenished)\n"
+            "                .expect(\"repeated replenishment witness must stutter\")\n",
+            "            command_tx\n"
+            "                .observe_serve_predecessor_episode_witness(barrier, replenished)\n"
+            "                .expect(\"repeated replenishment witness must stutter\")\n",
+            "exactly the next witness must reopen Complete once and then stutter",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        assert!(matches!(committed, CertifiedServeCommit::Queued));\n",
+            "        assert!(matches!(committed, CertifiedServeCommit::Coalesced));\n",
+            "the reopened owner must retire through real target delivery and the finite producer handoff",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "                .is_none(),\n"
+            "            \"passive Fetch transport work alone cannot block Serve\"\n",
+            "                .is_some(),\n"
+            "            \"passive Fetch transport work alone cannot block Serve\"\n",
+            "passive Fetch alone must not mint or block on a predecessor witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "        let fetch_ordinal = fixture\n"
+            "            .lifecycle_ordinals\n"
+            "            .reserve_one()\n"
+            "            .expect(\"reserve the passive Fetch lifecycle before Serve\");\n",
+            "        let fetch_ordinal = 2;\n",
+            "the concrete late-runnable regression must reserve passive Fetch ownership before the Serve target",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "        assert_eq!(witness.episode(), 1);\n",
+            "        assert_eq!(witness.episode(), 2);\n",
+            "late BodyAvailable materialization must mint episode one for the original earlier Fetch owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "            Some(witness),\n"
+            "            \"one continuous predecessor prefix retains one witness across target probes\"\n",
+            "            None,\n"
+            "            \"one continuous predecessor prefix retains one witness across target probes\"\n",
+            "one continuous late predecessor prefix must retain the identical witness across the alternate target probe",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "                .step(Instant::now(), &mut services)\n"
+            "                .expect(\"the reopened predecessor owns the next serialized step\"),\n",
+            "                .step_pacemaker_once(Instant::now(), &mut services)\n"
+            "                .expect(\"the reopened predecessor owns the next serialized step\"),\n",
+            "the reopened predecessor must consume one real runtime completion in one serialized step",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "            services.store_tasks.len(),\n            1,\n",
+            "            services.store_tasks.len(),\n            0,\n",
+            "the reopened BodyAvailable transition must produce exactly one Store successor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "            services.store_tasks[0].lifecycle_ordinal(),\n"
+            "            fetch_ordinal,\n",
+            "            services.store_tasks[0].lifecycle_ordinal(),\n"
+            "            serve_ordinal,\n",
+            "the Store successor must retain the immutable original Fetch owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "                .expect(\"an incomplete Store remains passive\")\n"
+            "                .is_none(),\n",
+            "                .expect(\"an incomplete Store remains passive\")\n"
+            "                .is_some(),\n",
+            "an incomplete asynchronous Store must remain passive and cannot veto Serve",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "        assert_eq!(replenished.episode(), 2);\n",
+            "        assert_eq!(replenished.episode(), 1);\n",
+            "tracked completed Store must retain its immutable owner and open exactly the next finite predecessor episode",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_REGRESSION_TEST_SHA256",
+            "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "                .older_runtime_lifecycle_predates_retained_response(\n"
+            "                    Instant::now(),\n"
+            "                    retained_response_ordinal,\n"
+            "                )\n"
+            "                .expect(\"exercise the published retained-response predecessor probe\")\n",
+            "                .exact_serve_predecessor_episode_witness(\n"
+            "                    Instant::now(),\n"
+            "                    retained_response_ordinal,\n"
+            "                )\n"
+            "                .expect(\"exercise the published retained-response predecessor probe\")\n"
+            "                .is_some()\n",
+            "the concrete late-runnable regression must execute the published isolated retained-response wrapper",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256",
+            "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "                .older_lifecycle_predates_retained_response(start, retained_response_ordinal)\n"
+            "                .expect(\"alternate retained-response target sees the same older owner\")\n",
+            "                .older_lifecycle_predates_exact_serve(start, retained_response_ordinal)\n"
+            "                .expect(\"alternate retained-response target sees the same older owner\")\n",
+            "alternating-target regression must exercise the isolated retained-response probe",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256",
+            "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "            Some(first_witness),\n"
+            "            \"selected Serve retains one monotone witness across the legacy target probe\"\n",
+            "            None,\n"
+            "            \"selected Serve retains one monotone witness across the legacy target probe\"\n",
+            "selected-Serve witness must remain stable after an alternate target probe",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256",
+            "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "        assert!(runtime.exact_serve_predecessor_retry_attempted);\n",
+            "        assert!(!runtime.exact_serve_predecessor_retry_attempted);\n",
+            "one retry-unadmitted step must latch both independently active exact targets",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256",
+            "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "        assert!(!runtime.retained_response_predecessor_retry_attempted);\n",
+            "        assert!(runtime.retained_response_predecessor_retry_attempted);\n",
+            "settling the shared older owner must clear both retry latches without witness regression",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256",
+            "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "        let completed_witness = runtime\n"
+            "            .exact_serve_predecessor_episode_witness(\n"
+            "                start,\n"
+            "                completed_target,\n"
+            "                Some(completed_evidence),\n"
+            "            )\n",
+            "        let completed_witness = runtime\n"
+            "            .exact_serve_predecessor_episode_witness(\n"
+            "                start,\n"
+            "                completed_target,\n"
+            "                None,\n"
+            "            )\n",
+            "only exact completion evidence may turn a passive service owner into one finite runnable predecessor episode",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -42231,6 +43812,7 @@ def test_exact_serve_runtime_episode_regressions_survive_item_digest_refresh(
     getattr(module, seal_group)[item_name] = module._rust_item_token_sha256(
         mutated_items[0]
     )
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = (
         module._exact_serve_runtime_episode_production_source_fidelity_errors(
@@ -42388,119 +43970,6 @@ def test_post_serve_producer_handoff_regression_survives_digest_refresh(
         for error in errors
     ), errors
 
-@pytest.mark.parametrize(
-    ("relative", "old", "new", "expected_error"),
-    (
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "            liveness_watchdog.poll(Instant::now());\n",
-            "",
-            "every serialized height-loop iteration must poll",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                continue;\n",
-            "                continue;\n",
-            "all four explicit serialized height-loop continue edges",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                advance_executor(\n"
-            "                    &block_rx,\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
-            "                )?;",
-            "                advance_executor(\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
-            "                )?;",
-            "ordinary height path must invoke the bounded serialized runtime against the live ingress high-watermark",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;",
-            "let _ = (&block_rx, &mut executor, &mut services);",
-            "retained response episode must receive exactly one direct typed pacemaker turn",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "service_certified_serve_barrier_liveness_turn(\n",
-            "service_certified_serve_barrier_liveness_turn_for_test(\n",
-            "selected Serve must keep certificate escape inside",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;\n",
-            "        let _ = CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode;\n",
-            "selected-Serve liveness service must admit TimeoutVote, drain its retained prefix, and run the pacemaker in reviewed order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "            recovery.assert_complete();\n",
-            "            assert!(recovery.entered_view_one());\n",
-            "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "    service()\n"
-            "}\n\n"
-            "/// Execute at most one typed timeout/Progress-root transition",
-            "    if _older_runtime_episode_claimed {\n"
-            "        service()\n"
-            "    } else {\n"
-            "        Ok(())\n"
-            "    }\n"
-            "}\n\n"
-            "/// Execute at most one typed timeout/Progress-root transition",
-            "selected-Serve pacemaker service must remain independent of the "
-            "one-shot predecessor-episode claim",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
-            "wake_rx.recv_timeout(remaining)",
-            "pending-tip recovery must wait only for the lesser of its remaining deadline",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "    for _ in 0..limit.max(1) {\n"
-            "        match executor.step(Instant::now(), services)? {",
-            "    loop {\n"
-            "        match executor.step(Instant::now(), services)? {",
-            "ordinary serialized runtime service must be a finite configured turn",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "        while attempts < limit {\n",
-            "        loop {\n",
-            "every completion policy must retain its caller-supplied finite bound",
-        ),
-    ),
-)
-def test_local_runner_service_contract_rejects_production_loop_mutations(
-    tmp_path: Path,
-    relative: str,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    module = load_checker()
-    formal_dir = local_runner_service_fixture(tmp_path, module)
-    path = tmp_path / relative
-    source = path.read_text(encoding="utf-8")
-    assert old in source, old
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = module._local_runner_service_contract_source_fidelity_errors(
-        module.load_ledger(),
-        repo_root=tmp_path,
-        formal_dir=formal_dir,
-    )
-
-    assert any(expected_error in error for error in errors), errors
 
 @pytest.mark.parametrize(
     ("old", "new"),
@@ -42594,7 +44063,7 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
         ),
         (
             "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
-            "runner",
+            "runner_test",
             "item",
             "complete_certified_serve_episode_cannot_veto_pacemaker",
             "                        recovery.service_timeout_vote_episode()\n",
@@ -42603,25 +44072,117 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
         ),
         (
             "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
-            "runner",
+            "runner_test",
             "item",
             "complete_certified_serve_episode_cannot_veto_pacemaker",
-            "                let older_runtime_episode_claimed = recovery\n"
-            "                    .service_exact_serve_runtime_prefix()\n"
-            "                    .expect(\"service the exact selected-Serve runtime prefix\");\n",
-            "                let older_runtime_episode_claimed = false;\n",
+            "    for older_runtime_episode_claimed in [true, false] {\n",
+            "    for older_runtime_episode_claimed in [true, true] {\n",
+            "completed selected-Serve predecessor claims must retain the same bounded pacemaker turn",
+        ),
+        (
+            "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
+            "runner_test",
+            "item",
+            "complete_certified_serve_episode_cannot_veto_pacemaker",
+            "    .expect_err(\"live runner propagates a typed pacemaker failure\");\n",
+            "    .expect(\"live runner swallows a typed pacemaker failure\");\n",
+            "selected-Serve pacemaker regression must propagate typed failure and suppress only interrupted-tip recovery",
+        ),
+        (
+            "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
+            "runner_test",
+            "item",
+            "complete_certified_serve_episode_cannot_veto_pacemaker",
+            "            let older_runtime_episode_claimed = recovery\n"
+            "                .service_exact_serve_runtime_prefix()\n"
+            "                .expect(\"service the exact selected-Serve runtime prefix\");\n",
+            "            let older_runtime_episode_claimed = false;\n",
             "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
         ),
         (
             "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
-            "runner",
+            "runner_test",
             "item",
             "complete_certified_serve_episode_cannot_veto_pacemaker",
-            "                    older_runtime_episode_claimed,\n"
-            "                    |action| match action {\n",
-            "                    false,\n"
-            "                    |action| match action {\n",
+            "                older_runtime_episode_claimed,\n"
+            "                |action| match action {\n",
+            "                false,\n"
+            "                |action| match action {\n",
             "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
+        ),
+        (
+            "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
+            "runner_test",
+            "item",
+            "complete_certified_serve_episode_cannot_veto_pacemaker",
+            "        let mut late_passive_fetch =\n"
+            "            super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch();\n"
+            "        late_passive_fetch.assert_late_passive_fetch_completion_reopens_selected_serve();\n",
+            "",
+            "selected-Serve regression must execute the real late-passive-Fetch completion, target release, and producer handoff",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryMode",
+            "worker",
+            "enum",
+            "SelectedServeTimeoutRecoveryMode",
+            "        LatePassiveFetch,\n",
+            "        LatePassiveFetchBypass,\n",
+            "selected-Serve fixture mode vocabulary must remain closed",
+        ),
+        (
+            "worker::SelectedServeLatePassiveFetch",
+            "worker",
+            "struct",
+            "SelectedServeLatePassiveFetch",
+            "        body_store: V2BodyStore,\n",
+            "",
+            "late-passive-Fetch fixture must retain the exact body store, immutable task owner, manifest, and body",
+        ),
+        (
+            "worker::SelectedServeLatePassiveFetch",
+            "worker",
+            "struct",
+            "SelectedServeLatePassiveFetch",
+            "        task: BodyFetchTask,\n",
+            "",
+            "late-passive-Fetch fixture must retain the exact body store, immutable task owner, manifest, and body",
+        ),
+        (
+            "worker::SelectedServeLatePassiveFetch",
+            "worker",
+            "struct",
+            "SelectedServeLatePassiveFetch",
+            "        manifest: wire::PayloadManifest,\n",
+            "",
+            "late-passive-Fetch fixture must retain the exact body store, immutable task owner, manifest, and body",
+        ),
+        (
+            "worker::SelectedServeLatePassiveFetch",
+            "worker",
+            "struct",
+            "SelectedServeLatePassiveFetch",
+            "        body: Vec<u8>,\n",
+            "",
+            "late-passive-Fetch fixture must retain the exact body store, immutable task owner, manifest, and body",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture",
+            "worker",
+            "struct",
+            "SelectedServeTimeoutRecoveryFixture",
+            "        late_passive_fetch: Option<SelectedServeLatePassiveFetch>,\n",
+            "",
+            "selected-Serve regression must retain every real ingress, runtime, worker, and observation owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture",
+            "worker",
+            "struct",
+            "SelectedServeTimeoutRecoveryFixture",
+            "        missing_proposal_request: AuthenticatedCertifiedBodyRequest,\n",
+            "",
+            "selected-Serve regression must retain every real ingress, runtime, worker, and observation owner",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture",
@@ -42629,7 +44190,7 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
             "struct",
             "SelectedServeTimeoutRecoveryFixture",
             "        missing_proposal_request_hash: HashOf<wire::CertifiedBodyRequest>,\n",
-            "        missing_proposal_request: HashOf<wire::CertifiedBodyRequest>,\n",
+            "",
             "selected-Serve regression must retain every real ingress, runtime, worker, and observation owner",
         ),
         (
@@ -42637,22 +44198,341 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
             "worker",
             "method",
             "new",
-            "                .take(2)\n",
-            "                .take(1)\n",
+            "            Self::new_for_mode(SelectedServeTimeoutRecoveryMode::TimeoutRecovery)\n",
+            "            Self::new_for_mode(SelectedServeTimeoutRecoveryMode::LatePassiveFetch)\n",
+            "the timeout-recovery fixture constructor must select only its exact closed mode",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch",
+            "worker",
+            "method",
+            "new_late_passive_fetch",
+            "            Self::new_for_mode(SelectedServeTimeoutRecoveryMode::LatePassiveFetch)\n",
+            "            Self::new_for_mode(SelectedServeTimeoutRecoveryMode::TimeoutRecovery)\n",
+            "the late-passive-Fetch fixture constructor must select only its exact closed mode",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                    .take(2)\n",
+            "                    .take(1)\n",
             "selected-Serve fixture must enqueue exactly two distinct remote timeout signers",
         ),
         (
-            "worker::SelectedServeTimeoutRecoveryFixture::new",
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
             "worker",
             "method",
-            "new",
-            "                timeout_owner.lifecycle_ordinal(),\n"
-            "                1,\n"
-            "                \"the height-start timeout owns the first actor-global scheduler position\"\n",
-            "                timeout_owner.lifecycle_ordinal(),\n"
-            "                2,\n"
-            "                \"the height-start timeout owns the first actor-global scheduler position\"\n",
+            "new_for_mode",
+            "                        timeout_owner.lifecycle_ordinal(),\n"
+            "                        1,\n"
+            "                        \"the height-start timeout owns the first actor-global scheduler position\"\n",
+            "                        timeout_owner.lifecycle_ordinal(),\n"
+            "                        2,\n"
+            "                        \"the height-start timeout owns the first actor-global scheduler position\"\n",
             "selected-Serve fixture must freeze the height-start timeout at actor-global ordinal one",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                allow_fixture_block_payload(&mut services.context);\n",
+            "                let _ = &services.context;\n",
+            "late-passive-Fetch mode must widen the exact context and rebuild its recovery authority before cloning any context-bound service",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                    services.context.height,\n"
+            "                    [0xF4; 32],\n"
+            "                    services.active_tag.view(),\n"
+            "                    false,\n",
+            "                    services.context.height,\n"
+            "                    [0xF5; 32],\n"
+            "                    services.active_tag.view(),\n"
+            "                    false,\n",
+            "late-passive-Fetch mode must widen the exact context and rebuild its recovery authority before cloning any context-bound service",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                services.chunk_root = runtime_directory.path().join(\"chunks\");\n",
+            "                services.chunk_root = PathBuf::new();\n",
+            "late-passive-Fetch mode must retain an isolated chunk root before dispatching body work",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {\n"
+            "                    Duration::from_secs(24 * 60 * 60)\n"
+            "                }\n",
+            "                SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {\n"
+            "                    Duration::from_millis(1)\n"
+            "                }\n",
+            "selected-Serve fixture must keep only timeout recovery due while the late-Fetch pipeline owns one long non-due clock",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                    executor\n"
+            "                        .arm_live_clocks(late_dispatch_at)\n"
+            "                        .expect(\"arm non-due late-passive-Fetch clocks\");\n",
+            "",
+            "late-passive-Fetch mode must arm exactly one fresh non-due clock",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                            .step(late_dispatch_at, &mut services)\n"
+            "                            .expect(\"dispatch the signed proposal into passive Fetch work\"),\n",
+            "                            .step_pacemaker_once(late_dispatch_at, &mut services)\n"
+            "                            .expect(\"dispatch the signed proposal into passive Fetch work\"),\n",
+            "late-passive-Fetch mode must arm and reuse one non-due instant for a real signed Proposal and one serialized production step establishing exactly one passive Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                            .step(late_dispatch_at, &mut services)\n",
+            "                            .step(Instant::now(), &mut services)\n",
+            "late-passive-Fetch mode must arm and reuse one non-due instant for a real signed Proposal and one serialized production step establishing exactly one passive Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                        &proposal.signature_preimage(),\n",
+            "                        b\"forged late-passive-Fetch proposal\",\n",
+            "late-passive-Fetch mode must arm and reuse one non-due instant for a real signed Proposal and one serialized production step establishing exactly one passive Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                        executor.status().pending_fetches,\n"
+            "                        1,\n",
+            "                        executor.status().pending_fetches,\n"
+            "                        0,\n",
+            "late-passive-Fetch mode must arm and reuse one non-due instant for a real signed Proposal and one serialized production step establishing exactly one passive Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            ".checked_add(1)",
+            ".checked_add(2)",
+            "selected Serve must take exactly the next shared actor-global ordinal after the passive Fetch",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "            if mode == SelectedServeTimeoutRecoveryMode::TimeoutRecovery {\n",
+            "            if mode != SelectedServeTimeoutRecoveryMode::TimeoutRecovery {\n",
+            "only timeout-recovery mode may enqueue the two remote TimeoutVote owners",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                context.roster.len(),\n"
+            "                4,\n",
+            "                context.roster.len(),\n"
+            "                3,\n",
+            "selected-Serve fixture must use four validators and a non-leader local timeout owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "            let (command_tx, command_rx, admission) = test_io_command_channel(8);\n",
+            "            let (command_tx, command_rx, admission) = test_io_command_channel(7);\n",
+            "selected-Serve fixture must share one actor-global ordinal and tracked completion owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "            ingress.require_leader_wire_lifecycle_gate();\n",
+            "",
+            "selected-Serve fixture must require and bind the real Serve and leader-wire gates",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                    lifecycle_ordinals.clone(),\n",
+            "                    RuntimeLifecycleOrdinalSource::after_high_watermark(0),\n",
+            "selected-Serve fixture must bind leader-wire admission to the same lifecycle source",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                    missing_request.request(),\n"
+            "                    authenticated_via,\n",
+            "                    missing_request.request(),\n"
+            "                    services.local_peer.clone(),\n",
+            "selected-Serve fixture must admit a remote authenticated missing-proposal request",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                        &timeout_vote.signature_preimage(),\n",
+            "                        b\"forged selected-Serve timeout vote\",\n",
+            "selected-Serve fixture remote timeout votes must be signed and authenticated by their roster sources",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                lifecycle_ordinals,\n"
+            "            )\n"
+            "            .expect(\"construct selected-Serve serialized runtime\");\n",
+            "                RuntimeLifecycleOrdinalSource::after_high_watermark(0),\n"
+            "            )\n"
+            "            .expect(\"construct selected-Serve serialized runtime\");\n",
+            "selected-Serve fixture runtime must consume the shared actor-global lifecycle source",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                        body,\n"
+            "                    })\n",
+            "                        body: Vec::new(),\n"
+            "                    })\n",
+            "late-passive-Fetch mode must retain the exact dispatched task, manifest, body, and isolated durable store",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode",
+            "worker",
+            "method",
+            "new_for_mode",
+            "                late_passive_fetch,\n"
+            "                executor,\n"
+            "                services,\n",
+            "                late_passive_fetch: None,\n"
+            "                executor,\n"
+            "                services,\n",
+            "selected-Serve fixture must retain the authenticated target and complete late-Fetch state with the live executor and services",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "            let completion_evidence = self\n"
+            "                .services\n"
+            "                .certified_serve_predecessor_completion_evidence(\n"
+            "                    self.executor.remaining_completion_capacity() != 0,\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )?;\n"
+            "            if let Some(witness) = self\n"
+            "                .executor\n"
+            "                .exact_serve_predecessor_episode_witness(\n"
+            "                    Instant::now(),\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                    completion_evidence,\n"
+            "                )\n"
+            "                .map_err(|error| error.to_string())?\n"
+            "            {\n"
+            "                let _ = self\n"
+            "                    .services\n"
+            "                    .observe_certified_serve_predecessor_episode_witness(barrier, witness)?;\n"
+            "            }\n",
+            "",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "            let completion_evidence = self\n"
+            "                .services\n"
+            "                .certified_serve_predecessor_completion_evidence(\n"
+            "                    self.executor.remaining_completion_capacity() != 0,\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )?;\n"
+            "            if let Some(witness) = self\n",
+            "            let completion_evidence = self\n"
+            "                .services\n"
+            "                .certified_serve_predecessor_completion_evidence(\n"
+            "                    self.executor.remaining_completion_capacity() == 0,\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )?;\n"
+            "            if let Some(witness) = self\n",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "            let _ = self\n"
+            "                .services\n"
+            "                .drain_exact_serve_runtime_predecessor(\n"
+            "                    &mut self.executor,\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )\n"
+            "                .map_err(|error| error.to_string())?;\n"
+            "            let completion_evidence = self\n"
+            "                .services\n"
+            "                .certified_serve_predecessor_completion_evidence(\n"
+            "                    self.executor.remaining_completion_capacity() != 0,\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )?;\n",
+            "            let _ = self\n"
+            "                .services\n"
+            "                .drain_exact_serve_runtime_predecessor(\n"
+            "                    &mut self.executor,\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )\n"
+            "                .map_err(|error| error.to_string())?;\n"
+            "            let completion_evidence = None;\n",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "                .ok_or_else(|| \"selected-Serve fixture lost its exact barrier\".to_owned())?;\n"
+            "            let completion_evidence = self\n",
+            "                .ok_or_else(|| \"selected-Serve fixture lost its exact barrier\".to_owned())?;\n"
+            "            let _ = self.services.drain_exact_serve_runtime_predecessor(\n"
+            "                &mut self.executor,\n"
+            "                barrier.scheduler_ordinal(),\n"
+            "            );\n"
+            "            let completion_evidence = self\n",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
@@ -42663,7 +44543,7 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
             "                .services\n"
             "                .claim_certified_serve_runtime_episode(barrier)?;\n",
             "            let claimed = true;\n",
-            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
@@ -42678,22 +44558,22 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
             "                )\n"
             "                .map_err(|error| error.to_string())?;\n",
             "            let _ = Ok::<(), String>(());\n",
-            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
             "worker",
             "method",
             "service_exact_serve_runtime_prefix",
-            "                .map_err(|error| error.to_string())?\n"
+            "            if predecessor_witness.is_some()\n"
             "                && self\n"
             "                    .services\n"
             "                    .certified_serve_runtime_predecessor_capacity_available(barrier)?\n",
-            "                .map_err(|error| error.to_string())?\n"
+            "            if predecessor_witness.is_some()\n"
             "                || self\n"
             "                    .services\n"
             "                    .certified_serve_runtime_predecessor_capacity_available(barrier)?\n",
-            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
@@ -42702,37 +44582,289 @@ def test_selected_serve_liveness_helper_survives_own_digest_refresh(
             "service_exact_serve_runtime_prefix",
             ".step(Instant::now(), &mut self.services)",
             ".step_pacemaker_once(Instant::now(), &mut self.services)",
-            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
             "worker",
             "method",
             "service_exact_serve_runtime_prefix",
-            "            let older_predecessor_remains = self\n"
-            "                .executor\n"
-            "                .older_runtime_lifecycle_predates_exact_serve(\n"
-            "                    Instant::now(),\n"
-            "                    barrier.scheduler_ordinal(),\n"
-            "                )\n",
-            "            let older_predecessor_remains = self\n"
-            "                .executor\n"
-            "                .older_runtime_lifecycle_predates_exact_serve(\n"
-            "                    Instant::now(),\n"
-            "                    u128::MAX,\n"
-            "                )\n",
-            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+            "            let older_predecessor_remains = predecessor_witness.is_some();\n",
+            "            let older_predecessor_remains = false;\n",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
             "worker",
             "method",
             "service_exact_serve_runtime_prefix",
-            "                    older_predecessor_remains,\n"
-            "                )?;\n",
-            "                    false,\n"
-            "                )?;\n",
-            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+            "                .finish_certified_serve_runtime_episode_turn(barrier, older_predecessor_remains)?;\n",
+            "                .finish_certified_serve_runtime_episode_turn(barrier, false)?;\n",
+            "selected-Serve exact runtime prefix must observe before claim, drain the strict completion, service at most one witnessed capacity-gated predecessor, then re-observe and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                !self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the passive Fetch alone cannot reopen the completed episode\"),\n",
+            "                self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the passive Fetch alone cannot reopen the completed episode\"),\n",
+            "the integrated late-Fetch regression must first seal a real selected-Serve episode Complete while passive Fetch work remains non-runnable",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            assert!(\n"
+            "                self.service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"complete the initially selected Serve predecessor episode\")\n"
+            "            );\n"
+            "            assert!(\n"
+            "                !self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the passive Fetch alone cannot reopen the completed episode\"),\n"
+            "                \"transport-passive Fetch work is not runnable reducer progress\"\n"
+            "            );\n"
+            "\n"
+            "            assert_eq!(\n"
+            "                self.executor\n"
+            "                    .complete_body_reconstruction(\n"
+            "                        &late.task,\n"
+            "                        late.manifest.clone(),\n"
+            "                        late.body.clone(),\n"
+            "                        &mut self.services,\n"
+            "                    )\n"
+            "                    .expect(\"complete the exact passive body reconstruction\"),\n"
+            "                CompletionDisposition::Accepted\n"
+            "            );\n"
+            "            assert!(\n"
+            "                self.service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the late BodyAvailable successor reopens the Serve episode\")\n"
+            "            );\n",
+            "            assert_eq!(\n"
+            "                self.executor\n"
+            "                    .complete_body_reconstruction(\n"
+            "                        &late.task,\n"
+            "                        late.manifest.clone(),\n"
+            "                        late.body.clone(),\n"
+            "                        &mut self.services,\n"
+            "                    )\n"
+            "                    .expect(\"complete the exact passive body reconstruction\"),\n"
+            "                CompletionDisposition::Accepted\n"
+            "            );\n"
+            "            assert!(\n"
+            "                self.service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the late BodyAvailable successor reopens the Serve episode\")\n"
+            "            );\n"
+            "\n"
+            "            assert!(\n"
+            "                self.service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"complete the initially selected Serve predecessor episode\")\n"
+            "            );\n"
+            "            assert!(\n"
+            "                !self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the passive Fetch alone cannot reopen the completed episode\"),\n"
+            "                \"transport-passive Fetch work is not runnable reducer progress\"\n"
+            "            );\n",
+            "integrated late-Fetch completion must seal Complete before reconstruction, acknowledge Store and Validate in order, retire the owner, drain Serve, and only then hand off producer ownership",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                        late.body.clone(),\n",
+            "                        Vec::new(),\n",
+            "a real accepted BodyAvailable completion must reopen the previously Complete selected-Serve episode",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                store_task.lifecycle_ordinal(),\n"
+            "                fetch_ordinal,\n",
+            "                store_task.lifecycle_ordinal(),\n"
+            "                fetch_ordinal + 1,\n",
+            "the reopened body pipeline must execute Store and publish its tracked completion under the immutable original Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            assert!(\n"
+            "                !self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"an incomplete Store cannot reopen the completed episode\"),\n"
+            "                \"active Store work remains passive until its tracked completion exists\"\n"
+            "            );\n",
+            "",
+            "the reopened body pipeline must execute Store and publish its tracked completion under the immutable original Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                V2IoCompletion::Stored(stored),\n"
+            "                Some(fetch_ordinal),\n",
+            "                V2IoCompletion::Stored(stored),\n"
+            "                None,\n",
+            "the reopened body pipeline must execute Store and publish its tracked completion under the immutable original Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            self.command_rx.complete_work(store_task.id());\n",
+            "",
+            "the reopened body pipeline must execute Store and publish its tracked completion under the immutable original Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                validation_task.lifecycle_ordinal(),\n"
+            "                fetch_ordinal,\n",
+            "                validation_task.lifecycle_ordinal(),\n"
+            "                fetch_ordinal + 1,\n",
+            "Stored must causally re-fanout exactly one Validate command under the same immutable Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            assert!(\n"
+            "                !self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"an incomplete Validate cannot reopen the completed episode\"),\n"
+            "                \"active Validate work remains passive until its tracked completion exists\"\n"
+            "            );\n",
+            "",
+            "Stored must causally re-fanout exactly one Validate command under the same immutable Fetch owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            assert!(matches!(\n"
+            "                &validated,\n"
+            "                BodyValidationCompletion::Rejected { work_id, reason }\n"
+            "                    if *work_id == validation_task.id()\n"
+            "                        && reason == \"deterministic late-passive-Fetch rejection\"\n"
+            "            ));\n",
+            "",
+            "Validate must terminate deterministically through an exact tracked rejection completion rather than opening an unbounded Sign suffix",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            self.command_rx.complete_work(validation_task.id());\n",
+            "",
+            "Validate must terminate deterministically through an exact tracked rejection completion rather than opening an unbounded Sign suffix",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                V2IoCompletion::Validated(validated),\n"
+            "                Some(fetch_ordinal),\n",
+            "                V2IoCompletion::Validated(validated),\n"
+            "                None,\n",
+            "Validate must terminate deterministically through an exact tracked rejection completion rather than opening an unbounded Sign suffix",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                !self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the retired body pipeline leaves no older predecessor\"),\n",
+            "                self\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"the retired body pipeline leaves no older predecessor\"),\n",
+            "the ValidationFailed terminal must drain the original owner and leave the selected-Serve predecessor episode Complete again",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                    && request.request_hash() == self.missing_proposal_request_hash\n",
+            "                    && request.request_hash() != self.missing_proposal_request_hash\n",
+            "after the older owner retires, the exact selected Serve must commit and materialize only its authenticated retained request",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            let requester = self.missing_proposal_request.request().requester.clone();\n",
+            "            let producer_episode = self\n"
+            "                .services\n"
+            "                .try_begin_certified_serve_producer_episode()\n"
+            "                .expect(\"inspect producer ownership after exact Serve drain\")\n"
+            "                .expect(\"the exact Serve completion must reopen one producer episode\");\n"
+            "            assert!(\n"
+            "                self.services\n"
+            "                    .try_begin_certified_serve_producer_episode()\n"
+            "                    .is_err(),\n"
+            "                \"one live producer lease must reject a nested ownership claim\"\n"
+            "            );\n"
+            "            drop(producer_episode);\n"
+            "            let requester = self.missing_proposal_request.request().requester.clone();\n",
+            "integrated late-Fetch completion must seal Complete before reconstruction, acknowledge Store and Validate in order, retire the owner, drain Serve, and only then hand off producer ownership",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                .expect(\"the exact Serve completion must reopen one producer episode\");\n",
+            "                ;\n",
+            "final Serve retirement must yield the ordinary producer handoff while its live lease rejects duplicate ownership",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "                    .is_err(),\n"
+            "                \"one live producer lease must reject a nested ownership claim\"\n",
+            "                    .is_ok(),\n"
+            "                \"one live producer lease must reject a nested ownership claim\"\n",
+            "final Serve retirement must yield the ordinary producer handoff while its live lease rejects duplicate ownership",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve",
+            "worker",
+            "method",
+            "assert_late_passive_fetch_completion_reopens_selected_serve",
+            "            drop(producer_episode);\n",
+            "            drop(producer_episode);\n"
+            "            assert!(\n"
+            "                self.services\n"
+            "                    .try_begin_certified_serve_producer_episode()\n"
+            "                    .expect(\"inspect post-drop producer ownership\")\n"
+            "                    .is_none(),\n"
+            "                \"the producer debt must be impossible after the first lease drops\"\n"
+            "            );\n",
+            "integrated late-Fetch producer handoff must make exactly one claim and one nested rejection before dropping the live lease, with no post-drop claim",
         ),
         (
             "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode",
@@ -42825,7 +44957,7 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
     module = load_checker()
     assert len(
         module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256
-    ) == 12
+    ) == 17
     assert (
         seal_key
         in module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256
@@ -42834,7 +44966,12 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
     source_path = (
         tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
         if source_kind == "runner"
-        else tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+        else (
+            tmp_path
+            / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs"
+            if source_kind == "runner_test"
+            else tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+        )
     )
     worker_test_context = (
         (
@@ -42899,7 +45036,7 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
         candidates = module.rust_items(source, item_name)
         return (
             candidates
-            if source_kind == "runner"
+            if source_kind in {"runner", "runner_test"}
             else tuple(item for item in candidates if item.brace_context == context)
         )
 
@@ -42919,6 +45056,7 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
     module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
         seal_key
     ] = module._rust_item_token_sha256(mutated_items[0])
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = module._local_runner_service_contract_source_fidelity_errors(
         module.load_ledger(),
@@ -42971,21 +45109,20 @@ def test_selected_serve_timeout_owner_freeze_must_precede_serve_ingress_after_di
     )
     methods = tuple(
         item
-        for item in module.rust_items(source, "new")
+        for item in module.rust_items(source, "new_for_mode")
         if item.brace_context == worker_method_context
     )
     assert len(methods) == 1
     method = methods[0]
     freeze = (
-        "            let timeout_owner = executor\n"
-        "                .freeze_due_timeout_owner_for_test(Instant::now())\n"
-        "                .expect(\"freeze the height-start timeout before later Serve ingress\");\n"
-        "            assert_eq!(\n"
-        "                timeout_owner.lifecycle_ordinal(),\n"
-        "                1,\n"
-        "                \"the height-start timeout owns the first actor-global scheduler position\"\n"
-        "            );\n"
-        "            let consensus_observations = install_consensus_route_observer(&mut services);\n"
+        "                    let timeout_owner = executor\n"
+        "                        .freeze_due_timeout_owner_for_test(Instant::now())\n"
+        "                        .expect(\"freeze the height-start timeout before later Serve ingress\");\n"
+        "                    assert_eq!(\n"
+        "                        timeout_owner.lifecycle_ordinal(),\n"
+        "                        1,\n"
+        "                        \"the height-start timeout owns the first actor-global scheduler position\"\n"
+        "                    );\n"
     )
     serve_ingress = (
         "            assert!(matches!(\n"
@@ -42998,10 +45135,18 @@ def test_selected_serve_timeout_owner_freeze_must_precede_serve_ingress_after_di
     )
     assert method.source.count(freeze) == 1
     assert method.source.count(serve_ingress) == 1
+    late_freeze = (
+        "            if mode == SelectedServeTimeoutRecoveryMode::TimeoutRecovery {\n"
+        + "".join(
+            line[4:] if line.startswith("    ") else line
+            for line in freeze.splitlines(keepends=True)
+        )
+        + "            }\n"
+    )
     mutated_method = method.source.replace(freeze, "", 1)
     mutated_method = mutated_method.replace(
         serve_ingress,
-        serve_ingress + "\n" + freeze,
+        serve_ingress + "\n" + late_freeze,
         1,
     )
     assert source.count(method.source) == 1
@@ -43012,12 +45157,12 @@ def test_selected_serve_timeout_owner_freeze_must_precede_serve_ingress_after_di
     mutated_source = worker_path.read_text(encoding="utf-8")
     mutated_methods = tuple(
         item
-        for item in module.rust_items(mutated_source, "new")
+        for item in module.rust_items(mutated_source, "new_for_mode")
         if item.brace_context == worker_method_context
     )
     assert len(mutated_methods) == 1
     module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
-        "worker::SelectedServeTimeoutRecoveryFixture::new"
+        "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode"
     ] = module._rust_item_token_sha256(mutated_methods[0])
 
     errors = module._local_runner_service_contract_source_fidelity_errors(
@@ -43029,41 +45174,5 @@ def test_selected_serve_timeout_owner_freeze_must_precede_serve_ingress_after_di
     assert any(
         "height-start timeout owner must freeze before Serve ingress" in error
         and "exact reviewed token digest" not in error
-        for error in errors
-    ), errors
-
-@pytest.mark.parametrize(
-    "symbol",
-    (
-        "AsyncCandidateServiceStageOrdinalIsBounded",
-        "AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum",
-        "AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal",
-        "AsyncOlderRetransmitLifecycleCannotAloneBlockDueTimeout",
-        "AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
-    ),
-)
-def test_async_source_fidelity_rejects_reviewed_theorem_omission(
-    tmp_path: Path,
-    symbol: str,
-) -> None:
-    module = load_checker()
-    formal_dir = copy_async_source_fidelity_fixture(
-        tmp_path,
-        module,
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2Core.tla",
-    )
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    source = path.read_text(encoding="utf-8")
-    span = module._top_level_declaration_span(source, symbol, kind="theorem")
-    assert span is not None
-    start, end = span
-    path.write_text(source[:start] + source[end:], encoding="utf-8")
-
-    errors = module._async_source_fidelity_errors(formal_dir)
-
-    assert any(
-        "must declare exactly the reviewed local theorem inventory" in error
-        and symbol in error
         for error in errors
     ), errors
