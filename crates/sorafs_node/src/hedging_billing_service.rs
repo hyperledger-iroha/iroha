@@ -7261,9 +7261,9 @@ struct BillingSourceReceiptPreimageV1 {
 }
 
 #[derive(DeriveNoritoSerialize)]
-struct BillingEventReplayPreimageV1<'a> {
+struct BillingEventReplayPreimageV1 {
     network_id: NetworkId,
-    event: &'a HedgingBillingFinalizedEventV1,
+    event: HedgingBillingFinalizedEventV1,
 }
 
 fn source_receipt(
@@ -7286,7 +7286,10 @@ fn event_replay_digest(
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
     hash_canonical(
         EVENT_REPLAY_RECEIPT_DOMAIN_V1,
-        &BillingEventReplayPreimageV1 { network_id, event },
+        &BillingEventReplayPreimageV1 {
+            network_id,
+            event: event.clone(),
+        },
     )
 }
 
@@ -10314,6 +10317,26 @@ mod tests {
             service.ingest_finalized_page(&forged),
             Err(HedgingBillingServiceError::FinalizedEventEquivocation)
         ));
+    }
+
+    #[test]
+    fn event_replay_digest_binds_network_and_exact_event() {
+        let first_network = test_network_id(b"billing-network-a");
+        let second_network = test_network_id(b"billing-network-b");
+        let first_event = event(1, "storage:event:1", "10");
+        let mut changed_event = first_event.clone();
+        changed_event.quantity_units = 2;
+
+        let first_digest = event_replay_digest(first_network, &first_event).expect("digest");
+        eprintln!("billing replay compatibility digest: {}", hex::encode(first_digest));
+        assert_ne!(
+            first_digest,
+            event_replay_digest(second_network, &first_event).expect("network-bound digest")
+        );
+        assert_ne!(
+            first_digest,
+            event_replay_digest(first_network, &changed_event).expect("event-bound digest")
+        );
     }
 
     #[test]

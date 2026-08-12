@@ -146,7 +146,7 @@ impl CertifiedFetchBodyPersistenceTask {
     }
 
     /// Return whether this command came from the exact queue-selected carrier.
-    pub(in crate::sumeragi) const fn matches_ingress_identity(
+    pub(in crate::sumeragi) fn matches_ingress_identity(
         &self,
         identity: PendingFairIngressIdentity,
     ) -> bool {
@@ -1263,7 +1263,7 @@ impl PreparedLifecycleIngressSelector {
             .prepare_selected_certified_fetch_completion(&mut registry, location)
             .map_err(|error| format!("sealed Fetch registry preflight rejected: {error:?}"))?;
         drop(prepared);
-        if registry.len() != 1 || !registry.exactly_contains(address, &expected_effect) {
+        if !registry.exactly_contains(address, &expected_effect) {
             return Err("dropping sealed Fetch preflight changed its incumbent".to_owned());
         }
         Ok((incumbent_digest, ready.ingress_identity.digest()))
@@ -1561,7 +1561,7 @@ impl LifecycleCoordinator {
         &mut self,
         authority: CertifiedFetchReadyAuthority,
     ) -> Result<CertifiedFetchReadyPublication, CertifiedFetchReadyPublicationError> {
-        let projection = super::replay_authority::tests::durable_certified_fetch_projection_fixture(
+        let projection = super::replay_authority::durable_certified_fetch_projection_fixture(
             self.active_context,
             authority.causal_root,
             u8::try_from(authority.key.round().view()).expect("fixture Fetch view fits u8"),
@@ -2525,10 +2525,9 @@ mod tests {
             .expect("one exact Fetch slot")
             .0;
         let incumbent_digest = coordinator.records[&ordinal].physical_slots[&slot];
-        let projection =
-            super::super::replay_authority::tests::durable_certified_fetch_projection_fixture(
-                context, root, 3,
-            );
+        let projection = super::super::replay_authority::durable_certified_fetch_projection_fixture(
+            context, root, 3,
+        );
         let slot_universe = coordinator.records[&ordinal].episode.slot_universe.clone();
         let consumed_slots = coordinator.records[&ordinal].episode.consumed_slots.clone();
         assert_ne!(incumbent_digest, authority.ingress_identity.digest());
@@ -2649,12 +2648,11 @@ mod tests {
             .expect("one exact Fetch slot");
 
         let mut trial = coordinator.clone();
-        let projection =
-            super::super::replay_authority::tests::durable_certified_fetch_projection_fixture(
-                context,
-                authority.causal_root,
-                6,
-            );
+        let projection = super::super::replay_authority::durable_certified_fetch_projection_fixture(
+            context,
+            authority.causal_root,
+            6,
+        );
         trial
             .records
             .get_mut(&ordinal)

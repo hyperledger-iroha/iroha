@@ -809,7 +809,7 @@
                 7,
                 durable.round().height,
                 HashOf::from_untyped_unchecked(Hash::new(b"detached Validate merge parent")),
-                Hash::new(b"detached Validate merge chain"),
+                crate::sumeragi::synthetic_network_id("detached Validate merge chain"),
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),

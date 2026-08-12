@@ -34,7 +34,7 @@ pub(crate) struct SoranetPrivacyCollectorAuthState {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct VerifiedSoranetPrivacyCollector;
+pub(super) struct VerifiedSoranetPrivacyCollector;
 
 fn privacy_token(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -154,7 +154,7 @@ pub(crate) async fn enforce_soranet_privacy_collector_authentication(
 
 #[cfg(feature = "telemetry")]
 /// Record one authenticated SoraNet privacy event.
-pub(crate) async fn handler_post_soranet_privacy_event(
+pub(super) async fn handler_post_soranet_privacy_event(
     State(app): State<SharedAppState>,
     Extension(_collector): Extension<VerifiedSoranetPrivacyCollector>,
     request: NoritoJson<RecordSoranetPrivacyEventDto>,
@@ -166,7 +166,7 @@ pub(crate) async fn handler_post_soranet_privacy_event(
 
 #[cfg(feature = "telemetry")]
 /// Record one authenticated SoraNet privacy collector share.
-pub(crate) async fn handler_post_soranet_privacy_share(
+pub(super) async fn handler_post_soranet_privacy_share(
     State(app): State<SharedAppState>,
     Extension(_collector): Extension<VerifiedSoranetPrivacyCollector>,
     request: NoritoJson<RecordSoranetPrivacyShareDto>,

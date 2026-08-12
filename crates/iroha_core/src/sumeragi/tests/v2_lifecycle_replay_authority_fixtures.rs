@@ -74,9 +74,9 @@
             let subject_marker = seed.wrapping_add(0x31);
             let subject = self::subject(subject_marker);
             let conflicting_subject = self::subject(subject_marker.wrapping_add(1));
-            let manifest = manifest(round, subject, subject_marker);
+            let manifest = self::manifest(round, subject, subject_marker);
             let conflicting_manifest =
-                manifest(round, conflicting_subject, subject_marker.wrapping_add(1));
+                self::manifest(round, conflicting_subject, subject_marker.wrapping_add(1));
             let proposal = wire::Proposal {
                 round,
                 proposer: 0,
@@ -690,14 +690,7 @@
                 roster,
                 nexus_amx_context_hash: Hash::new(b"Certified-Serve replay AMX context"),
                 execution_policy_hash: Hash::new(b"Certified-Serve replay execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 8,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 16,
-                    max_chunk_count: 4,
-                },
+                da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
                 leader_seed: [0xA7; 32],
             };
             context
@@ -819,14 +812,7 @@
                 roster,
                 nexus_amx_context_hash: Hash::new(b"recovered Serve replay AMX context"),
                 execution_policy_hash: Hash::new(b"recovered Serve replay execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1_048_576,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 2,
-                },
+                da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
                 leader_seed: [0xB7; 32],
             };
             let verified = VerifiedHeightContext::genesis(context, proofs)

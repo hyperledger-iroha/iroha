@@ -3054,7 +3054,7 @@ impl ConcreteLifecycleWorkRegistry {
                 RegistryError::DigestMismatch,
             ));
         }
-        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &work.kind else {
+        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &mut work.kind else {
             return Err(RecoveredDecisionApplyDispatchProjectionError::WrongWorkKind);
         };
         if !apply.matches_claimed_record(address, digest, coordinator, lease) {
@@ -3652,7 +3652,7 @@ impl ConcreteLifecycleWorkRegistry {
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.entries.len()
     }
 
@@ -4156,17 +4156,12 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             .is_some_and(|completion| &completion.incumbent.durable_receipt == receipt)
     }
 
-    fn validated_authority(&self) -> Option<ReadyValidatedAdapterAuthority<'_>> {
+    fn validated_completion(&self) -> Option<&DurableValidateCompletion> {
         if self.outcome_kind != ReadyDurableValidateOutcomeKind::Validated {
             return None;
         }
         let completion = self.completion()?;
-        let AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        } = &completion.incumbent.effect
-        else {
+        let AdapterEffect::ValidateBody { .. } = &completion.incumbent.effect else {
             return None;
         };
         let receipt = completion.outcome.validated_receipt()?;
@@ -4180,6 +4175,20 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
         {
             return None;
         }
+        Some(completion)
+    }
+
+    fn validated_authority(&self) -> Option<ReadyValidatedAdapterAuthority<'_>> {
+        let completion = self.validated_completion()?;
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = &completion.incumbent.effect
+        else {
+            return None;
+        };
+        let receipt = completion.outcome.validated_receipt()?;
         Some(ReadyValidatedAdapterAuthority {
             tag: *tag,
             round: *round,
@@ -4191,8 +4200,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     fn validate_sign_predecessor_authority(
         &self,
     ) -> Option<ReadyValidateSignPredecessorAuthority<'_>> {
-        self.validated_authority()?;
-        let completion = self.completion()?;
+        let completion = self.validated_completion()?;
         Some(ReadyValidateSignPredecessorAuthority {
             effect: &completion.incumbent.effect,
             pending: &completion.incumbent.pending,

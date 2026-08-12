@@ -884,14 +884,12 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
     let mut successor_context = parent_context.clone();
     successor_context.height += 1;
     let error = PendingSuccessorActivation::recovered(
-        RecoveredSuccessorActivationAuthority::CompleteTip(
-            test_recovered_complete_tip_authority(
-                &parent_context,
-                successor_context.id(),
-                b"exact recovered successor context",
-                directory.path(),
-            ),
-        ),
+        RecoveredSuccessorActivationAuthority::CompleteTip(test_recovered_complete_tip_authority(
+            &parent_context,
+            successor_context.id(),
+            b"exact recovered successor context",
+            directory.path(),
+        )),
         &keys[0],
     )
     .expect_err("CompleteTip cannot form activation before exact predecessor retirement");
@@ -906,7 +904,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
     );
     assert!(
         matches!(
-            ingress.push(missing_ancestry_response(6)),
+            ingress.try_push(InboundBlockMessage::new(valid_ingress_probe(), None)),
             Err(FairV2IngressPushError::Closed(_))
         ),
         "unretired CompleteTip recovery must leave ingress closed"

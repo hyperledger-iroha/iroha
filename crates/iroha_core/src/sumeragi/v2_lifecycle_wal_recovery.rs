@@ -6,13 +6,15 @@ use super::{
     CandidateAdmission, CapacityClass, DurablePayloadReference, DurableValidateReplayEvidenceV1,
     InitialLifecycleState, LifecycleStageKind, LifecycleWorkClass, PredecessorScope,
     RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyReplayLineageV1,
-    RecoveredWalControlCandidateProjectionV1, RecoveredWalControlReplayEvidenceV1,
-    RecoveredWalDecisionFetchCandidateProjectionV1, RecoveredWalDecisionFetchReplayEvidenceV1,
+    RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
     body_pipeline_transition::{
         durable_continuation_successor_is_exact, durable_validate_payload_is_exact,
     },
     ledger::{AuthenticatedRecoveredWalValidateLedgerParent, DurableWalVoteLedgerRepairReceipt},
     projection,
+    replay_authority::{
+        RecoveredWalControlCandidateProjectionV1, RecoveredWalDecisionFetchCandidateProjectionV1,
+    },
     schema::DurableContinuationEdge,
 };
 use crate::sumeragi::{
@@ -985,7 +987,7 @@ fn control_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bool {
 
 impl AuthenticatedRecoveredWalVoteProjection {
     /// Assemble the one successful result of the consuming runtime projection.
-    pub(in crate::sumeragi) const fn from_runtime_projection(
+    pub(in crate::sumeragi) fn from_runtime_projection(
         _permit: RecoveredWalCandidateProjectionPermit,
         successor: RecoveredWalVoteSuccessor,
         parent: CandidateAdmission,

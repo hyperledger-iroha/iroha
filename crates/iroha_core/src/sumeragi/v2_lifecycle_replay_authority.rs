@@ -106,7 +106,11 @@ impl LifecycleReplayAuthorityV1 {
             && retained == certificate
             && retained.phase == wire::GlobalPhase::Commit
             && retained.subject == *subject
-            && body_frame.matches_origin(context.id(), certificate.proposal_round, *subject)
+            && body_frame.matches_origin(
+                LifecycleContext::new(digest_from_bytes(context.id().0.as_ref()), context.height),
+                certificate.proposal_round,
+                *subject,
+            )
     }
 
     /// Rebind a persisted Fetch authority only when it is the canonical
@@ -136,13 +140,13 @@ impl LifecycleReplayAuthorityV1 {
         let (
             LifecycleReplaySourceV1::BodyPipeline(source),
             ReplayPayloadBindingV1::BodyFrame(body_frame),
-        ) = (&self.source, self.payload)
+        ) = (&self.source, &self.payload)
         else {
             return None;
         };
         let family = CertifiedBodyPipelineReplayFamilyV1 {
             source: source.clone(),
-            body_frame,
+            body_frame: *body_frame,
         };
         (family.is_exact_for_stage(LifecycleStageKind::FetchBody)
             && body_frame.durable_reference()
@@ -1490,7 +1494,7 @@ impl SealedLiveWalPersistedEffectV1 {
     /// move-only inputs intact; success keeps the bound pending value nested in
     /// this replay envelope.
     #[allow(clippy::result_large_err)]
-    pub(super) fn bind_exact_validate_sign_pending(
+    pub(in crate::sumeragi) fn bind_exact_validate_sign_pending(
         self,
         pending: PendingRuntimeEffectBinding,
     ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
@@ -1519,7 +1523,7 @@ impl SealedLiveWalPersistedEffectV1 {
 
     /// Recheck the sealed post-append Validate-to-Sign binding without
     /// releasing its effect or pending owner.
-    pub(super) fn exactly_binds_validate_sign_pending(&self) -> bool {
+    pub(in crate::sumeragi) fn exactly_binds_validate_sign_pending(&self) -> bool {
         matches!(
             &self.pending,
             LiveWalPersistedPendingV1::ValidateSignBound(pending)
@@ -4807,11 +4811,11 @@ fn recovered_certified_serve_payload(
                     DurableServeNegativeOutcome::Failed(*code)
                 }
             };
-            ReplayPayloadBindingV1::CertifiedServeNegative {
-                request: *request_hash.as_ref(),
-                certificate: *certificate_hash.as_ref(),
+            ReplayPayloadBindingV1::from_payload(DurablePayloadReference::CertifiedServeNegative {
+                request: LifecycleDigest::new(*request_hash.as_ref()),
+                certificate: LifecycleDigest::new(*certificate_hash.as_ref()),
                 outcome,
-            }
+            })
         }
     })
 }
@@ -4991,7 +4995,7 @@ impl CertifiedFetchReplayEvidenceV1 {
         pending: &PendingRuntimeEffectBinding,
         receipt: &DurableBodyReceipt,
     ) -> Option<(EventTag, &'a wire::PayloadManifest)> {
-        self.project_durable_ready_fetch(effect, pending, receipt)?;
+        let _ready_projection = self.project_durable_ready_fetch(effect, pending, receipt)?;
         let BodyPipelineOriginV1::Certified { manifest, .. } = &self.family.source.origin else {
             return None;
         };
@@ -7405,8 +7409,8 @@ mod tests {
 
 #[cfg(test)]
 pub(super) use tests::{
-    exact_body_record_fixture, exact_certified_fetch_record_fixture,
-    exact_local_body_record_fixture, exact_record_fixture,
-    exact_recovered_decision_terminal_family_fixture,
-    foreign_certified_serve_family_authority_fixture,
+    durable_certified_fetch_projection_fixture, exact_body_record_fixture,
+    exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
+    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
+    exact_replay_authority_for_payload_fixture, foreign_certified_serve_family_authority_fixture,
 };

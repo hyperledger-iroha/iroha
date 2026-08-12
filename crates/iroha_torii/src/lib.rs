@@ -168,9 +168,8 @@ pub use json_utils::{json_array, json_entry, json_object, json_value};
 pub use crate::app_auth::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, HEADER_WITNESS, Method,
     Uri, canonical_network_request_hash, canonical_network_request_message,
-    canonical_network_request_signature_message, canonical_request_hash, canonical_request_message,
-    canonical_request_signature_message, canonical_request_witness_message, signature_header_value,
-    witness_header_value,
+    canonical_network_request_signature_message, canonical_request_message,
+    canonical_request_witness_message, signature_header_value, witness_header_value,
 };
 
 pub mod openapi;
@@ -10402,7 +10401,7 @@ async fn handler_ministry_agenda_proposal_draft(
     )
     .await?;
     require_runtime_governance_canonical_account_literal(
-        &body.authority,
+        &body.0.authority,
         &verified.account,
         "ministry agenda draft",
     )?;
@@ -10478,7 +10477,7 @@ async fn handler_gov_citizen_draft(
     body: crate::utils::extractors::NoritoJson<crate::gov::CitizenDraftRequestV1>,
 ) -> Result<JsonBody<crate::gov::CitizenDraftResponseV1>, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/gov/citizens/draft").await?;
-    require_runtime_governance_account(&body.owner, &verified.account, "citizen draft")?;
+    require_runtime_governance_account(&body.0.owner, &verified.account, "citizen draft")?;
     crate::gov::handle_gov_citizen_draft(app.state.clone(), body).await
 }
 

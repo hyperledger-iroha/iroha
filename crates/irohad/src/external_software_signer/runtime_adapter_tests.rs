@@ -473,4 +473,6 @@ fn composite_registry_partitions_exactly_and_rejects_overlap_or_missing_base() {
     let (signers, base) = signer_catalog.partition_external_software_signers_v1();
     assert_eq!(signers.len(), 1);
     assert!(base.is_empty());
+    assert_eq!(signers.network_id(), signer_catalog.network_id());
+    assert_eq!(base.network_id(), signer_catalog.network_id());
 }

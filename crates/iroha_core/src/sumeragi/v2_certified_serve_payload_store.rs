@@ -256,6 +256,7 @@ impl Drop for DurableCertifiedServeAdmissionPublication {
 /// Store-derived state needed to distinguish fresh admission from exact
 /// tombstone replay without reopening or reconstructing payload bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(variant_size_differences)] // Completed retains its exact hash inline without allocation.
 pub(super) enum DurableCertifiedServeAdmissionStateV1 {
     /// The exact request still owns a Pending frame.
     Pending,
@@ -395,6 +396,7 @@ impl RecoveredCertifiedServeCompletedPayload<'_> {
 
 /// Closed recovered state of one Certified-Serve payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(variant_size_differences)] // Borrowed recovery views remain allocation-free and Copy.
 pub(crate) enum RecoveredCertifiedServePayloadState<'a> {
     /// The exact request was admitted but has no durable terminal result.
     Pending,
@@ -443,7 +445,7 @@ impl RecoveredCertifiedServePayload<'_> {
                     response_hash: *response_hash,
                     manifest,
                     responder: *responder,
-                    signature,
+                    signature: signature.as_slice(),
                 },
             ),
             PersistedCertifiedServePayloadStateV1::Negative { outcome } => {

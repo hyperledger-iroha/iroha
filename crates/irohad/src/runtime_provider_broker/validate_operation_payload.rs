@@ -936,7 +936,12 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
             )?;
-            validate_source_fetch_request(&fetch, &request.binding, None, session_chain_id)?;
+            validate_source_fetch_request(
+                &fetch,
+                &request.binding,
+                None,
+                session_network_id,
+            )?;
         }
         (slot, OPERATION_SIGN_V1) if slot == signer_slot => {
             let signing = decode_canonical::<PurposeSignRequestWireV1>(

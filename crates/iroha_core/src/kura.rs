@@ -15699,7 +15699,6 @@ impl Kura {
     /// # Errors
     ///
     /// Returns an error if finality, its association, or retained record is invalid.
-    #[cfg(test)]
     pub(crate) fn v2_finality_artifact_with_merge_reference(
         &self,
         height: u64,

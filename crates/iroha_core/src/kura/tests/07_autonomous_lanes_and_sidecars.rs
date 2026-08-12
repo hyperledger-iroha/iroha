@@ -1621,7 +1621,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     assert!(
         kura.claim_autonomous_lifecycle_process_generation(
-            Hash::new(b"wrong lifecycle process chain"),
+            test_network_id(b"wrong lifecycle process chain"),
             &local_peer,
         )
         .is_err(),
@@ -1937,7 +1937,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .expect("rebind exact lifecycle key identity");
     assert!(
         kura.read_only_active_autonomous_lifecycle_attempt_inventory(
-            Hash::new(b"wrong read-only lifecycle inventory chain"),
+            test_network_id(b"wrong read-only lifecycle inventory chain"),
             &local_peer,
             lane.lane_id,
             lane.dataspace_id,

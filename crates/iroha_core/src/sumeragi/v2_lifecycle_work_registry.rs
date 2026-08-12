@@ -14,9 +14,10 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::Encode;
+use thiserror::Error;
 
 #[cfg(test)]
-use super::{AdmissionRequest, schema::DurableBodyFrameReference};
+use super::{AdmissionRequest, CausalRoot, schema::DurableBodyFrameReference};
 use super::{
     AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
     LeaseId, LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,
@@ -247,6 +248,9 @@ use crate::sumeragi::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
 
+#[cfg(test)]
+use crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership;
+
 /// One-shot authority to split a staged recovered Decision into its cold
 /// adapter and one dedicated Apply carrier inside the exact registry install.
 pub(in crate::sumeragi) struct RecoveredDecisionApplyRegistryProjectionPermit {
@@ -426,7 +430,7 @@ impl RecoveredDecisionApplyDispatchKeyV1 {
     }
 
     /// Recheck the immutable context and digest retained by a closed carrier.
-    pub(in crate::sumeragi) const fn matches_carrier(
+    pub(in crate::sumeragi) fn matches_carrier(
         self,
         context: LifecycleContext,
         digest: LifecycleDigest,
@@ -435,7 +439,7 @@ impl RecoveredDecisionApplyDispatchKeyV1 {
     }
 
     /// Return whether this key still names the exact installed carrier.
-    const fn matches(
+    fn matches(
         self,
         context: LifecycleContext,
         address: ConcreteWorkAddress,
@@ -486,7 +490,7 @@ impl RecoveredDecisionApplyDispatchIdentityV1 {
     }
 
     /// Recheck the immutable context and digest retained by the closed carrier.
-    pub(in crate::sumeragi) const fn matches_carrier(
+    pub(in crate::sumeragi) fn matches_carrier(
         &self,
         context: LifecycleContext,
         digest: LifecycleDigest,
@@ -3260,7 +3264,7 @@ pub(super) struct ReadyValidateCarrierSeal {
 
 impl ReadyValidateCarrierSeal {
     /// Return whether this seal names the exact coordinator-owned slot.
-    pub(super) const fn matches(
+    pub(super) fn matches(
         self,
         owner: OwnerId,
         ordinal: u128,
@@ -6547,7 +6551,7 @@ impl DurableValidateCompletionAuthority {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-impl PreparedExecutedDurableValidateCompletion<'_> {
+impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
     /// Borrow the sealed coordinator publication projection.
     pub(super) const fn authority(&self) -> DurableValidateCompletionAuthority {
         self.authority
@@ -6585,7 +6589,7 @@ impl PreparedExecutedDurableValidateCompletion<'_> {
     pub(super) fn stage_executable_carrier(
         self,
     ) -> Result<
-        StagedDurableValidateCompletion<'_>,
+        StagedDurableValidateCompletion<'a>,
         (
             DurableValidateCompletionPublicationError,
             ExecutedDurableValidateDispatch,

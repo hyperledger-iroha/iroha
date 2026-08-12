@@ -1935,6 +1935,7 @@ impl CertifiedResponsePriorityCandidate {
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "this classification does not itself authorize selector debt"]
 #[cfg_attr(not(test), allow(dead_code))]
+#[allow(variant_size_differences)] // The move-only preflight branches retain their closed types.
 pub(crate) enum CertifiedResponsePriorityProbe {
     /// The response is provably outside claimed-response priority.
     DefinitelyNonPriority(CertifiedResponsePriorityNonPriority),
@@ -23708,7 +23709,7 @@ mod tests {
                 &winning_prepared,
                 owner_effect,
                 owner_pending,
-                &keys[0],
+                &fixture.validator_keys[0],
                 owner_directory.path(),
             );
         let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
@@ -24187,7 +24188,7 @@ mod tests {
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(exact_response.clone()),
         );
         assert!(
-            executor.can_admit_network_message(&later_duplicate),
+            executor.retained_dispatch_allows_network_ingress(&later_duplicate.payload),
             "a later physical duplicate remains ordinarily drainable after owner retirement",
         );
         assert!(matches!(

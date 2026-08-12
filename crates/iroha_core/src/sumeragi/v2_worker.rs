@@ -37,7 +37,7 @@ use super::v2_core::{
     Generation, production_reliable_flush_trace_refines_outbound_ownership_kernel,
 };
 #[cfg(test)]
-use super::v2_runtime::RuntimeQueueSnapshot;
+use super::v2_runtime::{LocalProposalEffectOwnership, RuntimeQueueSnapshot};
 use iroha_config::parameters::{
     actual::{
         KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN,
@@ -22292,7 +22292,7 @@ pub(super) mod tests {
             &mut self,
             tag: EventTag,
             manifest: &wire::PayloadManifest,
-        ) -> Result<RuntimeEffectOwnership, String> {
+        ) -> Result<LocalProposalEffectOwnership, String> {
             let mut identity = Vec::from(b"body-pipeline".as_slice());
             identity.extend_from_slice(&manifest.round.encode());
             identity.extend_from_slice(&manifest.subject.encode());
@@ -22302,9 +22302,15 @@ pub(super) mod tests {
                 round: manifest.round,
                 subject: manifest.subject,
             };
-            bind_adapter_effect_batch_ownership(std::slice::from_ref(&effect), vec![ownership])?
-                .pop()
-                .ok_or_else(|| "saturated local proposal StoreBody binding was empty".to_owned())
+            let ownership = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&effect),
+                vec![ownership],
+            )?
+            .pop()
+            .ok_or_else(|| "saturated local proposal StoreBody binding was empty".to_owned())?;
+            LocalProposalEffectOwnership::for_test(ownership, &effect, manifest).ok_or_else(|| {
+                "saturated local proposal replay seal did not match its Store owner".to_owned()
+            })
         }
 
         fn reconcile_active_view_producer(
@@ -22564,6 +22570,14 @@ pub(super) mod tests {
         let proposal_owner = runtime
             .mint_local_proposal_effect_ownership(tag, &manifest)
             .expect("mint local proposal owner");
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let proposal_effect_owner = proposal_owner
+            .exact_store_task_ownership(&store, &manifest)
+            .expect("local proposal composite retains its exact Store owner");
         let fetch = AdapterEffect::FetchBody {
             tag,
             round: manifest.round,
@@ -22577,16 +22591,16 @@ pub(super) mod tests {
             .expect("derive positional fetch owner")
             .pop()
             .expect("one effect has one owner");
-        assert_eq!(fetch_owner, proposal_owner);
+        assert_eq!(fetch_owner, proposal_effect_owner);
 
         runtime
-            .set_external_lifecycle_owners(vec![proposal_owner.owner().clone()])
+            .set_external_lifecycle_owners(vec![proposal_effect_owner.owner().clone()])
             .expect("one external owner fits");
         assert_eq!(runtime.external_lifecycle_owners.len(), 1);
         assert!(
             runtime
                 .set_external_lifecycle_owners(vec![
-                    proposal_owner.owner().clone();
+                    proposal_effect_owner.owner().clone();
                     MAX_EFFECTS_PER_STEP + 2
                 ])
                 .is_err()

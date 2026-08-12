@@ -143,11 +143,8 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         signature_policy.clone(),
         AccountId::new(local_signer.public_key().clone()),
     );
-    let factory_inputs = lifecycle_factory_inputs_for_test(
-        &authenticated,
-        storage_authority,
-        Arc::clone(&kura),
-    );
+    let factory_inputs =
+        lifecycle_factory_inputs_for_test(&authenticated, storage_authority, Arc::clone(&kura));
     let owner = authenticated
         .open_production_lifecycle_owner_v1(
             &lifecycle_owner_config(),
@@ -209,7 +206,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     let foreign = open_recovered_startup_at_test_path(
         foreign_storage_root
             .join("wal")
-            .join(format!("{:020}.wal", context().height)),
+            .join(format!("{:020}.wal", context.height)),
     )
     .expect("open foreign-owner startup")
     .authenticate_final_wal_startup_authority()
@@ -255,7 +252,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     let wrong_policy = open_recovered_startup_at_test_path(
         wrong_storage_root
             .join("wal")
-            .join(format!("{:020}.wal", context().height)),
+            .join(format!("{:020}.wal", context.height)),
     )
     .expect("open wrong-policy startup")
     .authenticate_final_wal_startup_authority()
@@ -323,10 +320,8 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
             account.clone(),
         )
     };
-    let exact_state = lifecycle_factory_state_for_test(
-        Arc::clone(&kura),
-        recovered_context.network_id,
-    );
+    let exact_state =
+        lifecycle_factory_state_for_test(Arc::clone(&kura), recovered_context.network_id);
     assert!(
         try_lifecycle_factory_inputs_for_test(
             &authenticated,
@@ -339,10 +334,8 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
     );
 
     let foreign_kura = Kura::blank_kura_for_testing();
-    let foreign_state = lifecycle_factory_state_for_test(
-        Arc::clone(&foreign_kura),
-        recovered_context.network_id,
-    );
+    let foreign_state =
+        lifecycle_factory_state_for_test(Arc::clone(&foreign_kura), recovered_context.network_id);
     let foreign_kura_error = match try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage(),
@@ -369,10 +362,8 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         foreign_state_error.to_string(),
         "recovered lifecycle execution dependencies changed identity"
     );
-    let wrong_network_state = lifecycle_factory_state_for_test(
-        Arc::clone(&kura),
-        test_network_id(0xFE),
-    );
+    let wrong_network_state =
+        lifecycle_factory_state_for_test(Arc::clone(&kura), test_network_id(0xFE));
     let wrong_network_error = match try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage(),
@@ -683,9 +674,9 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
         .authenticate(&verified, &signer, &body_store)
         .expect("authenticate empty owner-seal payload recovery");
     let (_ledger_store, opened_ledger) =
-        super::super::v2_lifecycle_ledger::LifecycleLedgerStoreV1::open(
+        super::super::v2_lifecycle_coordinator::LifecycleLedgerStoreV1::open(
             ledger.path(),
-            super::super::v2_lifecycle_projection::lifecycle_context(verified.context()),
+            super::super::v2_lifecycle_coordinator::lifecycle_context(verified.context()),
         )
         .expect("open exact repaired owner-seal ledger");
     let mut recovery = AuthenticatedLifecycleRecoveryCut::empty_for_recovered_wal_test(

@@ -407,7 +407,10 @@ impl LiveWalFrameIdentity {
 
     /// Return whether the live append has the canonical reducer relation.
     pub(super) const fn is_exact(&self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Project inert codec evidence without exposing locator scalar parts.
@@ -443,11 +446,14 @@ impl RecoveredWalFrameIdentity {
 
     /// Return whether this sealed frame has the canonical reducer persistence relation.
     pub(crate) const fn is_exact(self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Match another sealed WAL-frame identity without exposing its parts.
-    pub(crate) const fn exactly_matches(self, other: Self) -> bool {
+    pub(crate) fn exactly_matches(self, other: Self) -> bool {
         self.frame_sequence == other.frame_sequence
             && self.persistence_id == other.persistence_id
             && self.frame_hash == other.frame_hash
@@ -500,11 +506,14 @@ pub(crate) struct PersistedWalFrameLocatorV1 {
 impl PersistedWalFrameLocatorV1 {
     /// Check the canonical reducer persistence relation without authenticating provenance.
     pub(crate) const fn is_exact(self) -> bool {
-        self.frame_sequence.checked_add(1) == Some(self.persistence_id)
+        match self.frame_sequence.checked_add(1) {
+            Some(next) => next == self.persistence_id,
+            None => false,
+        }
     }
 
     /// Compare inert persisted evidence with one sealed runtime identity.
-    pub(crate) const fn exactly_matches_runtime(self, runtime: RecoveredWalFrameIdentity) -> bool {
+    pub(crate) fn exactly_matches_runtime(self, runtime: RecoveredWalFrameIdentity) -> bool {
         self.frame_sequence == runtime.frame_sequence
             && self.persistence_id == runtime.persistence_id
             && self.frame_hash == runtime.frame_hash
@@ -1874,109 +1883,113 @@ impl AuthenticatedRecoveredAdapterStartup {
         }
         let authority = match authority {
             PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
-                match body_store.detach_recovered_decision_apply_body(&fetch) {
-                    Ok(body) => {
-                        if !body.exactly_matches_decision(&fetch) {
-                            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "detached Decision body lost its exact same-store binding",
+                if body_store.has_rejected_recovered_decision_body(&fetch) {
+                    return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
+                            super::v2_body_store::RecoveredDecisionApplyBodyCutError::DeterministicRejection,
+                        ),
+                    ));
+                }
+                if !body_store.has_exact_recovered_decision_fetch_parent(&fetch) {
+                    PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch)
+                } else {
+                    // Establish marker presence before taking the move-only body
+                    // cut so the cut's borrow ends before the store is consumed.
+                    let body = body_store
+                        .detach_recovered_decision_apply_body(&fetch)
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
+                                    error,
                                 ),
-                            ));
-                        }
-                        let lineage =
-                            body.prepare_replay_lineage(&verified, &fetch)
-                                .ok_or_else(|| {
-                                    ProductionLifecycleOwnerStartupErrorV1::new(
+                            )
+                        })?;
+                    if !body.exactly_matches_decision(&fetch) {
+                        return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "detached Decision body lost its exact same-store binding",
+                            ),
+                        ));
+                    }
+                    let lineage =
+                        body.prepare_replay_lineage(&verified, &fetch)
+                            .ok_or_else(|| {
+                                ProductionLifecycleOwnerStartupErrorV1::new(
                                 ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
                                     "Decision body replay lineage is inconsistent",
                                 ),
                             )
-                                })?;
-                        let preview = body
-                            .into_adapter_preview(adapter, &verified, fetch, lineage)
-                            .map_err(|error| {
-                                let _ = error.reason();
-                                ProductionLifecycleOwnerStartupErrorV1::new(
+                            })?;
+                    let preview = body
+                        .into_adapter_preview(adapter, &verified, fetch, lineage)
+                        .map_err(|error| {
+                            let _ = error.reason();
+                            ProductionLifecycleOwnerStartupErrorV1::new(
                                 ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
                                     "Decision body reducer fast-forward is inconsistent",
                                 ),
                             )
-                            })?;
-                        let storage =
-                            preview.into_storage_preview(&verified).map_err(|_error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "Decision body storage lineage is inconsistent",
-                                ),
-                            )
-                            })?;
-                        if !storage.validates(&verified) {
-                            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "Decision body storage projection lost its same-store binding",
-                                ),
-                            ));
-                        }
-                        let restored = storage.restore_body();
-                        debug_assert!(restored.staged().validates(&verified));
-                        let staged = restored.into_staged();
-                        let body_store = body_store
-                            .into_lifecycle_owner_store(verified.context())
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-                                )
-                            })?;
-                        let (payload_store, recovered_payloads) =
-                            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                                serve_payload_root,
-                                verified.context(),
-                            )
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-                                )
-                            })?;
-                        let serve_payloads = recovered_payloads
-                            .authenticate(&verified, local_signer, &body_store)
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(
-                                        error,
-                                    ),
-                                )
-                            })?;
-                        let owner =
-                            ProductionLifecycleOwnerV1::open_recovered_decision_apply_startup(
-                                verified,
-                                staged,
-                                effects,
-                                ledger_root,
-                                body_store,
-                                config,
-                                reply_route_source_capacity,
-                                payload_store,
-                                serve_payloads,
-                            )
-                            .map_err(|error| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                        error.reason(),
-                                    ),
-                                )
-                            })?;
-                        return Ok(owner);
-                    }
-                    Err(
-                        super::v2_body_store::RecoveredDecisionApplyBodyCutError::MissingMarker,
-                    ) => PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch),
-                    Err(error) => {
+                        })?;
+                    let storage = preview.into_storage_preview(&verified).map_err(|_error| {
+                        ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "Decision body storage lineage is inconsistent",
+                            ),
+                        )
+                    })?;
+                    if !storage.validates(&verified) {
                         return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
-                                error,
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "Decision body storage projection lost its same-store binding",
                             ),
                         ));
                     }
+                    let restored = storage.restore_body();
+                    debug_assert!(restored.staged().validates(&verified));
+                    let staged = restored.into_staged();
+                    let body_store = body_store
+                        .into_lifecycle_owner_store(verified.context())
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                            )
+                        })?;
+                    let (payload_store, recovered_payloads) =
+                        super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                                serve_payload_root,
+                                verified.context(),
+                            )
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
+                                )
+                        })?;
+                    let serve_payloads = recovered_payloads
+                        .authenticate(&verified, local_signer, &body_store)
+                        .map_err(|error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(error),
+                            )
+                        })?;
+                    let owner = ProductionLifecycleOwnerV1::open_recovered_decision_apply_startup(
+                        verified,
+                        staged,
+                        effects,
+                        ledger_root,
+                        body_store,
+                        config,
+                        reply_route_source_capacity,
+                        payload_store,
+                        serve_payloads,
+                    )
+                    .map_err(|error| {
+                        ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                error.reason(),
+                            ),
+                        )
+                    })?;
+                    return Ok(owner);
                 }
             }
             authority => authority,
@@ -5178,7 +5191,7 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             && validation_tag == persist_tag
             && persist_tag == persisted_tag
             && persisted_tag == sign_tag
-            && id == entry.id()
+            && *id == entry.id()
             && next_reducer.pending_persistence_record().is_none()
             && next_reducer.awaiting_signature() == Some(message)
     }
@@ -5433,7 +5446,7 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         // boundary without weakening the production WAL API.
         let frame_sequence = receipt.sequence();
         let frame_hash = receipt.frame_hash();
-        let post_wal = (|| {
+        let post_wal: Result<SealedLiveWalPersistedEffectV1, AdapterError> = (|| {
             let frame = adapter.wal.recovered_records().last().ok_or(
                 AdapterError::WalFrameIdentityMismatch {
                     frame_sequence,
@@ -24787,12 +24800,10 @@ mod tests {
         let factory_inputs = canonical_factory
             .find("factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1")
             .expect("factory consumes the adapter-bound execution/storage seal");
-        assert!(canonical_factory.contains(
-            "mut body_store: super::v2_body_store::V2BodyStore"
-        ));
-        assert!(!canonical_factory.contains(
-            "body_store: super::v2_body_store::RevalidatedV2BodyStore"
-        ));
+        assert!(canonical_factory.contains("mut body_store: super::v2_body_store::V2BodyStore"));
+        assert!(
+            !canonical_factory.contains("body_store: super::v2_body_store::RevalidatedV2BodyStore")
+        );
         let residual = canonical_factory
             .find("if !self.effects.is_empty()")
             .expect("factory rejects residual effects before marker replay");

@@ -17,8 +17,6 @@ use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll, Encode};
 use thiserror::Error;
 
-#[cfg(test)]
-use super::TurnPlan;
 use super::projection::{AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError};
 use super::replay_authority::{
     AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
@@ -42,6 +40,8 @@ use super::{
     ProductionLifecycleOwnerV1, RecoveredLifecycleRecord, RecoveredWalProductionOwnerOpenV1,
     RecoverySnapshot, TerminalOutcome,
 };
+#[cfg(test)]
+use super::{TurnOutcome, TurnPlan};
 use super::{
     authority,
     body_pipeline_transition::{
@@ -1119,7 +1119,7 @@ impl LifecycleProducerDebtV1 {
 /// Complete version-one durable lifecycle ledger.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
-pub(super) struct LifecycleLedgerV1 {
+pub(in crate::sumeragi) struct LifecycleLedgerV1 {
     format_version: u16,
     context: [u8; 32],
     height: u64,
@@ -1160,6 +1160,7 @@ pub(in crate::sumeragi) struct CompleteTipPredecessorStorageErrorV1 {
 enum CompleteTipPredecessorStorageErrorKindV1 {
     #[error(transparent)]
     Ledger(#[from] LifecycleLedgerError),
+    #[error(transparent)]
     PayloadStore(#[from] CertifiedServePayloadStoreError),
     #[error(transparent)]
     PayloadRecovery(#[from] CertifiedServePayloadRecoveryError),
@@ -4407,7 +4408,7 @@ fn record_matches_recovery_candidate(
 
 /// Typed LifecycleLedgerV1 load or persistence failure.
 #[derive(Debug, Error)]
-pub(super) enum LifecycleLedgerError {
+pub(in crate::sumeragi) enum LifecycleLedgerError {
     /// A filesystem operation failed.
     #[error("{0}")]
     Io(String),
@@ -4485,7 +4486,7 @@ impl DurableWalVoteLedgerRepairReceipt {
 
 /// Crash-safe, bounded store for one height-local LifecycleLedgerV1.
 #[derive(Clone, Debug)]
-pub(super) struct LifecycleLedgerStoreV1 {
+pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
     path: PathBuf,
     context: LifecycleContext,
     max_records: usize,
@@ -4512,7 +4513,7 @@ impl LifecycleLedgerStoreV1 {
     }
 
     /// Open a height-local ledger under the coordinator's sealed size bounds.
-    pub(super) fn open(
+    pub(in crate::sumeragi) fn open(
         root: &Path,
         context: LifecycleContext,
     ) -> Result<(Self, LifecycleLedgerV1), LifecycleLedgerError> {
@@ -5309,8 +5310,9 @@ pub(crate) fn substitute_recovered_decision_fetch_owner_for_test(
     };
     let ordinal = ledger.records[*index].ordinal;
     let owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xDF; 32])), ordinal);
-    ledger.records[*index].owner = owner;
-    ledger.records[*index].reconstruction_source = owner.causal_root().digest();
+    ledger.records[*index].causal_root = *owner.causal_root().digest().as_bytes();
+    ledger.records[*index].owner_first_ordinal = owner.first_admission_ordinal();
+    ledger.records[*index].reconstruction_source = *owner.causal_root().digest().as_bytes();
     ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_ok() && store.persist(&ledger).is_ok()
 }
 
@@ -5570,7 +5572,7 @@ pub(crate) mod tests {
                 )
                 .expect("sign durable Ready-Fetch block");
                 let block = SignedBlock::presigned(
-                    BlockSignature::new(leader, block_signature),
+                    BlockSignature::new(u64::from(leader), block_signature),
                     header,
                     Vec::new(),
                 );
@@ -5647,7 +5649,7 @@ pub(crate) mod tests {
                         .map(|entry| entry.validator.clone())
                         .collect()
                 });
-                let case = super::super::super::replay_authority::tests::exact_durable_certified_fetch_record_fixture(
+                let case = super::super::super::replay_authority::exact_durable_certified_fetch_record_fixture(
                     self.lifecycle_context(),
                     EventTag::new(context.height, view, Generation::new(u64::from(marker))),
                     certificate,
@@ -5705,7 +5707,7 @@ pub(crate) mod tests {
                 )
                 .expect("sign terminal Validate block");
                 let block = SignedBlock::presigned(
-                    BlockSignature::new(leader, signature),
+                    BlockSignature::new(u64::from(leader), signature),
                     header,
                     Vec::new(),
                 );
@@ -5731,7 +5733,7 @@ pub(crate) mod tests {
                     .store(manifest.clone(), body)
                     .expect("fsync terminal Validate body");
                 let replay =
-                    super::super::super::replay_authority::tests::exact_local_body_record_fixture(
+                    super::super::super::replay_authority::exact_local_body_record_fixture(
                         self.lifecycle_context(),
                         EventTag::new(context.height, view, Generation::new(u64::from(marker))),
                         manifest,
@@ -5770,7 +5772,9 @@ pub(crate) mod tests {
             ) -> AuthenticatedCertifiedBodyRequest {
                 let subject = wire::BlockSubject {
                     parent_block_hash: None,
-                    block_hash: Hash::new([marker, 0xA1]),
+                    block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new([
+                        marker, 0xA1,
+                    ])),
                     payload_hash: Hash::new([marker, 0xA2]),
                 };
                 self.authenticated_serve_request_for_subject(view, marker, requester_index, subject)
@@ -5889,7 +5893,7 @@ pub(crate) mod tests {
                 )
                 .expect("sign completed Serve block");
                 let block = SignedBlock::presigned(
-                    BlockSignature::new(leader, signature),
+                    BlockSignature::new(u64::from(leader), signature),
                     header,
                     Vec::new(),
                 );
@@ -6521,7 +6525,7 @@ pub(crate) mod tests {
             ordinal: u128,
             seed: u8,
         ) -> LifecycleLedgerRecordV1 {
-            let case = super::super::super::replay_authority::tests::exact_record_fixture(
+            let case = super::super::super::replay_authority::exact_record_fixture(
                 context,
                 LifecycleStageKind::SignPrepareVote,
                 seed,
@@ -7136,7 +7140,7 @@ pub(crate) mod tests {
                     .authenticate_for_complete_tip_retirement(&fixture.verified, &fixture.keys[0])
                     .expect("authenticate retirement-only Completed metadata");
                 assert!(
-                    super::super::open::authenticate_complete_tip_serve_census(
+                    super::super::super::open::authenticate_complete_tip_serve_census(
                         &pending_serve_ledger,
                         &bodyless,
                     )
@@ -8959,7 +8963,7 @@ pub(crate) mod tests {
         #[test]
         fn production_owner_rejects_an_unsupported_live_class_before_publication() {
             let fixture = RecoveryFixture::new("unsupported-live-production-owner", 0x81);
-            let replay = super::super::super::replay_authority::tests::exact_record_fixture(
+            let replay = super::super::super::replay_authority::exact_record_fixture(
                 fixture.lifecycle_context(),
                 LifecycleStageKind::SignProposal,
                 0x82,

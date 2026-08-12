@@ -2007,6 +2007,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 
+    use super::super::projection;
     use super::*;
     use crate::sumeragi::{
         v2_core::{EventTag, Generation},
@@ -2618,7 +2619,7 @@ mod tests {
             ordinal,
             producer_turn_ordinal: None,
             ..
-        } = coordinator.admit(AdmissionRequest::Candidate(validate_candidate))
+        } = coordinator.admit(AdmissionRequest::Candidate(validate_candidate.clone()))
         else {
             panic!("admit Validate parent fixture")
         };

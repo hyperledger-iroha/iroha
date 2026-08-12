@@ -274,7 +274,9 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
 }
 
 /// Exact finalized identity of one archived committed view.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
 pub struct ProviderIngestFinalizedArchiveKeyV1 {
     /// Exact genesis-derived network containing the committed state.
     pub network_id: NetworkId,
@@ -552,7 +554,9 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
 }
 
 /// Context-bound exclusive cursor for provider-indexed archive pages.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
 pub struct ProviderIngestFinalizedArchiveCursorV1 {
     /// Exact finalized key whose immutable snapshot is being paged.
     pub key: ProviderIngestFinalizedArchiveKeyV1,
@@ -592,7 +596,7 @@ pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
 ///
 /// The finality-artifact hash is supplied by the commit-owned caller and is
 /// reauthenticated against Kura before any prefix is removed.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionFenceV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
     kura_finality_artifact_hash: [u8; 32],
@@ -1042,7 +1046,7 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
 }
 
 /// Result of installing one authenticated virtual-base checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ProviderIngestFinalizedArchiveCompactionOutcomeV1 {
     retention_floor: ProviderIngestFinalizedArchiveKeyV1,
@@ -1085,7 +1089,7 @@ impl ProviderIngestFinalizedArchiveCompactionOutcomeV1 {
 }
 
 /// Exact archive coverage qualified against one authenticated Kura boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ProviderIngestFinalizedArchiveQualificationV1 {
     activation_floor: ProviderIngestFinalizedArchiveKeyV1,
@@ -1128,7 +1132,7 @@ impl ProviderIngestFinalizedArchiveQualificationV1 {
 }
 
 /// Outcome of exact startup or recovery reconciliation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ProviderIngestFinalizedArchiveReconcileOutcomeV1 {
     insertion: ProviderIngestFinalizedArchiveInsertOutcomeV1,

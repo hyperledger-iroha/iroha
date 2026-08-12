@@ -524,35 +524,35 @@
             )
             .is_none()
         );
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             producer_shape.key,
             serve_stage,
             fixture.pending_payload(),
             receipt.payload_hash(),
         ));
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             producer_stage,
             fixture.pending_payload(),
             receipt.payload_hash(),
         ));
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             serve_stage,
             DurablePayloadReference::None,
             receipt.payload_hash(),
         ));
-        assert!(!pair.exactly_matches_serve_record(
+        assert!(!shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             serve_stage,
             fixture.pending_payload(),
             Hash::new(b"wrong retained payload hash"),
         ));
-        assert!(!pair.exactly_matches_producer_record(
+        assert!(!shared.exactly_matches_producer_record(
             fixture.active_context,
             producer_shape.key,
             producer_stage,
@@ -562,14 +562,14 @@
 
         let authority = LifecycleReplayAuthorityV1 {
             format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-            payload: pair.serve.payload.clone(),
+            payload: shared.serve.payload.clone(),
             source: LifecycleReplaySourceV1::CertifiedServeStorage(
-                pair.serve.family.source.clone(),
+                shared.serve.family.source.clone(),
             ),
         };
         let canonical = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode())
             .expect("exact Certified-Serve replay source canonical-roundtrips");
-        assert!(pair.serve.exactly_matches_authority(&canonical));
+        assert!(shared.serve.exactly_matches_authority(&canonical));
 
         let mut wrong_payload_source = canonical.clone();
         let LifecycleReplaySourceV1::CertifiedServeStorage(source) =
@@ -578,7 +578,11 @@
             unreachable!("Serve replay authority retains its storage source")
         };
         source.payload_hash[0] ^= 1;
-        assert!(!pair.serve.exactly_matches_authority(&wrong_payload_source));
+        assert!(
+            !shared
+                .serve
+                .exactly_matches_authority(&wrong_payload_source)
+        );
 
         let mut wrong_qc_source = canonical.clone();
         let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut wrong_qc_source.source
@@ -589,7 +593,7 @@
         let wrong_qc_source =
             LifecycleReplayAuthorityV1::decode_canonical(&wrong_qc_source.encode())
                 .expect("mutated QC source remains canonical codec data");
-        assert!(!pair.serve.exactly_matches_authority(&wrong_qc_source));
+        assert!(!shared.serve.exactly_matches_authority(&wrong_qc_source));
 
         let mut absent_retainer = canonical;
         let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut absent_retainer.source
@@ -631,11 +635,11 @@
             ReplayPayloadBindingV1::CertifiedServeCompleted { .. }
         ));
         assert!(matches!(
-            negative.serve.payload,
-            ReplayPayloadBindingV1::CertifiedServeNegative {
+            negative.serve.payload.durable_payload(),
+            Some(DurablePayloadReference::CertifiedServeNegative {
                 outcome: DurableServeNegativeOutcome::Rejected(17),
                 ..
-            }
+            })
         ));
         assert_eq!(
             pending.serve.family.source.request,
@@ -926,10 +930,15 @@
             )
         );
 
-        let manifest_absent_effect = AdapterEffect::FetchBody {
-            manifest: None,
-            ..effect.clone()
+        let mut manifest_absent_effect = effect.clone();
+        let AdapterEffect::FetchBody {
+            manifest: candidate_manifest,
+            ..
+        } = &mut manifest_absent_effect
+        else {
+            unreachable!("fixture effect is one certified Fetch")
         };
+        *candidate_manifest = None;
         let manifest_absent = projection(
             &manifest_absent_effect,
             &first_response,
@@ -943,10 +952,15 @@
 
         let source_key = KeyPair::try_from_seed(vec![0xD6; 32], Algorithm::Ed25519)
             .expect("deterministic certified-source identity");
-        let foreign_sources_effect = AdapterEffect::FetchBody {
-            certified_sources: vec![PeerId::new(source_key.public_key().clone())],
-            ..effect.clone()
+        let mut foreign_sources_effect = effect.clone();
+        let AdapterEffect::FetchBody {
+            certified_sources: candidate_sources,
+            ..
+        } = &mut foreign_sources_effect
+        else {
+            unreachable!("fixture effect is one certified Fetch")
         };
+        *candidate_sources = vec![PeerId::new(source_key.public_key().clone())];
         let foreign_sources = projection(
             &foreign_sources_effect,
             &first_response,

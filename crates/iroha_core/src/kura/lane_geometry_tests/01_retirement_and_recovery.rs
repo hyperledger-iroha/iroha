@@ -1494,7 +1494,7 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
         )],
     );
     let receipt = geometry_native_amx_receipt(
-        *network_id,
+        network_id,
         source_id,
         entrypoint_hash,
         &plan,

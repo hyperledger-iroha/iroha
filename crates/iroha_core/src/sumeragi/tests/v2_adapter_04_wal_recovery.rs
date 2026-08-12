@@ -867,11 +867,12 @@ fn empty_authenticated_lifecycle_recovery(
     let payloads = recovered
         .authenticate(verified, &signer, &body_store)
         .expect("authenticate empty Certified-Serve payload recovery");
-    let (_ledger_store, ledger) = super::super::v2_lifecycle_ledger::LifecycleLedgerStoreV1::open(
-        ledger_root,
-        super::super::v2_lifecycle_projection::lifecycle_context(verified.context()),
-    )
-    .expect("decode the exact lifecycle ledger authenticated by the fixture cut");
+    let (_ledger_store, ledger) =
+        super::super::v2_lifecycle_coordinator::LifecycleLedgerStoreV1::open(
+            ledger_root,
+            super::super::v2_lifecycle_coordinator::lifecycle_context(verified.context()),
+        )
+        .expect("decode the exact lifecycle ledger authenticated by the fixture cut");
     let recovery =
         AuthenticatedLifecycleRecoveryCut::empty_for_recovered_wal_test(verified, ledger, payloads)
             .expect("assemble empty same-context lifecycle recovery cut");
@@ -1181,7 +1182,7 @@ fn bls_decision_fetch_body_markers_fail_before_ledger_mutation() {
         };
         let (payload_store, recovered_payloads) =
             super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                promoted_storage.path().join("serve"),
+                &promoted_storage.path().join("serve"),
                 verified.context(),
             )
             .expect("open promoted Decision Serve store");
@@ -1585,7 +1586,7 @@ fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
         assert!(
             mutate(
                 &ledger_root,
-                super::super::v2_lifecycle_projection::lifecycle_context(&context),
+                super::super::v2_lifecycle_coordinator::lifecycle_context(&context),
             ),
             "construct structurally valid {label} drift"
         );

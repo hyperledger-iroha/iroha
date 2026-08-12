@@ -47,7 +47,7 @@ impl FairIngressQueuePositions {
 /// its carrier-derived context equals this bound context. The identity contains
 /// no superseded runtime lifecycle or scheduler ordinal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PendingFairIngressIdentity {
+pub(in crate::sumeragi) struct PendingFairIngressIdentity {
     context: LifecycleContext,
     digest: LifecycleDigest,
     physical_admission_ordinal: u64,
@@ -1629,6 +1629,13 @@ mod tests {
         ))
     }
 
+    fn assert_same_v2_message(actual: &BlockMessage, expected: &BlockMessage) {
+        let (BlockMessage::V2(actual), BlockMessage::V2(expected)) = (actual, expected) else {
+            panic!("expected two Sumeragi V2 messages: {actual:?}, {expected:?}")
+        };
+        assert_eq!(actual, expected);
+    }
+
     fn single_commit_request_ingress(
         signature_byte: u8,
     ) -> (FairV2Ingress, LifecycleContext, PeerId, BlockMessage, u64) {
@@ -1891,7 +1898,7 @@ mod tests {
             FairV2IngressQueueGateVerdict::Strict
         );
         assert!(!selector_row.is_obsolete());
-        assert_eq!(selector_row.inbound().message(), &target_message);
+        assert_same_v2_message(selector_row.inbound().message(), &target_message);
 
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::new(
@@ -2085,7 +2092,7 @@ mod tests {
             )
             .expect("unchanged prepared cut commits exactly once");
 
-        assert_eq!(inbound.message(), &selected);
+        assert_same_v2_message(inbound.message(), &selected);
         assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
         assert_eq!(
             inbound
@@ -2155,13 +2162,8 @@ mod tests {
             Some(u128::from(append_ordinal) + 1)
         );
         assert_eq!(ingress.len(), 1);
-        assert_eq!(
-            ingress
-                .try_recv()
-                .expect("post-cut append remains queued")
-                .message(),
-            &appended
-        );
+        let retained = ingress.try_recv().expect("post-cut append remains queued");
+        assert_same_v2_message(retained.message(), &appended);
     }
 
     #[test]

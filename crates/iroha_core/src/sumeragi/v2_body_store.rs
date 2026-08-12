@@ -1182,6 +1182,24 @@ impl RevalidatedV2BodyStore {
         self.0.instance_identity()
     }
 
+    /// Return whether this revalidated store owns the exact successful marker
+    /// needed to replace a recovered Decision Fetch with Apply.
+    pub(in crate::sumeragi) fn has_exact_recovered_decision_fetch_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.0.has_exact_recovered_decision_fetch_parent(projection)
+    }
+
+    /// Return whether deterministic replay rejected the body named by a
+    /// recovered Decision.
+    pub(in crate::sumeragi) fn has_rejected_recovered_decision_body(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        self.0.has_rejected_recovered_decision_body(projection)
+    }
+
     /// Detach the exact successful body frame named by a recovered Decision.
     ///
     /// Every fallible context, marker, index, manifest, checksum, canonical
@@ -1201,7 +1219,7 @@ impl RevalidatedV2BodyStore {
                 ));
                 RecoveredDecisionApplyBodyCutError::UnrevalidatedMarkers
             })?;
-        let lifecycle_context = super::v2_lifecycle_projection::lifecycle_context(&self.0.context);
+        let lifecycle_context = super::v2_lifecycle_coordinator::lifecycle_context(&self.0.context);
         if !projection.belongs_to_context(lifecycle_context) {
             return Err(RecoveredDecisionApplyBodyCutError::ForeignContext);
         }

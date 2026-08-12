@@ -16598,6 +16598,9 @@ impl NodeHandle {
             Ok(Ok(_)) | Ok(Err(ProviderIngestLocalStorageErrorV1::Permanent)) => {
                 Err(ProviderIngestLocalStorageErrorV1::Permanent)
             }
+            Ok(Err(ProviderIngestLocalStorageErrorV1::Quarantined)) => {
+                Err(ProviderIngestLocalStorageErrorV1::Quarantined)
+            }
             Ok(Err(ProviderIngestLocalStorageErrorV1::Retryable)) => {
                 Err(ProviderIngestLocalStorageErrorV1::Retryable)
             }
@@ -18319,7 +18322,6 @@ mod tests {
                 inserted.job_id(),
                 ProviderIngestCompletionSigningContextV1 {
                     baseline_finalized_cursor: fixture.ingest_cursor,
-                    chain_id: ChainId::from("provider-ingest-node-test"),
                     network_id,
                     provider_owner: completion_payload.authority.clone(),
                     signer_policy: completion_signer_policy,

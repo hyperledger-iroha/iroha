@@ -72,7 +72,8 @@ use super::{
         RecoveredDecisionApplyAdapterCompletionAuthorityV1, RecoveredWalControlSign,
         RecoveredWalDecisionFetch, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
         RegisteredPrepareInvalidBodyReportCapability, RegisteredPrepareValidateSignCapability,
-        SignRequest, SumeragiV2Adapter, classify_decided_local_proposal, proposal_is_safe_for_lock,
+        SignRequest, SumeragiV2Adapter, VerifiedHeightContext, classify_decided_local_proposal,
+        proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
     v2_lifecycle_coordinator::{
@@ -23837,7 +23838,15 @@ mod tests {
         let ownership = runtime
             .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
             .expect("local Store aliases the active producer");
-        assert_eq!(ownership.owner(), reserved.owner());
+        let store_effect = AdapterEffect::StoreBody {
+            tag: initial,
+            round: proposal.manifest.round,
+            subject: proposal.manifest.subject,
+        };
+        let store_ownership = ownership
+            .exact_store_task_ownership(&store_effect, &proposal.manifest)
+            .expect("local proposal composite retains its exact Store owner");
+        assert_eq!(store_ownership.owner(), reserved.owner());
         assert!(runtime.active_view_producer.is_some());
 
         let deadline = start + Duration::from_secs(10);
@@ -23852,7 +23861,7 @@ mod tests {
         );
 
         runtime
-            .complete_active_view_producer_after_proposal_fanout(proposal.round, &ownership)
+            .complete_active_view_producer_after_proposal_fanout(proposal.round, &store_ownership)
             .expect("guarded fanout retires the inherited producer");
         assert!(runtime.active_view_producer.is_none());
         assert!(

@@ -101,6 +101,8 @@ pub(crate) fn complete_tip_restart_activation_fixture() -> (
     ledger::tests::durable_ready_fetch_recovery::complete_tip_restart_activation_fixture()
 }
 #[cfg(test)]
+pub(in crate::sumeragi) use ledger::LifecycleLedgerStoreV1;
+#[cfg(test)]
 pub(crate) use ledger::{
     append_same_owner_foreign_terminal_for_test,
     substitute_recovered_control_replay_authority_for_test,
@@ -111,6 +113,7 @@ pub(super) use open::TerminalValidateNoSuccessorClaim;
 pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
 #[cfg(test)]
 pub(crate) use projection::CertifiedServeAdmissionBoundaryError;
+pub(in crate::sumeragi) use projection::lifecycle_context;
 pub(crate) use projection::{
     AdapterEffectAdmissionError, CertifiedServeAdmissionError,
     CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,
@@ -711,7 +714,9 @@ impl LifecycleCoordinator {
         let Some(first_ordinal) = self.high_water.checked_add(1) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
-        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_count - 1) else {
+        let ordinal_span =
+            u128::try_from(ordinal_count - 1).expect("bounded lifecycle record count fits in u128");
+        let Some(last_ordinal) = first_ordinal.checked_add(ordinal_span) else {
             return AdmissionDecision::Rejected(AdmissionRejection::OrdinalExhausted);
         };
         let owner = self
@@ -5200,7 +5205,8 @@ mod tests {
                 terminal,
             )
         };
-        let rejected = |records, producer_debts| {
+        let rejected = |records: Vec<RecoveredLifecycleRecord>,
+                        producer_debts: BTreeMap<u128, u128>| {
             let high_water = records
                 .iter()
                 .map(|record: &RecoveredLifecycleRecord| record.ordinal)

@@ -3394,7 +3394,7 @@ mod recovery_tests {
     fn storage_only_assembler_seals_an_empty_exact_frame() {
         let (context, payloads) = empty_authenticated_payload_cut();
         let ledger = LifecycleLedgerV1::empty(context);
-        let mut recovery =
+        let recovery =
             AuthenticatedLifecycleRecoveryCut::assemble_storage_only(ledger.clone(), payloads)
                 .expect("empty storage census assembles exactly");
 
@@ -3907,7 +3907,7 @@ mod recovery_tests {
                 context, 0xD9,
             )
             .expect("construct prepared-open repaired WAL fixture");
-        let recovery =
+        let mut recovery =
             AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
                 repaired.clone(),
                 payloads,

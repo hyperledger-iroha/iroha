@@ -22,7 +22,7 @@ pub(crate) struct LifecycleDigest(pub(super) [u8; 32]);
 
 impl LifecycleDigest {
     /// Construct a digest from an already authenticated projection.
-    pub(super) const fn new(bytes: [u8; 32]) -> Self {
+    pub(in crate::sumeragi) const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -41,7 +41,7 @@ pub(crate) struct LifecycleContext {
 
 impl LifecycleContext {
     /// Construct a typed lifecycle context.
-    pub(super) const fn new(id: LifecycleDigest, height: u64) -> Self {
+    pub(in crate::sumeragi) const fn new(id: LifecycleDigest, height: u64) -> Self {
         Self { id, height }
     }
 
@@ -847,6 +847,7 @@ impl WaitToken {
 
 /// Stable terminal result retained as a tombstone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(variant_size_differences)] // Stable inline tombstones avoid allocation in the scheduler.
 pub(crate) enum TerminalOutcome {
     Advanced,
     Completed(Option<LifecycleDigest>),

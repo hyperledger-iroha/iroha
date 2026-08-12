@@ -1,5 +1,3 @@
-//! Iroha node executable, startup wiring, and command-line interface.
-
 /// Feature-isolated real-network consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
@@ -5478,6 +5476,12 @@ mod network_relay_tests {
         SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
         sumeragi_relay_class,
     };
+
+    fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
+        let mut bytes = [0_u8; Hash::LENGTH];
+        bytes[0] = byte;
+        HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
+    }
 
     #[cfg(feature = "test-network-message-control")]
     #[derive(Clone)]

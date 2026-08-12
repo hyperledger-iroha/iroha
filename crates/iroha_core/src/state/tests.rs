@@ -11116,7 +11116,7 @@ fn autoscale_drain_state_for_test(
         version: 1,
         intent: LaneDrainIntentV1 {
             version: 1,
-            network_id: DEFAULT_TEST_NETWORK_ID,
+            network_id: *DEFAULT_TEST_NETWORK_ID,
             lane_id,
             dataspace_id,
             lane_incarnation,

@@ -64,7 +64,7 @@ impl RecoveredRecord {
     }
 
     /// Match an append acknowledgement to this exact retained frame.
-    pub(crate) const fn exactly_matches_receipt(&self, receipt: SafetyWalAppendReceipt) -> bool {
+    pub(crate) fn exactly_matches_receipt(&self, receipt: SafetyWalAppendReceipt) -> bool {
         self.sequence == receipt.sequence && self.frame_hash == receipt.frame_hash
     }
 }

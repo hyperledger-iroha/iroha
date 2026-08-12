@@ -1725,7 +1725,9 @@ fn install_merge_applied_retirement_work(
                 proof_of_possession: proof_of_possession.clone(),
             })
             .collect(),
-        autonomous_network_id: test_network_id(b"geometry-durability-merge-genesis"),
+        autonomous_network_id: crate::sumeragi::synthetic_network_id(
+            "geometry-durability-merge-genesis",
+        ),
         autonomous_epoch: 1,
         autonomous_payload_hash: Hash::new(b"geometry-durability-merge-payload"),
         entrypoint_hashes: vec![Hash::from(entrypoint_hash)],
@@ -2070,7 +2072,11 @@ fn autonomous_retirement_payload(
     participant_dataspace_id: DataSpaceId,
     participant_incarnation: Hash,
     producer: &KeyPair,
-) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+) -> (
+    iroha_data_model::NetworkId,
+    u64,
+    crate::lane_consensus::LaneExecutablePayloadV1,
+) {
     autonomous_retirement_payload_for_routes(
         LaneId::SINGLE,
         DataSpaceId::new(7),
@@ -2091,7 +2097,11 @@ fn autonomous_retirement_payload_for_routes(
     participant_dataspace_id: DataSpaceId,
     participant_incarnation: Hash,
     producer: &KeyPair,
-) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+) -> (
+    iroha_data_model::NetworkId,
+    u64,
+    crate::lane_consensus::LaneExecutablePayloadV1,
+) {
     let network_id = crate::sumeragi::synthetic_network_id("geometry-retirement-autonomous");
     let transaction = TransactionBuilder::new(
         network_id,
@@ -2126,7 +2136,6 @@ fn autonomous_retirement_payload_for_routes(
         Hash::from(entrypoint_hash),
         producer,
     );
-    let network_id = *network_id;
     let epoch = 9;
     let receipt = geometry_native_amx_receipt(
         network_id,
