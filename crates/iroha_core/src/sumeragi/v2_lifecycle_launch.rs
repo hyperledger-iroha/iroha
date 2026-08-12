@@ -18,13 +18,8 @@ use super::{
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
 use crate::{
-    EventsSender, IrohaNetwork,
+    IrohaNetwork,
     kura::Kura,
-    query::{
-        provider_ingest_finalized::ProviderIngestFinalizedArchiveV1,
-        reputation_finalized::ReputationFinalizedArchive,
-    },
-    queue::Queue,
     state::State,
     sumeragi::{
         FairV2Ingress,
@@ -63,13 +58,8 @@ pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {
     key_pair: KeyPair,
     network: IrohaNetwork,
     state: Arc<State>,
-    queue: Arc<Queue>,
     kura: Arc<Kura>,
     authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,
-    provider_ingest_finalized_archive: Option<Arc<ProviderIngestFinalizedArchiveV1>>,
-    reputation_finalized_archive: Option<Arc<ReputationFinalizedArchive>>,
-    block_cadence: Duration,
-    events_sender: EventsSender,
     consensus_io_capacity: usize,
     auxiliary_io_capacity: usize,
     orphan_chunk_capacity: usize,
@@ -92,13 +82,8 @@ impl ProductionLifecycleLaunchInputsV1 {
         key_pair: KeyPair,
         network: IrohaNetwork,
         state: Arc<State>,
-        queue: Arc<Queue>,
         kura: Arc<Kura>,
         authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,
-        provider_ingest_finalized_archive: Option<Arc<ProviderIngestFinalizedArchiveV1>>,
-        reputation_finalized_archive: Option<Arc<ReputationFinalizedArchive>>,
-        block_cadence: Duration,
-        events_sender: EventsSender,
         consensus_io_capacity: usize,
         auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
@@ -117,13 +102,8 @@ impl ProductionLifecycleLaunchInputsV1 {
             key_pair,
             network,
             state,
-            queue,
             kura,
             authenticated_genesis,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
-            block_cadence,
-            events_sender,
             consensus_io_capacity,
             auxiliary_io_capacity,
             orphan_chunk_capacity,
@@ -570,12 +550,22 @@ impl ProductionLifecycleOwnerV1 {
         let construction = construction_guard
             .begin_fail_stop_operation()
             .ok_or(ProductionLifecycleLaunchErrorV1::OutputClosed)?;
+        let context = self.verified.context().clone();
+        let validator_set_pops = self.verified.proofs_of_possession().to_vec();
         if self.body_store.is_none()
             || self.body_store_identity.is_some()
             || !self
                 .kura_binding
                 .as_ref()
                 .is_some_and(|binding| binding.matches_kura(inputs.kura.as_ref()))
+            || !self.apply_service.as_ref().is_some_and(|service| {
+                service.matches_lifecycle_launch(
+                    &inputs.state,
+                    &inputs.kura,
+                    &context,
+                    &validator_set_pops,
+                )
+            })
             || self.adapter_startup.is_none()
             || self.coordinator.active_context()
                 != super::projection::lifecycle_context(self.verified.context())
@@ -590,18 +580,11 @@ impl ProductionLifecycleOwnerV1 {
         } {
             return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
         }
-        let genesis_account = self
-            .kura_binding
-            .as_ref()
-            .and_then(|binding| binding.genesis_account_for_launch(inputs.kura.as_ref()))
-            .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
         let launch_storage = self
             .kura_binding
             .as_ref()
             .and_then(|binding| binding.storage_paths_for_launch(inputs.kura.as_ref()))
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
-        let context = self.verified.context().clone();
-        let validator_set_pops = self.verified.proofs_of_possession().to_vec();
         let leader_wire_launch = self
             .adapter_startup
             .as_mut()
@@ -651,6 +634,10 @@ impl ProductionLifecycleOwnerV1 {
             .body_store
             .take()
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
+        let apply_service = self
+            .apply_service
+            .take()
+            .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
         let body_store_identity = body_store.instance_identity();
         let runtime = adapter_startup
             .into_serialized_runtime(
@@ -690,7 +677,10 @@ impl ProductionLifecycleOwnerV1 {
                 )
             })?
             .decided_subject();
-        let services = ProductionV2Services::start(
+        let services = ProductionV2Services::start_with_apply_service(
+            super::ProductionLifecycleApplyServiceLaunchPermitV1 {
+                _seal: super::ProductionLifecycleApplyServiceLaunchPermitSealV1,
+            },
             context,
             initial_tag,
             durable_decided_subject,
@@ -702,13 +692,8 @@ impl ProductionLifecycleOwnerV1 {
             launch_storage.into_chunk_root(),
             body_store,
             inputs.state,
-            inputs.queue,
             inputs.kura,
-            inputs.provider_ingest_finalized_archive,
-            inputs.reputation_finalized_archive,
-            inputs.block_cadence,
-            genesis_account,
-            inputs.events_sender,
+            apply_service,
             inputs.consensus_io_capacity,
             inputs.auxiliary_io_capacity,
             inputs.orphan_chunk_capacity,

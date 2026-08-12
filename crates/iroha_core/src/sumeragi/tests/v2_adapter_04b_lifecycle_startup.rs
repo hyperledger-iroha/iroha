@@ -131,29 +131,28 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     let signature_policy = super::super::v2_body_store::BlockSignaturePolicy::GenesisAuthority(
         local_signer.public_key().clone(),
     );
-    let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+    let body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
         storage_root.join("bodies"),
         context.clone(),
         signature_policy.clone(),
     )
     .expect("open Kura-owned body store");
-    body_store
-        .ensure_recovered_markers_revalidated()
-        .expect("empty Kura-owned store has no quarantined markers");
-    let body_store = body_store
-        .into_revalidated_startup()
-        .expect("seal Kura-owned body store");
     let storage_authority = RecoveredLifecycleStorageAuthorityV1::for_test(
         kura.as_ref(),
         &verified_genesis(context.clone()),
         signature_policy.clone(),
         AccountId::new(local_signer.public_key().clone()),
     );
+    let factory_inputs = lifecycle_factory_inputs_for_test(
+        &authenticated,
+        storage_authority,
+        Arc::clone(&kura),
+    );
     let owner = authenticated
         .open_production_lifecycle_owner_v1(
             &lifecycle_owner_config(),
             4,
-            storage_authority,
+            factory_inputs,
             body_store,
             &local_signer,
         )
@@ -172,28 +171,27 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         .authenticate_final_wal_startup_authority()
         .unwrap_or_else(|(error, _startup)| panic!("authenticate mismatched-WAL startup: {error}"));
     let mismatched_context = mismatched.adapter.wire_context.clone();
-    let mut mismatched_body = super::super::v2_body_store::V2BodyStore::open_with_policy(
+    let mismatched_body = super::super::v2_body_store::V2BodyStore::open_with_policy(
         mismatched_root.join("bodies"),
         mismatched_context.clone(),
         signature_policy.clone(),
     )
     .expect("open canonical body store for mismatched-WAL case");
-    mismatched_body
-        .ensure_recovered_markers_revalidated()
-        .expect("mismatched-WAL body store has no quarantined markers");
-    let mismatched_body = mismatched_body
-        .into_revalidated_startup()
-        .expect("seal mismatched-WAL body store");
     let mismatched_storage = RecoveredLifecycleStorageAuthorityV1::for_test(
         mismatched_kura.as_ref(),
         &verified_genesis(mismatched_context),
         signature_policy.clone(),
         AccountId::new(local_signer.public_key().clone()),
     );
+    let mismatched_inputs = lifecycle_factory_inputs_for_test(
+        &mismatched,
+        mismatched_storage,
+        Arc::clone(&mismatched_kura),
+    );
     let error = match mismatched.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
-        mismatched_storage,
+        mismatched_inputs,
         mismatched_body,
         &local_signer,
     ) {
@@ -218,29 +216,28 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     .unwrap_or_else(|(error, _startup)| panic!("authenticate foreign-owner startup: {error}"));
     let foreign_context = foreign.adapter.wire_context.clone();
     let foreign_body_root = TempDir::new().expect("foreign body-store root");
-    let mut foreign_body = super::super::v2_body_store::V2BodyStore::open_with_policy(
+    let foreign_body = super::super::v2_body_store::V2BodyStore::open_with_policy(
         foreign_body_root.path(),
         foreign_context.clone(),
         signature_policy.clone(),
     )
     .expect("open foreign body store");
-    foreign_body
-        .ensure_recovered_markers_revalidated()
-        .expect("foreign store has no quarantined markers");
-    let foreign_body = foreign_body
-        .into_revalidated_startup()
-        .expect("seal foreign body store");
     let foreign_storage_authority = RecoveredLifecycleStorageAuthorityV1::for_test(
         foreign_kura.as_ref(),
         &verified_genesis(foreign_context),
         signature_policy.clone(),
         AccountId::new(local_signer.public_key().clone()),
     );
+    let foreign_inputs = lifecycle_factory_inputs_for_test(
+        &foreign,
+        foreign_storage_authority,
+        Arc::clone(&foreign_kura),
+    );
     let foreign_lifecycle_parent = foreign_kura.sumeragi_v2_storage_root().join("lifecycle-v1");
     let error = match foreign.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
-        foreign_storage_authority,
+        foreign_inputs,
         foreign_body,
         &local_signer,
     ) {
@@ -249,7 +246,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     };
     assert_eq!(
         error.to_string(),
-        "revalidated body-store handoff failed: Sumeragi v2 body-store publication target mismatch"
+        "recovered body-store handoff failed: Sumeragi v2 body-store publication target mismatch"
     );
     assert!(!foreign_lifecycle_parent.exists());
 
@@ -264,28 +261,27 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     .authenticate_final_wal_startup_authority()
     .unwrap_or_else(|(error, _startup)| panic!("authenticate wrong-policy startup: {error}"));
     let wrong_context = wrong_policy.adapter.wire_context.clone();
-    let mut wrong_body = super::super::v2_body_store::V2BodyStore::open_with_policy(
+    let wrong_body = super::super::v2_body_store::V2BodyStore::open_with_policy(
         wrong_storage_root.join("bodies"),
         wrong_context,
         super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
     )
     .expect("open canonical-root body store with the wrong policy");
-    wrong_body
-        .ensure_recovered_markers_revalidated()
-        .expect("wrong-policy store has no quarantined markers");
-    let wrong_body = wrong_body
-        .into_revalidated_startup()
-        .expect("seal wrong-policy body store");
     let wrong_storage_authority = RecoveredLifecycleStorageAuthorityV1::for_test(
         wrong_kura.as_ref(),
         &verified_genesis(wrong_policy.adapter.wire_context.clone()),
         signature_policy,
         AccountId::new(local_signer.public_key().clone()),
     );
+    let wrong_inputs = lifecycle_factory_inputs_for_test(
+        &wrong_policy,
+        wrong_storage_authority,
+        Arc::clone(&wrong_kura),
+    );
     let error = match wrong_policy.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
-        wrong_storage_authority,
+        wrong_inputs,
         wrong_body,
         &local_signer,
     ) {
@@ -294,10 +290,106 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     };
     assert_eq!(
         error.to_string(),
-        "revalidated body-store handoff failed: Sumeragi v2 body-store publication target mismatch"
+        "recovered body-store handoff failed: Sumeragi v2 body-store publication target mismatch"
     );
     assert!(!wrong_storage_root.join("lifecycle-v1").exists());
     crate::sumeragi::status::clear_v2_status();
+}
+
+#[test]
+fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
+    let kura = Kura::blank_kura_for_testing();
+    let storage_root = kura.sumeragi_v2_storage_root();
+    let authenticated = open_recovered_startup_at_test_path(
+        storage_root
+            .join("wal")
+            .join(format!("{:020}.wal", context().height)),
+    )
+    .expect("open exact factory-input startup")
+    .authenticate_final_wal_startup_authority()
+    .unwrap_or_else(|(error, _startup)| panic!("authenticate factory-input startup: {error}"));
+    let recovered_context = authenticated.adapter.wire_context.clone();
+    let signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+        .expect("deterministic factory-input signer");
+    let policy = super::super::v2_body_store::BlockSignaturePolicy::GenesisAuthority(
+        signer.public_key().clone(),
+    );
+    let account = AccountId::new(signer.public_key().clone());
+    let storage = || {
+        RecoveredLifecycleStorageAuthorityV1::for_test(
+            kura.as_ref(),
+            &verified_genesis(recovered_context.clone()),
+            policy.clone(),
+            account.clone(),
+        )
+    };
+    let exact_state = lifecycle_factory_state_for_test(
+        Arc::clone(&kura),
+        recovered_context.network_id,
+    );
+    assert!(
+        try_lifecycle_factory_inputs_for_test(
+            &authenticated,
+            storage(),
+            exact_state,
+            Arc::clone(&kura),
+        )
+        .is_ok(),
+        "the exact State/Kura/network tuple must mint the move-only factory input"
+    );
+
+    let foreign_kura = Kura::blank_kura_for_testing();
+    let foreign_state = lifecycle_factory_state_for_test(
+        Arc::clone(&foreign_kura),
+        recovered_context.network_id,
+    );
+    let foreign_kura_error = match try_lifecycle_factory_inputs_for_test(
+        &authenticated,
+        storage(),
+        Arc::clone(&foreign_state),
+        Arc::clone(&foreign_kura),
+    ) {
+        Ok(_inputs) => panic!("a foreign Kura cannot consume the storage seal"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        foreign_kura_error.to_string(),
+        "recovered lifecycle execution dependencies changed identity"
+    );
+    let foreign_state_error = match try_lifecycle_factory_inputs_for_test(
+        &authenticated,
+        storage(),
+        foreign_state,
+        Arc::clone(&kura),
+    ) {
+        Ok(_inputs) => panic!("a State backed by another Kura cannot enter the seal"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        foreign_state_error.to_string(),
+        "recovered lifecycle execution dependencies changed identity"
+    );
+    let wrong_network_state = lifecycle_factory_state_for_test(
+        Arc::clone(&kura),
+        test_network_id(0xFE),
+    );
+    let wrong_network_error = match try_lifecycle_factory_inputs_for_test(
+        &authenticated,
+        storage(),
+        wrong_network_state,
+        Arc::clone(&kura),
+    ) {
+        Ok(_inputs) => panic!("a foreign State network cannot enter the seal"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        wrong_network_error.to_string(),
+        "recovered lifecycle execution dependencies changed identity"
+    );
+    assert!(
+        !storage_root.join("lifecycle-v1").exists(),
+        "input binding must not open lifecycle storage"
+    );
 }
 
 fn expect_recovered_open_error<'registry>(

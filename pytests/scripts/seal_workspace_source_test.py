@@ -1,10 +1,11 @@
-"""Adversarial tests for detached release-source sealing."""
+"""Adversarial tests for independent release-source mirroring and sealing."""
 
 from __future__ import annotations
 
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -132,11 +133,19 @@ def test_no_writable_paths_cli_is_mutually_exclusive_with_writable(
     assert result.returncode == 2
 
 
-def test_detached_worktree_reproduces_identity_then_seals_source(
+def test_independent_mirror_reproduces_identity_without_mutating_candidate_git(
     tmp_path: Path,
 ) -> None:
     seal = load_module()
     manifest = load_manifest_module()
+    release_runner = (
+        ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    ).read_text(encoding="utf-8")
+    assert "worktree add" not in release_runner
+    assert "worktree remove" not in release_runner
+    assert "--no-local --no-hardlinks --no-checkout" in release_runner
+    assert "independent release mirror unexpectedly uses alternate objects" in release_runner
+    assert "release mirror shares a Git object inode with the candidate" in release_runner
     repository = tmp_path / "repository"
     sealed = tmp_path / "sealed"
     output = tmp_path / "output"
@@ -167,21 +176,68 @@ def test_detached_worktree_reproduces_identity_then_seals_source(
     )
     (repository / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
     candidate = manifest.release_source_identity(repository)
+    candidate_git = repository / ".git"
+
+    def git_file_state() -> dict[str, tuple[int, int, int, int, bytes]]:
+        return {
+            path.relative_to(candidate_git).as_posix(): (
+                path.lstat().st_mode,
+                path.lstat().st_size,
+                path.lstat().st_mtime_ns,
+                path.lstat().st_ctime_ns,
+                path.read_bytes(),
+            )
+            for path in candidate_git.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        }
+
+    original_git_state = git_file_state()
 
     subprocess.run(
-        ["git", "worktree", "add", "--detach", str(sealed), "HEAD"],
-        cwd=repository,
+        [
+            "git",
+            "clone",
+            "--no-local",
+            "--no-hardlinks",
+            "--no-checkout",
+            str(repository),
+            str(sealed),
+        ],
+        cwd=tmp_path,
         check=True,
         stdout=subprocess.DEVNULL,
     )
     try:
+        subprocess.run(
+            ["git", "checkout", "--detach", candidate["head_commit"]],
+            cwd=sealed,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            ["git", "remote", "remove", "origin"],
+            cwd=sealed,
+            check=True,
+        )
+        assert not (sealed / ".git/objects/info/alternates").exists()
+        for mirror_object in (sealed / ".git/objects").rglob("*"):
+            if not mirror_object.is_file() or mirror_object.is_symlink():
+                continue
+            original_object = (
+                candidate_git / "objects" / mirror_object.relative_to(sealed / ".git/objects")
+            )
+            if original_object.is_file():
+                assert (mirror_object.stat().st_dev, mirror_object.stat().st_ino) != (
+                    original_object.stat().st_dev,
+                    original_object.stat().st_ino,
+                )
         (sealed / "Cargo.lock").write_bytes((repository / "Cargo.lock").read_bytes())
         reproduced = manifest.release_source_identity(sealed)
         assert reproduced == candidate
-        (sealed / "target").symlink_to(output, target_is_directory=True)
+        assert git_file_state() == original_git_state
 
-        seal.seal_source_tree(sealed)
-        seal.verify_source_tree_sealed(sealed)
+        seal.seal_source_tree(sealed, ())
+        seal.verify_source_tree_sealed(sealed, ())
         sealed_identity = manifest.release_source_identity(sealed)
         for field in (
             "head_commit",
@@ -199,13 +255,10 @@ def test_detached_worktree_reproduces_identity_then_seals_source(
             with pytest.raises(PermissionError):
                 (sealed / "runner.sh").write_text("transient edit\n", encoding="utf-8")
         (output / "release.log").write_text("passed\n", encoding="utf-8")
+        assert git_file_state() == original_git_state
     finally:
         seal.unseal_source_tree(sealed)
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(sealed)],
-            cwd=repository,
-            check=True,
-        )
+        shutil.rmtree(sealed)
 
 
 def test_seal_rejects_parent_or_absolute_writable_escape(tmp_path: Path) -> None:

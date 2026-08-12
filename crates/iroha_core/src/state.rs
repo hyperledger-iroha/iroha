@@ -26046,6 +26046,15 @@ impl State {
         &self.kura
     }
 
+    /// Return whether this State owns the exact supplied live Kura handle.
+    ///
+    /// The comparison does not clone or expose State's retained storage
+    /// handle. Recovered lifecycle startup uses it to prevent deterministic
+    /// marker replay and live application from crossing Kura instances.
+    pub(crate) fn matches_kura_instance(&self, kura: &Arc<Kura>) -> bool {
+        Arc::ptr_eq(&self.kura, kura)
+    }
+
     /// Clone the block storage handle used by isolated snapshot-state reconstruction.
     #[cfg(test)]
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {

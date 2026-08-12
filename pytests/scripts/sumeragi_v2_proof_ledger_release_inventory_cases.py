@@ -1007,10 +1007,10 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             '    source-sealed-workspace-tests command 0 \\\n'
-            '    "cargo +1.93.1 test -j1 --locked --offline --workspace" \\\n'
+            '    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace" \\\n'
             "    run_cargo test --locked --offline --workspace",
             '    source-sealed-workspace-tests command 0 \\\n'
-            '    "cargo +1.93.1 test -j1 --locked --workspace" \\\n'
+            '    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --workspace" \\\n'
             "    run_cargo test --locked --workspace",
             "source-sealed command-success leg source-sealed-workspace-tests",
         ),

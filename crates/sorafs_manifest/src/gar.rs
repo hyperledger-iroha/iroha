@@ -1,19 +1,10 @@
 //! Gateway Authorization Record policy payload types.
 //!
-//! When the optional `iroha_data_model_bridge` feature is enabled we re-export
-//! the canonical types from `iroha_data_model`. Otherwise we ship lightweight
-//! local definitions so dependants (e.g. `iroha_js_host`) can parse GAR payloads
-//! without pulling the entire data model crate, avoiding cyclic dependencies.
+//! Lightweight local definitions let dependants (e.g. `iroha_js_host`) parse
+//! GAR payloads without pulling the entire data model crate or creating cycles.
 
 #![allow(clippy::module_name_repetitions)]
 
-#[cfg(feature = "iroha_data_model_bridge")]
-pub use iroha_data_model::sorafs::gar::{
-    GarCdnPolicyV1, GarLicenseSetV1, GarMetricsPolicyV1, GarModerationAction,
-    GarModerationDirectiveV1, GarPolicyPayloadV1,
-};
-
-#[cfg(not(feature = "iroha_data_model_bridge"))]
 mod local {
     /// Licensing bundle referenced by a GAR payload.
     #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -122,7 +113,6 @@ mod local {
     }
 }
 
-#[cfg(not(feature = "iroha_data_model_bridge"))]
 pub use local::{
     GarCdnPolicyV1, GarLicenseSetV1, GarMetricsPolicyV1, GarModerationAction,
     GarModerationDirectiveV1, GarPolicyPayloadV1,

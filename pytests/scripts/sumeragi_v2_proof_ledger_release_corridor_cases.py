@@ -2604,28 +2604,37 @@ kura.claim_autonomous_lifecycle_process_generation(
         f"{module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT}"
         in release_source
     )
+    assert 'export IROHA_RELEASE_CARGO_BIN="$release_cargo_bin"' in release_source
+    assert (
+        'corridor_cargo_path="$(canonical_path "$IROHA_RELEASE_CARGO_BIN")"'
+        in release_source
+    )
+    assert (
+        'expected_legs = _corridor_legs(fields["cargo_path"])'
+        in receipt_source
+    )
     for leg_id, command in (
         (
             "source-sealed-workspace-build",
-            "cargo +1.93.1 build -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} build -j1 --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-tests",
-            "cargo +1.93.1 test -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace",
         ),
         (
             "source-sealed-irohad-tests",
-            "cargo +1.93.1 test -j1 --locked --offline -p irohad --bin irohad "
+            "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad "
             "--features test-network-message-control",
         ),
         (
             "source-sealed-workspace-clippy",
-            "cargo +1.93.1 clippy -j1 --locked --offline --workspace --all-targets "
+            "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace --all-targets "
             "-- -D warnings",
         ),
         (
             "source-sealed-workspace-format",
-            "cargo +1.93.1 fmt --all -- --check",
+            "${IROHA_RELEASE_CARGO_BIN} fmt --all -- --check",
         ),
         (
             "source-sealed-legacy-codec-guard",

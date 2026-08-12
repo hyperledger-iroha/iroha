@@ -1,0 +1,26 @@
+
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+  <FIToFIPmtStsRpt>
+    <GrpHdr>
+      <MsgId>ISO-PACS002-AUTH</MsgId>
+      <CreDtTm>2025-11-11T09:35:15.671Z</CreDtTm>
+    </GrpHdr>
+    <OrgnlGrpInfAndSts>
+      <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
+      <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+      <OrgnlCreDtTm>2025-11-11T09:34:09</OrgnlCreDtTm>
+      <OrgnlNbOfTxs>1</OrgnlNbOfTxs>
+    </OrgnlGrpInfAndSts>
+    <TxInfAndSts>
+      <StsId>ISO-PACS002-AUTH</StsId>
+      <OrgnlInstrId>SAMPLE-INSTR-008</OrgnlInstrId>
+      <OrgnlEndToEndId>SAMPLE-E2E-008</OrgnlEndToEndId>
+      <OrgnlTxId>SAMPLE-TX-008</OrgnlTxId>
+      <AcctSvcrRef>7001</AcctSvcrRef>
+      <OrgnlTxRef>
+        <IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>
+        <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
+      </OrgnlTxRef>
+    </TxInfAndSts>
+  </FIToFIPmtStsRpt>
+</Document>

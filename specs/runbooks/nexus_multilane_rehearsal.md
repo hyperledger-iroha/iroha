@@ -184,9 +184,10 @@ payload-recovery-to-canonical-application stall does not recur.
   index, memory, and disk bound respected.
 - Run the Rust/OpenAPI, Python, JavaScript, Swift, Kotlin, and Java parity
   suites against the same Rust-owned grouped fixture and negative corpus.
-- Before every Cargo command, inspect `ps -axo pid,etime,command` and wait while
-  another Cargo/rustc process is active. Use the isolated target directory with
-  `--locked --offline`, then run focused crates, SDK parity, formal runners,
+- Before every Cargo command, acquire the invocation-local private lock below
+  the authenticated external artifact root and fail closed on contention;
+  never inspect or log unrelated processes. Use the isolated target directory
+  with `--locked --offline`, then run focused crates, SDK parity, formal runners,
   workspace build, full workspace test, strict workspace Clippy, formatting,
   and the legacy-codec guard.
 

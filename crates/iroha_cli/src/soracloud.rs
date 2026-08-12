@@ -16628,703 +16628,31 @@ h1 {{
 }
 
 fn single_api_frontend_app_vue(app_name: &str) -> String {
-    r#"<template>
-  <main class="shell">
-    <p class="eyebrow">Soracloud Single-API App</p>
-    <h1>__APP_NAME__</h1>
-    <p class="lede">
-      Root-bound frontend published from <code>web/dist</code> with a deterministic API
-      mounted under <code>/api</code>.
-    </p>
-
-    <section class="card">
-      <div class="row">
-        <span>Frontend mount</span>
-        <code>/</code>
-      </div>
-      <div class="row">
-        <span>API health route</span>
-        <code>/api/healthz</code>
-      </div>
-      <button type="button" @click="checkHealth" :disabled="loading">
-        {{ loading ? "Checking..." : "Check API Health" }}
-      </button>
-      <pre v-if="payload">{{ payload }}</pre>
-      <p v-if="error" class="error">{{ error }}</p>
-    </section>
-  </main>
-</template>
-
-<script setup lang="ts">
-import { ref } from "vue";
-
-const loading = ref(false);
-const payload = ref("");
-const error = ref("");
-
-async function checkHealth() {
-  loading.value = true;
-  error.value = "";
-  try {
-    const response = await fetch("/api/healthz");
-    const body = await response.text();
-    if (!response.ok) {
-      throw new Error(body || `health check failed with status ${response.status}`);
-    }
-    payload.value = body;
-  } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : String(caught);
-  } finally {
-    loading.value = false;
-  }
-}
-</script>
-
-<style scoped>
-.shell {
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-  max-width: 780px;
-  margin: 4rem auto;
-  padding: 0 1.25rem 4rem;
-  color: #16324f;
-}
-
-.eyebrow {
-  margin: 0 0 0.75rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  font-size: 0.8rem;
-  color: #567189;
-}
-
-.lede {
-  max-width: 48rem;
-  line-height: 1.6;
-}
-
-.card {
-  margin-top: 2rem;
-  padding: 1.25rem;
-  border: 1px solid #dde4ec;
-  border-radius: 0.9rem;
-  background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
-  box-shadow: 0 18px 40px rgba(22, 50, 79, 0.08);
-}
-
-.row {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.75rem;
-}
-
-button {
-  margin-top: 0.5rem;
-  padding: 0.7rem 1rem;
-  border-radius: 999px;
-  border: 0;
-  background: #16324f;
-  color: white;
-  font: inherit;
-  cursor: pointer;
-}
-
-button:disabled {
-  opacity: 0.7;
-  cursor: wait;
-}
-
-pre {
-  margin: 1rem 0 0;
-  padding: 1rem;
-  border-radius: 0.75rem;
-  background: #0f172a;
-  color: #dbeafe;
-  overflow-x: auto;
-}
-
-.error {
-  margin-top: 1rem;
-  color: #b42318;
-}
-</style>
-"#
-    .replace("__APP_NAME__", app_name)
+    include_str!("soracloud/templates/v1/static/single_api_frontend_app.vue")
+        .replace("__APP_NAME__", app_name)
 }
 
 fn webapp_frontend_app_vue(service_name: &str) -> String {
-    r#"<template>
-  <main class="shell">
-    <h1>__SERVICE_NAME__ Control Panel</h1>
-    <p>Use an Ed25519 wallet to sign the challenge message and paste the signature.</p>
-    <section>
-      <h2>1) Request Challenge</h2>
-      <form @submit.prevent="requestChallenge">
-        <label>
-          Public Key (32-byte hex)
-          <input v-model="publicKey" placeholder="ed25519 public key hex" />
-        </label>
-        <button type="submit">Request Challenge</button>
-      </form>
-      <p v-if="challengeId">challenge id: {{ challengeId }}</p>
-      <textarea
-        v-if="challengeMessage"
-        rows="6"
-        readonly
-        :value="challengeMessage"
-      />
-    </section>
-
-    <section>
-      <h2>2) Login</h2>
-      <form @submit.prevent="login">
-        <label>
-          Signature (64-byte hex)
-          <input v-model="signature" placeholder="ed25519 signature hex" />
-        </label>
-        <button type="submit">Login</button>
-      </form>
-    </section>
-
-    <section>
-      <h2>Session</h2>
-      <button type="button" @click="loadMe">Refresh /api/auth/me</button>
-      <button type="button" @click="logout">Logout</button>
-      <p v-if="principal">principal: {{ principal }}</p>
-      <p v-if="capabilities.length > 0">capabilities: {{ capabilities.join(", ") }}</p>
-    </section>
-
-    <p v-if="message">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
-  </main>
-</template>
-
-<script setup lang="ts">
-import { ref } from "vue";
-
-const publicKey = ref("");
-const challengeId = ref("");
-const challengeMessage = ref("");
-const signature = ref("");
-const principal = ref("");
-const capabilities = ref<string[]>([]);
-const message = ref("");
-const error = ref("");
-
-async function parseJson(response: Response) {
-  const text = await response.text();
-  if (!text) {
-    return {};
-  }
-  return JSON.parse(text);
-}
-
-async function requestChallenge() {
-  error.value = "";
-  message.value = "";
-  const response = await fetch("/api/auth/challenge", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ public_key: publicKey.value })
-  });
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "challenge request failed";
-    return;
-  }
-  challengeId.value = payload.challenge_id ?? "";
-  challengeMessage.value = payload.message ?? "";
-  message.value = "challenge issued; sign the message then submit login.";
-}
-
-async function login() {
-  error.value = "";
-  message.value = "";
-  const response = await fetch("/api/auth/login", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      public_key: publicKey.value,
-      challenge_id: challengeId.value,
-      signature: signature.value
-    })
-  });
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "login failed";
-    return;
-  }
-  principal.value = payload.principal ?? "";
-  capabilities.value = payload.capabilities ?? [];
-  message.value = "session established";
-}
-
-async function loadMe() {
-  error.value = "";
-  const response = await fetch("/api/auth/me");
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "session check failed";
-    return;
-  }
-  principal.value = payload.principal ?? "";
-  capabilities.value = payload.capabilities ?? [];
-}
-
-async function logout() {
-  error.value = "";
-  await fetch("/api/auth/logout", { method: "POST" });
-  principal.value = "";
-  capabilities.value = [];
-  challengeId.value = "";
-  signature.value = "";
-  message.value = "session closed";
-}
-</script>
-
-<style scoped>
-.shell {
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-  max-width: 760px;
-  margin: 3rem auto;
-  padding: 0 1.25rem;
-}
-
-section {
-  margin: 1.25rem 0;
-  padding: 1rem;
-  border: 1px solid #dde4ec;
-  border-radius: 0.5rem;
-}
-
-form {
-  display: grid;
-  gap: 0.75rem;
-  margin: 0.75rem 0;
-}
-
-input,
-textarea {
-  width: 100%;
-  padding: 0.5rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-button {
-  margin-right: 0.75rem;
-}
-
-.error {
-  color: #b42318;
-}
-</style>
-"#
-    .replace("__SERVICE_NAME__", service_name)
+    include_str!("soracloud/templates/v1/static/webapp_frontend_app.vue")
+        .replace("__SERVICE_NAME__", service_name)
 }
 
 fn single_api_contract_ko(app_name: &str) -> String {
     let seiyaku_name = format!("{}_api_service", normalized_contract_identifier(app_name));
-    r#"seiyaku __CONTRACT_NAME__ {
-  view fn main() -> Json {
-    return json {
-      app: "__APP_NAME__",
-      status: "ready"
-    };
-  }
-
-  view fn serve_healthz(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-    return json {
-      app: "__APP_NAME__",
-      observed_height: observed_height,
-      route: "/api/healthz",
-      status: "ready"
-    };
-  }
-}
-"#
-    .replace("__CONTRACT_NAME__", &seiyaku_name)
-    .replace("__APP_NAME__", app_name)
+    include_str!("soracloud/templates/v1/static/single_api_contract.ko")
+        .replace("__CONTRACT_NAME__", &seiyaku_name)
+        .replace("__APP_NAME__", app_name)
 }
 
 fn pii_app_frontend_app_vue(service_name: &str) -> String {
-    r#"<template>
-  <main class="shell">
-    <h1>__SERVICE_NAME__ PII Control Panel</h1>
-    <p>Private routes require deterministic challenge login and capability authorization.</p>
-
-    <section>
-      <h2>Auth</h2>
-      <form @submit.prevent="requestChallenge">
-        <label>
-          Public Key (32-byte hex)
-          <input v-model="publicKey" placeholder="ed25519 public key hex" />
-        </label>
-        <button type="submit">Request Challenge</button>
-      </form>
-      <textarea
-        v-if="challengeMessage"
-        rows="6"
-        readonly
-        :value="challengeMessage"
-      />
-      <form @submit.prevent="login">
-        <label>
-          Signature (64-byte hex)
-          <input v-model="signature" placeholder="ed25519 signature hex" />
-        </label>
-        <button type="submit">Login</button>
-      </form>
-      <button type="button" @click="loadMe">Refresh /pii/api/auth/me</button>
-      <button type="button" @click="logout">Logout</button>
-      <p v-if="principal">principal: {{ principal }}</p>
-      <p v-if="capabilities.length > 0">capabilities: {{ capabilities.join(", ") }}</p>
-    </section>
-
-    <section>
-      <h2>Consent</h2>
-      <form @submit.prevent="grantConsent">
-        <label>
-          Subject ID
-          <input v-model="subjectId" placeholder="subject-001" />
-        </label>
-        <label>
-          Scope
-          <input v-model="scope" placeholder="records.read" />
-        </label>
-        <button type="submit">Grant Consent</button>
-      </form>
-      <button type="button" @click="revokeConsent">Revoke Consent</button>
-      <button type="button" @click="listConsentState">List Consent State</button>
-    </section>
-
-    <section>
-      <h2>Retention / Deletion</h2>
-      <button type="button" @click="runRetention">Run Retention Sweep</button>
-      <button type="button" @click="requestDeletion">Request Subject Deletion</button>
-      <button type="button" @click="listRetentionRuns">List Retention Runs</button>
-    </section>
-
-    <pre v-if="details">{{ details }}</pre>
-    <p v-if="message">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
-  </main>
-</template>
-
-<script setup lang="ts">
-import { ref } from "vue";
-
-const publicKey = ref("");
-const challengeId = ref("");
-const challengeMessage = ref("");
-const signature = ref("");
-const principal = ref("");
-const capabilities = ref<string[]>([]);
-const subjectId = ref("subject-001");
-const scope = ref("records.read");
-const message = ref("");
-const error = ref("");
-const details = ref("");
-
-async function parseJson(response: Response) {
-  const text = await response.text();
-  if (!text) {
-    return {};
-  }
-  return JSON.parse(text);
-}
-
-async function post(path: string, body: Record<string, string>) {
-  error.value = "";
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "request failed";
-    return null;
-  }
-  details.value = JSON.stringify(payload, null, 2);
-  return payload;
-}
-
-async function get(path: string) {
-  error.value = "";
-  const response = await fetch(path);
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "request failed";
-    return null;
-  }
-  details.value = JSON.stringify(payload, null, 2);
-  return payload;
-}
-
-async function requestChallenge() {
-  const payload = await post("/pii/api/auth/challenge", { public_key: publicKey.value });
-  if (payload) {
-    challengeId.value = payload.challenge_id ?? "";
-    challengeMessage.value = payload.message ?? "";
-    message.value = "challenge issued";
-  }
-}
-
-async function login() {
-  const payload = await post("/pii/api/auth/login", {
-    public_key: publicKey.value,
-    challenge_id: challengeId.value,
-    signature: signature.value
-  });
-  if (payload) {
-    principal.value = payload.principal ?? "";
-    capabilities.value = payload.capabilities ?? [];
-    message.value = "session established";
-  }
-}
-
-async function loadMe() {
-  const payload = await get("/pii/api/auth/me");
-  if (payload) {
-    principal.value = payload.principal ?? "";
-    capabilities.value = payload.capabilities ?? [];
-  }
-}
-
-async function logout() {
-  await fetch("/pii/api/auth/logout", { method: "POST" });
-  principal.value = "";
-  capabilities.value = [];
-  message.value = "session closed";
-}
-
-async function grantConsent() {
-  const payload = await post("/pii/api/consent/grant", {
-    subject_id: subjectId.value,
-    scope: scope.value
-  });
-  if (payload) {
-    message.value = `consent granted for ${payload.subject_id}`;
-  }
-}
-
-async function revokeConsent() {
-  const payload = await post("/pii/api/consent/revoke", {
-    subject_id: subjectId.value,
-    scope: scope.value
-  });
-  if (payload) {
-    message.value = `consent revoked for ${payload.subject_id}`;
-  }
-}
-
-async function runRetention() {
-  const payload = await post("/pii/api/records/retention/sweep", {
-    jurisdiction: "us",
-    policy_version: "retention-v1"
-  });
-  if (payload) {
-    message.value = `retention sweep planned=${payload.planned_actions}`;
-  }
-}
-
-async function requestDeletion() {
-  const payload = await post("/pii/api/records/delete", {
-    subject_id: subjectId.value,
-    reason: "subject request"
-  });
-  if (payload) {
-    message.value = `deletion ticket ${payload.ticket_id}`;
-  }
-}
-
-async function listConsentState() {
-  const payload = await get("/pii/api/consent/state");
-  if (payload) {
-    message.value = "consent state refreshed";
-  }
-}
-
-async function listRetentionRuns() {
-  const payload = await get("/pii/api/retention/runs");
-  if (payload) {
-    message.value = "retention runs refreshed";
-  }
-}
-</script>
-
-<style scoped>
-.shell {
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-  max-width: 860px;
-  margin: 3rem auto;
-  padding: 0 1.25rem;
-}
-
-section {
-  margin: 1.5rem 0;
-  padding: 1rem;
-  border: 1px solid #dde4ec;
-  border-radius: 0.5rem;
-}
-
-form {
-  display: grid;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-input,
-textarea {
-  width: 100%;
-  padding: 0.5rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-button {
-  margin-right: 0.75rem;
-}
-
-pre {
-  overflow: auto;
-  padding: 0.75rem;
-  border: 1px solid #dde4ec;
-  border-radius: 0.5rem;
-  background: #f7fafc;
-}
-
-.error {
-  color: #b42318;
-}
-</style>
-"#
-    .replace("__SERVICE_NAME__", service_name)
+    include_str!("soracloud/templates/v1/static/pii_app_frontend_app.vue")
+        .replace("__SERVICE_NAME__", service_name)
 }
 
 fn hayahi_app_contract_ko(service_name: &str) -> String {
-    r#"seiyaku __CONTRACT_NAME__ {
-  view fn main() -> Json {
-    return json {
-      entrypoint: "main",
-      runtime: "soracloud_ivm",
-      service: "__SERVICE_NAME__",
-      status: "compiled"
-    };
-  }
-
-  view fn serve_health(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-    return json {
-      observed_height: observed_height,
-      ok: true,
-      route: "/api/v1/health",
-      service: "__SERVICE_NAME__"
-    };
-  }
-
-  view fn serve_state_overview(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-    return json {
-      observed_height: observed_height,
-      route: "/api/v1/state/overview",
-      service: "__SERVICE_NAME__",
-      storage: "service_manifest_state_bindings"
-    };
-  }
-
-  view fn serve_collector_status(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-    return json {
-      collectors: "validator_workers",
-      observed_height: observed_height,
-      route: "/api/v1/collector/status",
-      service: "__SERVICE_NAME__"
-    };
-  }
-
-  view fn serve_auth_me(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-    return json {
-      auth_surface: "/api/auth/me",
-      observed_height: observed_height,
-      service: "__SERVICE_NAME__",
-      wallet_session_mode: "planned"
-    };
-  }
-
-  view fn serve_user_preferences(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-    return json {
-      observed_height: observed_height,
-      route: "/api/v1/user/preferences",
-      service: "__SERVICE_NAME__",
-      storage_scope: "confidential_state"
-    };
-  }
-
-  view fn serve_saved_searches(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-    return json {
-      observed_height: observed_height,
-      route: "/api/v1/user/saved-searches",
-      service: "__SERVICE_NAME__",
-      storage_scope: "confidential_state"
-    };
-  }
-
-  view fn issue_auth_challenge(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-    return json {
-      execution_sequence: execution_sequence,
-      observed_height: observed_height,
-      route: "/api/auth/challenge",
-      service: "__SERVICE_NAME__"
-    };
-  }
-
-  view fn enqueue_search_request(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-    return json {
-      execution_sequence: execution_sequence,
-      observed_height: observed_height,
-      route: "/api/v1/search",
-      service: "__SERVICE_NAME__"
-    };
-  }
-
-  view fn complete_auth_login(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-    return json {
-      execution_sequence: execution_sequence,
-      observed_height: observed_height,
-      route: "/api/auth/login",
-      service: "__SERVICE_NAME__"
-    };
-  }
-
-  view fn close_auth_session(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-    return json {
-      execution_sequence: execution_sequence,
-      observed_height: observed_height,
-      route: "/api/auth/logout",
-      service: "__SERVICE_NAME__"
-    };
-  }
-
-  view fn store_user_preferences(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-    return json {
-      execution_sequence: execution_sequence,
-      observed_height: observed_height,
-      route: "/api/v1/user/preferences",
-      service: "__SERVICE_NAME__",
-      storage_scope: "confidential_state"
-    };
-  }
-
-  view fn store_saved_search(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-    return json {
-      execution_sequence: execution_sequence,
-      observed_height: observed_height,
-      route: "/api/v1/user/saved-searches",
-      service: "__SERVICE_NAME__",
-      storage_scope: "confidential_state"
-    };
-  }
-}
-"#
-    .replace("__CONTRACT_NAME__", "HayahiSoracloudCore")
-    .replace("__SERVICE_NAME__", service_name)
+    include_str!("soracloud/templates/v1/static/hayahi_app_contract.ko")
+        .replace("__CONTRACT_NAME__", "HayahiSoracloudCore")
+        .replace("__SERVICE_NAME__", service_name)
 }
 
 fn soracloud_auth_core_mjs() -> &'static str {
@@ -17462,103 +16790,26 @@ SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
 fn http_service_doctor_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-{prelude}
-
-"$SCRIPT_DIR/build-and-sync.sh"
-exec "${IROHA_CMD[@]}" soracloud service plan \
-  --container "$SCRIPT_DIR/container_manifest.json" \
-  --service "$SCRIPT_DIR/service_manifest.json" \
-  "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/http_service_doctor.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn http_service_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/doctor.sh"
-
-args=(
-  soracloud service deploy
-  --container "$SCRIPT_DIR/container_manifest.json"
-  --service "$SCRIPT_DIR/service_manifest.json"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/http_service_release.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn http_service_deploy_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/build-and-sync.sh"
-
-args=(
-  soracloud service deploy
-  --container "$SCRIPT_DIR/container_manifest.json"
-  --service "$SCRIPT_DIR/service_manifest.json"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/http_service_deploy.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn http_service_upgrade_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/build-and-sync.sh"
-
-args=(
-  soracloud service upgrade
-  --container "$SCRIPT_DIR/container_manifest.json"
-  --service "$SCRIPT_DIR/service_manifest.json"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/http_service_upgrade.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn http_service_server_mjs(service_name: &str) -> String {
@@ -18796,95 +18047,24 @@ fn split_app_local_dev_sh() -> &'static str {
 
 fn split_app_build_and_sync_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-NPM_BIN="${NPM_BIN:-npm}"
-{prelude}
-
-(
-  cd "$SCRIPT_DIR/frontend"
-  "$NPM_BIN" install
-  VITE_PUBLIC_API_BASE=/api VITE_DATA_MODE=live "$NPM_BIN" run build
-)
-
-(
-  cd "$SCRIPT_DIR/services/live"
-  ./build.sh
-)
-
-(
-  cd "$SCRIPT_DIR/services/vault"
-  ./build.sh
-  ./verify-build.sh
-)
-
-"${IROHA_CMD[@]}" soracloud service sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/split_app_build_and_sync.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn split_app_existing_repo_build_and_sync_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-cat >&2 <<'EOF'
-split-app existing-repo scaffold: replace build-and-sync.sh with your real
-frontend/live/vault build pipeline. The default implementation only refreshes
-manifest hashes for artifacts that already exist at the paths referenced by
-app_manifest.json.
-EOF
-
-exec "${IROHA_CMD[@]}" soracloud service sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/split_app_existing_repo_build_and_sync.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn split_app_doctor_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-"$SCRIPT_DIR/build-and-sync.sh"
-exec "${IROHA_CMD[@]}" soracloud app doctor --manifest "$SCRIPT_DIR/app_manifest.json" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/split_app_doctor.sh").replace("{prelude}", prelude)
 }
 
 fn split_app_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/doctor.sh"
-
-args=(
-  soracloud app release
-  --manifest "$SCRIPT_DIR/app_manifest.json"
-  --torii-url "$TORII_URL"
-  --skip-build
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/split_app_release.sh").replace("{prelude}", prelude)
 }
 
 fn split_app_deploy_sh() -> String {
@@ -18893,29 +18073,7 @@ fn split_app_deploy_sh() -> String {
 
 fn split_app_upgrade_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/doctor.sh"
-
-args=(
-  soracloud app upgrade
-  --manifest "$SCRIPT_DIR/app_manifest.json"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/split_app_upgrade.sh").replace("{prelude}", prelude)
 }
 
 fn split_app_readme(app_name: &str, package_name: &str) -> String {
@@ -19241,124 +18399,30 @@ fn single_api_local_dev_sh() -> &'static str {
 
 fn single_api_build_and_sync_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-NPM_BIN="${NPM_BIN:-npm}"
-{prelude}
-
-(
-  cd "$SCRIPT_DIR/web"
-  "$NPM_BIN" install
-  "$NPM_BIN" run build
-)
-
-(
-  cd "$SCRIPT_DIR/services/api"
-  ./build.sh
-  ./verify-build.sh
-)
-
-"${IROHA_CMD[@]}" soracloud service sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/single_api_build_and_sync.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn single_api_doctor_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-"$SCRIPT_DIR/build-and-sync.sh"
-exec "${IROHA_CMD[@]}" soracloud app doctor --manifest "$SCRIPT_DIR/app_manifest.json" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/single_api_doctor.sh").replace("{prelude}", prelude)
 }
 
 fn single_api_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/doctor.sh"
-
-args=(
-  soracloud app release
-  --manifest "$SCRIPT_DIR/app_manifest.json"
-  --torii-url "$TORII_URL"
-  --skip-build
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/single_api_release.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn single_api_deploy_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/build-and-sync.sh"
-
-args=(
-  soracloud app deploy
-  --manifest "$SCRIPT_DIR/app_manifest.json"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/single_api_deploy.sh").replace("{prelude}", prelude)
 }
 
 fn single_api_upgrade_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/build-and-sync.sh"
-
-args=(
-  soracloud app upgrade
-  --manifest "$SCRIPT_DIR/app_manifest.json"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
-    .replace("{prelude}", prelude)
+    include_str!("soracloud/templates/v1/static/single_api_upgrade.sh")
+        .replace("{prelude}", prelude)
 }
 
 fn single_api_app_readme(app_name: &str, package_name: &str) -> String {

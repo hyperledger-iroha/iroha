@@ -1,0 +1,49 @@
+{
+  "format_version": 1,
+  "source_commit": "dd10f01c8e2f38819eaf2fbc794b600e3c86815e",
+  "source_slice_hash_scope": "line-count-pinned Rust extraction span including trailing LF",
+  "assets": [
+    {
+      "path": "index.html",
+      "byte_length": 1260,
+      "sha256": "097abd46e146ab3f8826a4630af7b86003bfb33b27b63e66dcd571b6aded727e",
+      "layout": "UTF-8 protected evidence viewer asset bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../evidence_viewer_api.rs",
+          "start_line": 1704,
+          "physical_lines": 34,
+          "sha256": "91b9b2c785c081379655cd7b49c700c5ea7d1df209da0ec354d10309095fb097"
+        }
+      ]
+    },
+    {
+      "path": "app.css",
+      "byte_length": 1085,
+      "sha256": "cbfba33d5d9cddec21dc42ed61c0c7405e78d30a33b740ed3fa22f00bd74d4ec",
+      "layout": "UTF-8 protected evidence viewer asset bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../evidence_viewer_api.rs",
+          "start_line": 1739,
+          "physical_lines": 12,
+          "sha256": "5fa71889634cbf28eadaaa8936498d146fee4672ac8cdd38364310807c0ab0c8"
+        }
+      ]
+    },
+    {
+      "path": "app.js",
+      "byte_length": 2918,
+      "sha256": "f49fd1a9141475f5c5f74ef88974a4bb42c013887e9d2eff6361717762af0b52",
+      "layout": "UTF-8 protected evidence viewer asset bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../evidence_viewer_api.rs",
+          "start_line": 1752,
+          "physical_lines": 71,
+          "sha256": "de32338d39d393dc1f13c10174cb1f28d3a7f6fe0d8b09bfaffa270626ba61d9"
+        }
+      ]
+    }
+  ]
+}

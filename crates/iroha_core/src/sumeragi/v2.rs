@@ -16,7 +16,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use super::v2_core as reducer;
@@ -712,7 +712,10 @@ pub(crate) struct AuthenticatedRecoveredAdapterStartup {
     effects: Vec<AdapterEffect>,
     authority: RecoveredWalStartupAuthorityV1,
     validation_authority: RecoveredValidationAuthority,
+    factory_owner: Arc<AuthenticatedRecoveredAdapterFactoryOwnerV1>,
 }
+
+struct AuthenticatedRecoveredAdapterFactoryOwnerV1;
 
 /// Exhaustive and mutually exclusive current recovered-WAL work authority.
 #[allow(variant_size_differences)]
@@ -760,6 +763,27 @@ pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
     signature_policy: super::v2_body_store::BlockSignaturePolicy,
 }
 
+/// Move-only execution and storage inputs for the recovered lifecycle owner.
+///
+/// The authenticated adapter is the sole production mint. It consumes the
+/// recovered storage authority only after the supplied State and Kura are the
+/// exact live instances for the recovered network. No dependency or storage
+/// component can be projected back out of this seal.
+#[must_use = "recovered lifecycle factory inputs must enter the unified owner"]
+pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryInputsV1 {
+    adapter_owner: Arc<AuthenticatedRecoveredAdapterFactoryOwnerV1>,
+    storage: RecoveredLifecycleStorageAuthorityV1,
+    state: Arc<crate::state::State>,
+    queue: Arc<crate::queue::Queue>,
+    kura: Arc<Kura>,
+    provider_ingest_finalized_archive:
+        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
+    reputation_finalized_archive:
+        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
+    block_cadence: Duration,
+    events_sender: crate::EventsSender,
+}
+
 /// Opaque live-Kura binding retained after the storage authority is consumed.
 ///
 /// Only the production storage factory can construct this seal. It exposes
@@ -767,7 +791,6 @@ pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
 #[must_use = "the recovered Kura binding must remain inside its lifecycle owner"]
 pub(crate) struct RecoveredLifecycleOwnerKuraBindingV1 {
     kura_identity: KuraInstanceIdentity,
-    genesis_account: AccountId,
     wal_path: PathBuf,
     chunk_root: PathBuf,
 }
@@ -807,12 +830,6 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
         self.kura_identity.same_instance(identity)
     }
 
-    /// Clone the recovery-authenticated genesis account only for the exact Kura launch.
-    pub(in crate::sumeragi) fn genesis_account_for_launch(&self, kura: &Kura) -> Option<AccountId> {
-        self.matches_kura(kura)
-            .then(|| self.genesis_account.clone())
-    }
-
     /// Project canonical height-local paths only for the exact live Kura.
     pub(in crate::sumeragi) fn storage_paths_for_launch(
         &self,
@@ -827,14 +844,8 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
 
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_test(kura: &Kura) -> Self {
-        let genesis = iroha_crypto::KeyPair::try_from_seed(
-            b"recovered lifecycle owner test genesis".to_vec(),
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("deterministic lifecycle-owner genesis account");
         Self {
             kura_identity: kura.instance_identity(),
-            genesis_account: AccountId::new(genesis.public_key().clone()),
             wal_path: kura
                 .sumeragi_v2_storage_root()
                 .join("wal")
@@ -1198,7 +1209,11 @@ enum ProductionLifecycleOwnerStartupErrorKindV1 {
     ResidualEffects,
     #[error("recovered adapter safety WAL changed its Kura-derived storage path")]
     StorageLayout,
-    #[error("revalidated body-store handoff failed: {0}")]
+    #[error("recovered lifecycle execution dependencies changed identity")]
+    ExecutionIdentity,
+    #[error("recovered body marker replay failed: {0}")]
+    MarkerReplay(#[source] super::v2_apply::V2ApplyError),
+    #[error("recovered body-store handoff failed: {0}")]
     BodyStore(#[source] super::v2_body_store::V2BodyStoreError),
     #[error("Certified-Serve payload store open failed: {0}")]
     ServeStore(#[source] super::v2_certified_serve_payload_store::CertifiedServePayloadStoreError),
@@ -1513,6 +1528,7 @@ impl RecoveredAdapterStartup {
                 effects: self.effects,
                 authority: RecoveredWalStartupAuthorityV1::PhaseVote(recovered_vote),
                 validation_authority,
+                factory_owner: Arc::new(AuthenticatedRecoveredAdapterFactoryOwnerV1),
             });
         }
         let recovered_control = match self
@@ -1529,6 +1545,7 @@ impl RecoveredAdapterStartup {
                 effects: self.effects,
                 authority: RecoveredWalStartupAuthorityV1::ControlSign(control),
                 validation_authority,
+                factory_owner: Arc::new(AuthenticatedRecoveredAdapterFactoryOwnerV1),
             });
         }
         let recovered_fetch = match self
@@ -1545,6 +1562,7 @@ impl RecoveredAdapterStartup {
                 effects: self.effects,
                 authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch),
                 validation_authority,
+                factory_owner: Arc::new(AuthenticatedRecoveredAdapterFactoryOwnerV1),
             });
         }
         if !self.effects.is_empty() {
@@ -1555,6 +1573,7 @@ impl RecoveredAdapterStartup {
             effects: self.effects,
             authority: RecoveredWalStartupAuthorityV1::None,
             validation_authority,
+            factory_owner: Arc::new(AuthenticatedRecoveredAdapterFactoryOwnerV1),
         })
     }
 }
@@ -1588,16 +1607,61 @@ impl AuthenticatedRecoveredAdapterStartup {
         self.adapter.durable_producer_terminal_tokens()
     }
 
+    /// Consume recovered storage into one exact lifecycle execution-input seal.
+    ///
+    /// The State must own the supplied Kura Arc and the recovered adapter's
+    /// network. Block cadence is derived from that State rather than accepted
+    /// as a caller-controlled semantic validation input.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(
+        &self,
+        storage: RecoveredLifecycleStorageAuthorityV1,
+        state: Arc<crate::state::State>,
+        queue: Arc<crate::queue::Queue>,
+        kura: Arc<Kura>,
+        provider_ingest_finalized_archive: Option<
+            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
+        >,
+        reputation_finalized_archive: Option<
+            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
+        >,
+        events_sender: crate::EventsSender,
+    ) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1>
+    {
+        if !storage.kura_identity.matches(kura.as_ref())
+            || !state.matches_kura_instance(&kura)
+            || state.network_id_ref() != &self.adapter.wire_context.network_id
+        {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
+            ));
+        }
+        let block_cadence = state.sumeragi_block_cadence();
+        Ok(RecoveredLifecycleOwnerFactoryInputsV1 {
+            adapter_owner: Arc::clone(&self.factory_owner),
+            storage,
+            state,
+            queue,
+            kura,
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
+            block_cadence,
+            events_sender,
+        })
+    }
+
     /// Consume all recovered adapter and storage authority into one V1 owner.
     ///
     /// The no-authority, phase-vote, control-Sign, and Decision-Fetch cases are
     /// private branches over this type's sealed authority enum. The lifecycle
     /// Ledger and Serve stores are derived internally from the exact Kura owner
     /// and frozen context; callers cannot substitute raw publication roots.
-    /// The already-revalidated body cut must belong to that same Kura layout
-    /// and the exact recovery-authenticated signature policy. No body root,
-    /// recovery snapshot, candidate, effect, pending binding, ordinal, or
-    /// branch selector crosses this boundary.
+    /// The raw opened body store must belong to that same Kura layout and the
+    /// exact recovery-authenticated signature policy. This factory applies the
+    /// finality and WAL marker filters, replays semantic validation with the
+    /// exact service retained for live Apply, and only then opens lifecycle
+    /// storage. No body root, recovery snapshot, callback, effect, pending
+    /// binding, ordinal, or branch selector crosses this boundary.
     #[allow(
         clippy::result_large_err,
         clippy::too_many_arguments,
@@ -1607,16 +1671,37 @@ impl AuthenticatedRecoveredAdapterStartup {
         self,
         config: &iroha_config::parameters::actual::SumeragiV2Config,
         reply_route_source_capacity: usize,
-        storage: RecoveredLifecycleStorageAuthorityV1,
-        body_store: super::v2_body_store::RevalidatedV2BodyStore,
+        factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1,
+        mut body_store: super::v2_body_store::V2BodyStore,
         local_signer: &KeyPair,
     ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
-        let context = &self.adapter.wire_context;
+        if !self.effects.is_empty() {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ResidualEffects,
+            ));
+        }
+        let RecoveredLifecycleOwnerFactoryInputsV1 {
+            adapter_owner,
+            storage,
+            state,
+            queue,
+            kura,
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
+            block_cadence,
+            events_sender,
+        } = factory_inputs;
+        let context = self.adapter.wire_context.clone();
+        if !Arc::ptr_eq(&adapter_owner, &self.factory_owner) {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
+            ));
+        }
         if storage.context_id != context.id()
             || storage.height != context.height
             || !body_store.matches_lifecycle_storage_root(
                 &storage.body_store_root,
-                context,
+                &context,
                 &storage.signature_policy,
             )
         {
@@ -1631,9 +1716,64 @@ impl AuthenticatedRecoveredAdapterStartup {
                 ProductionLifecycleOwnerStartupErrorKindV1::StorageLayout,
             ));
         }
+        let validator_set_pops = self.adapter.proofs_of_possession.clone();
+        let validation_authority = self.validation_authority.clone();
+        let apply_service = super::v2_apply::V2ApplyService::new(
+            Arc::clone(&state),
+            queue,
+            Arc::clone(&kura),
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
+            block_cadence,
+            storage.genesis_account.clone(),
+            events_sender,
+            validator_set_pops.clone(),
+        );
+        if !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops) {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
+            ));
+        }
+        if let Some(subject) =
+            apply_service
+                .recovered_finality_subject(&context)
+                .map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::MarkerReplay(error),
+                    )
+                })?
+        {
+            body_store
+                .retain_recovered_markers_for_subject(subject)
+                .map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                    )
+                })?;
+        }
+        body_store
+            .retain_recovered_markers_for_authority(validation_authority)
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                )
+            })?;
+        body_store
+            .revalidate_recovered_markers(|body| {
+                apply_service.revalidate_recovered_candidate(&context, body)
+            })
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                )
+            })?;
+        let body_store = body_store.into_revalidated_startup().map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+            )
+        })?;
         let RecoveredLifecycleStorageAuthorityV1 {
             kura_identity,
-            genesis_account,
             wal_path,
             chunk_root,
             lifecycle_root,
@@ -1649,11 +1789,10 @@ impl AuthenticatedRecoveredAdapterStartup {
         )?;
         let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 {
             kura_identity,
-            genesis_account,
             wal_path,
             chunk_root,
         };
-        Ok(owner.with_recovered_kura_binding(kura_binding))
+        Ok(owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service))
     }
 
     /// Shared implementation after production or a test-only fixture has
@@ -1682,6 +1821,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             effects,
             authority,
             validation_authority,
+            factory_owner,
         } = self;
         let verified = VerifiedHeightContext {
             context: adapter.wire_context.clone(),
@@ -1932,6 +2072,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             effects,
             authority: RecoveredWalStartupAuthorityV1::PhaseVote(vote),
             validation_authority,
+            factory_owner,
         };
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let authenticated = phase_startup
@@ -19127,25 +19268,10 @@ mod tests {
     }
 
     #[test]
-    fn recovered_lifecycle_kura_binding_releases_genesis_and_paths_only_to_exact_kura() {
+    fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
         let kura = Kura::blank_kura_for_testing();
         let foreign_kura = Kura::blank_kura_for_testing();
-        let genesis = KeyPair::try_from_seed(
-            b"recovered lifecycle owner test genesis".to_vec(),
-            Algorithm::Ed25519,
-        )
-        .expect("deterministic lifecycle-owner genesis account");
-        let expected = AccountId::new(genesis.public_key().clone());
         let binding = RecoveredLifecycleOwnerKuraBindingV1::for_test(kura.as_ref());
-
-        assert_eq!(
-            binding.genesis_account_for_launch(kura.as_ref()),
-            Some(expected)
-        );
-        assert_eq!(
-            binding.genesis_account_for_launch(foreign_kura.as_ref()),
-            None
-        );
 
         let storage_root = kura.sumeragi_v2_storage_root();
         let expected_chunk_root = storage_root.join("chunks");
@@ -21080,6 +21206,59 @@ mod tests {
                 allowed_hsm_providers: Vec::new(),
             },
         }
+    }
+
+    fn lifecycle_factory_state_for_test(
+        kura: Arc<Kura>,
+        network_id: iroha_data_model::NetworkId,
+    ) -> Arc<crate::state::State> {
+        Arc::new(
+            crate::state::State::new_with_chain_and_network_id_for_testing(
+                crate::state::World::default(),
+                kura,
+                crate::query::store::LiveQueryStore::start_test(),
+                "sumeragi-v2-lifecycle-test"
+                    .parse()
+                    .expect("lifecycle fixture chain id"),
+                network_id,
+            ),
+        )
+    }
+
+    fn lifecycle_factory_inputs_for_test(
+        startup: &AuthenticatedRecoveredAdapterStartup,
+        storage: RecoveredLifecycleStorageAuthorityV1,
+        kura: Arc<Kura>,
+    ) -> RecoveredLifecycleOwnerFactoryInputsV1 {
+        let state = lifecycle_factory_state_for_test(
+            Arc::clone(&kura),
+            startup.adapter.wire_context.network_id,
+        );
+        try_lifecycle_factory_inputs_for_test(startup, storage, state, kura)
+            .unwrap_or_else(|error| panic!("bind exact lifecycle factory inputs: {error}"))
+    }
+
+    fn try_lifecycle_factory_inputs_for_test(
+        startup: &AuthenticatedRecoveredAdapterStartup,
+        storage: RecoveredLifecycleStorageAuthorityV1,
+        state: Arc<crate::state::State>,
+        kura: Arc<Kura>,
+    ) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1>
+    {
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(crate::queue::Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events_sender.clone(),
+        ));
+        startup.bind_production_lifecycle_owner_factory_inputs_v1(
+            storage,
+            state,
+            queue,
+            kura,
+            None,
+            None,
+            events_sender,
+        )
     }
 
     fn open_test_with_capacity_geometry(
@@ -24564,9 +24743,21 @@ mod tests {
             .split_once("fn open_production_lifecycle_owner_v1_at_authenticated_roots(")
             .expect("locate the private authenticated-root implementation")
             .0;
-        let storage_authority = canonical_factory
-            .find("storage: RecoveredLifecycleStorageAuthorityV1")
-            .expect("factory consumes the recovery-minted storage authority");
+        let factory_inputs = canonical_factory
+            .find("factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1")
+            .expect("factory consumes the adapter-bound execution/storage seal");
+        assert!(canonical_factory.contains(
+            "mut body_store: super::v2_body_store::V2BodyStore"
+        ));
+        assert!(!canonical_factory.contains(
+            "body_store: super::v2_body_store::RevalidatedV2BodyStore"
+        ));
+        let residual = canonical_factory
+            .find("if !self.effects.is_empty()")
+            .expect("factory rejects residual effects before marker replay");
+        let startup_binding = canonical_factory
+            .find("Arc::ptr_eq(&adapter_owner, &self.factory_owner)")
+            .expect("factory input remains bound to this exact authenticated startup");
         let context_binding = canonical_factory
             .find("storage.context_id != context.id()")
             .expect("factory binds the storage authority to the recovered context");
@@ -24576,6 +24767,24 @@ mod tests {
         let wal_path = canonical_factory
             .find("self.adapter.wal.matches_path(&storage.wal_path)")
             .expect("factory joins the adapter to the recovery-sealed WAL path");
+        let apply_service = canonical_factory
+            .find("let apply_service = super::v2_apply::V2ApplyService::new(")
+            .expect("factory constructs one exact marker/live Apply service");
+        let finality = canonical_factory
+            .find(".recovered_finality_subject(&context)")
+            .expect("factory derives the recovered-finality marker subject");
+        let subject_filter = canonical_factory
+            .find(".retain_recovered_markers_for_subject(subject)")
+            .expect("factory filters markers to recovered finality first");
+        let authority_filter = canonical_factory
+            .find(".retain_recovered_markers_for_authority(validation_authority)")
+            .expect("factory then filters markers to authenticated WAL authority");
+        let replay = canonical_factory
+            .find(".revalidate_recovered_markers(|body|")
+            .expect("factory semantically replays retained markers");
+        let seal = canonical_factory
+            .find("body_store.into_revalidated_startup()")
+            .expect("factory seals only replayed markers");
         let sealed_parts = canonical_factory
             .find("let RecoveredLifecycleStorageAuthorityV1 {")
             .expect("factory opens the storage authority only after validation");
@@ -24583,12 +24792,20 @@ mod tests {
             .find("self.open_production_lifecycle_owner_v1_at_authenticated_roots(")
             .expect("factory enters the private implementation after target checks");
         let kura_binding = canonical_factory
-            .find("owner.with_recovered_kura_binding(kura_binding)")
-            .expect("factory retains the exact recovered Kura instance in the owner");
-        assert!(storage_authority < context_binding);
+            .find("owner.with_recovered_kura_binding_and_apply_service(")
+            .expect("factory retains the Kura and replay service in one owner transition");
+        assert!(factory_inputs < residual);
+        assert!(residual < startup_binding);
+        assert!(startup_binding < context_binding);
         assert!(context_binding < body_root);
         assert!(body_root < wal_path);
-        assert!(wal_path < sealed_parts);
+        assert!(wal_path < apply_service);
+        assert!(apply_service < finality);
+        assert!(finality < subject_filter);
+        assert!(subject_filter < authority_filter);
+        assert!(authority_filter < replay);
+        assert!(replay < seal);
+        assert!(seal < sealed_parts);
         assert!(sealed_parts < authenticated_roots);
         assert!(authenticated_roots < kura_binding);
         for forbidden in [
@@ -24603,9 +24820,6 @@ mod tests {
                 "production owner factory accepts forbidden raw target {forbidden}"
             );
         }
-        let residual = owner_factory
-            .find("if !self.effects.is_empty()")
-            .expect("factory rejects residual effects");
         let control_projection = owner_factory
             .find("project_recovered_wal_control_sign")
             .expect("factory projects the sealed control authority");
@@ -24641,10 +24855,6 @@ mod tests {
         );
         assert!(!owner_factory.contains("V2BodyStore::open_with_policy("));
         assert!(!owner_factory.contains("body_root:"));
-        assert!(
-            canonical_factory
-                .contains("body_signature_policy: &super::v2_body_store::BlockSignaturePolicy")
-        );
         for forbidden in [
             "CandidateAdmission",
             "PendingRuntimeEffectBinding",

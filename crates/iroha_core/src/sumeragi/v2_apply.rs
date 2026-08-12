@@ -3799,6 +3799,25 @@ impl V2ApplyService {
         }
     }
 
+    /// Compare this exact immutable service owner with one lifecycle launch.
+    ///
+    /// This fixed oracle exposes none of the retained execution dependencies.
+    /// It is used before a recovered service is transferred into the I/O
+    /// worker so a caller cannot substitute State, Kura, network, or validator
+    /// proof authority after semantic marker replay.
+    pub(in crate::sumeragi) fn matches_lifecycle_launch(
+        &self,
+        state: &Arc<State>,
+        kura: &Arc<Kura>,
+        context: &wire::HeightContext,
+        validator_set_pops: &[Vec<u8>],
+    ) -> bool {
+        Arc::ptr_eq(&self.state, state)
+            && Arc::ptr_eq(&self.kura, kura)
+            && self.network_id == context.network_id
+            && self.validator_set_pops == validator_set_pops
+    }
+
     /// Apply one exact CommitQC task or complete its interrupted sidecar write.
     pub(crate) fn execute(
         &self,

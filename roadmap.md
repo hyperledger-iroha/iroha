@@ -8,8 +8,8 @@ Completed history lives in [`status.md`](./status.md).
 ## Build-efficiency closeout
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline and the
-  4,560,536-line ten-percent ceiling. The current 5,018,658-line ratchet leaves
-  a 458,122-line gap; do not redefine the baseline, count moved test code as a
+  4,560,536-line ten-percent ceiling. The current 5,014,603-line ratchet leaves
+  a 454,067-line gap; do not redefine the baseline, count moved test code as a
   physical reduction, or weaken required runtime, security, consensus, SDK, or
   release-evidence behavior to close it.
 - Add the new source and fixture files to the eventual signed commit, then rerun
@@ -870,11 +870,13 @@ The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
 [`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).
 The former autonomous `execution_batch.is_none()` exclusion and its in-scope
-TODO are gone. One explicitly classified in-scope marker remains at the
-carrier-silent Queue-install/startup-activation seam for the still-open
-`Crash`/`Recover` lifecycle-cursor reconciliation; the closure ledger does not
-claim that cursor is already implemented. This is source implementation
-closure for the other mapped rows, not release completion.
+TODO are gone. The former carrier-silent Queue-install/startup-activation
+lifecycle-cursor marker is also gone: the four named recovery actions now have
+source-bound extraction seams and the open-action tuple is empty. This is
+structural source closure, not formal execution or release completion. The
+separate generic lifecycle-coordinator replacement remains intentionally
+unwired and is classified outside the current `ML-*` finish scope; that
+classification advances no ledger row or release gate.
 The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
@@ -910,7 +912,7 @@ atomic grouped reservation commit, exact
 QueuePlan obligation authentication, ApplyCarrier authorization, and canonical
 historical autonomous recovery into exactly-once merge application. This is
 source inventory consistency, not execution evidence.
-Schema 5 machine-maps 30 conceptual multilane rows to 99 exact mutation
+Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending source check;
 the final pre-self-documentation source manifest is
@@ -920,18 +922,20 @@ multilane model/source contract suite passes `171/171` under pinned Python 3.12
 with strict warnings, and the static
 Apalache-runner contract passes all 14 fail-closed controls. No current TLC or
 Apalache engine run is claimed. The newly bound non-retireable lane transport
-is intentionally fail-closed at applied-height handoff; concrete production
-trace extraction plus drain/restart/liveness evidence remain mandatory.
+is intentionally fail-closed at applied-height handoff; formal operational
+correspondence plus drain/restart/liveness evidence remain mandatory.
 
 The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
-`8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`;
-its suite-source manifest hashes to
-`4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`;
+`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
+its grouped and diagnostics suite-source manifests hash to
+`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
+and
+`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`;
 the synchronized 48-line wire TSV hashes to
-`f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
+`aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
-`59`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
+`60`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
 remains open under `G-SDK`.
@@ -941,7 +945,7 @@ production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
 container, QueuePlan journal V4, and reservation journal V5. Schema 5 of the
 multilane binding ledger keeps this as the
 `inflight_first_release_layout_contract`, with the explicit
-`composed_state_action_relation_no_trace_extraction` claim, and source-binds
+`composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
 exact 854-test production inventory, 525-test G-UNIT source inventory, 12
@@ -952,8 +956,8 @@ G-UNIT inventory has 526 TSV lines and SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
-claimed by those static checks, and the total Rust transition projection
-remains open.
+claimed by those static checks, and formal correspondence between concrete
+Rust executions and the source-bound transition partition remains open.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -1003,11 +1007,13 @@ The remaining work is evidence-driven and must stay in order:
   source/distribution, Swift, Kotlin, and Java for
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
   fixture SHA-256
-  `8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`,
-  suite-source manifest SHA-256
-  `4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`,
+  `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
+  grouped/diagnostics suite-source manifest SHA-256 values
+  `86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
+  and
+  `79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`,
   and wire-TSV SHA-256
-  `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
+  `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
   Swift `4`, Kotlin `6`, and Java `5` tests. The predecessor fixture's direct
   subset results are not an archived all-surface replay and do not attest this
@@ -26922,15 +26928,19 @@ launch. Direct production-runner entry fails before another candidate helper.
 The bootstrap neither times out nor output-captures the runner and never
 signals its process group; an escaped internal deadline stays visibly
 incomplete.
-Its exact `PATH` consists of the archived protected tools plus a private
-`runner-bin` populated only by exact-target symlinks from a digest-pinned
-canonical manifest. Tool sources and all ancestors must be trusted-owner and
-non-writable. Runner stdout/stderr inherit owner-private regular files, so a
+Its outer `PATH` consists of archived protected tools plus a digest-pinned
+runner-tool closure. Before any candidate build child starts, the outer runner
+copies the named reviewed language/tool runtime closures to new private inodes and binds
+their source and destination inventories; the child receives only those private
+paths. Shell core utilities still come from admitted host system directories
+and remain a host-image prerequisite. Tool sources and all ancestors must be trusted-owner and non-writable.
+Runner stdout/stderr inherit owner-private regular files, so a
 blocked bootstrap stream cannot stall the runner; normal exit seals them
 read-only, while bootstrap-only interruption preserves active logs without an
 external completion marker. The successful runner retains its sealed source
 and identity for independent replay.
-The complete corridor then re-enters from a unique detached read-only worktree
+The complete corridor then re-enters from a unique independent clone made with
+`--no-local`, `--no-hardlinks`, and no alternates, sealed read-only,
 with external outputs. The chmod seal is a cooperative guard against ordinary
 writes, while detached committed source, the external bootstrap marker, and
 repeated identity checkpoints remain authoritative. The manifest binds modes
@@ -26939,8 +26949,9 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-829-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and their exact
+854-test inventory plus the separate exact 525-test G-UNIT inventory, the
+formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -26958,8 +26969,8 @@ repository's pinned 1.93.1 toolchain after Git/Rust semantic-environment cleanup
 and run with an isolated configuration-free `CARGO_HOME`; exact tool paths,
 versions, and hashes are receipt-bound.
 
-The current release-support suites are green at 11/11 seed-matrix, 189/189
-release-receipt, and 71/71 protected-bootstrap tests. The source-bound release
+The current release-support suites collect 302 release-receipt and 252
+protected-bootstrap tests without selector inflation. The source-bound release
 gate now requires exactly 5,291 proof-fidelity cases and 26 formal-launcher
 cases. The source-derived proof-fidelity composition is 5,189 ledger/checker
 cases, 28 pinned-Verus evidence cases, 15 TLC-normalizer cases, eight
@@ -26971,15 +26982,17 @@ settled-tree collection and execution of both
 preflights remain pending; the derived totals and prior runs are not promoted
 as final release evidence.
 
-The receipt is published only at the exact bootstrap-owned path with mode
-`0400`, one link, exclusive staging, complete writes, no-clobber linking, and
-identity-checked cleanup. Publication revalidates and synchronizes every bound
+The receipt is published with mode `0400`, one link, an exclusive fully synced
+stage, and one no-replace rename. Publication revalidates and synchronizes every bound
 artifact, then every evidence directory bottom-up, and repeats the transitive
 closure with the receipt included; any file, directory, or `fsync` failure is
-fail-closed. The bootstrap validates the retained source and invokes its
-separately protected archived receipt validator in exact `--verify-existing`
-mode before publishing a no-clobber external marker bound to the receipt,
-source identity, validator, and sealed runner logs. There is no mutable pointer.
+fail-closed. The protected outer runner invokes the separately archived receipt
+validator in exact `--verify-existing` mode; that validator alone publishes the
+no-clobber acknowledgment. Only then may the protected runtime helper prune
+disposable runtime/cache/target state and publish the retained result and exact
+inventory. The bootstrap authenticates that acknowledgment, result, inventory,
+source identity, and sealed runner logs before external completion. There is no
+mutable pointer.
 Malformed, incomplete, cross-source, semantically mismatched, and
 digest-mismatched evidence is rejected. This authenticates the
 signed candidate and runner relative to operator-protected inputs, but does not

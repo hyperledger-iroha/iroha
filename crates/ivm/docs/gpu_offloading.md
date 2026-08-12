@@ -3,7 +3,9 @@
 Status
 - Metal: SHA‑256 compression and batched leaf hashing/reduction used for Merkle
   roots are accelerated on macOS; bitwise vector kernels (add/and/xor/or) are
-  wired through `vector::*` helpers with deterministic fallbacks.
+  wired through `vector::*` helpers with deterministic fallbacks. The exact
+  Metal source strings are sealed under [`src/assets/text_v1/`](../src/assets/text_v1/)
+  and embedded at compile time.
 - CUDA: A `build.rs` script installs checked-in PTX by default and exposes
   explicit generation and byte-for-byte verification modes; vector helpers,
   SHA‑256, Merkle leaf hashing/reduction, Keccak, Poseidon2/6 permutations,
@@ -51,7 +53,8 @@ The following hotspots contain tight loops or field arithmetic that map well to 
 - **Poseidon permutations** – [`poseidon2`](../src/poseidon.rs) and [`poseidon6`](../src/poseidon.rs) use repeated S‑box and MDS matrix steps with field multiplications【F:src/poseidon.rs†L60-L118】【F:src/poseidon.rs†L180-L248】.
 - **Keccak‑f1600** – the `keccak_f1600` function processes a 25‑lane state with many rotations and XORs【F:src/sha3.rs†L1-L63】.
 - **AES round helpers** – `aesenc` and `aesdec` apply S‑boxes and MixColumns over 16‑byte states【F:src/aes.rs†L132-L175】.
-- **Vector helpers** – functions like `vadd32_slice` and `vadd64_slice` perform lane-wise arithmetic on large arrays【F:src/vector.rs†L575-L613】.
+- **Vector helpers** – functions like [`vadd32_slice`](../src/vector.rs) and
+  `vadd64_slice` perform lane-wise arithmetic on large arrays.
 - **BN254 field arithmetic** – accelerated on CUDA via `bn254_add_kernel`, `bn254_sub_kernel`, and `bn254_mul_kernel` (see `crates/ivm/cuda/bn254.cu`) with scalar/SIMD fallbacks for hosts without GPUs; the host wrappers in `crates/ivm/src/cuda.rs` now support both single-element and batch submissions, reuse cached PTX modules per `GpuContext`, and disable the backend on first mismatch. Tests in `crates/ivm/tests/cuda_extra.rs` and the inline CUDA regressions cover GPU vs CPU parity.
 - **Merkle hashing** – `ByteMerkleTree::from_bytes_parallel` hashes leaves and inner nodes in parallel using Rayon threads【F:src/byte_merkle_tree.rs†L72-L98】.
 - **Signature verification** – wrappers in [`signature.rs`] dispatch to Ed25519 or Dilithium libraries to check signatures【F:src/signature.rs†L27-L63】.

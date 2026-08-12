@@ -96,13 +96,45 @@ class SourceSealError(RuntimeError):
     """A sealed detached source archive is malformed, unsafe, or inconsistent."""
 
 
+def _git_read_only_environment() -> dict[str, str]:
+    """Return a closed environment for read-only repository inspection."""
+
+    environment = os.environ.copy()
+    # Git's environment surface is open-ended. Trace variables can create or
+    # append caller-selected files, while discovery, pathspec, object-store,
+    # and configuration variables can silently redirect what is inspected.
+    # Start with no caller-provided `GIT_*` setting, then add only the closed
+    # read-only policy below.
+    for name in tuple(environment):
+        if name.startswith("GIT_"):
+            environment.pop(name, None)
+    environment["GIT_NO_LAZY_FETCH"] = "1"
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_COUNT"] = "2"
+    environment["GIT_CONFIG_KEY_0"] = "core.hooksPath"
+    environment["GIT_CONFIG_VALUE_0"] = os.devnull
+    environment["GIT_CONFIG_KEY_1"] = "core.fsmonitor"
+    environment["GIT_CONFIG_VALUE_1"] = "false"
+    return environment
+
+
+def _git_command(root: Path, *arguments: str) -> list[str]:
+    """Build one Git command pinned to the caller's resolved worktree."""
+
+    return ["git", f"--work-tree={root.resolve()}", *arguments]
+
+
 def _git_path(root: Path, name: str) -> Path:
     """Resolve one worktree-specific Git administrative path."""
 
     result = subprocess.run(
-        ["git", "rev-parse", "--git-path", name],
+        _git_command(root, "rev-parse", "--git-path", name),
         cwd=root,
         check=True,
+        env=_git_read_only_environment(),
         stdout=subprocess.PIPE,
     )
     raw = result.stdout.removesuffix(b"\n")
@@ -135,9 +167,10 @@ def _reject_active_git_operations(root: Path) -> None:
 
 def _git_unmerged_paths(root: Path) -> list[str]:
     result = subprocess.run(
-        ["git", "ls-files", "--unmerged", "-z"],
+        _git_command(root, "ls-files", "--unmerged", "-z"),
         cwd=root,
         check=True,
+        env=_git_read_only_environment(),
         stdout=subprocess.PIPE,
     )
     paths: set[str] = set()
@@ -159,10 +192,30 @@ def _git_source_paths(root: Path) -> list[str]:
             f"workspace contains unresolved merge entries: {rendered}"
         )
     _reject_active_git_operations(root)
+    untracked_ignore_policy = _git_paths(
+        root,
+        "ls-files",
+        "--others",
+        "--",
+        ":(top).gitignore",
+        ":(glob)**/.gitignore",
+    )
+    if untracked_ignore_policy:
+        raise DirtyReleaseSourceError(
+            "workspace has untracked ignore policy: "
+            + ", ".join(untracked_ignore_policy)
+        )
     result = subprocess.run(
-        ["git", "ls-files", "-co", "--exclude-standard", "-z"],
+        _git_command(
+            root,
+            "ls-files",
+            "-co",
+            "--exclude-per-directory=.gitignore",
+            "-z",
+        ),
         cwd=root,
         check=True,
+        env=_git_read_only_environment(),
         stdout=subprocess.PIPE,
     )
     paths = {
@@ -179,9 +232,10 @@ def _git_source_paths(root: Path) -> list[str]:
 
 def _git_stdout(root: Path, *arguments: str) -> str:
     result = subprocess.run(
-        ["git", *arguments],
+        _git_command(root, *arguments),
         cwd=root,
         check=True,
+        env=_git_read_only_environment(),
         stdout=subprocess.PIPE,
         text=True,
     )
@@ -193,20 +247,184 @@ def _git_paths(root: Path, *arguments: str) -> list[str]:
         raise ValueError("a Git subcommand is required")
     command, *rest = arguments
     result = subprocess.run(
-        ["git", command, "-z", *rest],
+        _git_command(root, command, "-z", *rest),
         cwd=root,
         check=True,
+        env=_git_read_only_environment(),
         stdout=subprocess.PIPE,
     )
     return [os.fsdecode(raw) for raw in result.stdout.split(b"\0") if raw]
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _git_index_entries(root: Path) -> list[tuple[bytes, str, str]]:
+    """Return the stage-zero index without consulting worktree attributes."""
+
+    result = subprocess.run(
+        _git_command(root, "ls-files", "--stage", "-z"),
+        cwd=root,
+        check=True,
+        env=_git_read_only_environment(),
+        stdout=subprocess.PIPE,
+    )
+    entries = []
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        header, separator, path = raw.partition(b"\t")
+        fields = header.split(b" ")
+        if not separator or len(fields) != 3 or fields[2] != b"0":
+            raise UnmergedSourceError("workspace index has a non-stage-zero entry")
+        mode = fields[0].decode("ascii", "strict")
+        object_id = fields[1].decode("ascii", "strict")
+        _validate_source_path_bytes(path)
+        entries.append((path, mode, object_id))
+    return entries
+
+
+def _git_blob_hasher(algorithm: str, size: int) -> "hashlib._Hash":
+    if algorithm not in {"sha1", "sha256"}:
+        raise RuntimeError(f"unsupported Git object format: {algorithm}")
+    digest = hashlib.new(algorithm)
+    digest.update(f"blob {size}\0".encode("ascii"))
+    return digest
+
+
+def _raw_tracked_worktree_changes(root: Path) -> list[str]:
+    """Compare tracked bytes to stage zero without executing Git filters."""
+
+    algorithm = _git_stdout(root, "rev-parse", "--show-object-format")
+    expected_oid_length = 40 if algorithm == "sha1" else 64 if algorithm == "sha256" else 0
+    if not expected_oid_length:
+        raise RuntimeError(f"unsupported Git object format: {algorithm}")
+    changes = []
+    root_descriptor, root_before = _open_root_directory(root, "workspace root")
+    try:
+        for member, expected_mode, expected_object_id in _git_index_entries(root):
+            relative = os.fsdecode(member)
+            if (
+                len(expected_object_id) != expected_oid_length
+                or any(character not in "0123456789abcdef" for character in expected_object_id)
+            ):
+                raise RuntimeError("Git returned a malformed stage-zero object ID")
+            parent_descriptor = _open_source_parent(root_descriptor, member)
+            if parent_descriptor is None:
+                changes.append(relative)
+                continue
+            try:
+                leaf = member.rsplit(b"/", 1)[-1]
+                try:
+                    metadata = os.stat(
+                        leaf, dir_fd=parent_descriptor, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    changes.append(relative)
+                    continue
+
+                observed_object_id = ""
+                mode_matches = False
+                if expected_mode in {"100644", "100755"}:
+                    mode_matches = stat.S_ISREG(metadata.st_mode) and bool(
+                        metadata.st_mode & 0o111
+                    ) == (expected_mode == "100755")
+                    if mode_matches:
+                        digest = _git_blob_hasher(algorithm, metadata.st_size)
+                        with _stable_regular_reader_at(
+                            parent_descriptor,
+                            leaf,
+                            metadata,
+                            maximum_size=_MAX_SOURCE_FILE_BYTES,
+                            label=f"workspace source {relative}",
+                        ) as (source, _):
+                            while chunk := source.read(_COPY_CHUNK_BYTES):
+                                digest.update(chunk)
+                        observed_object_id = digest.hexdigest()
+                elif expected_mode == "120000":
+                    mode_matches = stat.S_ISLNK(metadata.st_mode)
+                    if mode_matches:
+                        try:
+                            target = os.readlink(leaf, dir_fd=parent_descriptor)
+                            after = os.stat(
+                                leaf,
+                                dir_fd=parent_descriptor,
+                                follow_symlinks=False,
+                            )
+                            repeated_target = os.readlink(
+                                leaf, dir_fd=parent_descriptor
+                            )
+                        except OSError as error:
+                            raise SourceSealError(
+                                f"workspace symlink changed while inspected: {relative}"
+                            ) from error
+                        if (
+                            _stable_metadata_changed(metadata, after)
+                            or target != repeated_target
+                        ):
+                            raise SourceSealError(
+                                f"workspace symlink changed while inspected: {relative}"
+                            )
+                        target_bytes = (
+                            target if isinstance(target, bytes) else os.fsencode(target)
+                        )
+                        digest = _git_blob_hasher(algorithm, len(target_bytes))
+                        digest.update(target_bytes)
+                        observed_object_id = digest.hexdigest()
+                elif expected_mode == "160000":
+                    mode_matches = stat.S_ISDIR(metadata.st_mode)
+                    if mode_matches:
+                        flags = os.O_RDONLY
+                        if hasattr(os, "O_DIRECTORY"):
+                            flags |= os.O_DIRECTORY
+                        if hasattr(os, "O_NOFOLLOW"):
+                            flags |= os.O_NOFOLLOW
+                        descriptor = os.open(
+                            leaf, flags, dir_fd=parent_descriptor
+                        )
+                        try:
+                            opened = os.fstat(descriptor)
+                            if _stable_metadata_changed(metadata, opened):
+                                raise SourceSealError(
+                                    f"workspace gitlink changed while inspected: {relative}"
+                                )
+                            # Release source binds only the parent gitlink OID;
+                            # a populated submodule is a separate, unsealed
+                            # checkout and is therefore never accepted.
+                            if os.listdir(descriptor):
+                                mode_matches = False
+                            after = os.fstat(descriptor)
+                            path_after = os.stat(
+                                leaf,
+                                dir_fd=parent_descriptor,
+                                follow_symlinks=False,
+                            )
+                            if (
+                                _stable_metadata_changed(metadata, after)
+                                or _stable_metadata_changed(metadata, path_after)
+                            ):
+                                raise SourceSealError(
+                                    f"workspace gitlink changed while inspected: {relative}"
+                                )
+                        finally:
+                            os.close(descriptor)
+                        if mode_matches:
+                            observed_object_id = expected_object_id
+                else:
+                    raise RuntimeError(f"unsupported Git index mode: {expected_mode}")
+
+                _require_same_source_parent(root_descriptor, member, parent_descriptor)
+                if not mode_matches or observed_object_id != expected_object_id:
+                    changes.append(relative)
+            finally:
+                os.close(parent_descriptor)
+        root_after = os.fstat(root_descriptor)
+        root_path_after = root.lstat()
+        if (
+            _stable_metadata_changed(root_before, root_after)
+            or _stable_metadata_changed(root_before, root_path_after)
+        ):
+            raise SourceSealError("workspace root changed while inspected")
+    finally:
+        os.close(root_descriptor)
+    return changes
 
 
 def _validate_sha256(value: str, label: str) -> str:
@@ -228,22 +446,31 @@ def _stable_regular_reader(
     *,
     maximum_size: int,
     label: str,
+    require_single_link: bool = True,
 ) -> Iterator[tuple[BinaryIO, os.stat_result]]:
-    """Open one bounded regular file without following or accepting hard links."""
+    """Open one bounded regular file without following a replaced pathname."""
 
     before = path.lstat()
     if (
         not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
+        or (require_single_link and before.st_nlink != 1)
         or before.st_size > maximum_size
     ):
+        requirement = (
+            "one bounded, singly linked regular file"
+            if require_single_link
+            else "one bounded regular file"
+        )
         raise SourceSealError(
-            f"{label} must be one bounded, singly linked regular file"
+            f"{label} must be {requirement}"
         )
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise SourceSealError(f"{label} changed before it was opened") from error
     stream = os.fdopen(descriptor, "rb")
     try:
         opened = os.fstat(stream.fileno())
@@ -256,6 +483,12 @@ def _stable_regular_reader(
         after = os.fstat(stream.fileno())
         if _stable_metadata_changed(before, after):
             raise SourceSealError(f"{label} changed while it was read")
+        try:
+            path_after = path.lstat()
+        except OSError as error:
+            raise SourceSealError(f"{label} changed after it was read") from error
+        if _stable_metadata_changed(before, path_after):
+            raise SourceSealError(f"{label} was replaced while it was read")
     finally:
         stream.close()
 
@@ -265,10 +498,14 @@ def _stable_file_sha256(
     *,
     maximum_size: int,
     label: str,
+    require_single_link: bool = True,
 ) -> str:
     digest = hashlib.sha256()
     with _stable_regular_reader(
-        path, maximum_size=maximum_size, label=label
+        path,
+        maximum_size=maximum_size,
+        label=label,
+        require_single_link=require_single_link,
     ) as (stream, _):
         while chunk := stream.read(_COPY_CHUNK_BYTES):
             digest.update(chunk)
@@ -287,38 +524,93 @@ def release_source_identity(root: Path) -> dict[str, str | int]:
         )
 
     head_commit = _git_stdout(root, "rev-parse", "--verify", "HEAD^{commit}")
-    head_tree = _git_stdout(root, "rev-parse", "--verify", "HEAD^{tree}")
-    index_tree = _git_stdout(root, "write-tree")
-    if index_tree != head_tree:
-        staged = _git_paths(root, "diff", "--cached", "--name-only", "HEAD", "--")
-        rendered = ", ".join(staged) if staged else "index tree differs from HEAD"
-        raise DirtyReleaseSourceError(f"release index is not HEAD: {rendered}")
+    head_tree = _git_stdout(
+        root, "rev-parse", "--verify", f"{head_commit}^{{tree}}"
+    )
+    staged = _git_paths(
+        root,
+        "diff-index",
+        "--cached",
+        "--name-only",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=none",
+        "--ita-visible-in-index",
+        head_commit,
+        "--",
+    )
+    if staged:
+        raise DirtyReleaseSourceError(
+            "release index is not HEAD: " + ", ".join(staged)
+        )
+    # A stage-zero index with no difference from the captured commit has that
+    # commit's exact tree. Reusing the existing object ID avoids `write-tree`,
+    # which can write tree objects and update the index cache-tree extension.
+    index_tree = head_tree
 
-    tracked_changes = _git_paths(root, "diff", "--name-only", "--")
+    tracked_changes = _raw_tracked_worktree_changes(root)
     if tracked_changes:
         raise DirtyReleaseSourceError(
             "release worktree has tracked changes: " + ", ".join(tracked_changes)
         )
-    untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard")
+    untracked = _git_paths(
+        root, "ls-files", "--others", "--exclude-per-directory=.gitignore"
+    )
     if untracked:
         raise DirtyReleaseSourceError(
             "release worktree has non-ignored untracked paths: "
             + ", ".join(untracked)
         )
 
-    lockfile = root / _WORKSPACE_LOCKFILE
-    if not lockfile.is_file() or lockfile.is_symlink():
-        raise DirtyReleaseSourceError(
-            f"release requires a regular workspace {_WORKSPACE_LOCKFILE}"
-        )
-    return {
+    manifest_sha256, lock_sha256 = _release_workspace_snapshot(root)
+    identity = {
         "schema_version": 1,
         "head_commit": head_commit,
         "head_tree": head_tree,
         "index_tree": index_tree,
-        "workspace_source_manifest_sha256": workspace_source_manifest(root),
-        "cargo_lock_sha256": _sha256_file(lockfile),
+        "workspace_source_manifest_sha256": manifest_sha256,
+        "cargo_lock_sha256": lock_sha256,
     }
+    repeated_manifest, repeated_lock_sha256 = _release_workspace_snapshot(root)
+    if (
+        repeated_manifest != identity["workspace_source_manifest_sha256"]
+        or repeated_lock_sha256 != identity["cargo_lock_sha256"]
+    ):
+        raise DirtyReleaseSourceError(
+            "release source changed during identity capture"
+        )
+    _reject_active_git_operations(root)
+    repeated_unmerged = _git_unmerged_paths(root)
+    if repeated_unmerged:
+        raise UnmergedSourceError(
+            "workspace gained unresolved merge entries during identity capture: "
+            + ", ".join(repeated_unmerged)
+        )
+    repeated_staged = _git_paths(
+        root,
+        "diff-index",
+        "--cached",
+        "--name-only",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=none",
+        "--ita-visible-in-index",
+        head_commit,
+        "--",
+    )
+    repeated_tracked = _raw_tracked_worktree_changes(root)
+    repeated_untracked = _git_paths(
+        root, "ls-files", "--others", "--exclude-per-directory=.gitignore"
+    )
+    if repeated_staged or repeated_tracked or repeated_untracked:
+        raise DirtyReleaseSourceError(
+            "release source changed during identity capture"
+        )
+    if _git_stdout(root, "rev-parse", "--verify", "HEAD^{commit}") != head_commit:
+        raise DirtyReleaseSourceError("release HEAD changed during identity capture")
+    return identity
 
 
 def _frame(hasher: "hashlib._Hash", payload: bytes) -> None:
@@ -367,32 +659,19 @@ def write_source_path_list(path: Path, paths: Iterable[str]) -> None:
 def read_source_path_list(path: Path) -> list[str]:
     """Read and validate a fixed path list without consulting Git metadata."""
 
-    before = path.lstat()
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
-        or before.st_size > _MAX_PATH_LIST_BYTES
-    ):
-        raise SourcePathListError(
-            "source path list must be one bounded, singly linked regular file"
-        )
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    with os.fdopen(descriptor, "rb") as stream:
-        opened = os.fstat(stream.fileno())
-        if (
-            (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
-            or _stable_metadata_changed(before, opened)
-        ):
-            raise SourcePathListError("source path list changed before open")
-        payload = stream.read(_MAX_PATH_LIST_BYTES + 1)
-        after = os.fstat(stream.fileno())
+    try:
+        with _stable_regular_reader(
+            path,
+            maximum_size=_MAX_PATH_LIST_BYTES,
+            label="source path list",
+        ) as (stream, _):
+            payload = stream.read(_MAX_PATH_LIST_BYTES + 1)
+    except FileNotFoundError:
+        raise
+    except (OSError, SourceSealError) as error:
+        raise SourcePathListError(str(error)) from error
     if len(payload) > _MAX_PATH_LIST_BYTES:
         raise SourcePathListError("source path list exceeds its byte bound")
-    if _stable_metadata_changed(before, after):
-        raise SourcePathListError("source path list changed while it was read")
     if not payload.startswith(_PATH_LIST_DOMAIN):
         raise SourcePathListError("source path list has the wrong domain")
 
@@ -500,6 +779,66 @@ def _open_source_parent(root_descriptor: int, member: bytes) -> int | None:
         raise
 
 
+def _require_same_source_parent(
+    root_descriptor: int,
+    member: bytes,
+    expected_descriptor: int,
+) -> None:
+    """Require one member's parent path to still name the opened directory."""
+
+    repeated_descriptor = _open_source_parent(root_descriptor, member)
+    if repeated_descriptor is None:
+        raise SourceSealError("workspace source parent disappeared while inspected")
+    try:
+        expected = os.fstat(expected_descriptor)
+        repeated = os.fstat(repeated_descriptor)
+        if (expected.st_dev, expected.st_ino) != (repeated.st_dev, repeated.st_ino):
+            raise SourceSealError("workspace source parent changed while inspected")
+    finally:
+        os.close(repeated_descriptor)
+
+
+@contextmanager
+def _stable_regular_reader_at(
+    parent_descriptor: int,
+    leaf: bytes,
+    expected: os.stat_result,
+    *,
+    maximum_size: int,
+    label: str,
+) -> Iterator[tuple[BinaryIO, os.stat_result]]:
+    """Open one regular member relative to an already authenticated parent."""
+
+    if not stat.S_ISREG(expected.st_mode) or expected.st_size > maximum_size:
+        raise SourceSealError(f"{label} must be one bounded regular file")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(leaf, flags, dir_fd=parent_descriptor)
+    except OSError as error:
+        raise SourceSealError(f"{label} changed before it was opened") from error
+    stream = os.fdopen(descriptor, "rb")
+    try:
+        opened = os.fstat(stream.fileno())
+        if _stable_metadata_changed(expected, opened):
+            raise SourceSealError(f"{label} changed before it was opened")
+        yield stream, expected
+        after = os.fstat(stream.fileno())
+        if _stable_metadata_changed(expected, after):
+            raise SourceSealError(f"{label} changed while it was read")
+        try:
+            path_after = os.stat(
+                leaf, dir_fd=parent_descriptor, follow_symlinks=False
+            )
+        except OSError as error:
+            raise SourceSealError(f"{label} changed after it was read") from error
+        if _stable_metadata_changed(expected, path_after):
+            raise SourceSealError(f"{label} was replaced while it was read")
+    finally:
+        stream.close()
+
+
 def _inspect_source_members(
     root: Path, paths: list[str]
 ) -> list[tuple[bytes, bytes, int, int | bytes, os.stat_result | None]]:
@@ -520,6 +859,12 @@ def _inspect_source_members(
                     )
             parent_descriptor = _open_source_parent(root_descriptor, member)
             if parent_descriptor is None:
+                repeated_parent = _open_source_parent(root_descriptor, member)
+                if repeated_parent is not None:
+                    os.close(repeated_parent)
+                    raise SourceSealError(
+                        "source parent appeared while it was inspected"
+                    )
                 record = (member, b"D", 0, 0, None)
                 records.append(record)
                 kinds[member] = b"D"
@@ -559,13 +904,21 @@ def _inspect_source_members(
                         )
                 records.append(record)
                 kinds[member] = record[1]
+                _require_same_source_parent(
+                    root_descriptor, member, parent_descriptor
+                )
             finally:
                 os.close(parent_descriptor)
         root_after = os.fstat(root_descriptor)
+        try:
+            root_path_after = root.lstat()
+        except OSError as error:
+            raise SourceSealError(
+                "source root changed while it was inspected"
+            ) from error
         if (
-            (root_after.st_dev, root_after.st_ino)
-            != (root_before.st_dev, root_before.st_ino)
-            or root_after.st_mode != root_before.st_mode
+            _stable_metadata_changed(root_before, root_after)
+            or _stable_metadata_changed(root_before, root_path_after)
         ):
             raise SourceSealError("source root changed while it was inspected")
     finally:
@@ -602,16 +955,15 @@ def _write_source_file_payload(
     parent_descriptor = _open_source_parent(root_descriptor, member)
     if parent_descriptor is None:
         raise SourceSealError("source file disappeared while sealing")
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
     leaf = member.rsplit(b"/", 1)[-1]
     try:
-        descriptor = os.open(leaf, flags, dir_fd=parent_descriptor)
-        with os.fdopen(descriptor, "rb") as source:
-            opened = os.fstat(source.fileno())
-            if _stable_metadata_changed(expected_metadata, opened):
-                raise SourceSealError("source file changed before sealing")
+        with _stable_regular_reader_at(
+            parent_descriptor,
+            leaf,
+            expected_metadata,
+            maximum_size=_MAX_SOURCE_FILE_BYTES,
+            label="source file",
+        ) as (source, _):
             remaining = payload_size
             while remaining:
                 chunk = source.read(min(_COPY_CHUNK_BYTES, remaining))
@@ -622,9 +974,7 @@ def _write_source_file_payload(
                 remaining -= len(chunk)
             if source.read(1):
                 raise SourceSealError("source file grew while sealing")
-            after = os.fstat(source.fileno())
-            if _stable_metadata_changed(expected_metadata, after):
-                raise SourceSealError("source file changed while sealing")
+        _require_same_source_parent(root_descriptor, member, parent_descriptor)
     finally:
         os.close(parent_descriptor)
 
@@ -637,12 +987,21 @@ def _revalidate_non_file_source_member(
     parent_descriptor = _open_source_parent(root_descriptor, member)
     if kind == b"D":
         if parent_descriptor is None:
+            repeated_parent = _open_source_parent(root_descriptor, member)
+            if repeated_parent is not None:
+                os.close(repeated_parent)
+                raise SourceSealError(
+                    "deleted source parent appeared while sealing"
+                )
             return
         try:
             leaf = member.rsplit(b"/", 1)[-1]
             try:
                 os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
             except FileNotFoundError:
+                _require_same_source_parent(
+                    root_descriptor, member, parent_descriptor
+                )
                 return
             raise SourceSealError("deleted source member appeared while sealing")
         finally:
@@ -660,6 +1019,7 @@ def _revalidate_non_file_source_member(
                 target = os.fsencode(target)
             if target != payload:
                 raise SourceSealError("source symlink changed while sealing")
+        _require_same_source_parent(root_descriptor, member, parent_descriptor)
     finally:
         os.close(parent_descriptor)
 
@@ -695,7 +1055,9 @@ def create_source_seal(
             manifest = hashlib.sha256(_DOMAIN)
             writer.write(_SOURCE_SEAL_DOMAIN)
             writer.write(struct.pack(">Q", len(records)))
-            root_descriptor, _ = _open_root_directory(root, "source root")
+            root_descriptor, root_before = _open_root_directory(
+                root, "source root"
+            )
             try:
                 for record in records:
                     member, kind, mode, payload, _ = record
@@ -731,6 +1093,18 @@ def create_source_seal(
                             )
                         else:
                             raise AssertionError("unreachable source seal kind")
+                root_after = os.fstat(root_descriptor)
+                try:
+                    root_path_after = root.lstat()
+                except OSError as error:
+                    raise SourceSealError(
+                        "source root changed while sealing"
+                    ) from error
+                if (
+                    _stable_metadata_changed(root_before, root_after)
+                    or _stable_metadata_changed(root_before, root_path_after)
+                ):
+                    raise SourceSealError("source root changed while sealing")
             finally:
                 os.close(root_descriptor)
             actual_manifest = manifest.hexdigest()
@@ -750,6 +1124,10 @@ def create_source_seal(
             raise SourceSealError("source path list changed while sealing")
         if read_source_path_list(path_list) != paths:
             raise SourceSealError("source path list changed while sealing")
+        if _manifest_for_paths(root, paths) != expected_manifest:
+            raise SourceSealError(
+                "source changed after the source seal was written"
+            )
         if (
             _stable_file_sha256(
                 archive,
@@ -1246,34 +1624,171 @@ def extract_source_seal(
     return detached_manifest
 
 
-def _manifest_for_paths(root: Path, paths: Iterable[str]) -> str:
-    hasher = hashlib.sha256(_DOMAIN)
-    for relative in sorted(set(paths), key=os.fsencode):
-        encoded_path = os.fsencode(relative)
-        _frame(hasher, encoded_path)
-        path = root / relative
-        try:
-            metadata = path.lstat()
-        except FileNotFoundError:
-            hasher.update(b"D")
-            continue
+def _manifest_snapshot_for_paths(
+    root: Path,
+    paths: Iterable[str],
+    *,
+    observed_regular_path: str | None = None,
+) -> tuple[str, str | None]:
+    """Hash one rooted path set and optionally one regular member in one pass."""
 
-        hasher.update(struct.pack(">I", stat.S_IMODE(metadata.st_mode)))
-        if stat.S_ISLNK(metadata.st_mode):
-            hasher.update(b"L")
-            _frame(hasher, os.fsencode(os.readlink(path)))
-        elif stat.S_ISREG(metadata.st_mode):
-            hasher.update(b"F")
-            hasher.update(struct.pack(">Q", metadata.st_size))
-            with path.open("rb") as source:
-                while chunk := source.read(1024 * 1024):
-                    hasher.update(chunk)
-        elif stat.S_ISDIR(metadata.st_mode):
-            # Gitlinks/submodules appear as directory entries in the parent.
-            hasher.update(b"G")
-        else:
-            hasher.update(b"O")
-    return hasher.hexdigest()
+    hasher = hashlib.sha256(_DOMAIN)
+    observed_digest = (
+        hashlib.sha256() if observed_regular_path is not None else None
+    )
+    observed = False
+    root_descriptor, root_before = _open_root_directory(root, "workspace root")
+    try:
+        for relative in sorted(set(paths), key=os.fsencode):
+            member = os.fsencode(relative)
+            _validate_source_path_bytes(member)
+            _frame(hasher, member)
+            parent_descriptor = _open_source_parent(root_descriptor, member)
+            if parent_descriptor is None:
+                repeated_parent = _open_source_parent(root_descriptor, member)
+                if repeated_parent is not None:
+                    os.close(repeated_parent)
+                    raise SourceSealError(
+                        f"workspace source parent appeared while inspected: {relative}"
+                    )
+                hasher.update(b"D")
+                continue
+            try:
+                leaf = member.rsplit(b"/", 1)[-1]
+                try:
+                    metadata = os.stat(
+                        leaf, dir_fd=parent_descriptor, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    try:
+                        os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+                    except FileNotFoundError:
+                        hasher.update(b"D")
+                    else:
+                        raise SourceSealError(
+                            f"workspace source appeared while inspected: {relative}"
+                        )
+                    _require_same_source_parent(
+                        root_descriptor, member, parent_descriptor
+                    )
+                    continue
+
+                if stat.S_ISLNK(metadata.st_mode):
+                    try:
+                        target = os.readlink(leaf, dir_fd=parent_descriptor)
+                        after = os.stat(
+                            leaf, dir_fd=parent_descriptor, follow_symlinks=False
+                        )
+                        repeated_target = os.readlink(
+                            leaf, dir_fd=parent_descriptor
+                        )
+                    except OSError as error:
+                        raise SourceSealError(
+                            f"workspace symlink changed while inspected: {relative}"
+                        ) from error
+                    if (
+                        not stat.S_ISLNK(after.st_mode)
+                        or _stable_metadata_changed(metadata, after)
+                        or repeated_target != target
+                    ):
+                        raise SourceSealError(
+                            f"workspace symlink changed while inspected: {relative}"
+                        )
+                    hasher.update(
+                        struct.pack(">I", stat.S_IMODE(metadata.st_mode))
+                    )
+                    hasher.update(b"L")
+                    _frame(hasher, os.fsencode(target))
+                elif stat.S_ISREG(metadata.st_mode):
+                    with _stable_regular_reader_at(
+                        parent_descriptor,
+                        leaf,
+                        metadata,
+                        maximum_size=_MAX_SOURCE_FILE_BYTES,
+                        label=f"workspace source {relative}",
+                    ) as (source, stable_metadata):
+                        hasher.update(
+                            struct.pack(
+                                ">I", stat.S_IMODE(stable_metadata.st_mode)
+                            )
+                        )
+                        hasher.update(b"F")
+                        hasher.update(struct.pack(">Q", stable_metadata.st_size))
+                        while chunk := source.read(_COPY_CHUNK_BYTES):
+                            hasher.update(chunk)
+                            if relative == observed_regular_path:
+                                assert observed_digest is not None
+                                observed_digest.update(chunk)
+                        if relative == observed_regular_path:
+                            observed = True
+                elif stat.S_ISDIR(metadata.st_mode):
+                    # Gitlinks/submodules appear as directory entries in the parent.
+                    after = os.stat(
+                        leaf, dir_fd=parent_descriptor, follow_symlinks=False
+                    )
+                    if (
+                        not stat.S_ISDIR(after.st_mode)
+                        or _stable_metadata_changed(metadata, after)
+                    ):
+                        raise SourceSealError(
+                            f"workspace directory changed while inspected: {relative}"
+                        )
+                    hasher.update(
+                        struct.pack(">I", stat.S_IMODE(metadata.st_mode))
+                    )
+                    hasher.update(b"G")
+                else:
+                    after = os.stat(
+                        leaf, dir_fd=parent_descriptor, follow_symlinks=False
+                    )
+                    if _stable_metadata_changed(metadata, after):
+                        raise SourceSealError(
+                            f"workspace special entry changed while inspected: {relative}"
+                        )
+                    hasher.update(
+                        struct.pack(">I", stat.S_IMODE(metadata.st_mode))
+                    )
+                    hasher.update(b"O")
+                _require_same_source_parent(
+                    root_descriptor, member, parent_descriptor
+                )
+            finally:
+                os.close(parent_descriptor)
+        root_after = os.fstat(root_descriptor)
+        try:
+            root_path_after = root.lstat()
+        except OSError as error:
+            raise SourceSealError("workspace root changed while inspected") from error
+        if (
+            _stable_metadata_changed(root_before, root_after)
+            or _stable_metadata_changed(root_before, root_path_after)
+        ):
+            raise SourceSealError("workspace root changed while inspected")
+    finally:
+        os.close(root_descriptor)
+    return (
+        hasher.hexdigest(),
+        observed_digest.hexdigest() if observed and observed_digest else None,
+    )
+
+
+def _manifest_for_paths(root: Path, paths: Iterable[str]) -> str:
+    return _manifest_snapshot_for_paths(root, paths)[0]
+
+
+def _release_workspace_snapshot(root: Path) -> tuple[str, str]:
+    """Bind the checkout manifest and ignored Cargo.lock from the same stream."""
+
+    manifest, lock_sha256 = _manifest_snapshot_for_paths(
+        root,
+        _git_source_paths(root),
+        observed_regular_path=_WORKSPACE_LOCKFILE,
+    )
+    if lock_sha256 is None:
+        raise DirtyReleaseSourceError(
+            f"release requires a regular workspace {_WORKSPACE_LOCKFILE}"
+        )
+    return manifest, lock_sha256
 
 
 def workspace_source_manifest(root: Path) -> str:

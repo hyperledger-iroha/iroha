@@ -1163,6 +1163,7 @@ fn bls_decision_fetch_body_markers_fail_before_ledger_mutation() {
             effects,
             authority,
             validation_authority: _,
+            factory_owner: _,
         } = authenticated;
         assert!(effects.is_empty());
         let verified = VerifiedHeightContext {
@@ -1286,6 +1287,7 @@ fn bls_revalidated_decision_body_cut_is_same_store_and_drop_restores_exactly() {
         effects,
         authority,
         validation_authority: _,
+        factory_owner: _,
     } = authenticated;
     assert!(effects.is_empty());
     let verified = VerifiedHeightContext {
@@ -1350,6 +1352,7 @@ fn bls_revalidated_decision_body_cut_is_same_store_and_drop_restores_exactly() {
         effects: restored_effects,
         authority: restored_authority,
         validation_authority: _,
+        factory_owner: _,
     } = reopened;
     assert!(restored_effects.is_empty());
     let RecoveredWalStartupAuthorityV1::DecisionFetch(restored_fetch) = restored_authority else {
@@ -1755,6 +1758,7 @@ fn recovered_signature_fifo_uses_latest_exact_owner_before_terminal_wal_frame() 
         effects,
         authority,
         validation_authority: _,
+        factory_owner: _,
     } = authenticated;
     assert!(effects.is_empty());
     drop(authority);
@@ -1893,6 +1897,7 @@ fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round()
         effects,
         authority,
         validation_authority: _,
+        factory_owner: _,
     } = authenticated;
     assert!(effects.is_empty());
     drop(authority);
@@ -2073,6 +2078,7 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         effects,
         authority,
         validation_authority: _,
+        factory_owner: _,
     } = authenticated;
     assert!(effects.is_empty());
     let RecoveredWalStartupAuthorityV1::DecisionFetch(mut fetch) = authority else {

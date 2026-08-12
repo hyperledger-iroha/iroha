@@ -232,22 +232,42 @@ pub(crate) struct ProductionLifecycleOwnerV1 {
     body_store: Option<crate::sumeragi::v2_body_store::V2BodyStore>,
     body_store_identity: Option<crate::sumeragi::v2_body_store::V2BodyStoreInstanceIdentity>,
     kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>,
+    apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>,
     adapter_startup: Option<crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1>,
 }
 // PRODUCTION_LIFECYCLE_OWNER_DECLARATION_END
 
+/// Move-only permit for transferring the recovery-replay Apply service.
+///
+/// Only the lifecycle launch child can name the private seal field. Sumeragi
+/// siblings may consume the permit through the worker seam but cannot mint a
+/// parallel path around the unified owner.
+#[must_use = "the Apply-service launch permit must be consumed by the I/O worker"]
+pub(in crate::sumeragi) struct ProductionLifecycleApplyServiceLaunchPermitV1 {
+    _seal: ProductionLifecycleApplyServiceLaunchPermitSealV1,
+}
+
+struct ProductionLifecycleApplyServiceLaunchPermitSealV1;
+
+impl Drop for ProductionLifecycleApplyServiceLaunchPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
 impl ProductionLifecycleOwnerV1 {
-    /// Bind the Kura instance authenticated by the sole production factory.
+    /// Bind the Kura and exact Apply service authenticated by the production factory.
     ///
     /// Test-only raw-root fixtures never call this method and remain
     /// deliberately unlaunchable. A second binding is an invariant violation
     /// because it would detach already-opened storage from its live Kura owner.
-    pub(in crate::sumeragi) fn with_recovered_kura_binding(
+    pub(in crate::sumeragi) fn with_recovered_kura_binding_and_apply_service(
         mut self,
         binding: crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1,
+        apply_service: crate::sumeragi::v2_apply::V2ApplyService,
     ) -> Self {
         assert!(self.kura_binding.is_none());
+        assert!(self.apply_service.is_none());
         self.kura_binding = Some(binding);
+        self.apply_service = Some(apply_service);
         self
     }
 }

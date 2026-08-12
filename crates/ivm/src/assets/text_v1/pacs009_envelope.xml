@@ -1,0 +1,25 @@
+
+<DataEnvelope xmlns="urn:sample:iso">
+  <Body>
+    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+      <BizMsgIdr>BAH-PACS009-1</BizMsgIdr>
+      <MsgDefIdr>pacs.009.001.10</MsgDefIdr>
+      <CreDt>2025-11-12T09:34:09Z</CreDt>
+    </AppHdr>
+    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10">
+      <FICdtTrf>
+        <GrpHdr>
+          <InstgAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></InstgAgt>
+          <InstdAgt><FinInstnId><BICFI>MARKDEFF</BICFI></FinInstnId></InstdAgt>
+        </GrpHdr>
+        <CdtTrfTxInf>
+          <IntrBkSttlmAmt Ccy="USD">2500</IntrBkSttlmAmt>
+          <IntrBkSttlmDt>2024-01-03</IntrBkSttlmDt>
+          <DbtrAcct><Id><Othr><Id>GB82WEST12345698765432</Id></Othr></Id></DbtrAcct>
+          <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
+          <Purp><Cd>SECU</Cd></Purp>
+        </CdtTrfTxInf>
+      </FICdtTrf>
+    </Document>
+  </Body>
+</DataEnvelope>

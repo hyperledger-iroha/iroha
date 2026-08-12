@@ -464,38 +464,6 @@ impl<'a> DecodeFromSlice<'a> for LayerWidthBuckets {
     }
 }
 
-#[cfg(feature = "json")]
-impl norito::json::FastJsonWrite for LayerWidthBuckets {
-    fn write_json(&self, out: &mut String) {
-        out.push('[');
-        for (idx, bucket) in self.0.iter().enumerate() {
-            if idx > 0 {
-                out.push(',');
-            }
-            JsonSerialize::json_serialize(bucket, out);
-        }
-        out.push(']');
-    }
-}
-
-#[cfg(feature = "json")]
-impl JsonDeserialize for LayerWidthBuckets {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let values = Vec::<u64>::json_deserialize(parser)?;
-        if values.len() != 8 {
-            return Err(norito::json::Error::Message(format!(
-                "expected 8 layer width buckets, got {}",
-                values.len()
-            )));
-        }
-        let mut buckets = [0_u64; 8];
-        buckets.copy_from_slice(&values);
-        Ok(Self(buckets))
-    }
-}
-
 fn encode_hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);

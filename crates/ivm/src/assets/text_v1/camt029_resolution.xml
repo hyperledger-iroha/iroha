@@ -1,0 +1,26 @@
+
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.029.001.09">
+  <RsltnOfInvstgtn>
+    <Assgnmt>
+      <Id>IROHA-CAMT029-ORIGINAL-1</Id>
+      <CreDtTm>2025-11-12T09:34:09Z</CreDtTm>
+    </Assgnmt>
+    <Sts>
+      <Conf>CNCL</Conf>
+    </Sts>
+    <CxlDtls>
+      <OrgnlGrpInf>
+        <OrgnlMsgId>ORIGINAL-1</OrgnlMsgId>
+        <OrgnlMsgNmId>pacs.009</OrgnlMsgNmId>
+      </OrgnlGrpInf>
+      <TxInfAndSts>
+        <OrgnlInstrId>tx-hash-1</OrgnlInstrId>
+        <TxCxlSts>CNCL</TxCxlSts>
+        <CxlStsRsnInf>
+          <Rsn><Prtry>CANCELLED_BY_LEDGER</Prtry></Rsn>
+          <AddtlInf>cancelled by participant request</AddtlInf>
+        </CxlStsRsnInf>
+      </TxInfAndSts>
+    </CxlDtls>
+  </RsltnOfInvstgtn>
+</Document>

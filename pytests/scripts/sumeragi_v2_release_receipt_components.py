@@ -5,6 +5,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import sys
 
 
 def _declared_components(
@@ -99,3 +102,97 @@ def terminal_output_path(
     output = evidence["terminal_output"]
     assert isinstance(output, Path)
     return output
+
+
+def install_cache_helper(source_root: Path, repository_root: Path) -> None:
+    """Install the production cache helper in an external sealed fixture."""
+    scripts = source_root / "scripts"
+    scripts.mkdir()
+    shutil.copy2(
+        repository_root / "scripts" / "copy_sumeragi_v2_release_cargo_cache.py",
+        scripts / "copy_sumeragi_v2_release_cargo_cache.py",
+    )
+
+
+def fixture_corridor_legs(
+    writer_symbols: dict[str, object], bootstrap: dict[str, object]
+) -> object:
+    """Return receipt fixture legs bound to its authenticated Cargo path."""
+
+    fixture_cargo = bootstrap["bootstrap_runner_cargo"]
+    assert isinstance(fixture_cargo, Path)
+    corridor_legs = writer_symbols["_corridor_legs"]
+    assert callable(corridor_legs)
+    return corridor_legs(str(fixture_cargo.resolve()))
+
+
+def run_fixture_cargo_cache_copy(
+    runner: Path, source_home: Path | None, cargo_home: Path, inventory: Path
+) -> subprocess.CompletedProcess[str]:
+    """Execute the production cache copier against fixture roots."""
+
+    helper = runner.with_name("copy_sumeragi_v2_release_cargo_cache.py")
+    arguments = [
+        sys.executable, "-I", "-S", str(helper),
+        "--cargo-home", str(cargo_home), "--inventory", str(inventory),
+    ]
+    if source_home is None:
+        arguments.append("--final")
+    else:
+        arguments.extend(("--source-cargo-home", str(source_home)))
+    return subprocess.run(
+        arguments,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def fixture_cargo_cache_input(
+    runner: Path, source_home: Path, artifact_root: Path
+) -> tuple[Path, Path, Path, Path, dict[str, str]]:
+    """Create one private Cargo cache copy and its production-format inventory."""
+
+    source_home.mkdir(mode=0o700)
+    registry_cache = source_home / "registry" / "cache"
+    registry_cache.mkdir(parents=True, mode=0o700)
+    registry_cache.parent.chmod(0o700)
+    registry_cache.chmod(0o700)
+    crate = registry_cache / "fixture.crate"
+    crate.write_bytes(b"fixture registry cache bytes\n")
+    crate.chmod(0o600)
+    (registry_cache / "fixture-copy").symlink_to(crate.name)
+    git_db = source_home / "git" / "db"
+    git_db.mkdir(parents=True, mode=0o700)
+    git_db.parent.chmod(0o700)
+    git_db.chmod(0o700)
+    git_head = git_db / "HEAD"
+    git_head.write_bytes(b"ref: refs/heads/main\n")
+    git_head.chmod(0o600)
+    cargo_home = artifact_root / "cargo-home"
+    for runtime_name in ("home", "tmp", "cache"):
+        (artifact_root / runtime_name).mkdir(mode=0o700)
+        (artifact_root / runtime_name).chmod(0o700)
+    cargo_home.mkdir(mode=0o700)
+    cargo_home.chmod(0o700)
+    inventory = artifact_root / "cargo-cache-input.json"
+    result = run_fixture_cargo_cache_copy(
+        runner, source_home, cargo_home, inventory
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
+    final_inventory = artifact_root / "cargo-cache-final.json"
+    final_result = run_fixture_cargo_cache_copy(
+        runner, None, cargo_home, final_inventory
+    )
+    if final_result.returncode != 0:
+        raise RuntimeError(final_result.stderr)
+    runtime_fields = {
+        "runtime_home_path": str((artifact_root / "home").resolve()),
+        "runtime_tmpdir_path": str((artifact_root / "tmp").resolve()),
+        "runtime_tmp_path": str((artifact_root / "tmp").resolve()),
+        "runtime_temp_path": str((artifact_root / "tmp").resolve()),
+        "runtime_cache_path": str((artifact_root / "cache").resolve()),
+    }
+    return cargo_home, inventory, final_inventory, source_home, runtime_fields

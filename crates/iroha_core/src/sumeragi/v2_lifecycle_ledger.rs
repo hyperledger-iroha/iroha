@@ -1921,6 +1921,7 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
             body_store: Some(body_store),
             body_store_identity: None,
             kura_binding: None,
+            apply_service: None,
             adapter_startup: Some(adapter_startup),
         })
     }
@@ -2147,6 +2148,7 @@ impl ProductionLifecycleOwnerV1 {
             body_store: Some(body_store),
             body_store_identity: None,
             kura_binding: None,
+            apply_service: None,
             adapter_startup: Some(adapter_startup),
         })
     }
@@ -2273,6 +2275,7 @@ impl ProductionLifecycleOwnerV1 {
             body_store: Some(body_store),
             body_store_identity: None,
             kura_binding: None,
+            apply_service: None,
             adapter_startup: Some(adapter_startup),
         })
     }
@@ -2378,6 +2381,7 @@ impl ProductionLifecycleOwnerV1 {
             body_store: Some(body_store),
             body_store_identity: None,
             kura_binding: None,
+            apply_service: None,
             adapter_startup: Some(adapter_startup),
         })
     }
@@ -2440,6 +2444,7 @@ impl ProductionLifecycleOwnerV1 {
             body_store: Some(body_store),
             body_store_identity: None,
             kura_binding: None,
+            apply_service: None,
             adapter_startup: Some(adapter_startup),
         })
     }
@@ -6424,6 +6429,7 @@ pub(crate) mod tests {
                 body_store: Some(body_store),
                 body_store_identity: None,
                 kura_binding: Some(RecoveredLifecycleOwnerKuraBindingV1::for_test(kura)),
+                apply_service: None,
                 adapter_startup: Some(ProductionLifecycleAdapterStartupV1::fixture_for_test()),
             }
         }

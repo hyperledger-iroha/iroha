@@ -1,4 +1,4 @@
-# zk-X509 fixed SHA assets
+# zk-X509 fixed compile-time assets
 
 `sha_fixed_algebraic_child_digests_v1.bin` contains the five-by-four matrix of
 32-byte release-seal digests for the fixed algebraic SHA compiler. The matrix
@@ -14,3 +14,10 @@ non-tautological coverage includes
 `release_shape_atom_counts_and_digests_are_reported_and_bounded`, and
 `composite_children_are_pinned_and_reject_order_width_and_substitution_attacks`.
 `manifest.json` pins the asset and its pre-extraction Rust declaration.
+
+`rfc5280_grammar_rules_v1.bin` contains the verifier-owned closed grammar as 86
+fixed-width 26-byte records. A specialized fixed-size `const fn` reconstructs
+the same `[ZkX509Rfc5280GrammarRuleV1; 86]`; there is no runtime parser,
+allocation, generic dispatch, or index-order change. The
+`grammar_asset_preserves_every_rule_and_index` test reserializes every typed
+field and pins the complete asset SHA-256.

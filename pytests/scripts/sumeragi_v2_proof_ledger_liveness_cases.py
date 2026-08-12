@@ -1419,14 +1419,27 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             policy,
-            "ps -axo pid,etime,command",
-            "ps -axo pid,command",
+            "acquire_invocation_cargo_lock() {",
+            "acquire_cargo_lock() {",
             "shared process policy lacks exact required token",
         ),
         (
             policy,
-            'executable == "rustfmt"',
-            'executable == "rustdoc"',
+            "release_invocation_cargo_lock() {",
+            "release_cargo_lock() {",
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            "# This file must be sourced. It never observes, signals, reprioritizes, or",
+            "# Mutant reintroduces ambient process observation.\n"
+            "ps -axo pid,etime,command",
+            "observes or polls ambient processes",
+        ),
+        (
+            policy,
+            "lock.mkdir(mode=0o700)",
+            "lock.mkdir(mode=0o755)",
             "shared process policy lacks exact required token",
         ),
         (
@@ -1449,8 +1462,20 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             policy,
-            'command cargo +1.93.1 "${pinned_arguments[@]}"',
+            '"$IROHA_RELEASE_CARGO_BIN" "${pinned_arguments[@]}"',
             'command cargo "${pinned_arguments[@]}"',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then',
+            'if [[ "$argument" == "--" ]]; then',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            '--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*',
+            '--target-dir|--target-dir=*',
             "shared process policy lacks exact required token",
         ),
         (

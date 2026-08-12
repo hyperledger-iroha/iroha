@@ -16,6 +16,21 @@
           "sha256": "982423bb22b0f963688a5f2302be44d75252c2ea50c5d4f2722d4bbfcce0ff9e"
         }
       ]
+    },
+    {
+      "path": "rfc5280_grammar_rules_v1.bin",
+      "byte_length": 2236,
+      "sha256": "2cf3ccbd8083384286fe7427427ac03900310b68e551a0b0345720f4e147e1e6",
+      "layout": "86 records x 26 bytes: u16/u8/bool/u32 grammar fields in declaration order, integers little-endian",
+      "source_preimages": [
+        {
+          "path": "../rfc5280_stark.rs",
+          "constant": "ZK_X509_RFC5280_GRAMMAR_RULES_V1",
+          "physical_lines": 864,
+          "sha256": "982defda4fe187b966e98fee27c9a597e8db062792cd345350f7b3f544751802",
+          "source_commit": "dd10f01c8e2f38819eaf2fbc794b600e3c86815e"
+        }
+      ]
     }
   ]
 }

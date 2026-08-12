@@ -1380,24 +1380,24 @@ def _production_liveness_release_inventory_errors(
     source_sealed_commands = (
         (
             "source-sealed-workspace-build",
-            "cargo +1.93.1 build -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} build -j1 --locked --offline --workspace",
             "run_cargo build --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-tests",
-            "cargo +1.93.1 test -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace",
             "run_cargo test --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-clippy",
-            "cargo +1.93.1 clippy -j1 --locked --offline --workspace "
+            "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace "
             "--all-targets -- -D warnings",
             "run_cargo clippy --locked --offline --workspace --all-targets "
             "-- -D warnings",
         ),
         (
             "source-sealed-workspace-format",
-            "cargo +1.93.1 fmt --all -- --check",
+            "${IROHA_RELEASE_CARGO_BIN} fmt --all -- --check",
             "run_cargo fmt --all -- --check",
         ),
         (
@@ -1608,11 +1608,25 @@ def _production_liveness_release_inventory_errors(
                     "_formal_artifacts",
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
+                    "_cargo_cache_relative_path",
+                    "_cargo_cache_final_relative_path",
+                    "_cargo_cache_octal_mode",
+                    "_cargo_cache_integer",
+                    "_cargo_cache_unchanged",
+                    "_cargo_cache_names",
+                    "_cargo_cache_stat",
+                    "_cargo_cache_open_regular",
+                    "_cargo_cache_tree",
+                    "_validate_cargo_cache_input",
                     "_sdk_suite_source_manifest",
                     "_test_count_from_log",
                     "_prebuilt_artifact_root",
                     "_prebuilt_release_roots",
                     "_prebuilt_directory",
+                    "_publish_receipt_validation_ack",
+                    "_receipt_validation_ack_arguments",
+                    "_receipt_validation_ack",
+                    "_owned_unlink_name",
                     "_corridor_legs",
                 ),
             }

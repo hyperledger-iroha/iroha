@@ -1267,7 +1267,7 @@ def verify(args: argparse.Namespace) -> None:
             environment=environment,
             maximum_output_bytes=_MAX_QUERY_OUTPUT_BYTES,
         )
-        if ssh_probe.returncode < 0:
+        if ssh_probe.returncode != 1:
             raise VerificationError(
                 "stable private ssh-keygen copy could not execute on this platform"
             )

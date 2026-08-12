@@ -6475,15 +6475,6 @@ fn inc_trust_gossip_skipped(direction: &'static str, reason: &'static str) {
     use std::sync::atomic::Ordering::Relaxed;
 
     TRUST_GOSSIP_SKIPPED_CAP_OFF.fetch_add(1, Relaxed);
-    #[cfg(feature = "telemetry")]
-    {
-        if let Some(metrics) = iroha_telemetry::metrics::global() {
-            metrics
-                .p2p_trust_gossip_skipped_total
-                .with_label_values(&[direction, reason])
-                .inc();
-        }
-    }
     iroha_logger::trace!(direction, reason, "trust gossip message skipped");
 }
 
@@ -20890,20 +20881,8 @@ mod tests {
         );
     }
 
-    fn trust_skip_count(direction: &str, reason: &str) -> u64 {
-        #[cfg(feature = "telemetry")]
-        {
-            iroha_telemetry::metrics::global_or_default()
-                .p2p_trust_gossip_skipped_total
-                .get_metric_with_label_values(&[direction, reason])
-                .map(|counter| counter.get())
-                .unwrap_or(0)
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            let _ = (direction, reason);
-            trust_gossip_skipped_capability_off_count()
-        }
+    fn trust_skip_count(_: &str, _: &str) -> u64 {
+        trust_gossip_skipped_capability_off_count()
     }
 
     #[test]

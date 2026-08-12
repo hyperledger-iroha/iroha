@@ -152,16 +152,25 @@ Their focused regression tests live under `scripts/tests/` and
 ## Reproducible Cargo profiling
 
 Use `scripts/profile_cargo_build.py` to compare compiler work without changing
-the repository-local `target/` layout used by CI. The profiler requires both
-its target directory and report path to be outside the checkout, adds
+the repository-local `target/` layout used by CI. The profiler requires its
+target, report, caller-private Cargo home, and caller-private Rustup home to be
+external and disjoint. It takes bounded, inode-independent copies of the dirty
+Git-selected source bytes, Cargo `registry/` and `git/` cache roots, and full
+Rustup tree. Cargo runs only from the read-only source snapshot, against the
+writable private cache/toolchain copies and private HOME/tmp. It adds
 `--locked`, Cargo JSON messages, timing output, and a deterministic job count,
-then records the source, lockfile, toolchain, environment, and compiled-unit
-fingerprints alongside wall-clock and process-resource measurements.
+then records the source, lockfile, initial cache/toolchain/warm-target,
+environment, PATH/core-tool, and compiled-unit fingerprints alongside
+wall-clock and completed-child resource measurements. Cargo, rustc, and Git
+are privately copied and byte-bound; other helpers reachable through the
+recorded PATH are not copied or byte-authenticated.
 
-After Cargo exits, the profiler re-captures the source/HEAD, `Cargo.lock`,
-toolchain, and environment fingerprints. Only top-level `valid: true` reports
-are comparable; any drift invalidates the report and makes an otherwise
-successful profile exit with status 3.
+After Cargo exits, the profiler re-captures the caller source/HEAD,
+`Cargo.lock`, caller cache/toolchain, original and private core tools, and the
+private execution source. Git reads have optional locks, fsmonitor,
+untracked-cache, hooks, and ambient system/global configuration disabled. Only
+top-level `valid: true` reports are comparable; any drift invalidates the
+report and makes an otherwise successful profile exit with status 3.
 
 For a cold profile, start with an absent or empty target directory:
 
@@ -169,14 +178,37 @@ For a cold profile, start with an absent or empty target directory:
 python3 scripts/profile_cargo_build.py \
   --target-dir /tmp/iroha-profile-target \
   --out /tmp/iroha-profile/cold.json \
+  --cargo-home "$IROHA_PROFILE_CARGO_HOME" \
+  --rustup-home "$IROHA_PROFILE_RUSTUP_HOME" \
   -- build --workspace
 ```
 
+Both home arguments are required canonical, external, caller-private roots
+prepopulated for an offline build. The profiler runs locked and offline,
+creates fresh private source/cache/Rustup/HOME/tmp state beside the report,
+refuses to replace any report, transcript, or state path, and removes the
+private state after validation. Copy limits are 250,000 records, 4 GiB per
+file, 64 GiB per tree, depth 128, path length 4096 bytes, and 1 GiB free after
+each copy. Special files, hard-linked regular files in writable caller-derived
+inputs, and absolute or escaping symlinks are rejected.
+
 Warm profiles require an explicit `--reuse-target` so cached work cannot be
-mistaken for a cold measurement. Keep the emitted JSON report, JSONL Cargo
+mistaken for a cold measurement; reused targets containing hard-linked files
+are rejected and the initial warm target is content-bound in the report.
+Allowed manifest paths are remapped into the private source snapshot, and
+`--target` accepts target triples rather than paths. Keep the emitted JSON
+report, JSONL Cargo
 message stream, stderr log, and Cargo timing HTML together when comparing two
 revisions. A comparison is meaningful only when the report input fingerprints
 and Cargo arguments identify the intended source/toolchain change.
+
+The external target and report bundle are intentional mutable outputs. Input
+reads may update filesystem access times. The profiler provides path isolation,
+not an OS sandbox: transitive helpers selected from the recorded PATH and
+hostile processes already able to address unrelated absolute paths are outside
+the guarantee. The legacy `scripts/profile_build.py` named-scenario wrapper now
+uses the same snapshot boundary, but authoritative evidence remains schema-v3
+output from `scripts/profile_cargo_build.py`.
 
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.

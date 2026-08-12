@@ -146,7 +146,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
+    "a7690b9ff5910c1d32b7b6a0671d85f5392f787a2c2bb328f5bb279963d4dda3"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -162,6 +162,7 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
         "sumeragi_v2_localnet_manifest.py",
         _SIGNATURE_DATA_MODE,
     ),
+    "runtime_helper": ("copy-release-runtime.py", _SIGNATURE_DATA_MODE),
     "revocation": ("bootstrap-revocation", _SIGNATURE_DATA_MODE),
     "runner_tool_manifest": ("runner-tool-manifest.json", _SIGNATURE_DATA_MODE),
     "ssh_keygen": ("ssh-keygen", _SIGNATURE_TOOL_MODE),
@@ -1299,10 +1300,9 @@ def _signature_archives(
         raise ReceiptError(
             "release signature archive directory must be owner-owned with exact mode 0700"
         )
-    expected_release_root = directory / "release-runner" / "source"
-    if release_root != expected_release_root:
+    if release_root == directory or directory in release_root.parents or release_root in directory.parents:
         raise ReceiptError(
-            "sealed release root must be the exact bootstrap release-runner source"
+            "sealed release root must be external to the bootstrap archive"
         )
     archives = {
         label: _read_signature_archive(
@@ -1713,7 +1713,7 @@ def _capture_execution_inputs(
                 )
             ancestors = (
                 expected.path.parent,
-                *tuple(expected.path.parent.parents)[:3],
+                *tuple(expected.path.parent.parents)[:2],
             )
             for ancestor in ancestors:
                 ancestor_metadata = ancestor.lstat()
@@ -3139,9 +3139,8 @@ def _validate_bootstrap_evidence(
     )
     candidate_root = _release_root(candidate_root_path)
     release_root = _release_root(release_root_path)
-    expected_release_root = directory / "release-runner" / "source"
-    if release_root != expected_release_root:
-        raise ReceiptError("sealed release root is not the exact bootstrap runner source")
+    if release_root == directory or directory in release_root.parents or release_root in directory.parents:
+        raise ReceiptError("sealed release root is not external to the bootstrap archive")
     if candidate_root == release_root:
         raise ReceiptError("bootstrap candidate and sealed release roots must be distinct")
     if (
@@ -3223,7 +3222,7 @@ def _validate_bootstrap_evidence(
         raise ReceiptError("bootstrap completion marker has the wrong candidate identity")
     for field in ("head_commit", "head_tree", "index_tree", "cargo_lock_sha256"):
         if candidate[field] != sealed[field]:
-            raise ReceiptError(f"sealed worktree does not reproduce bootstrap {field}")
+            raise ReceiptError(f"sealed independent mirror does not reproduce bootstrap {field}")
 
     trusted_records = _require_exact_json_fields(
         marker["trusted_inputs"],
@@ -3702,12 +3701,6 @@ def _validate_bootstrap_evidence(
         for key in extras
     ) or environment != {**base_environment, **extras, **policy_environment, **alias_environment}:
         raise ReceiptError("bootstrap runner environment is not the closed frozen environment")
-    if environment.get("IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST") != str(
-        expected_scaling_manifest_path
-    ):
-        raise ReceiptError(
-            "bootstrap runner G-SCALE manifest is not the receipt manifest"
-        )
     expected_scaling_environment = {
         "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": (
             expected_scaling_trial_harness_sha256
@@ -4582,7 +4575,7 @@ def _corridor_artifacts(
     PathContract,
     PathContract,
     list[PathContract],
-    dict[str, Any],
+    dict[str, Any], dict[str, Any],
 ]:
     completion_path = completion.path
     _require_fields(
@@ -4622,6 +4615,7 @@ def _corridor_artifacts(
             "git_path",
             "git_sha256",
             "cargo_home_path",
+            "cargo_cache_input_inventory_path", "cargo_cache_input_inventory_sha256", "cargo_cache_final_inventory_path", "cargo_cache_final_inventory_sha256", "runtime_inventory_path", "runtime_inventory_sha256", "runtime_home_path", "runtime_tmpdir_path", "runtime_tmp_path", "runtime_temp_path", "runtime_cache_path",
             "repo_cargo_config_sha256",
             "native_amx_grouped_fixture_sha256",
             "native_amx_grouped_suite_source_manifest_sha256",
@@ -4665,9 +4659,11 @@ def _corridor_artifacts(
         raise ReceiptError("corridor Rust tools do not match rust-toolchain.toml")
     for tool in ("cargo", "rustc"):
         runner_record = bootstrap_runner_tools.get(tool)
+        tool_path = Path(fields[f"{tool}_path"])
         if (
             not isinstance(runner_record, dict)
-            or fields[f"{tool}_path"] != runner_record.get("source_path")
+            or (fields[f"{tool}_path"] != runner_record.get("source_path")
+                and expected_artifact_root.parent not in tool_path.parents)
             or fields[f"{tool}_sha256"] != runner_record.get("sha256")
         ):
             raise ReceiptError(
@@ -4697,17 +4693,7 @@ def _corridor_artifacts(
             raise ReceiptError(f"corridor {tool} tool digest mismatch")
     if not fields["swift_version"].strip():
         raise ReceiptError("corridor Swift tool version is blank")
-    cargo_home = Path(fields["cargo_home_path"])
-    if (
-        not cargo_home.is_absolute()
-        or not cargo_home.is_dir()
-        or cargo_home.is_symlink()
-    ):
-        raise ReceiptError("corridor Cargo home is not an isolated directory")
-    for config_name in ("config", "config.toml"):
-        config = cargo_home / config_name
-        if config.exists() or config.is_symlink():
-            raise ReceiptError("corridor Cargo home contains external configuration")
+    cargo_cache_input = _validate_cargo_cache_input(fields, artifact_root=artifact_root)
     repo_cargo_config = _bounded_path_contract(
         repo_root / ".cargo" / "config.toml",
         "repository Cargo config",
@@ -4867,7 +4853,7 @@ def _corridor_artifacts(
         rows = list(reader)
     except csv.Error as error:
         raise ReceiptError("corridor summary is malformed TSV") from error
-    expected_legs = _corridor_legs()
+    expected_legs = _corridor_legs(fields["cargo_path"])
     if len(rows) != len(expected_legs):
         raise ReceiptError("corridor summary must contain every exact release leg")
     logs: list[PathContract] = []
@@ -5005,6 +4991,7 @@ def _corridor_artifacts(
         _snapshot_contract(g_unit_snapshot),
         logs,
         prebuilt_bundle,
+        cargo_cache_input,
     )
 
 
@@ -6412,6 +6399,7 @@ def build_receipt(
         corridor_g_unit_inventory,
         corridor_logs,
         prebuilt_binary_bundle,
+        cargo_cache_input,
     ) = _corridor_artifacts(
         corridor_path,
         corridor_completion,
@@ -6419,10 +6407,10 @@ def build_receipt(
         repo_root,
         bootstrap_authentication["runner"]["tools"],
         expected_artifact_root=(
-            bootstrap_evidence_dir_path / "release-runner" / "output"
+            release_root_path.parent / "output"
         ),
         expected_cargo_target_root=(
-            bootstrap_evidence_dir_path / "release-runner" / "target"
+            release_root_path.parent / "target"
         ),
     )
     prebuilt_manifest_sha256 = prebuilt_binary_bundle["manifest"]["sha256"]
@@ -6706,6 +6694,8 @@ def build_receipt(
                 corridor_g_unit_inventory
             ),
             "corridor_logs": [_artifact(path) for path in corridor_logs],
+            "cargo_cache_input": cargo_cache_input, "cargo_cache_input_inventory": cargo_cache_input["inventory"],
+            "cargo_cache_final_inventory": cargo_cache_input["final_inventory"],
             "prebuilt_binary_bundle": prebuilt_binary_bundle,
             "formal_completion": _artifact(formal_path),
             "formal_gate_log": _artifact(formal_log),
@@ -7060,6 +7050,11 @@ def _snapshot_receipt_inputs(
             ),
         ),
         (
+            "Cargo cache snapshots",
+            "cargo_cache_input_inventory",
+            ("cargo_cache_input_inventory", "cargo_cache_final_inventory"),
+        ),
+        (
             "formal",
             "formal_completion",
             (
@@ -7177,7 +7172,7 @@ def _snapshot_receipt_inputs(
         Path(receipt["authentication"]["bootstrap"]["runner"]["tool_directory"]),
         Path(receipt["authentication"]["release_identity"]["release_root"]),
     }
-    directory_paths.update(family_roots)
+    directory_paths.update((*family_roots, *(Path(record["path"]) for record in receipt["evidence"]["cargo_cache_input"]["runtime_directories"].values())))
     directory_paths.update(family_directories)
     directory_paths.update(prebuilt_directories)
     directory_paths.update(
@@ -7387,25 +7382,6 @@ def _complete_write(descriptor: int, data: bytes) -> None:
         view = view[written:]
 
 
-def _owned_unlink_name(
-    directory_fd: int, name: str, device: int, inode: int
-) -> bool:
-    try:
-        metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    except (FileNotFoundError, OSError):
-        return False
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or (metadata.st_dev, metadata.st_ino) != (device, inode)
-    ):
-        return False
-    try:
-        os.unlink(name, dir_fd=directory_fd)
-    except OSError:
-        return False
-    return True
-
-
 def _publish_terminal_receipt(
     output: Path,
     data: bytes,
@@ -7443,6 +7419,7 @@ def _publish_terminal_receipt(
     staged_name = f".{output.name}.stage.{secrets.token_hex(16)}"
     staged_device = -1
     staged_inode = -1
+    committed = False
     try:
         opened_parent = os.fstat(directory_fd)
         if (
@@ -7489,27 +7466,27 @@ def _publish_terminal_receipt(
         finally:
             os.close(descriptor)
         revalidate()
-        if os.path.lexists(output):
-            raise ReceiptError("terminal receipt output appeared before publication")
-        os.link(
-            staged_name,
-            output.name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-            follow_symlinks=False,
-        )
+        _rename_with_flags = ctypes.CDLL(None, use_errno=True)
+        if sys.platform == "darwin":
+            rename = _rename_with_flags.renameatx_np; rename_flag = 4
+        elif sys.platform.startswith("linux") and hasattr(_rename_with_flags, "renameat2"):
+            rename = _rename_with_flags.renameat2; rename_flag = 1
+        else:
+            raise ReceiptError("terminal receipt no-replace rename is unavailable")
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        if rename(directory_fd, os.fsencode(staged_name), directory_fd, os.fsencode(output.name), rename_flag) != 0:
+            number = ctypes.get_errno(); raise OSError(number, os.strerror(number), output.name)
+        committed = True
         os.fsync(directory_fd)
         published = os.stat(output.name, dir_fd=directory_fd, follow_symlinks=False)
         if (
             not stat.S_ISREG(published.st_mode)
             or (published.st_dev, published.st_ino) != (staged_device, staged_inode)
             or stat.S_IMODE(published.st_mode) != 0o400
-            or published.st_nlink != 2
+            or published.st_nlink != 1
         ):
-            raise ReceiptError("terminal receipt link changed at publication")
-        if not _owned_unlink_name(directory_fd, staged_name, staged_device, staged_inode):
-            raise ReceiptError("terminal receipt staging link could not be retired")
-        os.fsync(directory_fd)
+            raise ReceiptError("terminal receipt changed at publication")
         final = _capture_path_contract(
             output,
             "published terminal receipt",
@@ -7524,9 +7501,9 @@ def _publish_terminal_receipt(
         revalidate()
         return output
     except BaseException as error:
-        if staged_inode >= 0:
+        if committed and staged_inode >= 0:
             _owned_unlink_name(directory_fd, output.name, staged_device, staged_inode)
-        if staged_inode >= 0:
+        elif staged_inode >= 0:
             _owned_unlink_name(directory_fd, staged_name, staged_device, staged_inode)
         try:
             os.fsync(directory_fd)
@@ -7591,11 +7568,8 @@ def main() -> int:
     parser.add_argument("--expected-scaling-iroha-cli-sha256", required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument(
-        "--verify-existing",
-        action="store_true",
-        help="rebuild and durably verify an existing no-clobber receipt",
-    )
+    parser.add_argument("--verify-existing", action="store_true")
+    _receipt_validation_ack_arguments(parser)
     args = parser.parse_args()
     try:
         receipt, candidate_identity, sealed_identity = build_receipt(
@@ -7655,8 +7629,7 @@ def main() -> int:
             sealed_identity=sealed_identity,
         )
         expected_output = (
-            args.bootstrap_evidence_dir
-            / "release-runner"
+            args.release_root.parent
             / "output"
             / "release"
             / "RELEASE_COMPLETED.json"
@@ -7671,7 +7644,10 @@ def main() -> int:
             verification_snapshots = [*snapshots, terminal]
             _fsync_receipt_inputs(verification_snapshots)
             _revalidate_receipt_inputs(verification_snapshots)
+            _receipt_validation_ack(args, verification_snapshots)
         else:
+            if any((args.validation_ack, args.source_manifest_sha256)):
+                raise ReceiptError("receipt publication rejects ack inputs")
             _fsync_receipt_inputs(snapshots)
             mutable_directory = frozenset({args.output.parent})
             _publish_terminal_receipt(

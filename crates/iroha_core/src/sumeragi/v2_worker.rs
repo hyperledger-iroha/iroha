@@ -15589,6 +15589,134 @@ impl ProductionV2Services {
             super::serviced_candidate_store::LeaderWireRecoveryAuthority,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
+        let apply_service = V2ApplyService::new(
+            Arc::clone(&state),
+            queue,
+            Arc::clone(&kura),
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
+            block_cadence,
+            genesis_account,
+            events_sender,
+            validator_set_pops.clone(),
+        );
+        Self::start_inner(
+            context,
+            initial_tag,
+            durable_decided_subject,
+            validator_set_pops,
+            local_peer,
+            local_validator,
+            key_pair,
+            network,
+            chunk_root,
+            body_store,
+            state,
+            kura,
+            apply_service,
+            consensus_io_capacity,
+            auxiliary_io_capacity,
+            orphan_chunk_capacity,
+            lifecycle_ordinals,
+            output_guard,
+            leader_wire_ingress,
+            kura_replica_advert_refresh,
+            leader_wire_recovery_authority,
+            exact_output_handoff_owner,
+        )
+    }
+
+    /// Start with the exact application service used for recovered marker replay.
+    ///
+    /// Identity validation runs before the shared constructor creates the
+    /// context chunk directory or starts any worker, so a substituted State,
+    /// Kura, network, or proof roster fails without startup side effects.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn start_with_apply_service(
+        _permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1,
+        context: wire::HeightContext,
+        initial_tag: EventTag,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        validator_set_pops: Vec<Vec<u8>>,
+        local_peer: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        key_pair: KeyPair,
+        network: IrohaNetwork,
+        chunk_root: impl AsRef<Path>,
+        body_store: V2BodyStore,
+        state: Arc<crate::state::State>,
+        kura: Arc<crate::kura::Kura>,
+        apply_service: V2ApplyService,
+        consensus_io_capacity: usize,
+        auxiliary_io_capacity: usize,
+        orphan_chunk_capacity: usize,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+        output_guard: Arc<ConsensusOutputGuard>,
+        leader_wire_ingress: Arc<FairV2Ingress>,
+        kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
+        leader_wire_recovery_authority:
+            super::serviced_candidate_store::LeaderWireRecoveryAuthority,
+        exact_output_handoff_owner: DurableExactOutputServiceOwner,
+    ) -> Result<Self, String> {
+        if !state.matches_kura_instance(&kura)
+            || !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)
+        {
+            return Err(
+                "Sumeragi v2 recovered Apply service changed lifecycle identity".to_owned(),
+            );
+        }
+        Self::start_inner(
+            context,
+            initial_tag,
+            durable_decided_subject,
+            validator_set_pops,
+            local_peer,
+            local_validator,
+            key_pair,
+            network,
+            chunk_root,
+            body_store,
+            state,
+            kura,
+            apply_service,
+            consensus_io_capacity,
+            auxiliary_io_capacity,
+            orphan_chunk_capacity,
+            lifecycle_ordinals,
+            output_guard,
+            leader_wire_ingress,
+            kura_replica_advert_refresh,
+            leader_wire_recovery_authority,
+            exact_output_handoff_owner,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_inner(
+        context: wire::HeightContext,
+        initial_tag: EventTag,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        validator_set_pops: Vec<Vec<u8>>,
+        local_peer: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        key_pair: KeyPair,
+        network: IrohaNetwork,
+        chunk_root: impl AsRef<Path>,
+        body_store: V2BodyStore,
+        state: Arc<crate::state::State>,
+        kura: Arc<crate::kura::Kura>,
+        apply_service: V2ApplyService,
+        consensus_io_capacity: usize,
+        auxiliary_io_capacity: usize,
+        orphan_chunk_capacity: usize,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+        output_guard: Arc<ConsensusOutputGuard>,
+        leader_wire_ingress: Arc<FairV2Ingress>,
+        kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
+        leader_wire_recovery_authority:
+            super::serviced_candidate_store::LeaderWireRecoveryAuthority,
+        exact_output_handoff_owner: DurableExactOutputServiceOwner,
+    ) -> Result<Self, String> {
         let construction_guard = Arc::clone(&output_guard);
         let construction = construction_guard
             .begin_fail_stop_operation()
@@ -15650,17 +15778,6 @@ impl ProductionV2Services {
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
-        let apply_service = V2ApplyService::new(
-            state,
-            queue,
-            Arc::clone(&kura),
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
-            block_cadence,
-            genesis_account,
-            events_sender,
-            validator_set_pops,
-        );
         let lifecycle_body_store_identity = body_store.instance_identity();
         let io = V2IoHandle::spawn(
             body_store,

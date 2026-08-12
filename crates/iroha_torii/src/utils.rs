@@ -2007,8 +2007,6 @@ pub mod extractors {
             Error::Misaligned { .. } => "misaligned",
             Error::Io(_) => "io_error",
             Error::Message(_) => "message",
-            #[cfg(feature = "json")]
-            Error::Json(_) => "json_error",
             _ => "other",
         }
     }

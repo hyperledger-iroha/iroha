@@ -847,6 +847,7 @@ impl ProductionLifecycleOwnerV1 {
                 body_store: Some(body_store),
                 body_store_identity: None,
                 kura_binding: None,
+                apply_service: None,
                 adapter_startup: Some(
                     crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
                 ),

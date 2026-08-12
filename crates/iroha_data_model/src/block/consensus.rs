@@ -5139,41 +5139,6 @@ pub struct RbcDeliver {
     pub ready_signatures: Vec<RbcReadySignature>,
 }
 
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct BlockMultiproof {
-    pub reads: Vec<ReadNode>,
-    pub read_keys: Vec<Vec<u8>>, // canonical bytes for keys
-    pub writes: Vec<WriteEntry>,
-    pub per_tx_read_index: Option<Vec<TxReadSpan>>,
-    pub proof_aux: Vec<u8>,
-}
-
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct ReadNode {
-    /// Opaque encoding of a Verkle/SMT node needed for verification
-    pub node_bytes: Vec<u8>,
-}
-
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct WriteEntry {
-    pub key: Vec<u8>,
-    pub value_bytes: Vec<u8>,
-    pub pre_version: u64,
-    pub new_version: u64,
-}
-
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct TxReadSpan {
-    /// start index (inclusive) into `BlockMultiproof::read_keys`
-    pub start: u32,
-    /// end index (exclusive)
-    pub end: u32,
-}
-
 // --- Helpers for Norito slice decoding bridges ---
 fn decode_from_slice_canonical<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
 where
@@ -5223,14 +5188,6 @@ impl_decode_from_slice_via_codec!(RbcChunk);
 impl_decode_from_slice_via_codec!(RbcReady);
 impl_decode_from_slice_via_codec!(RbcReadySignature);
 impl_decode_from_slice_via_codec!(RbcDeliver);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(BlockMultiproof);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(ReadNode);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(WriteEntry);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(TxReadSpan);
 impl_decode_from_slice_via_codec!(ConsensusGenesisParams);
 impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);

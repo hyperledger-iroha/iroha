@@ -438,7 +438,6 @@ pub struct FeedEventDigest {
 
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct BundleSummary {
-    #[cfg_attr(feature = "json", norito(default))]
     pub generated_at_unix: u64,
     pub artifact_root: String,
     pub feed_events: Vec<FeedEventDigest>,

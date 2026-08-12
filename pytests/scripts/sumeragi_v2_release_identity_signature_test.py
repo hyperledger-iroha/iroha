@@ -256,7 +256,7 @@ def signed_commit(tree: str, message: bytes, *, armor: str = "ssh") -> bytes:
     return headers + b"\n" + message
 
 
-_FAKE_GIT_TEMPLATE = r'''#!__PYTHON__
+_FAKE_GIT_TEMPLATE = r'''#!__PYTHON__ -B
 import base64
 import json
 import os
@@ -364,7 +364,7 @@ def write_fake_git(path: Path, state_path: Path, log_path: Path) -> None:
 
 def write_fake_ssh_keygen(path: Path) -> None:
     path.write_text(
-        f"#!{Path(sys.executable).resolve()}\nraise SystemExit(99)\n",
+        f"#!{Path(sys.executable).resolve()} -B\nraise SystemExit(1)\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -899,7 +899,7 @@ def test_rejects_wrong_protected_input_hash(tmp_path: Path, name: str) -> None:
 def test_rejects_stable_ssh_keygen_copy_that_cannot_execute(tmp_path: Path) -> None:
     case = make_case(tmp_path)
     case["ssh_keygen"].write_text(
-        f"#!{Path(sys.executable).resolve()}\n"
+        f"#!{Path(sys.executable).resolve()} -B\n"
         "raise SystemExit(79)\n",
         encoding="utf-8",
     )
@@ -1441,7 +1441,7 @@ def _real_signed_case(
     marker = tmp_path / "malicious-gpg-program-ran"
     malicious = tmp_path / "malicious-gpg-program"
     malicious.write_text(
-        f"#!{Path(sys.executable).resolve()}\n"
+        f"#!{Path(sys.executable).resolve()} -B\n"
         "from pathlib import Path\n"
         f"Path({str(marker)!r}).write_text('ran')\n"
         "raise SystemExit(0)\n",
