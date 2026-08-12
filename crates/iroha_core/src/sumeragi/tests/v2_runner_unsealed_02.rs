@@ -530,8 +530,9 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
 
 #[test]
 fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
+    let (context, _keys) = context();
     assert_eq!(
-        outer_ingress_turns(3).collect::<Vec<_>>(),
+        outer_ingress_turns(3, context.id(), context.height).collect::<Vec<_>>(),
         vec![
             OuterIngressTurn::Completion,
             OuterIngressTurn::Runtime,
@@ -545,7 +546,7 @@ fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
         ]
     );
     assert_eq!(
-        outer_ingress_turns(0).collect::<Vec<_>>(),
+        outer_ingress_turns(0, context.id(), context.height).collect::<Vec<_>>(),
         vec![
             OuterIngressTurn::Completion,
             OuterIngressTurn::Runtime,

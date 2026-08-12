@@ -177,12 +177,30 @@ coalescing them in a map. Planning computes prospective external/recovery
 wakeups first, validates the complete identity-bound ready census, and only
 then publishes those generations. A malformed or stale census therefore
 cannot make waiting work ready before the coordinator fails closed. Production
-selection remains intentionally unreachable until fair ingress can attest
+Ready rows for Validate additionally carry a registry-derived, exact-address
+attestation of `ExecuteBody`, `ValidatedCompletion`, or
+`RejectedCompletion`. Missing Validate attestations and attestations on any
+other work class fail the whole census. Only the canonical rejected completion
+demands one extra Consensus output slot. If that slot is full, the record stays
+Ready and unclaimed and contributes the current Consensus capacity generation
+to `TurnPlan::Waiting`; capacity-blocked rows are omitted from that call's
+selectable predecessor set so a later row able to release the slot can run.
+When feasible, the reservation is bound privately to the claimed lease, and
+all concurrent admission counts it as used capacity.
+
+The reservation is transient and never enters LifecycleLedgerV1. Dropping a
+consumer or failing before the typed commit leaves it visible on the active
+lease. Generic settlement rejects such a lease fail-closed: the future sole
+rejected-Validate transaction must either consume the reservation into its
+one invalid-body report without an intermediate generation change, or release
+it on a typed non-report branch and advance Consensus generation exactly once.
+Production selection remains intentionally unreachable until fair ingress can attest
 lane/source positions under its lock and the reified move-only
 Completion/Runtime/Ingress cursor is bound into the same composite snapshot.
 That cursor now preserves the old iteration sequence while exposing its exact
-reach debt, but it is not independently a planner mint. Post-selection legacy
-evidence and absent-source zero defaults are not accepted substitutes.
+reach debt, but it is not independently a planner mint. Post-selection
+out-of-band evidence and absent-source zero defaults are not accepted
+substitutes.
 
 The executor separately mints a move-only, context-bound mode observation:
 its debt is one until the typed Kura application completion is retained and
@@ -216,8 +234,9 @@ or same-wire ownership-history coalescence fails its comparison. The service
 guard may span coordinator snapshot validation; the queue-state guard may not
 span network, cryptographic, effect, or coordinator work.
 
-The cut also retains typed snapshots of both legacy physical barriers during
-the one-cut migration. The Certified-Serve projection binds the exact gate
+Until the final runner cutover deletes them, the cut also retains typed
+snapshots of both existing physical barriers. The Certified-Serve projection
+binds the exact gate
 actor, selected request/carrier, request cutoff, and predecessor-cleared
 predicate. The leader-wire projection binds its gate actor, durable Ingress
 ordinal set, complete active token/carrier/predecessor map, earliest selected
@@ -260,7 +279,7 @@ it may be stale immediately after return and exposes no general clone,
 constructor, mutation, claim, reservation, or dequeue API. The only
 crate-visible mint takes the ingress queue and target physical ordinal together;
 raw cut rows and candidates remain sealed. There is no optional selector, zero
-placeholder, caller-supplied row, or legacy lifecycle/scheduler ordinal in this
+placeholder, caller-supplied row, or runtime lifecycle/scheduler ordinal in this
 tranche, and the result still cannot mint `SchedulerInputs`.
 
 The queue-only final CAS now exists behind that sealed boundary, but it is not
@@ -384,7 +403,7 @@ receipt; generic registry replacement rejects completion values and is not a
 second construction path. Scheduled execution rechecks the receipt against the
 exact retained Fetch and dequeued response, and its sealed `StoreBody` successor
 retains the same nested `DurableBodyReceipt` for future canonical reload instead
-of relying on legacy ready-body persistence. The required order is therefore:
+of relying on volatile ready-body persistence. The required order is therefore:
 authenticate the response and persist its body to obtain the sealed receipt,
 freshly recapture selector/queue state, prepare the registry preflight, bind the
 receipt, exact-dequeue, then install the closed completion. `Ready` and terminal
@@ -404,7 +423,7 @@ its exact candidate and executor cut, and commits or removes the exact queue
 identity under the queue-state lock. A failed final comparison aborts every
 staged planner, response-claim, runtime, and service reservation change.
 
-The claimed-response priority relation also has an explicit migration gate.
+The claimed-response priority relation also has an explicit authority gap.
 The existing formal model claims a certified response when transport admits
 it, while production Rust currently authenticates and claims that response
 only after fair-ingress dequeue. Outstanding request-hash membership is not a
@@ -422,7 +441,7 @@ fallback for an unavailable preflight.
 The production cutover has an explicit ordinal-free seam. A move-only
 `PendingRuntimeEffectBinding` retains only the authenticated causal lifecycle
 key, exact concrete-effect identity, and inherited semantic statement under a
-separate integrity projection; the legacy runtime ordinal is absent. The
+separate integrity projection; the runtime ordinal is absent. The
 logical coordinator still stores only the resulting physical slot and digest.
 Complete process-local `AdapterEffect` values live in a sibling deterministic
 registry keyed by `(OwnerId, record ordinal, PhysicalSlotId)`, never by digest
@@ -480,7 +499,7 @@ pending causal binding, and nested durable body receipt. While that token keeps
 the concrete row exclusively borrowed, the adapter previews `BodyAvailable`
 against cloned reducer and wire-registry state. Preview never calls the
 serviced-candidate store, producer-continuation reservation, deferred FIFO, or
-legacy lifecycle ordinal allocator.
+runtime lifecycle ordinal allocator.
 
 A `Busy` preview leaves the completion installed and settles the unchanged
 Fetch lease on one context-scoped external reducer-fence source. The adapter
@@ -488,14 +507,14 @@ owns that source's monotone generation and advances it whenever pending
 persistence, awaiting-signature, or replay-fence authority changes. Generation
 `u64::MAX` is permanently reserved as invalid; exhaustion fails closed before
 either a wait token or a reducer mutation is exposed. Idempotent, superseded,
-and transitional legacy-conflict results retain the same exclusive adapter
+and deferred-conflict results retain the same exclusive adapter
 borrow until the future transaction gives them their typed settlement, so they
 cannot become check-then-use classifications.
 
 An applied preview is valid only when the cloned reducer emits exactly one
 `StoreBody` whose tag, round, and subject all equal the input `BodyAvailable`.
 The retained Fetch pending binding then projects the Store binding without a
-legacy ordinal: the immutable causal key and inherited semantic statement stay
+runtime ordinal: the immutable causal key and inherited semantic statement stay
 exact while only the concrete effect kind, physical identity, and integrity
 projection change. This projection is deterministic data, not separately
 executable authority; it remains sealed inside the parent-to-successor
@@ -513,7 +532,8 @@ body and replay or inject the matching `BodyAvailable` before exposing a live
 Store row; process fail-stop cannot substitute for that power-loss contract.
 
 The next direct seam advances that durable Store row to `ValidateBody` without
-reviving legacy completion machinery. Its sealed pending binding projects only
+reviving a parallel completion scheduler. Its sealed pending binding projects
+only
 an exact `StoreBody -> ValidateBody` pair with identical tag, round, subject,
 causal lifecycle key, and inherited candidate statement; only the concrete
 effect identity and integrity projection change. The adapter rechecks the
@@ -534,13 +554,15 @@ verified height context and require the claimed lifecycle key, causal owner,
 stage, reconstruction source, and complete consumed one-slot Effect geometry.
 Generic registry borrow/take operations reject both closed forms, and the
 current tokens expose no constructor, installation, removal, commit, or parts
-extraction. The sealed Store-to-Validate successor already owns every field
-needed for the later child carrier, but remains drop-inert until the adapter,
-coordinator, registry, ledger, and recovery cuts can publish together.
+extraction. The sealed Fetch-to-Store and Store-to-Validate successors project
+their mandatory replay authority and body-frame payload only while retaining
+the exact parent registry borrow. Coordinator staging consumes each token into
+a dual-borrow, drop-inert prepared cut; it still cannot publish until the
+adapter, coordinator, registry, ledger, and recovery cuts can commit together.
 
 Because the Store input already names a synchronised body-store frame, restart
 must reload those exact bytes from the durable catalog rather than depend on
-legacy `ready_bodies`. Publishing the Store-to-Validate ledger replacement is
+the volatile `ready_bodies` cache. Publishing the Store-to-Validate ledger replacement is
 safe only when recovery can replay `BodyAvailable` and then `BodyStored` for
 that exact manifest before exposing the reconstructed Validate row. Durable
 bytes alone do not prove that either reducer transition was replayed, and
@@ -558,7 +580,7 @@ decision owns no child effect. The `Persist` carrier keeps the complete core
 effect sealed and exposes neither encoded WAL bytes nor an append capability;
 the `Apply` carrier requires the exact event tag, subject, proposal round,
 execution commitment, and durable Decision. Preparation mutates no live
-adapter, WAL, lifecycle record, or legacy completion queue.
+adapter, WAL, lifecycle record, or parallel completion queue.
 
 Deterministic validation failure uses a separate private preview because it
 must never mint a success commitment or enter the safety-WAL continuation.
@@ -583,9 +605,10 @@ hash authorities. Its closed non-clone result is either a post-fsync
 `ValidatedBodyReceipt`, a deterministic rejection bound to the same durable
 receipt, or an exact certified-merge-sidecar deferral bound to that receipt.
 No work id, runtime owner, lifecycle ordinal, or scheduler decision appears in
-this surface. The legacy task wrapper delegates to the same storage core for
-behavioral compatibility, but only the new registry path supplies the
-independent manifest authority needed by the direct lifecycle transaction.
+this surface. The existing worker-task entry is not a second authority: it
+delegates to the same storage core and must be deleted at production cutover.
+Only the registry path supplies the independent manifest authority needed by
+the direct lifecycle transaction.
 The scheduler-free result has a consuming success-only extraction which
 returns every rejection or sidecar deferral intact. The closed Validate
 registry preflight can bind that exact `ValidatedBodyReceipt` without changing
@@ -596,6 +619,26 @@ canonical execution commitment. The resulting borrow-bound token exposes only
 preview inputs, the validation receipt, and old/new digests; it has no install,
 remove, or commit operation until the coordinator Ready replacement and
 registry conversion can publish atomically.
+
+The body-store validation marker is a first-release closed outcome envelope,
+not a success-only witness. It stores either the exact validated execution
+commitment or the canonical deterministic-rejection code beside the context,
+proposal round, subject, manifest hash, and checksummed body-frame hash. A
+merge-sidecar deferral is never persisted as terminal authority. Rejection
+diagnostic text remains volatile and does not enter the marker. On restart all
+marker kinds are quarantined; the body is reloaded and deterministic validation
+must reproduce the same success/rejection kind and, for success, the identical
+commitment before the marker is promoted. A changed kind, commitment, frame,
+manifest, or rejection code fails closed without partially promoting the
+catalog. An exact rejection repeat is idempotent and does not rerun validation.
+Promoted rejections remain private. The storage-only lifecycle assembler now
+consumes them only through one body-store-instance-bound aggregate catalog cut
+covering both successful and rejected outcomes. The cut selects every exact
+`AdvancedNoSuccessor` Validate claim once; dropping it restores selected and
+unselected outcomes, while commit consumes only selected outcomes and restores
+unrelated success authority needed by recovered-WAL replay. Pending semantic
+revalidation, retired sidecar deferrals, a missing/substituted frame, or an
+ambiguous success/rejection key fails before recovery authority is published.
 
 The inert asynchronous handoff now makes that storage interval explicit. The
 borrow-bound Validate preflight can be consumed into a sealed, non-clone owned
@@ -627,7 +670,7 @@ coordinator, and return one non-clone dispatch. Every precommit failure returns
 the caller's exact lease; a body-store error returns the complete dispatch and
 wake authority intact. Dropping a successful dispatch leaves the row explicitly
 Waiting and the closed registry carrier unchanged. This tranche creates no
-legacy body task or work identifier, enqueues no service work, publishes no
+second body task or work identifier, enqueues no service work, publishes no
 Ready event while dispatching, rewrites no lifecycle ledger, and has no
 production caller. Merge-sidecar registration and wake remain prerequisites
 for wiring it.
@@ -691,7 +734,7 @@ nested Persist. The encoded payload, post-acknowledgement state, and Sign effect
 remain private. Adapter or publication-preflight errors retain the complete
 opaque registry token. The bridge exposes only the nine-way Copy discriminator:
 no commit, install, extraction, WAL bytes, raw event or receipt constructor,
-legacy task identifier, scheduler authority, or production caller. It never
+worker-task identifier, scheduler authority, or production caller. It never
 appends the WAL, and dropping any result mutates neither subsystem.
 
 TODO: Add the sole atomic consuming transaction which settles the Validate
@@ -699,36 +742,187 @@ parent, authenticates and admits any exact successor, transitions or retires
 the Ready completion carrier, and installs the staged adapter state with the
 required WAL and restart ordering. No subset of coordinator settlement,
 successor admission, registry transition, or adapter commit may publish alone.
-Before that transaction can exist, authenticated restart must replay a
-terminalized Validate transition and reconstruct its exact successor, and the
-rejected-report branch must reserve or prove Consensus capacity before the
-Validate record is claimed; a claimed record cannot use record-level Capacity
-as a settlement wait. A durable Validate row is live, terminal `Advanced`, or
+The restart prerequisite is now represented explicitly in LedgerV1 by a
+canonical three-state durable continuation. `None` is required for live rows
+and unrelated tombstones. `AdvancedNoSuccessor` is accepted only for an
+`Advanced` Validate that deterministically produced no child.
+`AdvancedSuccessor` carries one typed forward edge and ordinal. Fetch and Store
+must respectively name `FetchToStore` and `StoreToValidate`; Validate may name
+`ValidateToApply`, `ValidateToInvalidBodyReport`, `ValidateToSignPrepare`, or
+`ValidateToSignCommit`. Decode rejects unknown codes and every noncanonical
+code/optional-ordinal pairing. Ledger validation and direct coordinator
+reconciliation reject a missing, backward, dangling, multiply named,
+foreign-owner, foreign-source, or semantically foreign edge. The target must
+retain the same causal owner and reconstruction source, preserve context,
+round, proposal round, subject, and independent predecessor scope, and obey
+the commitment-refinement lattice. Fetch and Store preserve commitment
+exactly; every Validate child carries a commitment, while an existing parent
+commitment must match it. The longer body debt is therefore
+Fetch=5, Store=4, Validate=3, signing=2, and Apply/report=1, so every newly
+admitted continuation strictly reduces the first scheduler-rank component.
+The durable payload relation is equally exact. Fetch owns no body-frame
+reference before completion and may publish one on Store. Store-to-Validate
+and Validate-to-Apply must then retain the same context, proposal round,
+subject, manifest hash, and checksummed body-frame hash byte-for-byte. A mixed
+or substituted frame invalidates the whole ledger. Payload-free Store and Apply
+rows are not part of the first-release format; the generic raw effect projection
+therefore fails closed until the receipt-bound body-stage transition installs
+the exact frame. Vote-signing and diagnostic
+children own separate replay authority and therefore carry no body-frame
+payload, while their terminal Validate parent retains its exact frame. Every
+live, claimed, waiting, and Ready Validate row carries that same key-bound
+`BodyFrame`; scheduler-demand attestation and dispatch/completion preflight
+compare it with the closed registry carrier's `DurableBodyReceipt`, so a
+payload-free or substituted frame can neither be claimed nor awakened.
+
+A future consuming transaction must persist the parent tombstone, child row,
+and typed continuation in one ledger replacement before exposing its volatile
+registry or adapter publication. `AdvancedNoSuccessor` requires exact coverage
+by a storage-authenticated body outcome joined to the immutable Validate
+parent identity, including the identical body-frame payload. The checksummed
+typed ledger tombstone is the authority for
+the historical no-child branch: restart must not rerun the old adapter preview,
+because later WAL/reducer progress can legitimately classify the same body as
+Busy, duplicate, or already decided. Absence of both the child and that exact
+body-outcome coverage is never authority. The general storage-only factory
+deliberately continues to reject such a tombstone when no body store is
+supplied. Its body-aware sibling authenticates the complete tombstone census
+against the aggregate outcome cut, and the recovered-WAL sibling joins that
+same census with the opaque installed Sign projection. All logical and
+Certified-Serve checks precede catalog detachment; partial multi-row selection
+restores the exact catalog before returning the owned ledger and Serve
+authority.
+For Persist, WAL fsync precedes ledger replacement. Startup must therefore
+replay the WAL first and repair an old live Validate plus its uniquely
+authenticated awaiting-signature continuation into the identical typed Sign
+edge before ordinary ledger/candidate coverage runs. Missing or ambiguous
+repair fails closed. The final ledger edge need not retain a WAL id because the
+restart-only seal binds the exact replay frame sequence, reducer persistence
+identity, verified complete-frame hash, parent owner/key/source, and
+authenticated Sign candidate. The pure WAL recovery result retains the
+calculated hash beside every recovered payload. The filesystem adapter exposes
+no sequence-only append acknowledgement: its typed fsync receipt contains the
+sequence and exact frame hash, the retained in-memory record contains the same
+pair, and the adapter compares both plus the payload before acknowledging the
+reducer. The recovered vote carries that three-field identity opaquely through
+the ledger-parent proof, runtime successor, authenticated repair, durable
+repair, and every failure that retains those seals; no raw parts API exposes it
+as executable authority. The adapter now keeps startup effects inside a
+private non-clone wrapper and defers initial status publication. Its sole
+consuming join re-decodes and reauthenticates the final `PrepareIntent` or
+`LockAndCommit` frame, proves that the exact vote remains the reducer-owned
+awaiting signature, and removes the unique matching Sign before any raw batch
+can escape. The vote never separates from that adapter wrapper: the same fixed
+join consumes it together with an opaque, move-only cut detached from the exact
+Ready/validated registry completion and uses a verified height context
+reconstructed from the sealed adapter. No raw effect or pending binding crosses
+that boundary. The join also handles the legitimate crash cut where an ordinary
+Validate was already in flight when the WAL durably registered a PrepareQC,
+using the token-retained full certificate to derive one Commit binding. The
+validated-body outcome, durable receipt, parent address, and installed digests
+remain retained beside the logical repair and are rechecked against the WAL
+vote's execution commitment and the exact frame retained by the live or
+already-repaired ledger parent. Projection failure restores the exact detached
+carrier. After successful authentication the registry row is absent and the
+result retains the exclusive registry borrow and vacant parent-address
+reservation. Before fsync the outer splice binds that address's owner, ordinal,
+semantic key, stage, durable source, payload, and physical slot to the exact
+opened LedgerV1 parent. The shared ledger reducer then accepts only the live
+parent transition or the exact already-repaired parent/child stutter; no third
+terminal or continuation shape passes. It derives the concrete Sign address
+from the staged/replayed durable ordinal and proves that child address is also
+vacant. The store then reloads the caller's opened snapshot, rejects staleness,
+and fsyncs the complete frame. This exact stutter is the crash-reentry path when
+the ledger fsync completed before volatile child installation.
+Every error—including preflight and post-publication errors—retains the sealed
+registry reservation and is fail-stop/restart rather than ordinary rollback.
+Failure retains every authority inside an opaque diagnostic; success produces
+one non-clone adapter-plus-durable-repair seal with no raw effect, binding,
+receipt, or startup-batch extraction. Authenticated final WAL records which own
+no phase-vote continuation may not publish initial status directly. They must
+first pass the exhaustive storage-only recovery assembler, exact
+registry/coordinator open, and status-last publication; unsupported live rows
+retain the sealed startup and fail closed. The production join remains
+intentionally unwired; the future composite must obtain the opaque Validate
+cut internally from the same sealed registry/ledger parent. LedgerV1
+purely stages either the one live-Validate to typed-Sign repair or an exact
+idempotent stutter, revalidating the complete ledger relation in both cases.
+The ledger store's publication receipt binds the store path, context,
+parent/child keys, typed edge, child ordinal, and canonical frame hash;
+authority checks reload and hash the bytes currently at that path rather than
+trusting a caller snapshot. The outer post-fsync authority retains that durable
+logical repair, the complete detached validation, the exclusive registry
+borrow, and both vacant concrete addresses.
+The post-fsync authority now has one consuming concrete-work installation. It
+reloads the receipt-bound store and requires the repaired-pair stutter, vacant
+parent and child, an otherwise empty causal owner, the receipt's exact child
+ordinal, and the sole Effect-class slot/digest before mutation. One infallible
+map insertion installs a closed `DurableRecoveredWalSign` carrier which owns
+the complete durable repair plus detached validated completion; it exposes only
+a borrow of the Sign effect required by generic registry inspection and never a
+pending binding or consuming pair. Failure retains the complete uninstalled
+authority in an opaque fail-stop diagnostic. Success returns an opaque installed
+startup cut which keeps the registry exclusively borrowed and revalidates one
+same-owner child with the parent absent. Dropping that cut releases only the
+borrow and leaves the exact closed row installed. The installed cut now feeds
+one sealed coordinator-open and publication transaction: it splices the exact
+authenticated recovery parent to the installed Sign child (or accepts the
+already-repaired child), prepares the coordinator without publishing either
+store, checks exact registry/coordinator/LedgerV1 agreement, commits the ledger
+and authenticated payload pruning, rechecks the post-commit join, and only then
+publishes adapter status. Every failure retains the adapter, unpublished
+effects, installed registry borrow, recovery authority, and any prepared or
+opened coordinator state still applicable; status failure is fail-stop after
+the exact open. Only production runner wiring and exposure of the final opaque
+published wrapper remain intentionally unavailable.
+
+The rejected-report branch now receives its one Consensus reservation before
+the Validate record is claimed; the consuming transaction still must convert
+that lease-bound reservation into the exact report child or release it on a
+typed non-report result. A claimed record cannot use record-level Capacity as
+a settlement wait. A durable Validate row is live, terminal `Advanced`, or
 typed `Cancelled` by explicit old-height retirement; generic Completed,
 Rejected, and Failed tombstones are rejected by the shared payload/terminal
-validator. Only `Advanced` requires semantic replay coverage. Validation
-success versus deterministic rejection is reauthenticated from the exact
-body-store outcome, not encoded as an unauthenticated tombstone discriminator.
+validator. Validation success versus deterministic rejection is
+reauthenticated from the exact body-store outcome, not encoded as an
+unauthenticated tombstone discriminator.
 
-The corresponding ordinal-free successor projection accepts only
-`ValidateBody -> Apply` under the same tag, subject, causal lifecycle key, and
-inherited candidate statement. It applies the existing commitment-refinement
-lattice rather than requiring all non-phase key coordinates to be identical:
-an ordinary Validate may acquire the Decision commitment, a Prepare-authorized
-Validate may advance only to the matching Commit commitment, and a
-Commit-authorized Validate may retain only that exact commitment. The result
-is deterministic sealed data, not executable or installable authority. A
-shared inert coordinator reducer already checks the matching third pipeline
-edge: it terminalizes the claimed Validate parent before admitting the exact
-one-slot Apply child, requires the store-minted validation receipt to bind the
-certificate's proposal round, subject, context, and exact execution
-commitment, preserves the causal owner, permits only the refinement above,
-advances the Effect generation once, and keeps net Effect usage constant. Its
-borrow-bound token exposes no persistence, registry mutation, or commit
-method. A future atomic transition must still join the selected
-Validate lease, durable validation receipt, exact reducer preview, coordinator
-cut, registry carrier conversion, WAL ordering when required, and restart
-reconstruction before either staged state is published.
+The corresponding ordinal-free successor projections accept only the closed
+`ValidateBody -> Apply`, ordinary `ValidateBody -> SignPrepare`, inherited
+Prepare `ValidateBody -> SignCommit`, and inherited Prepare
+`ValidateBody -> InvalidBodyReport` shapes under the same tag, subject, causal
+lifecycle key, and exact statement refinement. Apply uses the existing
+commitment-refinement lattice: an ordinary Validate may acquire the Decision
+commitment, a Prepare-authorized Validate may advance only to the matching
+Commit commitment, and a Commit-authorized Validate may retain only that exact
+commitment. Prepare signing is only the ordinary-to-Prepare refinement; Commit
+signing is only the exact Prepare-to-Commit refinement. The report binds the
+full registered Prepare certificate in its concrete identity and carries no
+candidate statement. A legitimate ordinary Validate may concurrently observe
+a newly registered PrepareQC. Only the fixed rejected-Validate adapter preview
+may now mint a move-only capability proving that the emitted report names the
+exact PrepareQC in its staged registry; the closed registry join uses that
+capability to derive the report binding while retaining the ordinary causal
+root. No caller can supply the registered statement or certificate, and none
+of these projections is executable or installable authority.
+
+A shared inert coordinator reducer checks Apply and both Sign edges: it
+terminalizes the claimed Validate parent before admitting the exact one-slot
+Effect child, preserves the causal owner, advances the Effect generation once,
+and keeps net Effect usage constant. Apply additionally requires the
+store-minted validation receipt to bind the certificate's proposal round,
+subject, context, and exact execution commitment. Another inert reducer stages
+validated inactive/no-effect and rejected inactive/no-effect as
+`AdvancedNoSuccessor`. Both release the parent Effect once; the rejected branch
+also releases its lease-bound Consensus reservation by advancing only the
+Consensus generation, never decrementing durable Consensus occupancy. Its
+production entry accepts the fixed registry/adapter preview token and rejects
+Busy, Apply, Persist, and Report classifications. All borrow-bound tokens
+expose no persistence, registry mutation, or commit method. A future atomic
+transition must still join the selected Validate lease, durable validation
+receipt or rejection identity, exact reducer preview, coordinator cut,
+registry carrier conversion, WAL ordering when required, and restart
+reconstruction before any staged state is published.
 
 An ordinary frozen-prefix target is blocked only by a member of its own frozen
 predecessor universe that is currently `Ready`; a `Waiting` member blocks
@@ -740,12 +934,13 @@ Serve or unrelated prefix target into a global scheduler barrier.
 `LifecycleLedgerV1` uses a new framed Norito file with explicit stable numeric
 codes for phase, work class, stage, predecessor scope, and terminal outcome.
 It persists context/height, the ordinal high-water mark, nonterminal records,
-terminal tombstones, reconstruction sources, small Certified-Serve payload
-references, and adjacent producer debt. It excludes readiness, leases, wait
-generations, rank snapshots, physical carriers, and scheduler episodes.
-Discovery of the
-retired `certified-serve-state.norito` v5 file fails startup with an explicit
-authorized-fresh-reset error; there is no migration or runtime bypass.
+terminal tombstones, reconstruction sources, typed durable continuations,
+small Certified-Serve payload references, and adjacent producer debt. A
+continuation is durable reconstruction metadata, not admission identity: an
+exact retry still stutters on its terminal parent. The ledger excludes
+readiness, leases, wait generations, rank snapshots, physical carriers, and
+scheduler episodes. This first-release format has no predecessor-format
+detector, migration path, or compatibility branch.
 Certified-Serve references are canonical Norito encodings of a typed small
 envelope (request-bound lifecycle subject, exact signed-request hash,
 authorizing-certificate hash, and typed terminal receipt), not unchecked opaque
@@ -827,6 +1022,220 @@ payload store. A terminal payload written before its ledger update is treated
 as the expected crash cut: startup rebinds the atomic Serve/producer pair,
 settles the authenticated terminal result, persists the reconciled ledger, and
 only then exposes the coordinator.
+
+The bounded storage-only recovery assembler consumes the exact already-opened
+`LifecycleLedgerV1` frame together with the move-only authenticated
+Certified-Serve payload cut; it accepts no raw recovery candidates. It permits
+live `CertifiedServe`/`ProducerTurn` rows only when the existing payload
+resolver covers the adjacent pair exactly. Every other live class returns a
+typed `MissingDurableRecoveryAuthority { ordinal, work_class, stage }` failure.
+A terminal Validate with `AdvancedNoSuccessor` is classified before generic
+terminal acceptance and requires its separately authenticated body outcome;
+the storage-only cut therefore rejects it when that authority is absent. Both
+the successful seal and every failure retain the exact ledger frame and payload
+authority. Durable open compares its reread to that retained frame before
+reconciliation, so a pre-repair cut cannot be reused after a WAL-ahead
+Validate-to-Sign repair and no classify/reopen gap can change the accepted
+ledger census.
+
+The post-fsync recovered-WAL cut uses a separate sealed storage assembler; the
+general storage-only assembler is not weakened. Its only additional input is
+the opaque projection minted from the exact installed recovered Sign registry
+row. That projection retains the repaired child candidate and its durable
+owner/ordinal address. The assembler admits exactly one live Sign child only
+after its key, owner, ordinal, work class, stage, reconstruction source,
+payload, terminal state, and continuation match the repaired LedgerV1 row.
+The old live Validate parent, a foreign or additional live Sign, and every
+other live ordinary row still fail closed. The projection stays borrowed with
+the installed registry cut, while success and failure retain the exact ledger
+frame and move-only Serve authority. Durable open rereads and compares that
+complete frame before reconciliation, including on same-context crash reentry.
+The production mint remains private and intentionally unwired. The final
+startup composite must assemble and open while consuming the same exclusive
+installed-registry cut; exposing the logical recovery cut by itself would be
+an authority regression.
+
+A codec-only `LifecycleReplayAuthorityV1` now defines one closed, bounded
+canonical Norito envelope for every one of the 22 lifecycle stages.
+Its source families retain exact scalar reducer tags and WAL
+sequence/persistence/role/frame-hash identities, signed consensus broadcasts,
+local-body, signed-proposal, or QC-origin body authority,
+authenticated equivocation pairs, the PrepareQC/rejected-body binding, and the
+Certified-Serve payload-store source. Decoding performs complete-input and
+byte-for-byte canonical re-encoding checks, while record matching is only a
+structural equality check over context, key, class, stage, and durable payload;
+it does not mint executable work or replace consensus authentication. Its
+fields stay private and decoded values expose no source, encoded, or parts
+accessor. The envelope is a required, non-optional field of candidate and
+ProducerTurn admission, coordinator durable metadata, recovered records, and
+each canonical LedgerV1 row. Admission rejects an inexact envelope before any
+mutation; ledger decode/open and WAL repair recheck the complete structural
+record binding. There is one first-release V1 format, with no default,
+placeholder, migration decoder, or compatibility fallback. Restart still must
+reauthenticate each retained source against the verified context and owning
+store before reconstructed work can execute.
+
+Certified-Serve and its dormant ProducerTurn now also have one closed,
+runtime-only replay-evidence pair. The fresh factory accepts only the exact
+authenticated request and its canonical Pending post-fsync receipt; it
+recomputes the Pending frame hash and checks request hash, exact QC hash,
+payload hash, bounded local-retainer index, QC-signer membership, and active
+context before deriving both fixed records internally. Authenticated payload
+recovery retains the independently verified local-retainer index and
+recomputes the canonical Pending, Completed, or typed-negative frame before a
+fixed recovered factory can reproduce the pair. Both opaque values share one
+storage origin, expose only exact equality/record predicates, and remain
+clone/drop inert. They expose no source, request, certificate, retainer,
+payload hash, key, stage, encoded, or parts accessor. Fresh post-fsync and
+authenticated recovery projection consume the pair into adjacent
+CertifiedServe and ProducerTurn candidates with separately encoded authorities
+from that common family. Coordinator admission and LedgerV1 debt validation
+require the exact key/source/family relation, including across terminal Serve
+payload rebinding; scheduler execution remains outside this inert evidence.
+
+The recovered Prepare/Commit path now performs the first sealed integration.
+The verified runtime WAL identity remains non-decodable. It can project only a
+separate `PersistedWalFrameLocatorV1`, whose decoder establishes structural
+evidence rather than WAL authority. The final recovered vote derives its
+PrepareIntent versus LockAndCommit role and Sign action internally, canonical
+round-trips the complete V1 envelope, and retains the resulting opaque evidence
+beside the move-only vote authority. That evidence is cloned only as inert data
+when the vote is consumed into `RecoveredWalVoteSuccessor`; exact locator, tag,
+role, and unsigned-vote equality are rechecked again when the authenticated
+lifecycle repair is formed and whenever its concrete pair is revalidated.
+Neither wrapper exposes encoded bytes, locator/action parts, a generic source
+constructor, ledger admission, or execution authority.
+
+The certified body pipeline now retains one normalized replay-evidence family
+from the selector-authenticated Fetch origin through its closed Store and
+Validate carriers. The family owns the exact QC and response manifest once,
+plus the exact fsynced body-frame binding; fixed Fetch, Store, and Validate
+wrappers transiently reconstruct and canonically compare only the requested
+stage envelope. Successor tokens retain the projected wrapper, and a live
+Validate-to-recovered-Sign detach moves the same evidence into the sealed
+repair before restoring it unchanged on failure. Cold body-store recovery
+cannot recreate the absent certified transport origin in this tranche, so its
+separate detached variant retains the exact storage-authenticated
+`DurableBodyReceipt` and requires byte-for-byte receipt equality rather than a
+truth sentinel. Digest bytes, including all-zero frame hashes, have no reserved
+sentinel value. These runtime wrappers are non-decodable and expose no
+certificate, manifest, receipt, frame, encoded, or parts access; the normalized
+family is not independently runnable authority. The sealed certified
+Fetch-to-Store and Store-to-Validate transition methods now consume the exact
+successor wrapper into a candidate carrying the mandatory persisted field and
+BodyFrame, derive its child digest from the sealed one-slot geometry, and keep
+the registry token alive inside inert coordinator staging. Raw production
+entrypoints for those two edges do not exist; publication remains unwired.
+
+Terminal Validate staging now follows the same closed boundary. Inactive and
+no-effect adapter branches consume the complete Ready registry/adapter preview;
+the registry derives the parent `BodyFrame` from its still-installed completion
+and returns only a permit-bound opaque projection. The staged no-successor cut
+retains both authority borrows and records `AdvancedNoSuccessor`, releasing the
+rejected branch's transient Consensus reservation exactly once. A rejected
+report first consumes the Ready preview into the canonical invalid-body replay
+seal, then projects its child only while a private non-copyable transition
+permit remains nested inside that adapter/registry token. No raw report effect,
+pending binding, receipt, or candidate accessor crosses either production
+entrypoint; all failures retain the move-only authority token, and both staged
+cuts remain drop-inert and unpublished. There is no raw Validate successor
+helper: Apply and Sign remain unavailable until their WAL-bound move-only
+authorities enter the same sealed transaction, rather than passing through a
+temporary effect/pending compatibility surface.
+
+Direct signed replay now has the same closed first-release prerequisite for
+exactly `Broadcast` and `ReportEquivocation`. Each non-decodable wrapper can be
+minted only from the complete `AdapterEffect` and its exact ordinal-free
+`PendingRuntimeEffectBinding`; it canonical-round-trips the existing V1
+broadcast or equivocation source while retaining private causal-root and
+physical-effect fingerprints. Those fingerprints preserve exact signatures,
+message bytes, and equivocation observation order even where the canonical
+logical conflict normalizes them. A move-only registry pre-admission token owns
+the effect, binding, and fixed class-specific wrapper with no optional or
+unsealed variant. The direct adapter boundary now consumes those fixed wrappers
+for Broadcast and ReportEquivocation only, and coordinator admission plus
+LedgerV1 retain and recheck the resulting inert envelope. There is no raw
+constructor, parts or encoded accessor, and zero-valued digest bytes are not
+reserved as a sentinel.
+
+Live safety-WAL continuations now have a separate inert exact-replay cut for
+`SignProposal`, `SignPrepare`, `SignCommit`, `SignTimeout`, `Apply`, and
+`EnterView`. The cut accepts only the reducer's one pending `Persist`, appends
+and fsyncs its exact frame, checks the retained frame against the append
+receipt and WAL record, acknowledges that persistence identifier, and returns
+a closed linear batch. The five payload-free effects carry a non-decodable WAL
+source plus a unique pending binding derived from the exact live frame and
+complete effect; callers cannot splice a same-effect foreign causal root.
+`Apply` instead retains a source-only Decision seal until the fixed registry
+join revalidates its installed Validate carrier and receipt, projects the child
+pending binding from that exact predecessor, and binds the body frame. A
+foreign receipt cannot construct the completion, and a foreign causal root is
+rejected before the source seal is consumed. Errors after append latch
+restart-required fail-stop; dropping the returned batch or pre-admission token
+publishes no work but never rolls back the WAL. LedgerV1 now requires a replay
+field, but the live sealed WAL transition has not yet supplied its fixed
+envelope to candidate admission; raw WAL stage projection fails closed until
+that join is threaded. Zero-valued frame hashes remain structurally valid.
+
+Local proposal bodies now retain a separate pre-intent replay capability from
+the active-view producer cut. The runtime consumes a one-shot mint permit only
+while binding the exact `AssembleBody` owner to its local `StoreBody`; cloneable
+worker tasks never carry that capability. The executor keeps the non-decodable,
+move-only seal in bounded sidecars, joins it only to the exact body-store
+receipt, projects it through the exact Store-to-Validate pending lineage, and
+then retains the same normalized `LocalBody` plus body-frame evidence beside
+the exact `LocalProposalReady` command. When that command emits
+`ProposalIntent`, its exact effect and runtime owner are consumed into one
+inseparable inert composite rather than dropping the companion body origin.
+Retries reuse the installed sidecar, failed consuming projections return the
+original seal, and validation rejection, superseding view/lock, and Decision
+detach retire it explicitly. Detached worker tasks therefore carry no local
+replay authority. The mandatory LedgerV1 field exists, but this local wrapper
+is not yet joined into body-stage candidate admission; it exposes no origin,
+manifest, receipt, pending, effect, encoded, or parts accessor, and zero-valued
+digest bytes are valid.
+
+Ordinary remote Proposal bodies now retain their distinct authenticated
+origin from the exact signed Proposal ingress to the runtime-owned
+`FetchBody`. Direct dispatch carries the signed envelope together with its
+frozen receiver ingress; Busy dispatch parks the same opaque origin only in
+the bounded deferred-ordinal map and releases it solely for the selected
+`ProposalReceived`. Exact effect ownership then attaches a non-decodable,
+cryptographically replayable Fetch wrapper only when the effect has the
+Proposal manifest, no certified sources, and no certificate. A closed,
+move-only work-registry prerequisite consumes that runtime owner and permits
+only the fixed Fetch-to-Store causal projection, the exact
+`DurableBodyReceipt`/body-frame join, and the fixed Store-to-Validate causal
+projection. Every failed projection retains both the incumbent token and the
+candidate owner or receipt; dropping any successful token is publication-
+inert. The wrappers expose no Proposal, ingress, source, effect, pending,
+receipt, encoded, or parts accessor and reserve no all-zero digest sentinel.
+The mandatory LedgerV1 field exists, but this remote body wrapper is not yet
+joined into body-stage admission, installation, or runner execution.
+
+Invalid certified-body reports now have a closed pre-admission prerequisite.
+The durable Validate carrier retains a closed certified-or-remote replay
+origin whose Store-to-Validate projection fingerprints the exact Validate
+pending binding. The Ready/rejected registry preview supplies its exact
+manifest, body frame, effect, pending binding, and canonical rejection identity
+only to the adapter's matching staged report. The adapter consumes an
+unforgeable move-only registered-Prepare proof, derives either the
+inherited-Prepare or ordinary-plus-concurrently-registered child binding from
+that exact predecessor, and compares the derived child before
+canonical-roundtripping the V1 `InvalidCertifiedBody` source with rejection
+code zero. The persisted source retains the exact validation origin: either the
+signed remote Proposal or the certified PrepareQC plus manifest, together with
+its tag. Structural projection rejects local bodies and any origin, report,
+body-frame, or manifest splice. A prepared preview may reproduce its private
+proof for internal revalidation, so this is move-only and unforgeable rather
+than a claimed linear one-shot mint. The resulting non-decodable evidence,
+report effect, child binding, registry borrow, and adapter borrow remain
+together in one move-only, drop-inert token. Every failure restores both
+previews. No certificate, manifest, receipt, pending, source, encoded, or parts
+surface is exposed. Although LedgerV1 now requires an authority field, this
+wrapper is not yet joined into report admission, installation, commit, or
+runner execution; all-zero frame-hash bytes remain valid rather than acting as
+a sentinel.
 
 Rollover is a two-context durable protocol, not an in-memory map clear. The
 verified successor snapshot carries its own ledger root and post-fsync

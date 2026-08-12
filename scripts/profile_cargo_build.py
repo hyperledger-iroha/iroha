@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+INPUT_DRIFT_EXIT_CODE = 3
 PROFILE_ENV_KEYS = (
     "CARGO_BUILD_TARGET",
     "CARGO_INCREMENTAL",
@@ -234,7 +235,7 @@ def normalized_cargo_args(raw: Sequence[str], jobs: int) -> list[str]:
         raise ValueError("the first Cargo argument must be a subcommand")
     separator = cargo_args.index("--") if "--" in cargo_args else len(cargo_args)
     cargo_controls = cargo_args[:separator]
-    if "--locked" not in cargo_args:
+    if "--locked" not in cargo_controls:
         cargo_args.insert(1, "--locked")
         separator += 1
         cargo_controls = cargo_args[:separator]
@@ -342,6 +343,59 @@ def write_json(path: Path, value: Any) -> None:
     )
 
 
+def selected_profile_environment() -> dict[str, str]:
+    """Return build-affecting environment inputs in stable key order."""
+    return {
+        key: os.environ[key]
+        for key in PROFILE_ENV_KEYS
+        if key in os.environ and os.environ[key]
+    }
+
+
+def capture_input_manifest(
+    root: Path,
+    cargo_args: Sequence[str],
+    jobs: int,
+    label: str,
+    reuse_target: bool,
+) -> dict[str, Any]:
+    """Capture every repository and toolchain input used by a profile."""
+    cargo_lock = root / "Cargo.lock"
+    if not cargo_lock.is_file():
+        raise ValueError("Cargo.lock is missing")
+    source = source_fingerprint(root, tracked_and_untracked_paths(root))
+    return {
+        "cargo_args": list(cargo_args),
+        "cargo_lock_sha256": sha256_bytes(cargo_lock.read_bytes()),
+        "git_revision": command_output(["git", "rev-parse", "HEAD"], root),
+        "jobs": jobs,
+        "label": label,
+        "profile_mode": "warm" if reuse_target else "cold",
+        "selected_env": selected_profile_environment(),
+        "source": {
+            "bytes": source.bytes,
+            "deleted": source.deleted,
+            "files": source.files,
+            "sha256": source.sha256,
+        },
+        "toolchain": {
+            "cargo": command_output(["cargo", "-Vv"], root),
+            "rustc": command_output(["rustc", "-Vv"], root),
+        },
+    }
+
+
+def changed_input_fields(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[str]:
+    """Return sorted manifest fields whose values changed during profiling."""
+    return sorted(
+        key
+        for key in before.keys() | after.keys()
+        if before.get(key) != after.get(key)
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the requested Cargo profile and write its report."""
     args = parse_args(argv)
@@ -351,39 +405,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         validate_paths(root, target_dir, out, args.reuse_target)
         cargo_args = normalized_cargo_args(args.cargo_args, args.jobs)
-    except ValueError as error:
+        input_manifest = capture_input_manifest(
+            root,
+            cargo_args,
+            args.jobs,
+            args.label,
+            args.reuse_target,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"profile_cargo_build: {error}", file=sys.stderr)
         return 2
 
-    source = source_fingerprint(root, tracked_and_untracked_paths(root))
-    cargo_lock = root / "Cargo.lock"
-    if not cargo_lock.is_file():
-        print("profile_cargo_build: Cargo.lock is missing", file=sys.stderr)
-        return 2
-    toolchain = {
-        "cargo": command_output(["cargo", "-Vv"], root),
-        "rustc": command_output(["rustc", "-Vv"], root),
-    }
-    selected_env = {
-        key: os.environ[key]
-        for key in PROFILE_ENV_KEYS
-        if key in os.environ and os.environ[key]
-    }
-    input_manifest = {
-        "cargo_args": cargo_args,
-        "cargo_lock_sha256": sha256_bytes(cargo_lock.read_bytes()),
-        "jobs": args.jobs,
-        "label": args.label,
-        "profile_mode": "warm" if args.reuse_target else "cold",
-        "selected_env": selected_env,
-        "source": {
-            "bytes": source.bytes,
-            "deleted": source.deleted,
-            "files": source.files,
-            "sha256": source.sha256,
-        },
-        "toolchain": toolchain,
-    }
     input_sha256 = sha256_bytes(canonical_json_bytes(input_manifest))
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -440,12 +472,41 @@ def main(argv: Sequence[str] | None = None) -> int:
     elapsed_ns = time.monotonic_ns() - started_ns
     usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
 
+    post_input_manifest: dict[str, Any] | None = None
+    input_capture_error: str | None = None
+    try:
+        post_input_manifest = capture_input_manifest(
+            root,
+            cargo_args,
+            args.jobs,
+            args.label,
+            args.reuse_target,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        input_capture_error = f"{type(error).__name__}: {error}"
+
+    if post_input_manifest is None:
+        changed_fields = ["post_input_capture"]
+        post_input_sha256 = None
+    else:
+        changed_fields = changed_input_fields(input_manifest, post_input_manifest)
+        post_input_sha256 = sha256_bytes(canonical_json_bytes(post_input_manifest))
+    input_stable = not changed_fields
+
     units.sort(key=canonical_json_bytes)
     unit_inventory_sha256 = sha256_bytes(canonical_json_bytes(units))
     report = {
         "schema_version": SCHEMA_VERSION,
+        "valid": returncode == 0 and input_stable,
         "input": input_manifest,
         "input_sha256": input_sha256,
+        "input_validation": {
+            "changed_fields": changed_fields,
+            "error": input_capture_error,
+            "post_input": post_input_manifest,
+            "post_input_sha256": post_input_sha256,
+            "stable": input_stable,
+        },
         "result": {
             "compiled_units": compiled_units,
             "elapsed_ns": elapsed_ns,
@@ -464,14 +525,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
     }
     write_json(out, report)
+    profiler_returncode = (
+        INPUT_DRIFT_EXIT_CODE if returncode == 0 and not input_stable else returncode
+    )
     print(
         "profile_cargo_build: "
         f"returncode={returncode} elapsed_ns={elapsed_ns} "
         f"compiled={compiled_units} fresh={fresh_units} "
-        f"units={unit_inventory_sha256} report={out}",
+        f"units={unit_inventory_sha256} input_stable={input_stable} report={out}",
         file=sys.stderr,
     )
-    return returncode
+    if not input_stable:
+        print(
+            "profile_cargo_build: report invalidated by input drift: "
+            + ", ".join(changed_fields),
+            file=sys.stderr,
+        )
+    return profiler_returncode
 
 
 if __name__ == "__main__":

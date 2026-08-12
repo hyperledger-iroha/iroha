@@ -440,7 +440,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "RuntimeEffectOwnership",
-        "35743d680ca008038833aa3282dfefa25f654270181a745d978ed14175dba613",
+        "067d73c41e68b3452f63d40153b1ac75815d13b48dac240d425c590082442144",
         "struct",
     ),
     *(
@@ -615,7 +615,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "retain_effect_ownership",
-                "78ecefa5fcd5fe328e953b59f873ddb1f073fecda9b1f6225a4d8fd4d9976859",
+                "37ff981ed5ee5c51160c5301f4584486751a0fd3be20fb2872194c4cecd75741",
                 (
                     (
                         "impl",
@@ -17352,101 +17352,7 @@ if record.capacity_bypass {
                 "current height/view before pruning owners and deliveries"
             )
 
-    test_context = (
-        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
-    )
-    long_tests = {
-        "capacity_bypass_records_follow_current_lock_and_timeout_view",
-        "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote",
-    }
-    regression_items: dict[str, RustItem | None] = {}
-    for name, expected_sha256 in (
-        _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256.items()
-    ):
-        item = _require_rust_item(path, source, name, errors)
-        regression_items[name] = item
-        expected_attributes = (
-            ("#[test]", "#[allow(clippy::too_many_lines)]")
-            if name in long_tests
-            else ("#[test]",)
-        )
-        _require_rust_item_context(
-            path,
-            item,
-            test_context,
-            f"TimeoutVote semantic-capacity regression {name}",
-            errors,
-            expected_attributes=expected_attributes,
-        )
-        _require_rust_item_token_sha256(
-            path,
-            item,
-            expected_sha256,
-            f"TimeoutVote semantic-capacity regression {name}",
-            errors,
-        )
-
-    _require_rust_token_sequence(
-        path,
-        regression_items.get(
-            "capacity_bypass_records_follow_current_lock_and_timeout_view"
-        ),
-        """
-assert_eq!(
-    adapter
-        .ingress_equivocations
-        .values()
-        .filter(|record| record.capacity_bypass)
-        .count(),
-    roster_len * 3
-);
-""",
-        "capacity-bypass regression must realize exactly one lock plus current and adjacent TimeoutVote rosters",
-        errors,
-    )
-    _require_rust_token_sequence(
-        path,
-        regression_items.get(
-            "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote"
-        ),
-        """
-assert_eq!(adapter.current_tag().view(), current_round.view + 1);
-assert!(adapter.deferred_progress_inputs.is_empty());
-""",
-        "certified-timeout regression must advance the hung signer exactly one view and drain its deferred progress fence",
-        errors,
-    )
-
-    cross_view_name = (
-        "busy_deferred_source_identity_coalesces_across_consumer_view_change"
-    )
-    cross_view = _require_rust_item(path, source, cross_view_name, errors)
-    _require_rust_item_context(
-        path,
-        cross_view,
-        test_context,
-        "cross-view Busy-deferred semantic-owner regression",
-        errors,
-        expected_attributes=("#[test]", "#[allow(clippy::too_many_lines)]"),
-    )
-    _require_rust_item_token_sha256(
-        path,
-        cross_view,
-        _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256[cross_view_name],
-        "cross-view Busy-deferred semantic-owner regression",
-        errors,
-    )
-    _require_rust_token_sequence(
-        path,
-        cross_view,
-        """
-assert_eq!(retagged_candidate.0, original_candidate.0);
-assert_eq!(retagged_candidate.0.source_view(), first_round.view);
-assert_eq!(retagged_candidate.1, adapter.current_tag().view());
-""",
-        "cross-view Busy-deferred regression must retain source identity while advancing only its consumer episode",
-        errors,
-    )
+    errors.extend(_timeout_capacity_regression_source_fidelity_errors(path, source))
     return errors
 
 
@@ -45548,6 +45454,7 @@ assert_eq!(
 
 
 _execute_checker_component("sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_runtime_ingress_contracts.py")
 
 
 def _production_causal_fifo_source_fidelity_errors(
@@ -45936,6 +45843,7 @@ const _: () = assert!(
                     "contract, and complete control flow must match the exact "
                     f"reviewed token digest {expected_sha256}; found {observed_sha256}"
                 )
+        errors += _drive_effects_wal_frame_source_fidelity_errors(adapter_path, drive)
         _require_rust_token_sequence(
             adapter_path,
             observed_adapter_bound_items.get("step_reducer"),
@@ -46406,6 +46314,7 @@ RuntimeDriverDispatch {
     deferred_ordinal,
     retry_unadmitted,
     producer_handoff,
+    remote_proposal_replay,
 }
 """,
             ),
@@ -47049,8 +46958,8 @@ projection.push(u8::from(evidence.fence_retry_marker_required));
                 "post-dequeue physical occurrence and runtime-receipt validator",
             ),
             (
-                "matches_authenticated",
-                "runtime_ingress_matches_authenticated",
+                "exactly_matches_authenticated",
+                "runtime_ingress_exactly_matches_authenticated",
                 "post-authentication canonical payload comparator",
             ),
             (
@@ -47147,7 +47056,7 @@ match (
         )
         _require_rust_token_sequence(
             runtime_path,
-            observed_runtime_ingress_items.get("matches_authenticated"),
+            observed_runtime_ingress_items.get("exactly_matches_authenticated"),
             """
 self.validate_frozen_physical()
     && self.runtime_bytes.as_ref() == authenticated.canonical_wire_bytes().as_slice()
@@ -49195,6 +49104,9 @@ self.complete_driver_dispatch_leader_wire_owners(
                     "exactly one serviceable adapter-deferred transition before "
                     f"{later_contract!r}"
                 )
+        errors += _remote_proposal_replay_source_fidelity_errors(
+            repo_root, runtime_path, runtime_source
+        )
 
     refinement_path = (
         repo_root / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
@@ -57541,23 +57453,12 @@ asyncServeProducerEpisodeDue' =
             if escape_contract not in " ".join(drain_body.split()):
                 errors.append(f"{runner_path}: {description}")
 
-        outer_start = runner_source.find("fn outer_ingress_turns(")
-        outer_end = runner_source.find("\nfn v2_ingress_head_can_drain(", outer_start)
-        outer_body = (
-            ""
-            if outer_start < 0 or outer_end < 0
-            else " ".join(runner_source[outer_start:outer_end].split())
+        outer_turns = _require_rust_item(
+            runner_path, runner_source, "outer_ingress_turns", errors
         )
-        expected_turns = (
-            "(0..limit.max(1)).flat_map(|_| { "
-            "[ OuterIngressTurn::Completion, OuterIngressTurn::Runtime, "
-            "OuterIngressTurn::Ingress, ] })"
+        errors += _outer_ingress_cursor_source_fidelity_errors(
+            runner_path, runner_source, outer_turns
         )
-        if expected_turns not in outer_body:
-            errors.append(
-                f"{runner_path}: outer_ingress_turns must keep the exact "
-                "Completion/Runtime/Ingress alternation"
-            )
 
     adapter_path = _formal_repo_root(formal_dir) / "crates/iroha_core/src/sumeragi/v2.rs"
     if not adapter_path.is_file():
@@ -57675,116 +57576,9 @@ asyncServeProducerEpisodeDue' =
             )
 
         consume = executor_items["consume_effects"]
-        _require_rust_token_sequence(
-            effects_path,
-            consume,
-            """
-let frontier = self
-    .runtime
-    .reconciliation_frontier()
-    .map_err(EffectExecutorError::Runtime)
-    .map_err(|error| self.close(error, services))?;
-if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
-    return Err(self.close(error, services));
-}
-let ownership = match self.runtime.take_effect_ownership(&effects) {
-    Ok(ownership) => ownership,
-    Err(error) => {
-        return Err(self.close(EffectExecutorError::Runtime(error), services));
-    }
-};
-if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
-    return Err(self.close(error, services));
-}
-if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
-    return Err(self.close_after_transferring_runtime_terminals(error, services));
-}
-if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
-    return Err(self.close(error, services));
-}
-let count = self
-    .drain_retained_effect_batch(services, true)
-""",
-            "consume_effects must snapshot, retain, and commit the reducer frontier before transferring terminals and draining",
-            errors,
+        errors.extend(
+            _consume_effects_replay_transfer_order_errors(effects_path, consume)
         )
-        if consume is not None:
-            consume_tokens = rust_code_tokens(consume.source)
-            ownership_tokens = rust_code_tokens(
-                "self.runtime.take_effect_ownership(&effects)"
-            )
-            preflight_tokens = rust_code_tokens(
-                "self.preflight_effect_batch_frontier(&effects, frontier)"
-            )
-            retain_tokens = rust_code_tokens(
-                "self.retain_effect_batch_at_frontier(effects, ownership, frontier)"
-            )
-            frontier_tokens = rust_code_tokens("self.runtime.reconciliation_frontier()")
-            commit_tokens = rust_code_tokens(
-                "self.commit_reconciliation_frontier(frontier, services)"
-            )
-            drain_tokens = rust_code_tokens(
-                "self.drain_retained_effect_batch(services, true)"
-            )
-            frontier_positions = [
-                index
-                for index in range(
-                    len(consume_tokens) - len(frontier_tokens) + 1
-                )
-                if consume_tokens[index : index + len(frontier_tokens)]
-                == frontier_tokens
-            ]
-            ownership_positions = [
-                index
-                for index in range(
-                    len(consume_tokens) - len(ownership_tokens) + 1
-                )
-                if consume_tokens[index : index + len(ownership_tokens)]
-                == ownership_tokens
-            ]
-            preflight_positions = [
-                index
-                for index in range(
-                    len(consume_tokens) - len(preflight_tokens) + 1
-                )
-                if consume_tokens[index : index + len(preflight_tokens)]
-                == preflight_tokens
-            ]
-            retain_positions = [
-                index
-                for index in range(len(consume_tokens) - len(retain_tokens) + 1)
-                if consume_tokens[index : index + len(retain_tokens)] == retain_tokens
-            ]
-            commit_positions = [
-                index
-                for index in range(len(consume_tokens) - len(commit_tokens) + 1)
-                if consume_tokens[index : index + len(commit_tokens)] == commit_tokens
-            ]
-            drain_positions = [
-                index
-                for index in range(len(consume_tokens) - len(drain_tokens) + 1)
-                if consume_tokens[index : index + len(drain_tokens)] == drain_tokens
-            ]
-            if not (
-                len(frontier_positions) == 1
-                and len(preflight_positions) == 1
-                and len(ownership_positions) == 1
-                and len(retain_positions) == 1
-                and len(commit_positions) == 1
-                and len(drain_positions) == 1
-                and frontier_positions[0]
-                < preflight_positions[0]
-                < ownership_positions[0]
-                < retain_positions[0]
-                < commit_positions[0]
-                < drain_positions[0]
-            ):
-                errors.append(
-                    f"{effects_path}:{consume.line}: consume_effects must acquire "
-                    "one frontier, preflight before consuming its ownership "
-                    "vector, retain exactly once, "
-                    "commit reconciliation, then perform one retained-batch drain"
-                )
 
         consume_recovery = executor_items["consume_pending_tip_recovery_effects"]
         _require_rust_token_sequence(
@@ -66936,7 +66730,7 @@ Self {
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get(
-            "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
         ),
         """
 let context = verified_context.context().clone();
@@ -66964,7 +66758,7 @@ let sidecar_server_roster = context
     .iter()
     .map(|entry| entry.validator.clone())
     .collect::<Vec<_>>();
-let sidecar_server_stream_capacity = sidecar_server_roster.len();
+let sidecar_server_stream_capacity = merge_sidecar_server_stream_capacity(sidecar_server_roster.len());
 let sidecar_server_roster_digest =
     canonical_merge_sidecar_roster_digest(&sidecar_server_roster);
 let merge_sidecars = match retained_merge_sidecars {
@@ -72187,9 +71981,6 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     return errors
 
 
-_execute_checker_component("sumeragi_v2_proof_ledger_runtime_ingress_contracts.py")
-
-
 def _local_runner_service_contract_source_fidelity_errors(
     ledger: dict[str, Any],
     *,
@@ -72729,9 +72520,7 @@ for _ in 0..16 {
         CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
             recovery.service_timeout_recovery_prefix()
         }
-        CertifiedServeBarrierLivenessAction::Pacemaker => {
-            recovery.service_pacemaker()
-        }
+        CertifiedServeBarrierLivenessAction::Pacemaker => recovery.service_pacemaker(),
     },
     )
     .expect("the selected-Serve suffix retains typed timeout recovery");
@@ -73421,11 +73210,12 @@ ingress.try_push(certified_serve_inbound(
             or len(late_arm_positions) != 1
             or len(all_arm_positions) != 2
             or len(timeout_mode_positions) != 1
-            or len(late_mode_positions) != 1
+            or len(late_mode_positions) != 2
             or not (
-                timeout_mode_positions[0]
+                late_mode_positions[0]
+                < timeout_mode_positions[0]
                 < timeout_arm_positions[0]
-                < late_mode_positions[0]
+                < late_mode_positions[1]
                 < late_arm_positions[0]
             )
         ):
@@ -74194,120 +73984,8 @@ else {
         "tip-recovery runtime service must be a finite configured turn",
         errors,
     )
-    _require_exact_rust_tokens(
-        runner_path,
-        runner_items.get("outer_ingress_turns"),
-        """
-fn outer_ingress_turns(
-    limit: usize,
-    context_id: wire::HeightContextId,
-    height: wire::Height,
-) -> OuterIngressTurns {
-    OuterIngressTurns::new(limit, context_id, height)
-}
-""",
-        "ordinary ingress turn construction must delegate to the context-bound finite cursor",
-        errors,
-    )
-    outer_new_context = (("impl", "OuterIngressTurns"),)
-    outer_new_items = tuple(
-        item
-        for item in rust_items(runner_source, "new")
-        if item.brace_context == outer_new_context
-    )
-    if len(outer_new_items) != 1:
-        errors.append(
-            f"{runner_path}: require exactly one context-bound outer-ingress cursor constructor; found {len(outer_new_items)}"
-        )
-        outer_new = None
-    else:
-        outer_new = outer_new_items[0]
-        _require_rust_item_context(
-            runner_path,
-            outer_new,
-            outer_new_context,
-            "context-bound outer-ingress cursor constructor",
-            errors,
-        )
-    _require_exact_rust_tokens(
-        runner_path,
-        outer_new,
-        """
-fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) -> Self {
-    Self {
-        context_id,
-        height,
-        cycles_remaining: limit.max(1),
-        next_turn: OuterIngressTurn::Completion,
-    }
-}
-""",
-        "outer-ingress cursor must freeze its height context and start at Completion with a positive finite cycle bound",
-        errors,
-    )
-    outer_next_context = (("impl", "Iterator", "for", "OuterIngressTurns"),)
-    outer_next_items = tuple(
-        item
-        for item in rust_items(runner_source, "next")
-        if item.brace_context == outer_next_context
-    )
-    if len(outer_next_items) != 1:
-        errors.append(
-            f"{runner_path}: require exactly one outer-ingress cursor Iterator::next implementation; found {len(outer_next_items)}"
-        )
-        outer_next = None
-    else:
-        outer_next = outer_next_items[0]
-        _require_rust_item_context(
-            runner_path,
-            outer_next,
-            outer_next_context,
-            "finite outer-ingress cursor alternation",
-            errors,
-        )
-    _require_exact_rust_tokens(
-        runner_path,
-        outer_next,
-        """
-fn next(&mut self) -> Option<Self::Item> {
-    if self.cycles_remaining == 0 {
-        return None;
-    }
-    let turn = self.next_turn;
-    self.next_turn = match turn {
-        OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
-        OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
-        OuterIngressTurn::Ingress => {
-            self.cycles_remaining -= 1;
-            OuterIngressTurn::Completion
-        }
-    };
-    Some(turn)
-}
-""",
-        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
-        errors,
-    )
-    outer_turn_index = _require_rust_item(
-        runner_path,
-        runner_source,
-        "outer_ingress_turn_index",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        runner_path,
-        outer_turn_index,
-        """
-const fn outer_ingress_turn_index(turn: OuterIngressTurn) -> u8 {
-    match turn {
-        OuterIngressTurn::Completion => 0,
-        OuterIngressTurn::Runtime => 1,
-        OuterIngressTurn::Ingress => 2,
-    }
-}
-""",
-        "outer-ingress cursor rank must use the same Completion, Runtime, and Ingress order",
-        errors,
+    errors += _outer_ingress_cursor_source_fidelity_errors(
+        runner_path, runner_source, runner_items.get("outer_ingress_turns")
     )
     _require_rust_token_sequence(
         runner_path,

@@ -393,6 +393,7 @@ def copy_persistent_recovery_cut_fixture(tmp_path: Path, module) -> Path:
         destination = repo_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(module.ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(repo_root)
     return repo_root
 
 
@@ -433,9 +434,16 @@ def _check_certified_fence_capacity_regression_survives_digest_refresh(
 ) -> None:
     """Refreshing either regression seal cannot hide its capacity assertion."""
 
-    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-    runtime_path.parent.mkdir(parents=True)
-    shutil.copy2(module.ROOT_DIR / runtime_path.relative_to(tmp_path), runtime_path)
+    runtime_parent = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    runtime_parent.parent.mkdir(parents=True)
+    shutil.copy2(
+        module.ROOT_DIR / runtime_parent.relative_to(tmp_path), runtime_parent
+    )
+    copy_reviewed_rust_include_components(tmp_path)
+    runtime_path = (
+        runtime_parent.parent
+        / "tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs"
+    )
     mutate_rust_item_source(module, runtime_path, item_name, old, new)
     items = module.rust_items(runtime_path.read_text(encoding="utf-8"), item_name)
     assert len(items) == 1, item_name

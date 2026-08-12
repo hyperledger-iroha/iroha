@@ -1,0 +1,15 @@
+
+            seiyaku ForeachPhi {
+                state StateMap<int, int> Values;
+
+                kotoage fn f() -> int authorize("WriteState") {
+                    var seen = 0;
+                    for (key, value) in Values.take(2) {
+                        seen = seen + 1;
+                        if (key == value) { continue; }
+                        if (seen == 2) { break; }
+                    }
+                    return seen;
+                }
+            }
+        

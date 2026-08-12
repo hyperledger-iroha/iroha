@@ -1,0 +1,17 @@
+
+seiyaku CompilerFixture {
+kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> cap, quantity replacement_cap, string alias, AccountId replacement, Option<string> reason) authorize("ControlAdmin") {
+  let Option<quantity> no_cap = Option::none;
+  ledger::asset::set_transfer_availability(account: account, asset_definition: asset, expected_revision: 0, incoming: false, outgoing: false, reason: reason);
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::some(replacement_cap));
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: no_cap);
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: cap);
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: Option::some(replacement_cap));
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: no_cap);
+  ledger::account::recovery::propose(alias: alias, replacement: replacement);
+  ledger::account::recovery::approve(alias: alias);
+  ledger::account::recovery::cancel(alias: alias);
+  ledger::account::recovery::finalize(alias: alias);
+}
+}

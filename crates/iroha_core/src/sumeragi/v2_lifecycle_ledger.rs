@@ -12,19 +12,42 @@ use std::{
 };
 
 use iroha_crypto::Hash;
+use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll, Encode};
 use thiserror::Error;
 
-use super::schema::{MAX_LIFECYCLE_RECORDS_PER_HEIGHT, serve_and_producer_keys_match};
+use super::replay_authority::{
+    CertifiedServeTerminalReplayAuthorityPairV1, LifecycleReplayAuthorityV1,
+};
+use super::schema::{
+    DurableBodyFrameReference, DurableContinuation, DurableContinuationEdge,
+    MAX_LIFECYCLE_RECORDS_PER_HEIGHT, serve_and_producer_keys_match,
+};
+use super::wal_recovery::{
+    AuthenticatedWalVoteLifecycleRepair, DurableAuthenticatedWalVoteLifecycleRepair,
+};
 use super::{
-    CausalRoot, DurablePayloadReference, DurableServeNegativeOutcome, LifecycleContext,
-    LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRound,
-    LifecycleStage, LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId,
-    PhysicalSlotId, PredecessorScope, RecoveredLifecycleRecord, RecoverySnapshot, TerminalOutcome,
+    CandidateAdmission, CausalRoot, DurablePayloadReference, DurableServeNegativeOutcome,
+    InitialLifecycleState, LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey,
+    LifecyclePhase, LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleState,
+    LifecycleWorkClass, OwnerId, PhysicalSlotId, PredecessorScope, RecoveredLifecycleRecord,
+    RecoverySnapshot, TerminalOutcome,
+};
+use super::{
+    body_pipeline_transition::{
+        durable_continuation_payload_is_exact, durable_continuation_successor_is_exact,
+        durable_validate_payload_is_exact,
+    },
+    projection,
+};
+use crate::sumeragi::{
+    v2::{RecoveredWalFrameIdentity, RecoveredWalVoteSign, VerifiedHeightContext},
+    v2_body_store::DurableBodyReceipt,
+    v2_core::EventTag,
+    v2_runtime::{PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit},
 };
 
 const LEDGER_FILE: &str = "lifecycle-ledger-v1.norito";
-const LEGACY_SERVE_V5_FILE: &str = "certified-serve-state.norito";
 const LEDGER_MAGIC: &[u8; 8] = b"SUMV2LC1";
 const LEDGER_VERSION: u16 = 1;
 const HASH_BYTES: usize = 32;
@@ -35,6 +58,7 @@ const PAYLOAD_NONE: u16 = 0;
 const PAYLOAD_CERTIFIED_SERVE_PENDING: u16 = 1;
 const PAYLOAD_CERTIFIED_SERVE_COMPLETED: u16 = 2;
 const PAYLOAD_CERTIFIED_SERVE_NEGATIVE: u16 = 3;
+const PAYLOAD_BODY_FRAME: u16 = 4;
 const NEGATIVE_CANCELLED: u8 = 0;
 const NEGATIVE_REJECTED: u8 = 1;
 const NEGATIVE_FAILED: u8 = 2;
@@ -153,6 +177,46 @@ impl CertifiedServePayloadReferenceV1 {
     }
 }
 
+/// Canonical reference to one fsynced body-store frame.
+///
+/// This is deliberately not the complete replay authority. An ordinary body
+/// still needs its authenticated proposal provenance and a certified body
+/// still needs its exact QC. Keeping the byte identity in LedgerV1 ensures a
+/// later replay-source join cannot silently substitute another local frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct BodyFramePayloadReferenceV1 {
+    context: [u8; 32],
+    round_height: u64,
+    round_view: u64,
+    subject: [u8; 32],
+    manifest_hash: [u8; 32],
+    frame_hash: [u8; 32],
+}
+
+impl BodyFramePayloadReferenceV1 {
+    const fn from_schema(reference: DurableBodyFrameReference) -> Self {
+        Self {
+            context: *reference.context.as_bytes(),
+            round_height: reference.round.height(),
+            round_view: reference.round.view(),
+            subject: *reference.subject.as_bytes(),
+            manifest_hash: *reference.manifest.as_bytes(),
+            frame_hash: *reference.frame.as_bytes(),
+        }
+    }
+
+    const fn to_schema(self) -> DurableBodyFrameReference {
+        DurableBodyFrameReference::new(
+            LifecycleDigest::new(self.context),
+            LifecycleRound::new(self.round_height, self.round_view),
+            LifecycleDigest::new(self.subject),
+            LifecycleDigest::new(self.manifest_hash),
+            LifecycleDigest::new(self.frame_hash),
+        )
+    }
+}
+
 /// Durable payload reference associated with a lifecycle record.
 ///
 /// Certified-Serve references contain canonical Norito bytes for a small
@@ -172,6 +236,19 @@ impl LifecyclePayloadReferenceV1 {
             kind: PAYLOAD_NONE,
             digest: [0; 32],
             canonical_reference: Vec::new(),
+        }
+    }
+
+    /// Construct a reference to one exact fsynced body-store frame.
+    pub(super) fn body_frame(reference: DurableBodyFrameReference) -> Self {
+        let canonical_reference = BodyFramePayloadReferenceV1::from_schema(reference).encode();
+        let digest = Hash::new(&canonical_reference);
+        let mut bytes = [0_u8; 32];
+        bytes.copy_from_slice(digest.as_ref());
+        Self {
+            kind: PAYLOAD_BODY_FRAME,
+            digest: bytes,
+            canonical_reference,
         }
     }
 
@@ -243,6 +320,9 @@ impl LifecyclePayloadReferenceV1 {
     fn from_schema(key: LifecycleKey, payload: DurablePayloadReference) -> Option<Self> {
         match payload {
             DurablePayloadReference::None => Some(Self::none()),
+            DurablePayloadReference::BodyFrame(reference) => reference
+                .matches_key(key)
+                .then(|| Self::body_frame(reference)),
             DurablePayloadReference::CertifiedServePending {
                 request,
                 certificate,
@@ -277,6 +357,14 @@ impl LifecyclePayloadReferenceV1 {
     fn validate(&self) -> bool {
         match self.kind {
             PAYLOAD_NONE => self.digest == [0; 32] && self.canonical_reference.is_empty(),
+            PAYLOAD_BODY_FRAME => {
+                let mut bytes = self.canonical_reference.as_slice();
+                let Ok(reference) = BodyFramePayloadReferenceV1::decode_all(&mut bytes) else {
+                    return false;
+                };
+                reference.encode() == self.canonical_reference
+                    && Hash::new(&self.canonical_reference).as_ref() == self.digest.as_slice()
+            }
             PAYLOAD_CERTIFIED_SERVE_PENDING
             | PAYLOAD_CERTIFIED_SERVE_COMPLETED
             | PAYLOAD_CERTIFIED_SERVE_NEGATIVE => {
@@ -295,6 +383,14 @@ impl LifecyclePayloadReferenceV1 {
     fn to_schema(&self, key: LifecycleKey) -> Option<DurablePayloadReference> {
         if self.kind == PAYLOAD_NONE {
             return self.validate().then_some(DurablePayloadReference::None);
+        }
+        if self.kind == PAYLOAD_BODY_FRAME {
+            let mut bytes = self.canonical_reference.as_slice();
+            let reference = BodyFramePayloadReferenceV1::decode_all(&mut bytes)
+                .ok()?
+                .to_schema();
+            return (self.validate() && reference.matches_key(key))
+                .then_some(DurablePayloadReference::BodyFrame(reference));
         }
         let mut bytes = self.canonical_reference.as_slice();
         let reference = CertifiedServePayloadReferenceV1::decode_all(&mut bytes).ok()?;
@@ -429,6 +525,89 @@ impl PersistedTerminalV1 {
     }
 }
 
+/// Canonical wire representation of one typed durable continuation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct PersistedDurableContinuationV1 {
+    code: u8,
+    successor_ordinal: Option<u128>,
+}
+
+impl PersistedDurableContinuationV1 {
+    const NONE: u8 = 0;
+    const ADVANCED_NO_SUCCESSOR: u8 = 1;
+    const FETCH_TO_STORE: u8 = 2;
+    const STORE_TO_VALIDATE: u8 = 3;
+    const VALIDATE_TO_APPLY: u8 = 4;
+    const VALIDATE_TO_INVALID_BODY_REPORT: u8 = 5;
+    const VALIDATE_TO_SIGN_PREPARE: u8 = 6;
+    const VALIDATE_TO_SIGN_COMMIT: u8 = 7;
+
+    const fn from_schema(continuation: DurableContinuation) -> Self {
+        match continuation {
+            DurableContinuation::None => Self {
+                code: Self::NONE,
+                successor_ordinal: None,
+            },
+            DurableContinuation::AdvancedNoSuccessor => Self {
+                code: Self::ADVANCED_NO_SUCCESSOR,
+                successor_ordinal: None,
+            },
+            DurableContinuation::AdvancedSuccessor { edge, ordinal } => Self {
+                code: match edge {
+                    DurableContinuationEdge::FetchToStore => Self::FETCH_TO_STORE,
+                    DurableContinuationEdge::StoreToValidate => Self::STORE_TO_VALIDATE,
+                    DurableContinuationEdge::ValidateToApply => Self::VALIDATE_TO_APPLY,
+                    DurableContinuationEdge::ValidateToInvalidBodyReport => {
+                        Self::VALIDATE_TO_INVALID_BODY_REPORT
+                    }
+                    DurableContinuationEdge::ValidateToSignPrepare => {
+                        Self::VALIDATE_TO_SIGN_PREPARE
+                    }
+                    DurableContinuationEdge::ValidateToSignCommit => Self::VALIDATE_TO_SIGN_COMMIT,
+                },
+                successor_ordinal: Some(ordinal),
+            },
+        }
+    }
+
+    const fn to_schema(self) -> Option<DurableContinuation> {
+        match (self.code, self.successor_ordinal) {
+            (Self::NONE, None) => Some(DurableContinuation::None),
+            (Self::ADVANCED_NO_SUCCESSOR, None) => Some(DurableContinuation::AdvancedNoSuccessor),
+            (Self::FETCH_TO_STORE, Some(ordinal)) => Some(DurableContinuation::successor(
+                DurableContinuationEdge::FetchToStore,
+                ordinal,
+            )),
+            (Self::STORE_TO_VALIDATE, Some(ordinal)) => Some(DurableContinuation::successor(
+                DurableContinuationEdge::StoreToValidate,
+                ordinal,
+            )),
+            (Self::VALIDATE_TO_APPLY, Some(ordinal)) => Some(DurableContinuation::successor(
+                DurableContinuationEdge::ValidateToApply,
+                ordinal,
+            )),
+            (Self::VALIDATE_TO_INVALID_BODY_REPORT, Some(ordinal)) => {
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::ValidateToInvalidBodyReport,
+                    ordinal,
+                ))
+            }
+            (Self::VALIDATE_TO_SIGN_PREPARE, Some(ordinal)) => {
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::ValidateToSignPrepare,
+                    ordinal,
+                ))
+            }
+            (Self::VALIDATE_TO_SIGN_COMMIT, Some(ordinal)) => Some(DurableContinuation::successor(
+                DurableContinuationEdge::ValidateToSignCommit,
+                ordinal,
+            )),
+            _ => None,
+        }
+    }
+}
+
 /// One restart-stable lifecycle record in `LifecycleLedgerV1`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -443,6 +622,135 @@ pub(super) struct LifecycleLedgerRecordV1 {
     terminal: Option<PersistedTerminalV1>,
     reconstruction_source: [u8; 32],
     payload_reference: LifecyclePayloadReferenceV1,
+    replay_authority: LifecycleReplayAuthorityV1,
+    continuation: PersistedDurableContinuationV1,
+}
+
+/// Opaque LedgerV1 proof of the exact Validate parent named by a recovered WAL vote.
+///
+/// The proof retains the complete WAL identity and the durable owner/address
+/// projection. It has no constructor or parts API; the runtime may use it only
+/// to reconstruct the ordinal-free predecessor binding, and the registry may
+/// use it only to exact-check its direct sealed reconstruction.
+#[must_use = "a recovered WAL ledger parent must be consumed by sealed startup reconstruction"]
+pub(crate) struct AuthenticatedRecoveredWalValidateLedgerParent {
+    key: LifecycleKey,
+    owner: OwnerId,
+    ordinal: u128,
+    payload: DurablePayloadReference,
+    replay_authority: LifecycleReplayAuthorityV1,
+    inherited_prepare_authority: bool,
+    wal_identity: RecoveredWalFrameIdentity,
+    tag: EventTag,
+    vote: wire::Vote,
+}
+
+impl AuthenticatedRecoveredWalValidateLedgerParent {
+    /// Revalidate the exact adapter-authenticated WAL identity retained here.
+    pub(crate) fn exactly_matches_recovered_vote(&self, recovered: &RecoveredWalVoteSign) -> bool {
+        self.wal_identity.exactly_matches(recovered.wal_identity())
+            && recovered.replay_evidence_is_exact()
+            && self.tag == recovered.tag()
+            && self.vote == *recovered.vote()
+    }
+
+    /// Return the restart-stable runtime causal key preserved by LedgerV1.
+    pub(crate) fn runtime_causal_lifecycle_key(&self) -> Hash {
+        Hash::prehashed(*self.owner.causal_root().digest().as_bytes())
+    }
+
+    /// Return whether the durable Validate inherited the exact Prepare authority.
+    pub(crate) const fn inherited_prepare_authority(&self) -> bool {
+        self.inherited_prepare_authority
+    }
+
+    /// Return the durable owner without exposing its runtime binding.
+    pub(super) const fn owner(&self) -> OwnerId {
+        self.owner
+    }
+
+    /// Return the durable parent ordinal for internal address reconstruction.
+    pub(super) const fn ordinal(&self) -> u128 {
+        self.ordinal
+    }
+
+    /// Match one semantically revalidated body receipt to the exact frame
+    /// reference retained by this ledger parent.
+    ///
+    /// This equality oracle deliberately exposes neither the persisted frame
+    /// reference nor receipt parts. Recovered-WAL reconstruction uses it before
+    /// consuming the one-shot body marker, so a vote-compatible marker from a
+    /// substituted durable frame cannot cross the ledger/body authority join.
+    pub(crate) fn matches_durable_receipt(
+        &self,
+        active_context: LifecycleContext,
+        durable: &DurableBodyReceipt,
+    ) -> bool {
+        projection::durable_body_frame_reference(active_context, durable)
+            .map(DurablePayloadReference::BodyFrame)
+            == Some(self.payload)
+    }
+
+    /// Match the reconstructed parent candidate against the complete ledger seal.
+    pub(super) fn matches_candidate(&self, candidate: &CandidateAdmission) -> bool {
+        candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.key == self.key
+            && candidate.causal_root == self.owner.causal_root()
+            && candidate.work_class == LifecycleWorkClass::Validate
+            && candidate.stage
+                == LifecycleStage::new(
+                    LifecycleStageKind::ValidateBody,
+                    PredecessorScope::Independent,
+                )
+            && candidate.reconstruction_source == self.owner.causal_root().digest()
+            && candidate.payload == self.payload
+            && candidate.replay_authority == self.replay_authority
+            && candidate.producer_turn.is_none()
+    }
+
+    /// Construct the exact recovered Validate candidate from this persisted seal.
+    ///
+    /// The persisted replay authority never leaves the ledger-parent wrapper;
+    /// it is attached only after the runtime effect and pending binding project
+    /// to the same owner and logical coordinates.
+    pub(in crate::sumeragi) fn project_recovered_candidate(
+        &self,
+        _permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        effect: &crate::sumeragi::v2::AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        let active_context = projection::lifecycle_context(verified.context());
+        let projected = projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            effect,
+            pending,
+        )
+        .ok()?;
+        self.replay_authority
+            .structurally_matches_record(
+                active_context,
+                projected.key,
+                projected.work_class,
+                projected.stage,
+                self.payload,
+            )
+            .then_some(())?;
+        let candidate = CandidateAdmission::new(
+            projected.key,
+            projected.causal_root,
+            projected.work_class,
+            projected.stage,
+            projected.initial_state,
+            projected.reconstruction_source,
+            self.payload,
+            self.replay_authority.clone(),
+            projected.physical_geometry,
+            None,
+        );
+        self.matches_candidate(&candidate).then_some(candidate)
+    }
 }
 
 impl LifecycleLedgerRecordV1 {
@@ -457,6 +765,8 @@ impl LifecycleLedgerRecordV1 {
         terminal: Option<TerminalOutcome>,
         reconstruction_source: LifecycleDigest,
         payload: DurablePayloadReference,
+        replay_authority: LifecycleReplayAuthorityV1,
+        continuation: DurableContinuation,
     ) -> Result<Self, LifecycleLedgerError> {
         let payload_reference =
             LifecyclePayloadReferenceV1::from_schema(key, payload).ok_or_else(|| {
@@ -475,7 +785,36 @@ impl LifecycleLedgerRecordV1 {
             terminal: terminal.map(PersistedTerminalV1::from_schema),
             reconstruction_source: *reconstruction_source.as_bytes(),
             payload_reference,
+            replay_authority,
+            continuation: PersistedDurableContinuationV1::from_schema(continuation),
         })
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_exact_replay_fixture(
+        key: LifecycleKey,
+        owner: OwnerId,
+        ordinal: u128,
+        work_class: LifecycleWorkClass,
+        stage: LifecycleStage,
+        terminal: Option<TerminalOutcome>,
+        reconstruction_source: LifecycleDigest,
+        payload: DurablePayloadReference,
+        continuation: DurableContinuation,
+    ) -> Result<Self, LifecycleLedgerError> {
+        Self::new(
+            key,
+            owner,
+            ordinal,
+            work_class,
+            stage,
+            terminal,
+            reconstruction_source,
+            payload,
+            tests::replay_authority_for(key, stage, payload),
+            continuation,
+        )
     }
 
     /// Decode the stable semantic key.
@@ -527,6 +866,77 @@ impl LifecycleLedgerRecordV1 {
             .and_then(|key| self.payload_reference.to_schema(key))
     }
 
+    /// Decode the exact typed durable continuation.
+    pub(super) const fn continuation(&self) -> Option<DurableContinuation> {
+        self.continuation.to_schema()
+    }
+
+    /// Compare a reconstructed admission with this row's inert persisted
+    /// authority without exposing the decoded envelope.
+    pub(super) fn replay_matches_candidate(&self, candidate: &CandidateAdmission) -> bool {
+        if self.work_class() == Some(LifecycleWorkClass::CertifiedServe) {
+            self.replay_authority
+                .same_persisted_family(&candidate.replay_authority)
+        } else {
+            self.replay_authority == candidate.replay_authority
+        }
+    }
+
+    /// Compare the adjacent reconstructed ProducerTurn with this row's exact
+    /// separately encoded replay authority.
+    pub(super) fn replay_matches_producer(&self, producer: &super::ProducerTurnAdmission) -> bool {
+        self.replay_authority == producer.replay_authority
+    }
+
+    /// Prove that this Pending Serve row and its adjacent ProducerTurn are the
+    /// exact predecessor of one authenticated terminal payload-store frame.
+    pub(super) fn replay_is_exact_pending_predecessor(
+        &self,
+        context: LifecycleContext,
+        producer: &Self,
+        terminal: &CertifiedServeTerminalReplayAuthorityPairV1,
+    ) -> bool {
+        let (
+            Some(serve_key),
+            Some(serve_stage),
+            Some(serve_payload),
+            Some(producer_key),
+            Some(producer_stage),
+            Some(producer_payload),
+        ) = (
+            self.key(),
+            self.stage(),
+            self.durable_payload(),
+            producer.key(),
+            producer.stage(),
+            producer.durable_payload(),
+        )
+        else {
+            return false;
+        };
+        self.work_class() == Some(LifecycleWorkClass::CertifiedServe)
+            && self.terminal() == Some(None)
+            && producer.work_class() == Some(LifecycleWorkClass::ProducerTurn)
+            && producer.terminal() == Some(None)
+            && terminal.exactly_advances_pending_coordinates(
+                context,
+                serve_key,
+                self.owner(),
+                self.ordinal,
+                serve_stage,
+                self.reconstruction_source(),
+                serve_payload,
+                &self.replay_authority,
+                producer_key,
+                producer.owner(),
+                producer.ordinal,
+                producer_stage,
+                producer.reconstruction_source(),
+                producer_payload,
+                &producer.replay_authority,
+            )
+    }
+
     fn validate(&self, context: LifecycleContext, high_water: u128) -> bool {
         let Some(key) = self.key() else {
             return false;
@@ -534,6 +944,12 @@ impl LifecycleLedgerRecordV1 {
         let Some(work_class) = self.work_class() else {
             return false;
         };
+        let terminal = self.terminal().flatten();
+        let Some(continuation) = self.continuation() else {
+            return false;
+        };
+        let successor_shape_is_valid =
+            continuation.matches_record(work_class, terminal, self.ordinal, high_water);
         self.ordinal > 0
             && self.ordinal <= high_water
             && self.owner_first_ordinal > 0
@@ -549,7 +965,15 @@ impl LifecycleLedgerRecordV1 {
             && self.durable_payload().is_some_and(|payload| {
                 payload
                     .matches_terminal(work_class, self.terminal().expect("terminal checked above"))
+                    && self.replay_authority.structurally_matches_record(
+                        context,
+                        key,
+                        work_class,
+                        self.stage().expect("stage checked above"),
+                        payload,
+                    )
             })
+            && successor_shape_is_valid
     }
 }
 
@@ -624,6 +1048,8 @@ impl LifecycleLedgerV1 {
                     terminal,
                     metadata.reconstruction_source,
                     metadata.payload,
+                    metadata.replay_authority.clone(),
+                    metadata.continuation,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -682,6 +1108,12 @@ impl LifecycleLedgerV1 {
                     record.durable_payload().ok_or_else(|| {
                         LifecycleLedgerError::InvalidLedger(
                             "durable payload cannot be decoded".to_owned(),
+                        )
+                    })?,
+                    record.replay_authority.clone(),
+                    record.continuation().ok_or_else(|| {
+                        LifecycleLedgerError::InvalidLedger(
+                            "durable continuation cannot be decoded".to_owned(),
                         )
                     })?,
                     physical_slot_universes
@@ -754,9 +1186,276 @@ impl LifecycleLedgerV1 {
         &self.records
     }
 
+    #[cfg(test)]
+    /// Substitute one structurally valid but foreign replay origin generation.
+    pub(super) fn with_foreign_replay_authority_for_test(&self, ordinal: u128) -> Option<Self> {
+        let mut changed = self.clone();
+        let record = changed
+            .records
+            .iter_mut()
+            .find(|record| record.ordinal == ordinal)?;
+        record.replay_authority = record
+            .replay_authority
+            .with_foreign_origin_generation_for_test()?;
+        changed.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).ok()?;
+        Some(changed)
+    }
+
     /// Borrow the canonical Serve-to-producer debts.
     pub(super) fn producer_debts(&self) -> &[LifecycleProducerDebtV1] {
         &self.producer_debts
+    }
+
+    /// Authenticate the unique live or already-repaired Validate parent of one WAL vote.
+    ///
+    /// This read-only projection binds the complete WAL identity to the exact
+    /// LedgerV1 owner and admission ordinal. It accepts only the two crash
+    /// states surrounding the existing fsync seam: a live uncontinued parent,
+    /// or the exact Advanced-parent/live-Sign-child pair.
+    pub(super) fn authenticate_recovered_wal_validate_parent(
+        &self,
+        recovered: &RecoveredWalVoteSign,
+    ) -> Option<AuthenticatedRecoveredWalValidateLedgerParent> {
+        let vote = recovered.vote();
+        let mut context_bytes = [0_u8; 32];
+        context_bytes.copy_from_slice(vote.round.context_id.0.as_ref());
+        let wal_authority_is_exact = match vote.phase {
+            wire::GlobalPhase::Prepare => recovered.prepare_certificate().is_none(),
+            wire::GlobalPhase::Commit => recovered.prepare_certificate().is_some_and(|prepare| {
+                prepare.phase == wire::GlobalPhase::Prepare
+                    && prepare.round == vote.round
+                    && prepare.proposal_round == vote.proposal_round
+                    && prepare.subject == vote.subject
+                    && prepare.execution_commitment == vote.execution_commitment
+            }),
+        };
+        if !recovered.wal_identity().is_exact()
+            || !recovered.replay_evidence_is_exact()
+            || !wal_authority_is_exact
+            || self.context().id() != LifecycleDigest::new(context_bytes)
+            || self.context().height() != vote.round.height
+            || vote.proposal_round.context_id != vote.round.context_id
+            || vote.proposal_round.height != vote.round.height
+            || recovered.tag().height() != vote.round.height
+            || recovered.tag().view() != vote.round.view
+        {
+            return None;
+        }
+        let subject = projection::block_subject(vote.subject);
+        let commitment = projection::execution_commitment(vote.execution_commitment);
+        let round = LifecycleRound::new(vote.round.height, vote.round.view);
+        let proposal_round =
+            LifecycleRound::new(vote.proposal_round.height, vote.proposal_round.view);
+        let mut parents = self.records.iter().filter(|record| {
+            let Some(key) = record.key() else {
+                return false;
+            };
+            let authority_is_exact = match vote.phase {
+                wire::GlobalPhase::Prepare => key.execution_commitment().is_none(),
+                wire::GlobalPhase::Commit => key
+                    .execution_commitment()
+                    .is_none_or(|candidate| candidate == commitment),
+            };
+            key.context() == self.context().id()
+                && key.round() == round
+                && key.proposal_round() == Some(proposal_round)
+                && key.subject() == Some(subject)
+                && key.phase() == LifecyclePhase::Validate
+                && authority_is_exact
+                && record.work_class() == Some(LifecycleWorkClass::Validate)
+                && record.stage()
+                    == Some(LifecycleStage::new(
+                        LifecycleStageKind::ValidateBody,
+                        PredecessorScope::Independent,
+                    ))
+                && record.reconstruction_source() == record.owner().causal_root().digest()
+                && record
+                    .durable_payload()
+                    .is_some_and(|payload| durable_validate_payload_is_exact(key, payload))
+        });
+        let parent = parents.next()?;
+        if parents.next().is_some() {
+            return None;
+        }
+        let parent_key = parent.key()?;
+        let inherited_prepare_authority = parent_key.execution_commitment().is_some();
+        let edge = match vote.phase {
+            wire::GlobalPhase::Prepare => DurableContinuationEdge::ValidateToSignPrepare,
+            wire::GlobalPhase::Commit => DurableContinuationEdge::ValidateToSignCommit,
+        };
+        let child_phase = match vote.phase {
+            wire::GlobalPhase::Prepare => LifecyclePhase::Prepare,
+            wire::GlobalPhase::Commit => LifecyclePhase::Commit,
+        };
+        let child_stage = match vote.phase {
+            wire::GlobalPhase::Prepare => LifecycleStageKind::SignPrepareVote,
+            wire::GlobalPhase::Commit => LifecycleStageKind::SignCommitVote,
+        };
+        let child_key = LifecycleKey::new(
+            self.context().id(),
+            round,
+            Some(proposal_round),
+            Some(subject),
+            child_phase,
+            Some(commitment),
+        );
+        match (parent.terminal()?, parent.continuation()?) {
+            (None, DurableContinuation::None) => {
+                if self
+                    .records
+                    .iter()
+                    .any(|record| record.key() == Some(child_key))
+                {
+                    return None;
+                }
+            }
+            (Some(TerminalOutcome::Advanced), continuation) => {
+                let (observed_edge, child_ordinal) = continuation.successor_parts()?;
+                let child = self
+                    .records
+                    .iter()
+                    .find(|record| record.ordinal() == child_ordinal)?;
+                if observed_edge != edge
+                    || child.key() != Some(child_key)
+                    || child.owner() != parent.owner()
+                    || child.work_class() != Some(LifecycleWorkClass::SignVote)
+                    || child.stage()
+                        != Some(LifecycleStage::new(
+                            child_stage,
+                            PredecessorScope::Independent,
+                        ))
+                    || child.terminal() != Some(None)
+                    || child.reconstruction_source() != parent.reconstruction_source()
+                    || child.durable_payload() != Some(DurablePayloadReference::None)
+                    || child.continuation() != Some(DurableContinuation::None)
+                {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+        Some(AuthenticatedRecoveredWalValidateLedgerParent {
+            key: parent_key,
+            owner: parent.owner(),
+            ordinal: parent.ordinal(),
+            payload: parent.durable_payload()?,
+            replay_authority: parent.replay_authority.clone(),
+            inherited_prepare_authority,
+            wal_identity: recovered.wal_identity(),
+            tag: recovered.tag(),
+            vote: vote.clone(),
+        })
+    }
+
+    /// Purely stage one adapter-authenticated WAL-ahead Validate-to-Sign repair.
+    ///
+    /// The only mutable shape is an exact live Validate parent with no child.
+    /// It becomes `Advanced` and names a newly appended, same-owner Sign row at
+    /// `high_water + 1`. An already repaired exact pair stutters. Every other
+    /// parent/child arrangement fails before the returned ledger can be
+    /// persisted by the future startup transaction.
+    pub(super) fn stage_authenticated_wal_vote_repair(
+        &self,
+        repair: &AuthenticatedWalVoteLifecycleRepair,
+    ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !repair.concrete_pair_is_exact() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered WAL repair lost its concrete effect binding".to_owned(),
+            ));
+        }
+        let parent_candidate = repair.parent();
+        let child_candidate = repair.child();
+        let parent_index = self
+            .records
+            .iter()
+            .position(|record| record.key() == Some(parent_candidate.key))
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "recovered WAL vote has no durable Validate parent".to_owned(),
+                )
+            })?;
+        let parent = &self.records[parent_index];
+        if !record_matches_recovery_candidate(parent, parent_candidate)
+            || parent.work_class() != Some(LifecycleWorkClass::Validate)
+            || parent.stage().is_none_or(|stage| {
+                stage.kind() != LifecycleStageKind::ValidateBody
+                    || stage.predecessor_scope() != PredecessorScope::Independent
+            })
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered WAL vote changed its durable Validate parent".to_owned(),
+            ));
+        }
+
+        let existing_child = self
+            .records
+            .iter()
+            .find(|record| record.key() == Some(child_candidate.key));
+        let continuation = parent.continuation().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "recovered WAL parent continuation cannot be decoded".to_owned(),
+            )
+        })?;
+        let terminal = parent.terminal().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "recovered WAL parent terminal cannot be decoded".to_owned(),
+            )
+        })?;
+
+        if let Some((edge, child_ordinal)) = continuation.successor_parts() {
+            let child = existing_child.ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "recovered WAL continuation lost its Sign child".to_owned(),
+                )
+            })?;
+            if terminal != Some(TerminalOutcome::Advanced)
+                || edge != repair.edge()
+                || child.ordinal() != child_ordinal
+                || child.owner() != parent.owner()
+                || !record_matches_recovery_candidate(child, child_candidate)
+                || child.terminal() != Some(None)
+                || child.continuation() != Some(DurableContinuation::None)
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "recovered WAL continuation conflicts with the durable Sign pair".to_owned(),
+                ));
+            }
+            return Ok((self.clone(), child_ordinal, false));
+        }
+
+        if terminal.is_some()
+            || continuation != DurableContinuation::None
+            || existing_child.is_some()
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered WAL vote does not match a live uncontinued Validate".to_owned(),
+            ));
+        }
+        let child_ordinal = self.high_water.checked_add(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger("recovered WAL Sign ordinal exhausted".to_owned())
+        })?;
+        let mut staged = self.clone();
+        staged.records[parent_index].terminal =
+            Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
+        staged.records[parent_index].continuation = PersistedDurableContinuationV1::from_schema(
+            DurableContinuation::successor(repair.edge(), child_ordinal),
+        );
+        staged.records.push(LifecycleLedgerRecordV1::new(
+            child_candidate.key,
+            parent.owner(),
+            child_ordinal,
+            child_candidate.work_class,
+            child_candidate.stage,
+            None,
+            child_candidate.reconstruction_source,
+            child_candidate.payload,
+            child_candidate.replay_authority.clone(),
+            DurableContinuation::None,
+        )?);
+        staged.high_water = child_ordinal;
+        staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        Ok((staged, child_ordinal, true))
     }
 
     fn validate(&self, max_records: usize) -> Result<(), LifecycleLedgerError> {
@@ -770,6 +1469,7 @@ impl LifecycleLedgerV1 {
         let mut keys = BTreeSet::new();
         let mut owners = BTreeMap::new();
         let mut serve_requests = BTreeSet::new();
+        let mut continuation_successors = BTreeSet::new();
         if self
             .records
             .windows(2)
@@ -809,6 +1509,81 @@ impl LifecycleLedgerV1 {
             {
                 return Err(LifecycleLedgerError::InvalidLedger(
                     "one exact signed Serve request names multiple lifecycle records".to_owned(),
+                ));
+            }
+        }
+        for record in &self.records {
+            let continuation = record
+                .continuation()
+                .expect("records validated before successor edges");
+            if continuation != DurableContinuation::None
+                && record.reconstruction_source() != record.owner().causal_root().digest()
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "durable continuation is not bound to its causal owner".to_owned(),
+                ));
+            }
+            if continuation == DurableContinuation::AdvancedNoSuccessor
+                && !durable_validate_payload_is_exact(
+                    record
+                        .key()
+                        .expect("records validated before continuation payloads"),
+                    record
+                        .durable_payload()
+                        .expect("records validated before continuation payloads"),
+                )
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "advanced Validate without a successor lost its exact body frame".to_owned(),
+                ));
+            }
+            let Some((edge, successor_ordinal)) = continuation.successor_parts() else {
+                continue;
+            };
+            let successor = self
+                .records
+                .binary_search_by_key(&successor_ordinal, |candidate| candidate.ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index));
+            if !continuation_successors.insert(successor_ordinal)
+                || successor.is_none_or(|successor| {
+                    successor.owner() != record.owner()
+                        || successor.reconstruction_source() != record.reconstruction_source()
+                        || !durable_continuation_payload_is_exact(
+                            edge,
+                            record
+                                .durable_payload()
+                                .expect("records validated before successor edges"),
+                            successor
+                                .durable_payload()
+                                .expect("records validated before successor edges"),
+                        )
+                        || !durable_continuation_successor_is_exact(
+                            edge,
+                            record
+                                .work_class()
+                                .expect("records validated before successor edges"),
+                            record
+                                .key()
+                                .expect("records validated before successor edges"),
+                            record
+                                .stage()
+                                .expect("records validated before successor edges"),
+                            successor
+                                .work_class()
+                                .expect("records validated before successor edges"),
+                            successor
+                                .key()
+                                .expect("records validated before successor edges"),
+                            successor
+                                .stage()
+                                .expect("records validated before successor edges"),
+                        )
+                })
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "advanced body-stage successor is missing, aliased, or semantically foreign"
+                        .to_owned(),
                 ));
             }
         }
@@ -886,6 +1661,9 @@ impl LifecycleLedgerV1 {
                     if producer.work_class() != Some(LifecycleWorkClass::ProducerTurn)
                         || producer.owner() != record.owner()
                         || producer.reconstruction_source() != record.reconstruction_source()
+                        || !producer
+                            .replay_authority
+                            .same_persisted_family(&record.replay_authority)
                         || !serve_and_producer_keys_match(
                             record.key().expect("records validated before debts"),
                             producer.key().expect("records validated before debts"),
@@ -935,12 +1713,119 @@ impl LifecycleLedgerV1 {
     }
 }
 
+/// Focused projection of one real authenticated WAL repair through LedgerV1.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WalVoteLedgerRepairTestSummary {
+    child_ordinal: u128,
+    edge: DurableContinuationEdge,
+    first_changed: bool,
+    repeat_changed: bool,
+    parent_advanced: bool,
+    child_live: bool,
+    high_water: u128,
+    durable_frame_bound: bool,
+    reopened_exact: bool,
+}
+
+#[cfg(test)]
+impl WalVoteLedgerRepairTestSummary {
+    /// Assemble the closed observations from the outer recovery fsync fixture.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) const fn new(
+        child_ordinal: u128,
+        edge: DurableContinuationEdge,
+        first_changed: bool,
+        repeat_changed: bool,
+        parent_advanced: bool,
+        child_live: bool,
+        high_water: u128,
+        durable_frame_bound: bool,
+        reopened_exact: bool,
+    ) -> Self {
+        Self {
+            child_ordinal,
+            edge,
+            first_changed,
+            repeat_changed,
+            parent_advanced,
+            child_live,
+            high_water,
+            durable_frame_bound,
+            reopened_exact,
+        }
+    }
+
+    /// Return whether the first stage repaired the live parent.
+    pub(crate) const fn first_changed(&self) -> bool {
+        self.first_changed
+    }
+
+    /// Return whether the exact repeated stage changed the ledger.
+    pub(crate) const fn repeat_changed(&self) -> bool {
+        self.repeat_changed
+    }
+
+    /// Return whether the repaired parent is the exact Advanced tombstone.
+    pub(crate) const fn parent_advanced(&self) -> bool {
+        self.parent_advanced
+    }
+
+    /// Return whether the typed Sign child remains live.
+    pub(crate) const fn child_live(&self) -> bool {
+        self.child_live
+    }
+
+    /// Return the repaired child ordinal.
+    pub(crate) const fn child_ordinal(&self) -> u128 {
+        self.child_ordinal
+    }
+
+    /// Return whether the repair names the exact Validate-to-Prepare-Sign edge.
+    pub(crate) const fn is_prepare_edge(&self) -> bool {
+        matches!(self.edge, DurableContinuationEdge::ValidateToSignPrepare)
+    }
+
+    /// Return whether the repair names the exact Validate-to-Commit-Sign edge.
+    pub(crate) const fn is_commit_edge(&self) -> bool {
+        matches!(self.edge, DurableContinuationEdge::ValidateToSignCommit)
+    }
+
+    /// Return the repaired durable ordinal high-water mark.
+    pub(crate) const fn high_water(&self) -> u128 {
+        self.high_water
+    }
+
+    /// Return whether a nonzero complete-frame hash was bound post-fsync.
+    pub(crate) const fn durable_frame_bound(&self) -> bool {
+        self.durable_frame_bound
+    }
+
+    /// Return whether reopening reproduced the exact repaired ledger.
+    pub(crate) const fn reopened_exact(&self) -> bool {
+        self.reopened_exact
+    }
+}
+
+fn record_matches_recovery_candidate(
+    record: &LifecycleLedgerRecordV1,
+    candidate: &CandidateAdmission,
+) -> bool {
+    candidate.initial_state == InitialLifecycleState::Ready
+        && record.key() == Some(candidate.key)
+        && record.owner().causal_root() == candidate.causal_root
+        && record.work_class() == Some(candidate.work_class)
+        && record.stage() == Some(candidate.stage)
+        && record.reconstruction_source() == candidate.reconstruction_source
+        && record
+            .durable_payload()
+            .is_some_and(|payload| payload.same_admission_material(candidate.payload))
+        && record.replay_authority == candidate.replay_authority
+}
+
 /// Typed LifecycleLedgerV1 load or persistence failure.
 #[derive(Debug, Error)]
 pub(super) enum LifecycleLedgerError {
-    /// The retired Serve v5 file requires the authorized fresh reset.
-    #[error("legacy Sumeragi certified-Serve v5 state at {0} requires the authorized fresh reset")]
-    LegacyV5RequiresReset(PathBuf),
     /// A filesystem operation failed.
     #[error("{0}")]
     Io(String),
@@ -950,6 +1835,70 @@ pub(super) enum LifecycleLedgerError {
     /// Decoded logical state violated a durable invariant.
     #[error("invalid LifecycleLedgerV1 state: {0}")]
     InvalidLedger(String),
+}
+
+/// Post-fsync receipt for one exact WAL-ahead Validate-to-Sign ledger repair.
+///
+/// Construction is private to [`LifecycleLedgerStoreV1`]. The receipt binds
+/// both semantic keys, the typed edge and child ordinal, and the complete
+/// framed ledger bytes which were published before it was returned.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct DurableWalVoteLedgerRepairReceipt {
+    store_path: PathBuf,
+    context: LifecycleContext,
+    parent_key: LifecycleKey,
+    child_key: LifecycleKey,
+    edge: DurableContinuationEdge,
+    child_ordinal: u128,
+    ledger_frame_hash: LifecycleDigest,
+}
+
+impl DurableWalVoteLedgerRepairReceipt {
+    /// Return whether this receipt names one exact authenticated repair.
+    pub(super) fn matches(&self, repair: &AuthenticatedWalVoteLifecycleRepair) -> bool {
+        self.context.id() == repair.parent().key.context()
+            && self.context.height() == repair.parent().key.round().height()
+            && self.parent_key == repair.parent().key
+            && self.child_key == repair.child().key
+            && self.edge == repair.edge()
+            && self.child_ordinal != 0
+    }
+
+    /// Return the durable child ordinal named by the published ledger.
+    pub(super) const fn child_ordinal(&self) -> u128 {
+        self.child_ordinal
+    }
+
+    /// Return the hash of the complete canonical ledger frame.
+    pub(super) const fn ledger_frame_hash(&self) -> LifecycleDigest {
+        self.ledger_frame_hash
+    }
+
+    /// Return whether the receipt belongs to this exact opened ledger store.
+    pub(super) fn belongs_to(&self, store: &LifecycleLedgerStoreV1) -> bool {
+        store
+            .load()
+            .ok()
+            .is_some_and(|ledger| self.belongs_to_loaded(store, &ledger))
+    }
+
+    /// Validate this receipt against one already-loaded frame from its store.
+    /// Keeping this comparison load-free lets the Sign-install preflight bind
+    /// the frame hash and repaired-pair shape to the same read.
+    pub(super) fn belongs_to_loaded(
+        &self,
+        store: &LifecycleLedgerStoreV1,
+        ledger: &LifecycleLedgerV1,
+    ) -> bool {
+        self.store_path == store.path
+            && self.context == store.context
+            && ledger.context() == self.context
+            && encode_frame(ledger, store.max_frame_bytes)
+                .ok()
+                .is_some_and(|frame| {
+                    LifecycleDigest::new(Hash::new(frame).into()) == self.ledger_frame_hash
+                })
+    }
 }
 
 /// Crash-safe, bounded store for one height-local LifecycleLedgerV1.
@@ -962,23 +1911,11 @@ pub(super) struct LifecycleLedgerStoreV1 {
 }
 
 impl LifecycleLedgerStoreV1 {
-    /// Open a height-local ledger under the coordinator's sealed size bounds,
-    /// rejecting the retired v5 Serve format.
+    /// Open a height-local ledger under the coordinator's sealed size bounds.
     pub(super) fn open(
         root: &Path,
         context: LifecycleContext,
     ) -> Result<(Self, LifecycleLedgerV1), LifecycleLedgerError> {
-        let legacy_path = root.join(LEGACY_SERVE_V5_FILE);
-        match fs::symlink_metadata(&legacy_path) {
-            Ok(_) => return Err(LifecycleLedgerError::LegacyV5RequiresReset(legacy_path)),
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(LifecycleLedgerError::Io(format!(
-                    "failed to inspect retired Serve v5 state {}: {error}",
-                    legacy_path.display()
-                )));
-            }
-        }
         ensure_durable_ledger_directory(root)?;
         let store = Self {
             path: root.join(LEDGER_FILE),
@@ -1033,6 +1970,31 @@ impl LifecycleLedgerStoreV1 {
         }
         ledger.validate(self.max_records)?;
         Ok(ledger)
+    }
+
+    /// Reload and authenticate one already-fsynced WAL repair as an exact
+    /// repaired-pair stutter.
+    ///
+    /// This is a read-only post-fsync/install preflight. It deliberately does
+    /// not expose the loaded ledger: callers learn only whether the complete
+    /// current frame contains the exact authenticated parent/child pair and
+    /// durable child ordinal they already own.
+    pub(super) fn revalidates_durable_authenticated_wal_vote_repair(
+        &self,
+        durable: &DurableAuthenticatedWalVoteLifecycleRepair,
+    ) -> bool {
+        let Ok(loaded) = self.load() else {
+            return false;
+        };
+        if !durable.belongs_to_loaded(self, &loaded) {
+            return false;
+        }
+        let Ok((staged, observed_child_ordinal, changed)) =
+            loaded.stage_authenticated_wal_vote_repair(durable.repair())
+        else {
+            return false;
+        };
+        !changed && observed_child_ordinal == durable.child_ordinal() && staged == loaded
     }
 
     /// Atomically replace the ledger after validating all durable invariants.
@@ -1098,6 +2060,73 @@ impl LifecycleLedgerStoreV1 {
         })?;
         sync_ledger_directory(parent)?;
         Ok(())
+    }
+
+    /// Stage and fsync one authenticated WAL-ahead lifecycle repair.
+    ///
+    /// The receipt is minted only after the complete replacement frame and
+    /// owning directory are synced. Exact repeats are persisted idempotently
+    /// and receive the same frame-bound receipt.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn persist_authenticated_wal_vote_repair(
+        &self,
+        ledger: &LifecycleLedgerV1,
+        repair: AuthenticatedWalVoteLifecycleRepair,
+    ) -> Result<
+        (
+            LifecycleLedgerV1,
+            DurableAuthenticatedWalVoteLifecycleRepair,
+            bool,
+        ),
+        (LifecycleLedgerError, AuthenticatedWalVoteLifecycleRepair),
+    > {
+        let loaded = match self.load() {
+            Ok(loaded) => loaded,
+            Err(error) => return Err((error, repair)),
+        };
+        if &loaded != ledger {
+            return Err((
+                LifecycleLedgerError::InvalidLedger(
+                    "WAL repair attempted to replace a stale ledger snapshot".to_owned(),
+                ),
+                repair,
+            ));
+        }
+        let (staged, child_ordinal, changed) =
+            match loaded.stage_authenticated_wal_vote_repair(&repair) {
+                Ok(staged) => staged,
+                Err(error) => return Err((error, repair)),
+            };
+        let frame = match encode_frame(&staged, self.max_frame_bytes) {
+            Ok(frame) => frame,
+            Err(error) => return Err((error, repair)),
+        };
+        if let Err(error) = self.persist(&staged) {
+            return Err((error, repair));
+        }
+        let receipt = DurableWalVoteLedgerRepairReceipt {
+            store_path: self.path.clone(),
+            context: self.context,
+            parent_key: repair.parent().key,
+            child_key: repair.child().key,
+            edge: repair.edge(),
+            child_ordinal,
+            ledger_frame_hash: LifecycleDigest::new(Hash::new(frame).into()),
+        };
+        debug_assert!(receipt.belongs_to(self));
+        let durable = match repair.bind_durable_ledger_receipt(receipt) {
+            Ok(durable) => durable,
+            Err((repair, _receipt)) => {
+                return Err((
+                    LifecycleLedgerError::InvalidLedger(
+                        "post-fsync WAL repair receipt did not bind its authority".to_owned(),
+                    ),
+                    repair,
+                ));
+            }
+        };
+        Ok((staged, durable, changed))
     }
 }
 
@@ -1508,14 +2537,12 @@ mod tests {
     }
 
     fn key(seed: u8, phase: LifecyclePhase) -> LifecycleKey {
-        LifecycleKey::new(
-            context().id(),
-            LifecycleRound::new(7, u64::from(seed)),
-            Some(LifecycleRound::new(7, u64::from(seed))),
-            Some(digest(seed)),
-            phase,
-            None,
-        )
+        let stage = match phase {
+            LifecyclePhase::Serve => LifecycleStageKind::CertifiedServe,
+            LifecyclePhase::ProducerTurn => LifecycleStageKind::ProducerTurn,
+            _ => panic!("ledger key fixture only covers Serve/ProducerTurn"),
+        };
+        super::super::replay_authority::exact_record_fixture(context(), stage, seed).key
     }
 
     fn stage(kind: LifecycleStageKind) -> LifecycleStage {
@@ -1533,8 +2560,427 @@ mod tests {
         OwnerId::new(CausalRoot::new(digest(9)), first)
     }
 
+    fn body_key(
+        phase: LifecyclePhase,
+        _execution_commitment: Option<LifecycleDigest>,
+    ) -> LifecycleKey {
+        let stage = match phase {
+            LifecyclePhase::Fetch => LifecycleStageKind::FetchBody,
+            LifecyclePhase::Store => LifecycleStageKind::StoreBody,
+            LifecyclePhase::Validate => LifecycleStageKind::ValidateBody,
+            LifecyclePhase::Apply => LifecycleStageKind::ApplyDecision,
+            LifecyclePhase::Prepare => LifecycleStageKind::SignPrepareVote,
+            LifecyclePhase::Commit => LifecycleStageKind::SignCommitVote,
+            LifecyclePhase::DiagnosticInvalidBody => LifecycleStageKind::ReportInvalidBody,
+            _ => panic!("ledger body fixture received a non-body phase"),
+        };
+        super::super::replay_authority::exact_record_fixture(context(), stage, 3).key
+    }
+
+    fn body_stage(kind: LifecycleStageKind) -> LifecycleStage {
+        LifecycleStage::new(kind, PredecessorScope::Independent)
+    }
+
+    pub(super) fn replay_authority_for(
+        key: LifecycleKey,
+        stage: LifecycleStage,
+        payload: DurablePayloadReference,
+    ) -> LifecycleReplayAuthorityV1 {
+        let seed = u8::try_from(key.round().view()).expect("fixture view fits u8");
+        let record_context = LifecycleContext::new(key.context(), key.round().height());
+        let case = super::super::replay_authority::exact_record_fixture(
+            record_context,
+            stage.kind(),
+            seed,
+        );
+        if stage.kind() == LifecycleStageKind::CertifiedServe {
+            return case
+                .authority
+                .terminalized_certified_serve(record_context, key, stage, payload)
+                .unwrap_or(case.authority);
+        }
+        case.authority
+    }
+
+    fn exact_body_payload(stage: LifecycleStageKind) -> DurablePayloadReference {
+        super::super::replay_authority::exact_record_fixture(context(), stage, 3).payload
+    }
+
+    #[test]
+    fn body_frame_reference_roundtrips_and_is_bound_to_the_body_key() {
+        let key = body_key(LifecyclePhase::Store, None);
+        let payload = exact_body_payload(LifecycleStageKind::StoreBody);
+        let encoded = LifecyclePayloadReferenceV1::from_schema(key, payload)
+            .expect("exact body reference projects into LedgerV1");
+        assert!(encoded.validate());
+        assert_eq!(encoded.to_schema(key), Some(payload));
+
+        let foreign_key = LifecycleKey::new(
+            key.context(),
+            key.round(),
+            key.proposal_round(),
+            Some(digest(43)),
+            LifecyclePhase::Store,
+            key.execution_commitment(),
+        );
+        assert!(LifecyclePayloadReferenceV1::from_schema(foreign_key, payload).is_none());
+        assert_eq!(encoded.to_schema(foreign_key), None);
+
+        let record = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            key,
+            owner(1),
+            1,
+            LifecycleWorkClass::Store,
+            body_stage(LifecycleStageKind::StoreBody),
+            None,
+            digest(9),
+            payload,
+            DurableContinuation::None,
+        )
+        .expect("body-bound Store record");
+        LifecycleLedgerV1::new(context(), 1, vec![record], BTreeMap::new())
+            .expect("body-bound Store ledger");
+
+        let validate_key = body_key(LifecyclePhase::Validate, None);
+        let validate_reference = DurableBodyFrameReference::new(
+            context().id(),
+            validate_key
+                .proposal_round()
+                .expect("Validate proposal round"),
+            validate_key.subject().expect("Validate subject"),
+            digest(41),
+            digest(42),
+        );
+        let invalid_validate = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            validate_key,
+            owner(1),
+            1,
+            LifecycleWorkClass::Validate,
+            body_stage(LifecycleStageKind::ValidateBody),
+            Some(TerminalOutcome::Rejected(7)),
+            digest(9),
+            DurablePayloadReference::BodyFrame(validate_reference),
+            DurableContinuation::None,
+        )
+        .expect("construct invalid terminal Validate fixture");
+        assert_invalid_records(1, vec![invalid_validate]);
+
+        let mut corrupted = encoded;
+        *corrupted
+            .canonical_reference
+            .last_mut()
+            .expect("body reference has canonical bytes") ^= 1;
+        assert!(!corrupted.validate());
+        assert_eq!(corrupted.to_schema(key), None);
+    }
+
+    #[test]
+    fn recovered_validate_parent_matches_only_its_exact_durable_body_frame() {
+        let context_hash = Hash::new(b"recovered Validate body-frame context");
+        let active_context = LifecycleContext::new(
+            LifecycleDigest::new(*context_hash.as_ref()),
+            context().height(),
+        );
+        let (replay, durable) = super::super::replay_authority::exact_body_record_fixture(
+            active_context,
+            LifecycleStageKind::ValidateBody,
+            3,
+        );
+        let round = durable.round();
+        let subject = durable.subject();
+        let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"parent state"),
+            Hash::new(b"post state"),
+            Hash::new(b"ordinary writes"),
+            1,
+            Hash::new(b"executed block"),
+        );
+        let parent = AuthenticatedRecoveredWalValidateLedgerParent {
+            key: replay.key,
+            owner: owner(1),
+            ordinal: 1,
+            payload: replay.payload,
+            replay_authority: replay.authority,
+            inherited_prepare_authority: false,
+            wal_identity: RecoveredWalFrameIdentity::for_test(0, 1, [0xA5; 32]),
+            tag: EventTag::new(
+                round.height,
+                round.view,
+                crate::sumeragi::v2_core::Generation::new(0),
+            ),
+            vote: wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment: commitment,
+                signer: 0,
+                signature: Vec::new(),
+            },
+        };
+        assert!(parent.matches_durable_receipt(active_context, &durable));
+
+        let substituted = DurableBodyReceipt::for_test(
+            durable.context_id(),
+            round,
+            subject,
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"substituted recovered Validate manifest",
+            )),
+        );
+        assert!(!parent.matches_durable_receipt(active_context, &substituted));
+    }
+
+    fn validate_successor_pair(
+        edge: DurableContinuationEdge,
+    ) -> (LifecycleLedgerRecordV1, LifecycleLedgerRecordV1) {
+        let (child_phase, child_class, child_stage) = match edge {
+            DurableContinuationEdge::ValidateToApply => (
+                LifecyclePhase::Apply,
+                LifecycleWorkClass::Apply,
+                LifecycleStageKind::ApplyDecision,
+            ),
+            DurableContinuationEdge::ValidateToInvalidBodyReport => (
+                LifecyclePhase::DiagnosticInvalidBody,
+                LifecycleWorkClass::InvalidBodyReport,
+                LifecycleStageKind::ReportInvalidBody,
+            ),
+            DurableContinuationEdge::ValidateToSignPrepare => (
+                LifecyclePhase::Prepare,
+                LifecycleWorkClass::SignVote,
+                LifecycleStageKind::SignPrepareVote,
+            ),
+            DurableContinuationEdge::ValidateToSignCommit => (
+                LifecyclePhase::Commit,
+                LifecycleWorkClass::SignVote,
+                LifecycleStageKind::SignCommitVote,
+            ),
+            DurableContinuationEdge::FetchToStore | DurableContinuationEdge::StoreToValidate => {
+                panic!("Validate fixture requires a Validate continuation edge")
+            }
+        };
+        let parent_key = body_key(LifecyclePhase::Validate, None);
+        let body_frame = exact_body_payload(LifecycleStageKind::ValidateBody);
+        let parent = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            parent_key,
+            owner(1),
+            1,
+            LifecycleWorkClass::Validate,
+            body_stage(LifecycleStageKind::ValidateBody),
+            Some(TerminalOutcome::Advanced),
+            digest(9),
+            body_frame,
+            DurableContinuation::successor(edge, 2),
+        )
+        .expect("valid advanced Validate ledger row");
+        let child_payload = match edge {
+            DurableContinuationEdge::ValidateToApply => {
+                exact_body_payload(LifecycleStageKind::ApplyDecision)
+            }
+            DurableContinuationEdge::ValidateToInvalidBodyReport
+            | DurableContinuationEdge::ValidateToSignPrepare
+            | DurableContinuationEdge::ValidateToSignCommit => DurablePayloadReference::None,
+            DurableContinuationEdge::FetchToStore | DurableContinuationEdge::StoreToValidate => {
+                unreachable!("Validate fixture excludes pre-Validate edges")
+            }
+        };
+        let child = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            body_key(child_phase, Some(digest(41))),
+            owner(1),
+            2,
+            child_class,
+            body_stage(child_stage),
+            None,
+            digest(9),
+            child_payload,
+            DurableContinuation::None,
+        )
+        .expect("valid live Apply ledger row");
+        (parent, child)
+    }
+
+    fn validate_apply_pair() -> (LifecycleLedgerRecordV1, LifecycleLedgerRecordV1) {
+        validate_successor_pair(DurableContinuationEdge::ValidateToApply)
+    }
+
+    fn complete_body_pipeline_chain() -> Vec<LifecycleLedgerRecordV1> {
+        let commitment = Some(digest(41));
+        [
+            (
+                LifecyclePhase::Fetch,
+                LifecycleWorkClass::Fetch,
+                LifecycleStageKind::FetchBody,
+                1,
+                Some(TerminalOutcome::Advanced),
+                DurableContinuation::successor(DurableContinuationEdge::FetchToStore, 2),
+            ),
+            (
+                LifecyclePhase::Store,
+                LifecycleWorkClass::Store,
+                LifecycleStageKind::StoreBody,
+                2,
+                Some(TerminalOutcome::Advanced),
+                DurableContinuation::successor(DurableContinuationEdge::StoreToValidate, 3),
+            ),
+            (
+                LifecyclePhase::Validate,
+                LifecycleWorkClass::Validate,
+                LifecycleStageKind::ValidateBody,
+                3,
+                Some(TerminalOutcome::Advanced),
+                DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, 4),
+            ),
+            (
+                LifecyclePhase::Apply,
+                LifecycleWorkClass::Apply,
+                LifecycleStageKind::ApplyDecision,
+                4,
+                None,
+                DurableContinuation::None,
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(phase, work_class, stage_kind, ordinal, terminal, continuation)| {
+                let key = body_key(phase, commitment);
+                let payload = exact_body_payload(stage_kind);
+                LifecycleLedgerRecordV1::new_exact_replay_fixture(
+                    key,
+                    owner(1),
+                    ordinal,
+                    work_class,
+                    body_stage(stage_kind),
+                    terminal,
+                    digest(9),
+                    payload,
+                    continuation,
+                )
+                .expect("valid complete body-pipeline ledger row")
+            },
+        )
+        .collect()
+    }
+
+    fn assert_invalid_records(high_water: u128, records: Vec<LifecycleLedgerRecordV1>) {
+        assert!(matches!(
+            LifecycleLedgerV1::new(context(), high_water, records, BTreeMap::new()),
+            Err(LifecycleLedgerError::InvalidLedger(_))
+        ));
+    }
+
+    #[test]
+    fn durable_body_successor_edges_reject_mixed_or_substituted_frames() {
+        let frame_for = |key: LifecycleKey, byte: u8| {
+            DurablePayloadReference::BodyFrame(DurableBodyFrameReference::new(
+                key.context(),
+                key.proposal_round().expect("body proposal round"),
+                key.subject().expect("body subject"),
+                digest(41),
+                digest(byte),
+            ))
+        };
+
+        let commitment = Some(digest(41));
+        let store_key = body_key(LifecyclePhase::Store, commitment);
+        let validate_key = body_key(LifecyclePhase::Validate, commitment);
+        let store_frame = frame_for(store_key, 42);
+        let foreign_frame = frame_for(validate_key, 43);
+        let store = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            store_key,
+            owner(1),
+            1,
+            LifecycleWorkClass::Store,
+            body_stage(LifecycleStageKind::StoreBody),
+            Some(TerminalOutcome::Advanced),
+            digest(9),
+            store_frame,
+            DurableContinuation::successor(DurableContinuationEdge::StoreToValidate, 2),
+        )
+        .expect("construct body-bound Store parent");
+        let foreign_validate = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            validate_key,
+            owner(1),
+            2,
+            LifecycleWorkClass::Validate,
+            body_stage(LifecycleStageKind::ValidateBody),
+            None,
+            digest(9),
+            foreign_frame,
+            DurableContinuation::None,
+        )
+        .expect("construct substituted Validate child");
+        assert_invalid_records(2, vec![store.clone(), foreign_validate]);
+        let missing_validate = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            validate_key,
+            owner(1),
+            2,
+            LifecycleWorkClass::Validate,
+            body_stage(LifecycleStageKind::ValidateBody),
+            None,
+            digest(9),
+            DurablePayloadReference::None,
+            DurableContinuation::None,
+        )
+        .expect("construct mixed Validate child");
+        assert_invalid_records(2, vec![store, missing_validate]);
+
+        let (mut validate, mut apply) = validate_apply_pair();
+        let validate_key = validate.key().expect("decode Validate key");
+        let apply_key = apply.key().expect("decode Apply key");
+        validate.payload_reference =
+            LifecyclePayloadReferenceV1::from_schema(validate_key, frame_for(validate_key, 44))
+                .expect("encode Validate body frame");
+        apply.payload_reference =
+            LifecyclePayloadReferenceV1::from_schema(apply_key, frame_for(apply_key, 45))
+                .expect("encode substituted Apply body frame");
+        assert_invalid_records(2, vec![validate, apply]);
+    }
+
+    #[test]
+    fn payload_free_store_and_apply_rows_are_not_ledger_v1() {
+        for (phase, work_class, stage_kind) in [
+            (
+                LifecyclePhase::Store,
+                LifecycleWorkClass::Store,
+                LifecycleStageKind::StoreBody,
+            ),
+            (
+                LifecyclePhase::Apply,
+                LifecycleWorkClass::Apply,
+                LifecycleStageKind::ApplyDecision,
+            ),
+        ] {
+            let record = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+                body_key(phase, Some(digest(41))),
+                owner(1),
+                1,
+                work_class,
+                body_stage(stage_kind),
+                None,
+                digest(9),
+                DurablePayloadReference::None,
+                DurableContinuation::None,
+            )
+            .expect("construct a locally decodable payload-free body-stage row");
+            assert_invalid_records(1, vec![record]);
+        }
+    }
+
     fn serve_pair() -> (LifecycleLedgerRecordV1, LifecycleLedgerRecordV1) {
-        let serve = LifecycleLedgerRecordV1::new(
+        let pending = super::super::replay_authority::exact_record_fixture(
+            context(),
+            LifecycleStageKind::CertifiedServe,
+            2,
+        )
+        .payload;
+        let DurablePayloadReference::CertifiedServePending {
+            request,
+            certificate,
+        } = pending
+        else {
+            unreachable!("canonical Serve fixture has pending durable material")
+        };
+        let serve = LifecycleLedgerRecordV1::new_exact_replay_fixture(
             key(2, LifecyclePhase::Serve),
             owner(1),
             1,
@@ -1543,13 +2989,14 @@ mod tests {
             Some(TerminalOutcome::Completed(Some(digest(23)))),
             digest(20),
             DurablePayloadReference::CertifiedServeCompleted {
-                request: digest(21),
-                certificate: digest(22),
+                request,
+                certificate,
                 response: digest(23),
             },
+            DurableContinuation::None,
         )
         .expect("valid Serve ledger record");
-        let producer = LifecycleLedgerRecordV1::new(
+        let producer = LifecycleLedgerRecordV1::new_exact_replay_fixture(
             key(2, LifecyclePhase::ProducerTurn),
             owner(1),
             2,
@@ -1558,9 +3005,30 @@ mod tests {
             None,
             digest(20),
             DurablePayloadReference::None,
+            DurableContinuation::None,
         )
         .expect("valid producer ledger record");
         (serve, producer)
+    }
+
+    #[test]
+    fn serve_debt_rejects_individually_valid_foreign_producer_family() {
+        let (serve, mut producer) = serve_pair();
+        producer.replay_authority =
+            super::super::replay_authority::foreign_certified_serve_family_authority_fixture(
+                context(),
+                LifecycleStageKind::ProducerTurn,
+                2,
+            );
+        assert!(matches!(
+            LifecycleLedgerV1::new(
+                context(),
+                2,
+                vec![serve, producer],
+                BTreeMap::from([(1, 2)]),
+            ),
+            Err(LifecycleLedgerError::InvalidLedger(_))
+        ));
     }
 
     #[test]
@@ -1582,16 +3050,276 @@ mod tests {
     }
 
     #[test]
-    fn store_rejects_legacy_v5_without_a_migration_path() {
+    fn advanced_validate_roundtrip_authenticates_its_exact_apply_successor() {
         let root = tempfile::tempdir().expect("temporary directory");
-        fs::write(root.path().join(LEGACY_SERVE_V5_FILE), b"SUMV2SRV").expect("legacy fixture");
-        let error = LifecycleLedgerStoreV1::open(root.path(), context())
-            .expect_err("legacy v5 must fail startup");
+        let (parent, child) = validate_apply_pair();
+        let ledger = LifecycleLedgerV1::new(context(), 2, vec![parent, child], BTreeMap::new())
+            .expect("exact Validate-to-Apply successor is durable");
+        let (store, empty) =
+            LifecycleLedgerStoreV1::open(root.path(), context()).expect("open ledger store");
+        assert!(empty.records().is_empty());
+        store.persist(&ledger).expect("persist successor edge");
+        let (_, reopened) =
+            LifecycleLedgerStoreV1::open(root.path(), context()).expect("reopen successor edge");
+        assert_eq!(reopened, ledger);
+        assert_eq!(
+            reopened.records()[0].continuation(),
+            Some(DurableContinuation::successor(
+                DurableContinuationEdge::ValidateToApply,
+                2,
+            ))
+        );
+
+        let snapshot = reopened
+            .recovery_snapshot(BTreeMap::from([(1, BTreeSet::new()), (2, BTreeSet::new())]))
+            .expect("recovery retains the typed successor edge");
+        assert_eq!(
+            snapshot.records[0].continuation,
+            DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, 2)
+        );
+        assert_eq!(snapshot.records[1].continuation, DurableContinuation::None);
+    }
+
+    #[test]
+    fn complete_body_pipeline_chain_roundtrips_all_successor_edges() {
+        let ledger = LifecycleLedgerV1::new(
+            context(),
+            4,
+            complete_body_pipeline_chain(),
+            BTreeMap::new(),
+        )
+        .expect("all three exact body-pipeline edges form one durable chain");
+        assert_eq!(
+            ledger
+                .records()
+                .iter()
+                .map(LifecycleLedgerRecordV1::continuation)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::FetchToStore,
+                    2,
+                )),
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    3,
+                )),
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::ValidateToApply,
+                    4,
+                )),
+                Some(DurableContinuation::None),
+            ]
+        );
+        let snapshot = ledger
+            .recovery_snapshot((1..=4).map(|ordinal| (ordinal, BTreeSet::new())).collect())
+            .expect("complete body-pipeline chain survives recovery projection");
+        assert_eq!(
+            snapshot
+                .records
+                .iter()
+                .map(|record| record.continuation)
+                .collect::<Vec<_>>(),
+            vec![
+                DurableContinuation::successor(DurableContinuationEdge::FetchToStore, 2),
+                DurableContinuation::successor(DurableContinuationEdge::StoreToValidate, 3),
+                DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, 4),
+                DurableContinuation::None,
+            ]
+        );
+    }
+
+    #[test]
+    fn all_validate_continuations_roundtrip_with_canonical_wire_shapes() {
+        for edge in [
+            DurableContinuationEdge::ValidateToApply,
+            DurableContinuationEdge::ValidateToInvalidBodyReport,
+            DurableContinuationEdge::ValidateToSignPrepare,
+            DurableContinuationEdge::ValidateToSignCommit,
+        ] {
+            let (parent, child) = validate_successor_pair(edge);
+            let ledger = LifecycleLedgerV1::new(context(), 2, vec![parent, child], BTreeMap::new())
+                .expect("typed Validate successor edge is valid");
+            let frame = encode_frame(&ledger, 1024 * 1024).expect("encode typed continuation");
+            let decoded = decode_frame(&frame, 1024 * 1024).expect("decode typed continuation");
+            assert_eq!(
+                decoded.records()[0].continuation(),
+                Some(DurableContinuation::successor(edge, 2))
+            );
+        }
+
+        let no_successor = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            body_key(LifecyclePhase::Validate, None),
+            owner(1),
+            1,
+            LifecycleWorkClass::Validate,
+            body_stage(LifecycleStageKind::ValidateBody),
+            Some(TerminalOutcome::Advanced),
+            digest(9),
+            exact_body_payload(LifecycleStageKind::ValidateBody),
+            DurableContinuation::AdvancedNoSuccessor,
+        )
+        .expect("construct no-successor Validate tombstone");
+        let ledger = LifecycleLedgerV1::new(context(), 1, vec![no_successor], BTreeMap::new())
+            .expect("Validate may finish without a child");
+        assert_eq!(
+            ledger.records()[0].continuation(),
+            Some(DurableContinuation::AdvancedNoSuccessor)
+        );
+
+        let payload_free_no_successor = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            body_key(LifecyclePhase::Validate, None),
+            owner(1),
+            1,
+            LifecycleWorkClass::Validate,
+            body_stage(LifecycleStageKind::ValidateBody),
+            Some(TerminalOutcome::Advanced),
+            digest(9),
+            DurablePayloadReference::None,
+            DurableContinuation::AdvancedNoSuccessor,
+        )
+        .expect("the local row shape is checked again by the complete ledger relation");
+        assert_invalid_records(1, vec![payload_free_no_successor]);
+
+        let payload_free_live = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            body_key(LifecyclePhase::Validate, None),
+            owner(1),
+            1,
+            LifecycleWorkClass::Validate,
+            body_stage(LifecycleStageKind::ValidateBody),
+            None,
+            digest(9),
+            DurablePayloadReference::None,
+            DurableContinuation::None,
+        )
+        .expect("the complete ledger rejects a payload-free live Validate row");
+        assert_invalid_records(1, vec![payload_free_live]);
+    }
+
+    #[test]
+    fn persisted_continuation_rejects_unknown_and_noncanonical_option_shapes() {
+        let (mut parent, child) = validate_apply_pair();
+        parent.continuation = PersistedDurableContinuationV1 {
+            code: PersistedDurableContinuationV1::VALIDATE_TO_APPLY,
+            successor_ordinal: None,
+        };
+        assert_invalid_records(2, vec![parent, child.clone()]);
+
+        let (mut parent, child) = validate_apply_pair();
+        parent.continuation = PersistedDurableContinuationV1 {
+            code: PersistedDurableContinuationV1::NONE,
+            successor_ordinal: Some(2),
+        };
+        assert_invalid_records(2, vec![parent, child.clone()]);
+
+        let (mut parent, child) = validate_apply_pair();
+        parent.continuation = PersistedDurableContinuationV1 {
+            code: u8::MAX,
+            successor_ordinal: Some(2),
+        };
+        assert_invalid_records(2, vec![parent, child]);
+    }
+
+    #[test]
+    fn advanced_validate_rejects_missing_or_foreign_successor_edges() {
+        let (mut parent, child) = validate_apply_pair();
+        parent.continuation =
+            PersistedDurableContinuationV1::from_schema(DurableContinuation::None);
         assert!(matches!(
-            &error,
-            LifecycleLedgerError::LegacyV5RequiresReset(_)
+            LifecycleLedgerV1::new(context(), 2, vec![parent, child.clone()], BTreeMap::new(),),
+            Err(LifecycleLedgerError::InvalidLedger(_))
         ));
-        assert!(error.to_string().contains("authorized fresh reset"));
+
+        let (mut parent, child) = validate_apply_pair();
+        parent.continuation = PersistedDurableContinuationV1::from_schema(
+            DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, 3),
+        );
+        assert!(matches!(
+            LifecycleLedgerV1::new(context(), 3, vec![parent, child], BTreeMap::new()),
+            Err(LifecycleLedgerError::InvalidLedger(_))
+        ));
+
+        let (parent, mut foreign_owner) = validate_apply_pair();
+        foreign_owner.causal_root = *digest(55).as_bytes();
+        foreign_owner.owner_first_ordinal = 2;
+        assert!(matches!(
+            LifecycleLedgerV1::new(context(), 2, vec![parent, foreign_owner], BTreeMap::new(),),
+            Err(LifecycleLedgerError::InvalidLedger(_))
+        ));
+
+        let (parent, mut foreign_lineage) = validate_apply_pair();
+        foreign_lineage.key.subject = Some(*digest(56).as_bytes());
+        assert!(matches!(
+            LifecycleLedgerV1::new(context(), 2, vec![parent, foreign_lineage], BTreeMap::new(),),
+            Err(LifecycleLedgerError::InvalidLedger(_))
+        ));
+    }
+
+    #[test]
+    fn typed_continuation_rejects_live_backward_and_unauthenticated_edges() {
+        let (mut live_parent, child) = validate_apply_pair();
+        live_parent.terminal = None;
+        assert_invalid_records(2, vec![live_parent, child]);
+
+        let (mut cancelled_parent, child) = validate_apply_pair();
+        cancelled_parent.terminal =
+            Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
+        assert_invalid_records(2, vec![cancelled_parent, child]);
+
+        let (mut backward_parent, child) = validate_apply_pair();
+        backward_parent.continuation = PersistedDurableContinuationV1::from_schema(
+            DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, 1),
+        );
+        assert_invalid_records(2, vec![backward_parent, child]);
+
+        let (parent, mut foreign_child_source) = validate_apply_pair();
+        foreign_child_source.reconstruction_source = *digest(57).as_bytes();
+        assert_invalid_records(2, vec![parent, foreign_child_source]);
+
+        let (mut foreign_parent_source, mut foreign_child_source) = validate_apply_pair();
+        foreign_parent_source.reconstruction_source = *digest(58).as_bytes();
+        foreign_child_source.reconstruction_source = *digest(58).as_bytes();
+        assert_invalid_records(2, vec![foreign_parent_source, foreign_child_source]);
+
+        let (mut absent_proposal_parent, mut absent_proposal_child) = validate_apply_pair();
+        absent_proposal_parent.key.proposal_height = None;
+        absent_proposal_parent.key.proposal_view = None;
+        absent_proposal_child.key.proposal_height = None;
+        absent_proposal_child.key.proposal_view = None;
+        assert_invalid_records(2, vec![absent_proposal_parent, absent_proposal_child]);
+
+        let (parent, mut foreign_scope) = validate_apply_pair();
+        foreign_scope.predecessor_code = predecessor_code(PredecessorScope::ReadyOrdinalPrefix);
+        assert_invalid_records(2, vec![parent, foreign_scope]);
+
+        let (mut inherited_commitment, mut substituted_commitment) = validate_apply_pair();
+        inherited_commitment.key.execution_commitment = Some(*digest(41).as_bytes());
+        substituted_commitment.key.execution_commitment = Some(*digest(42).as_bytes());
+        assert_invalid_records(2, vec![inherited_commitment, substituted_commitment]);
+
+        let (parent, mut linked_live_apply) = validate_apply_pair();
+        linked_live_apply.continuation = PersistedDurableContinuationV1::from_schema(
+            DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, 2),
+        );
+        assert_invalid_records(2, vec![parent, linked_live_apply]);
+
+        let (mut wrong_edge, child) = validate_apply_pair();
+        wrong_edge.continuation = PersistedDurableContinuationV1::from_schema(
+            DurableContinuation::successor(DurableContinuationEdge::ValidateToSignPrepare, 2),
+        );
+        assert_invalid_records(2, vec![wrong_edge, child]);
+
+        let mut no_child = validate_apply_pair().0;
+        no_child.continuation =
+            PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
+        no_child.reconstruction_source = *digest(58).as_bytes();
+        assert_invalid_records(1, vec![no_child]);
+
+        let mut chain = complete_body_pipeline_chain();
+        let mut fetch_without_child = chain.remove(0);
+        fetch_without_child.continuation =
+            PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
+        assert_invalid_records(1, vec![fetch_without_child]);
     }
 
     #[test]
@@ -1645,6 +3373,47 @@ mod tests {
             LifecycleLedgerStoreV1::open(root.path(), context()),
             Err(LifecycleLedgerError::InvalidFrame(_))
         ));
+    }
+
+    #[test]
+    fn durable_repair_receipt_reloads_the_current_store_frame() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let (store, empty) =
+            LifecycleLedgerStoreV1::open(root.path(), context()).expect("open empty store");
+        assert!(empty.records().is_empty());
+        let (serve, producer) = serve_pair();
+        let ledger = LifecycleLedgerV1::new(
+            context(),
+            2,
+            vec![serve.clone(), producer.clone()],
+            BTreeMap::from([(1, 2)]),
+        )
+        .expect("valid receipt frame");
+        store.persist(&ledger).expect("persist receipt frame");
+        let frame = encode_frame(&ledger, store.max_frame_bytes).expect("encode receipt frame");
+        let receipt = DurableWalVoteLedgerRepairReceipt {
+            store_path: store.path.clone(),
+            context: context(),
+            parent_key: serve.key().expect("Serve key"),
+            child_key: producer.key().expect("producer key"),
+            edge: DurableContinuationEdge::ValidateToSignPrepare,
+            child_ordinal: 2,
+            ledger_frame_hash: LifecycleDigest::new(Hash::new(frame).into()),
+        };
+        assert!(receipt.belongs_to(&store));
+
+        let replaced = LifecycleLedgerV1::new(
+            context(),
+            3,
+            vec![serve, producer],
+            BTreeMap::from([(1, 2)]),
+        )
+        .expect("valid later frame");
+        store.persist(&replaced).expect("replace receipt frame");
+        assert!(
+            !receipt.belongs_to(&store),
+            "a receipt for earlier bytes cannot authorize a later same-path frame"
+        );
     }
 
     #[test]

@@ -1,0 +1,8 @@
+
+seiyaku DecimalOps {
+    view fn calculate(decimal left, decimal right) -> decimal {
+        let sum = left + right;
+        let product = sum * right;
+        return product / left;
+    }
+}

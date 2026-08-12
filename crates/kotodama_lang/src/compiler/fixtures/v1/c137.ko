@@ -1,0 +1,16 @@
+
+seiyaku ExpressionHintIf {
+  state StateMap<Name, int> Entries;
+
+  view fn scan(bool flag) -> int {
+    if flag {
+      var int total = 0;
+      for (key, value) in Entries.take(3) {
+        total = total + value;
+      }
+      total
+    } else {
+      0
+    }
+  }
+}

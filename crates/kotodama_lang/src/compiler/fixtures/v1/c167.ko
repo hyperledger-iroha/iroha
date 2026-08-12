@@ -1,0 +1,12 @@
+
+seiyaku Test {
+  kotoage fn relay(bytes target, quantity amount, quantity minimum) -> quantity authorize("Entry") {
+    return contract::invoke(
+      contract: target,
+      entrypoint: "swap_exact_in_quote_public",
+      returns: "quantity",
+      amount_in: amount,
+      min_out: minimum
+    );
+  }
+}

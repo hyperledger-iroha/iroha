@@ -1,0 +1,18 @@
+
+seiyaku TypedPages {
+  view fn accounts(int offset, int limit) -> QueryPage<AccountView> {
+    ledger::query::accounts(offset: offset, limit: limit)
+  }
+  view fn assets(int offset, int limit) -> QueryPage<AssetView> {
+    ledger::query::assets(offset: offset, limit: limit)
+  }
+  view fn asset_definitions(int offset, int limit) -> QueryPage<AssetDefinitionView> {
+    ledger::query::asset_definitions(offset: offset, limit: limit)
+  }
+  view fn domains(int offset, int limit) -> QueryPage<DomainView> {
+    ledger::query::domains(offset: offset, limit: limit)
+  }
+  view fn nfts(int offset, int limit) -> QueryPage<NftView> {
+    ledger::query::nfts(offset: offset, limit: limit)
+  }
+}

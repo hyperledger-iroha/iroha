@@ -311,7 +311,7 @@ let autonomous_payload = autonomous_certificate
         self.kura.read_autonomous_lane_block_artifact(
             descriptor.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             self.context.epoch,
         )
     })

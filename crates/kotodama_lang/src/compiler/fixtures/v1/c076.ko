@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let _proof = crypto::prove_execution(1);
+}
+
+}

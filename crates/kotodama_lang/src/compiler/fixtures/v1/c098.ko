@@ -1,0 +1,12 @@
+
+            seiyaku CompilerFixture {
+                view fn wrapping(int left, int right) -> (int, int, int, int) {
+                    return (
+                        math::wrapping_neg(left),
+                        math::wrapping_add(left: left, right: right),
+                        math::wrapping_sub(left: left, right: right),
+                        math::wrapping_mul(left: left, right: right)
+                    );
+                }
+            }
+        

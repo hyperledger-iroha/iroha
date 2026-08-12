@@ -1,0 +1,42 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn main() authorize("CompilerFixture") {
+  let evidence = b"00";
+  ledger::escrow::open_offer(
+    offer: Name::parse("aitai_offer"),
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    amount: 10,
+    evidence: evidence,
+  );
+  ledger::escrow::accept(Name::parse("aitai_offer"));
+  ledger::escrow::mark_payment_sent(Name::parse("aitai_offer"));
+  ledger::escrow::release(Name::parse("aitai_offer"));
+  ledger::escrow::cancel(Name::parse("aitai_offer"));
+  ledger::escrow::open_dispute(Name::parse("aitai_offer"), evidence);
+  ledger::escrow::resolve_dispute(
+    offer: Name::parse("aitai_offer"),
+    buyer_amount: 6,
+    seller_amount: 4,
+    evidence: evidence,
+  );
+  ledger::escrow::open_offer(
+    offer: Name::parse("aitai_offer_call"),
+    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    amount: 11,
+    evidence: evidence,
+  );
+  ledger::escrow::accept(Name::parse("aitai_offer_call"));
+  ledger::escrow::mark_payment_sent(Name::parse("aitai_offer_call"));
+  ledger::escrow::release(Name::parse("aitai_offer_call"));
+  ledger::escrow::cancel(Name::parse("aitai_offer_call"));
+  ledger::escrow::open_dispute(Name::parse("aitai_offer_call"), evidence);
+  ledger::escrow::resolve_dispute(
+    offer: Name::parse("aitai_offer_call"),
+    buyer_amount: 7,
+    seller_amount: 4,
+    evidence: evidence,
+  );
+}
+
+}

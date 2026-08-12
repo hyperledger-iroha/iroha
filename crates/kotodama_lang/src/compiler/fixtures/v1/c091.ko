@@ -1,0 +1,25 @@
+
+seiyaku CompilerFixture {
+
+view fn crypt() -> int {
+  let payload = b"\x01\x02\x03";
+  let sm2 = crypto::sm2::verify(message: payload, signature: payload, public_key: payload);
+  let sm2_distid = crypto::sm2::verify(message: payload, signature: payload, public_key: payload, distid: payload);
+  let generic = crypto::verify_signature(message: payload, signature: payload, public_key: payload, scheme: 0);
+  let gcm = crypto::sm4_gcm::seal(key: payload, nonce: payload, aad: payload, payload: payload);
+  let _opened_gcm = crypto::sm4_gcm::open(key: payload, nonce: payload, aad: payload, payload: gcm);
+  let ccm = crypto::sm4_ccm::seal(key: payload, nonce: payload, aad: payload, payload: payload, tag_length: 12);
+  let _opened_ccm = crypto::sm4_ccm::open(key: payload, nonce: payload, aad: payload, payload: ccm);
+  if !sm2 {
+    return 0;
+  }
+  if !sm2_distid {
+    return 0;
+  }
+  if !generic {
+    return 0;
+  }
+  return 1;
+}
+
+}

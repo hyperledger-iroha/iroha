@@ -26,18 +26,12 @@ pub use iroha_data_model::block::consensus::{
     RbcReady, RbcReadySignature, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
     default_chain_order_hash,
 };
-/// Live consensus protocol revision. Legacy v1 types above are archival only.
+/// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
 /// Permissioned Sumeragi v2 handshake and signing-domain tag.
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
 /// NPoS Sumeragi v2 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
-/// Legacy v1 protocol revision retained for archival validation tools.
-pub const LEGACY_PROTO_VERSION: u32 = iroha_data_model::block::consensus::PROTO_VERSION;
-/// Legacy permissioned tag retained for archival validation tools.
-pub const LEGACY_PERMISSIONED_TAG: &str = iroha_data_model::block::consensus::PERMISSIONED_TAG;
-/// Legacy NPoS tag retained for archival validation tools.
-pub const LEGACY_NPOS_TAG: &str = iroha_data_model::block::consensus::NPOS_TAG;
 
 /// Commit-certificate phase (prepare/commit/new-view).
 pub type Phase = CertPhase;
@@ -670,10 +664,6 @@ mod tests {
         assert_eq!(
             &vote_preimage[..32],
             &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
-        );
-        assert_ne!(
-            &vote_preimage[..32],
-            &consensus_domain(&chain, "Vote", b"legacy-v2", PERMISSIONED_TAG)
         );
 
         let vrf_commit = VrfCommit {

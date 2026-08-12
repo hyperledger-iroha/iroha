@@ -1,0 +1,7 @@
+
+seiyaku Test {
+  kotoage fn subscription() authorize("Admin") {
+    ledger::subscription::bill();
+    ledger::subscription::record_usage();
+  }
+}

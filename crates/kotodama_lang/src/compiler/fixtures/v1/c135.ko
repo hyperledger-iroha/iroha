@@ -1,0 +1,7 @@
+
+    if false {
+      for (dead_key, dead_value) in Entries.take(4) {
+        let _copy = dead_value;
+      }
+    }
+    return 0;

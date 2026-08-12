@@ -36,8 +36,7 @@ fn canonical_body_rolls_back_exact_busy_deferred_conflicting_proposal() {
     let proposer = adapter.status().expect("status").leader;
     let subject = subject(0x3F);
     let canonical = proposal(&context, proposer, subject);
-    let wire::ConsensusMessageV2Payload::Proposal(canonical_proposal) = &canonical.payload
-    else {
+    let wire::ConsensusMessageV2Payload::Proposal(canonical_proposal) = &canonical.payload else {
         panic!("fixture is a proposal")
     };
     let canonical_manifest = canonical_proposal.manifest.clone();
@@ -94,9 +93,7 @@ fn canonical_body_rolls_back_exact_busy_deferred_conflicting_proposal() {
             fingerprint: IngressFingerprint::Proposal(Hash::new(
                 conflicting_proposal.signature_preimage(),
             )),
-            artifact: IngressEquivocationArtifact::Proposal(Arc::new(
-                conflicting_proposal.clone(),
-            )),
+            artifact: IngressEquivocationArtifact::Proposal(Arc::new(conflicting_proposal.clone())),
             equivocation_reported: true,
             capacity_bypass: false,
             admitted_at: Instant::now(),
@@ -154,13 +151,13 @@ fn canonical_body_rolls_back_exact_busy_deferred_conflicting_proposal() {
     assert!(adapter.registry.manifest_conflicts(&canonical_manifest));
     let DirectCertifiedBodyAvailablePreparation::Inactive(conflict) = adapter
         .prepare_direct_certified_body_available(deferred_tag, &canonical_manifest)
-        .expect("classify the legacy deferred conflict without mutating it")
+        .expect("classify the deferred conflict without mutating it")
     else {
-        panic!("legacy conflict must remain a non-applied classification")
+        panic!("deferred conflict must remain a non-applied classification")
     };
     assert_eq!(
         conflict.disposition(),
-        DirectCertifiedBodyAvailableInactive::LegacyDeferredConflict
+        DirectCertifiedBodyAvailableInactive::DeferredConflict
     );
     drop(conflict);
     assert_eq!(adapter.deferred_inputs.len(), 1);
@@ -298,8 +295,7 @@ fn local_proposal_commitment_conflict_is_transactional() {
         unreachable!("proposal helper returns a proposal")
     };
     let manifest = proposal.manifest;
-    let (durable, validated) =
-        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let (durable, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
     let round = reducer::Round::new(manifest.round.height, manifest.round.view);
     let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
     let conflicting = execution_commitment(0x7c);
@@ -341,8 +337,7 @@ fn post_decision_selected_lifecycles_cannot_reopen_the_reclaimed_owner_epoch() {
         unreachable!("proposal helper returns a proposal")
     };
     let manifest = proposal.manifest;
-    let (durable, validated) =
-        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let (durable, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
     let decision = wire::QuorumCertificate {
         round: manifest.round,
         proposal_round: manifest.round,
@@ -439,8 +434,7 @@ fn exact_local_completion_after_decision_reports_body_validated_progress() {
         unreachable!("proposal helper returns a proposal")
     };
     let manifest = proposal.manifest;
-    let (durable, validated) =
-        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let (durable, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
     let decision = wire::QuorumCertificate {
         round: manifest.round,
         proposal_round: manifest.round,
@@ -533,8 +527,7 @@ fn busy_local_completion_during_decision_wal_reaches_apply_once() {
         unreachable!("proposal helper returns a proposal")
     };
     let manifest = proposal.manifest;
-    let (durable, validated) =
-        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let (durable, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
     let decision = wire::QuorumCertificate {
         round: manifest.round,
         proposal_round: manifest.round,
@@ -615,8 +608,7 @@ fn busy_deferred_input_blocks_terminal_readiness_until_serviced() {
         unreachable!("proposal helper returns a proposal")
     };
     let manifest = proposal.manifest;
-    let (durable, validated) =
-        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let (durable, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
     let decision = wire::QuorumCertificate {
         round: manifest.round,
         proposal_round: manifest.round,
@@ -724,8 +716,7 @@ fn saturated_normal_lane_retains_exact_local_proposal_completion() {
         unreachable!("proposal helper returns a proposal")
     };
     let manifest = proposal.manifest;
-    let (durable, validated) =
-        validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+    let (durable, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
     let evidence = BodyPipelineCompletionEvidence::LocalProposalReady {
         manifest: manifest.clone(),
         durable_receipt: durable.clone(),
@@ -856,9 +847,7 @@ fn saturated_normal_lane_retains_exact_local_proposal_completion() {
             AdapterEffect::Sign {
                 tag,
                 request: SignRequest::Vote(vote),
-            } if vote.phase == wire::GlobalPhase::Prepare
-                && vote.subject == proposed_subject =>
-            {
+            } if vote.phase == wire::GlobalPhase::Prepare && vote.subject == proposed_subject => {
                 Some(*tag)
             }
             _ => None,
@@ -1144,9 +1133,7 @@ fn vote_signed_callback_is_restart_scoped_before_control_delivery() {
                 tag,
                 request: SignRequest::Vote(vote),
             },
-        ] if vote.phase == wire::GlobalPhase::Prepare && vote.subject == prepared_subject => {
-            *tag
-        }
+        ] if vote.phase == wire::GlobalPhase::Prepare && vote.subject == prepared_subject => *tag,
         effects => panic!("unexpected recovered Prepare frontier: {effects:?}"),
     };
     let validation_authority = recovered

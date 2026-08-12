@@ -1,0 +1,6 @@
+
+seiyaku CompilerFixture {
+fn apply(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::set_transfer_availability(account: account, asset_definition: asset, expected_revision: 0, incoming: true, outgoing: 1, reason: Option::some("operator review"));
+}
+}

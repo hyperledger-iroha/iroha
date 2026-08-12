@@ -1,0 +1,13 @@
+
+            seiyaku C {
+                struct Ledger { int counter; bool flag; }
+                state StateMap<int, Ledger> ledgers;
+
+                hajimari() {}
+
+                fn main() {
+                    ledgers[7] = Ledger { counter: 9, flag: true };
+                    let _snapshot = ledgers.get(7);
+                }
+            }
+        

@@ -1,0 +1,9 @@
+
+            fn page(int offset, int limit) -> QueryPage<AccountView> {
+                ledger::query::accounts(offset: offset, limit: limit)
+            }
+
+            fn account(AccountId id) -> Option<AccountView> {
+                ledger::query::account(id)
+            }
+        

@@ -231,7 +231,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
-    assert len(grouped_records.stdout.splitlines()) == 1_344
+    assert len(grouped_records.stdout.splitlines()) == 1_348
 
     _source_fixture(tmp_path)
     grouped_before = _native_digest(tmp_path)
@@ -358,6 +358,20 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         "SumeragiV2Wire.java",
     }
     assert required_omissions_closed <= all_paths
+    assert {
+        module.PurePosixPath(
+            "crates/connect_norito_bridge/src/platform_jni.rs"
+        ),
+        module.PurePosixPath(
+            "crates/connect_norito_bridge/src/platform_jni/part_1.rs"
+        ),
+        module.PurePosixPath(
+            "crates/connect_norito_bridge/src/platform_jni/part_2.rs"
+        ),
+        module.PurePosixPath(
+            "crates/connect_norito_bridge/src/platform_jni/part_3.rs"
+        ),
+    } <= set(manifest.groups["native-amx-v2-grouped-suite"])
     assert {
         module.PurePosixPath(
             "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift"

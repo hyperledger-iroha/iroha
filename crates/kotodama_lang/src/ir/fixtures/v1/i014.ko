@@ -1,0 +1,6 @@
+
+            fn widen(Option<int> value) -> Option<(int, int)> {
+                let payload = value?;
+                Option::some((payload, payload))
+            }
+        

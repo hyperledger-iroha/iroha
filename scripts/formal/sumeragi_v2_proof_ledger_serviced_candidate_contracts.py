@@ -844,6 +844,19 @@ ProducerParentReplaySource::VolatileBodyReconstruction => false,
         adapter_items,
         "open_with_aggregator_and_publication_with_capacity",
         """
+registry.decode_wal_entry(
+    record,
+    parent_verification.as_ref(),
+    &proofs_of_possession,
+)
+""",
+        "startup replay must decode the complete authenticated WAL record",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "open_with_aggregator_and_publication_with_capacity",
+        """
 let restored_producer_continuation_ordinal_high_watermark = restored_producer_continuations
     .values()
     .map(|record| record.identity().admission_ordinal())
@@ -1417,13 +1430,14 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         inventory: dict[str, str],
         long_tests: set[str] = set(),
         unix_tests: set[str] = set(),
-    ) -> None:
+    ) -> dict[str, RustItem]:
+        sealed: dict[str, RustItem] = {}
         test_module_offset = structural[source_key].find("mod tests")
         if test_module_offset < 0:
             errors.append(
                 f"{paths[source_key]}: serviced-candidate regression module is missing"
             )
-            return
+            return sealed
         for name, expected_sha256 in inventory.items():
             items = rust_function_items_from_structural(
                 sources[source_key], structural[source_key], name
@@ -1435,6 +1449,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
                 )
                 continue
             item = items[0]
+            sealed[name] = item
             item_offset = sources[source_key].find(item.source)
             expected = (
                 ("#[cfg(unix)]", "#[test]")
@@ -1463,6 +1478,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
                 f"V4 serviced-candidate regression {name}",
                 errors,
             )
+        return sealed
 
     seal_regressions(
         "store",
@@ -1471,13 +1487,23 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
             "snapshot_load_and_retire_never_follow_substituted_symlinks"
         },
     )
-    seal_regressions(
+    adapter_regressions = seal_regressions(
         "adapter",
         _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256,
         long_tests={
             "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate",
             "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims",
         },
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        adapter_regressions.get(
+            "post_wal_oversized_continuation_fails_closed_and_replays_exact_record"
+        ),
+        "assert_eq!(adapter.wal.recovered_records()[0].sequence(), 0);",
+        "the post-WAL oversized-continuation regression must inspect the "
+        "authenticated record sequence",
+        errors,
     )
     seal_regressions(
         "runtime",

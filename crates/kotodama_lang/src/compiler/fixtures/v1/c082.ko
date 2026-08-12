@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  crypto::zk::verify_batch(1);
+}
+
+}

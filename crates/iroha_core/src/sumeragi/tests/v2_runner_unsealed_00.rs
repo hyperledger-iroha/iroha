@@ -845,7 +845,11 @@ fn height_ingress_bindings_fixture(
         ),
     );
     ingress
-        .configure_roster_for_context(roster.iter().cloned(), &context.chain_id, context.da_layout)
+        .configure_roster_for_context(
+            roster.iter().cloned(),
+            &context.network_id,
+            context.da_layout,
+        )
         .expect("configure joint height ingress");
     ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();

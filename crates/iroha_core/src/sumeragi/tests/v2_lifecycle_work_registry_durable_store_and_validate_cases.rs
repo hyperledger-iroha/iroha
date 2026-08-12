@@ -86,6 +86,43 @@
 
     #[cfg(feature = "bls")]
     #[test]
+    fn durable_store_prepare_rejects_foreign_retained_origin_without_mutation() {
+        let DurableStoreFixture {
+            mut registry,
+            verified,
+            address,
+            lease,
+            slot,
+            ..
+        } = durable_store_fixture(0x43);
+        {
+            let work = registry
+                .entries
+                .get_mut(&address)
+                .expect("foreign-origin fixture retains its Store carrier");
+            let installed_digest = work.digest;
+            let ConcreteLifecycleWorkKind::DurableStoreBody(store) = &mut work.kind else {
+                unreachable!("foreign-origin fixture retains one Store carrier")
+            };
+            assert!(store.replay_evidence.replace_with_foreign_origin_for_test());
+            assert!(!store.validates(installed_digest));
+            assert!(matches!(
+                store.project_candidate(&verified),
+                Err(AdapterEffectAdmissionError::InvalidCarrier)
+            ));
+        }
+        let before = format!("{registry:?}");
+        assert!(matches!(
+            registry.prepare_durable_store_execution(&lease, slot, &verified),
+            Err(DurableStoreExecutionError::Registry(
+                RegistryError::CorruptWork
+            ))
+        ));
+        assert_eq!(format!("{registry:?}"), before);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     fn durable_store_prepare_rejects_wrong_lease_projection_and_context_without_mutation() {
         let DurableStoreFixture {
             mut registry,
@@ -441,6 +478,47 @@
 
     #[cfg(feature = "bls")]
     #[test]
+    fn durable_validate_prepare_rejects_foreign_retained_origin_without_mutation() {
+        let DurableValidateFixture {
+            mut registry,
+            verified,
+            address,
+            lease,
+            slot,
+            ..
+        } = durable_validate_fixture(0x86);
+        {
+            let work = registry
+                .entries
+                .get_mut(&address)
+                .expect("foreign-origin fixture retains its Validate carrier");
+            let installed_digest = work.digest;
+            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &mut work.kind else {
+                unreachable!("foreign-origin fixture retains one Validate carrier")
+            };
+            assert!(
+                validate
+                    .replay_evidence
+                    .replace_with_foreign_origin_for_test()
+            );
+            assert!(!validate.validates(installed_digest));
+            assert!(matches!(
+                validate.project_candidate(&verified),
+                Err(AdapterEffectAdmissionError::InvalidCarrier)
+            ));
+        }
+        let before = format!("{registry:?}");
+        assert!(matches!(
+            registry.prepare_durable_validate_execution(&lease, slot, &verified),
+            Err(DurableValidateExecutionError::Registry(
+                RegistryError::CorruptWork
+            ))
+        ));
+        assert_eq!(format!("{registry:?}"), before);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn durable_validate_prepare_rejects_wrong_lease_projection_and_context_without_mutation() {
         let DurableValidateFixture {
@@ -633,6 +711,159 @@
             .expect("repeat deterministic validation binding");
         assert_eq!(repeated.replacement_digest(), first_replacement);
         drop(repeated);
+        assert_eq!(format!("{registry:?}"), before);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn live_wal_apply_join_rejects_foreign_receipt_and_root_before_exact_retry() {
+        let DurableValidateFixture {
+            mut registry,
+            verified,
+            lease,
+            slot,
+            ..
+        } = durable_validate_fixture(0x97);
+        let before = format!("{registry:?}");
+        let prepared = registry
+            .prepare_durable_validate_execution(&lease, slot, &verified)
+            .expect("prepare exact Validate for live Apply");
+        let validated = ValidatedBodyReceipt::for_test(prepared.durable_body_receipt().clone());
+        let (apply, exact_child_pending, foreign_child_pending) = {
+            let validate = prepared.durable_validate();
+            let AdapterEffect::ValidateBody {
+                tag,
+                round,
+                subject,
+            } = &validate.effect
+            else {
+                unreachable!("fixture retains Validate")
+            };
+            let apply = AdapterEffect::Apply {
+                tag: *tag,
+                subject: *subject,
+                certificate: wire::QuorumCertificate {
+                    round: *round,
+                    proposal_round: *round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject: *subject,
+                    execution_commitment: validated.execution_commitment(),
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![0x97; 96],
+                },
+            };
+            let exact_child_pending = validate
+                .pending
+                .project_validate_apply_successor(&validate.effect, &apply)
+                .expect("retained Validate projects exact Apply pending");
+            let foreign_owner = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&validate.effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(*tag, 9_700)],
+            )
+            .expect("bind same effect under foreign causal root")
+            .pop()
+            .expect("one foreign Validate owner");
+            let foreign_predecessor = foreign_owner
+                .pending_adapter_effect_binding(&validate.effect)
+                .expect("mint foreign Validate pending");
+            assert_ne!(
+                foreign_predecessor.causal_lifecycle_key(),
+                validate.pending.causal_lifecycle_key()
+            );
+            let foreign_child_pending = foreign_predecessor
+                .project_validate_apply_successor(&validate.effect, &apply)
+                .expect("foreign Validate projects its own same-effect child");
+            (apply, exact_child_pending, foreign_child_pending)
+        };
+        let foreign_manifest =
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign same-coordinate Apply manifest"));
+        let exact_durable = prepared.durable_body_receipt();
+        let foreign_receipt = DurableBodyReceipt::for_test(
+            exact_durable.context_id(),
+            exact_durable.round(),
+            exact_durable.subject(),
+            foreign_manifest,
+        );
+        let foreign_validated = ValidatedBodyReceipt::for_test(foreign_receipt);
+        let Err((error, returned)) = prepared.bind_validated_receipt(foreign_validated) else {
+            panic!("foreign same-coordinate receipt cannot construct Apply completion")
+        };
+        assert_eq!(
+            error,
+            DurableValidateExecutionError::InvalidValidationReceipt
+        );
+        drop(returned);
+        assert_eq!(format!("{registry:?}"), before);
+
+        let prepared = registry
+            .prepare_durable_validate_execution(&lease, slot, &verified)
+            .expect("repeat exact Validate after foreign receipt rejection");
+        let validated = ValidatedBodyReceipt::for_test(prepared.durable_body_receipt().clone());
+        let persisted = SealedLiveWalPersistedEffectV1::from_exact_live_append(
+            ExactLiveWalPersistedContinuationCause::Apply {
+                wal_identity: LiveWalFrameIdentity::for_test(0, 1, [0; 32]),
+                effect: apply.clone(),
+            },
+        )
+        .expect("zero-valued exact live WAL hash seals Apply source");
+        let completion = prepared
+            .bind_validated_receipt(validated)
+            .expect("bind exact retained validation receipt");
+        let Ok(exact) = completion.seal_live_wal_apply(persisted, exact_child_pending) else {
+            panic!("exact retained receipt must complete Apply authority")
+        };
+        let LiveWalReplayPreAdmissionOrigin::Apply(completion) = &exact._origin else {
+            unreachable!("Apply join retains its Validate completion")
+        };
+        assert!(completion.retained_apply_join_is_exact(&exact._persisted));
+        drop(exact);
+        assert_eq!(format!("{registry:?}"), before);
+
+        let prepared = registry
+            .prepare_durable_validate_execution(&lease, slot, &verified)
+            .expect("repeat exact Validate after drop");
+        let validated = ValidatedBodyReceipt::for_test(prepared.durable_body_receipt().clone());
+        let persisted = SealedLiveWalPersistedEffectV1::from_exact_live_append(
+            ExactLiveWalPersistedContinuationCause::Apply {
+                wal_identity: LiveWalFrameIdentity::for_test(1, 2, [0x97; 32]),
+                effect: apply.clone(),
+            },
+        )
+        .expect("seal repeated exact Apply source");
+        let completion = prepared
+            .bind_validated_receipt(validated)
+            .expect("bind repeated exact validation receipt");
+        let Err(error) = completion.seal_live_wal_apply(persisted, foreign_child_pending) else {
+            panic!("foreign causal root cannot splice into retained Validate")
+        };
+        let LiveWalReplayPreAdmissionFailure::Apply {
+            _completion: completion,
+            _persisted: persisted,
+            _pending: foreign_pending,
+        } = error._failure
+        else {
+            unreachable!("Apply rejection retains every input")
+        };
+        drop(foreign_pending);
+        let exact_child_pending = {
+            let validate = completion
+                ._registry
+                .entries
+                .get(&completion.address)
+                .expect("completion keeps Validate installed");
+            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &validate.kind else {
+                unreachable!("completion retains durable Validate")
+            };
+            validate
+                .pending
+                .project_validate_apply_successor(&validate.effect, &apply)
+                .expect("retained predecessor still projects exact Apply")
+        };
+        let Ok(exact) = completion.seal_live_wal_apply(persisted, exact_child_pending) else {
+            panic!("foreign-root rejection must leave source-only seal retryable")
+        };
+        drop(exact);
         assert_eq!(format!("{registry:?}"), before);
     }
 
@@ -1028,7 +1259,15 @@
         let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &mut work.kind else {
             unreachable!("authority fixture retains one closed Validate")
         };
+        let (_store_replay, validate_replay) = certified_pipeline_replay_evidence_for_test(
+            tag,
+            &fixture.manifest,
+            &validate.durable_receipt,
+            &upgraded_validate,
+        )
+        .expect("rebind certified Validate replay to upgraded in-flight authority");
         validate.pending = upgraded_validate;
+        validate.replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);
         assert!(validate.validates(digest));
         assert!(work.validates_at(fixture.address));
         let upgraded = format!("{:?}", fixture.registry);

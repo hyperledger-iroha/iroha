@@ -11,14 +11,20 @@ use thiserror::Error;
 use super::{
     AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
     DurablePayloadReference, LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey,
-    LifecycleState, LifecycleWorkClass, RolloverSnapshot, TerminalOutcome,
+    LifecycleStage, LifecycleStageKind, LifecycleState, LifecycleWorkClass, RolloverSnapshot,
+    TerminalOutcome,
     authority::{self, AuthenticatedEpisodeAuthority},
     ledger::{
         LifecycleLedgerError, LifecycleLedgerRecordV1, LifecycleLedgerStoreV1, LifecycleLedgerV1,
     },
+    replay_authority::CertifiedServeTerminalReplayAuthorityPairV1,
+    work_registry::AuthenticatedRecoveredWalSignProjection,
 };
 use crate::sumeragi::{
     v2::VerifiedHeightContext,
+    v2_body_store::{
+        DurableBodyValidationOutcome, RecoveredTerminalValidateOutcomeCatalogError, V2BodyStore,
+    },
     v2_certified_serve_payload_store::{
         AuthenticatedCertifiedServePayloadRecoveryCut,
         AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadId,
@@ -27,31 +33,111 @@ use crate::sumeragi::{
     },
 };
 
+#[cfg(test)]
+use super::schema::{CausalRoot, DurableContinuation};
+
+/// Storage-authenticated identity of one terminal Validate with no successor.
+///
+/// The body outcome is consumed while this seal is minted and cannot be
+/// replayed or rebound afterward. The historical no-child reducer branch is
+/// represented by the checksummed typed ledger tombstone itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AuthenticatedValidateNoSuccessorRecovery {
+    key: LifecycleKey,
+    causal_root: CausalRoot,
+    reconstruction_source: LifecycleDigest,
+    stage: LifecycleStage,
+    payload: DurablePayloadReference,
+}
+
+/// Ledger-authenticated claim for one terminal Validate body outcome.
+///
+/// The claim is not storage authority: its private fields are decoded from one
+/// exact checksummed ledger row and become authoritative only when the body
+/// store's move-only recovery catalog consumes a matching semantic outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct TerminalValidateNoSuccessorClaim {
+    context: LifecycleContext,
+    ordinal: u128,
+    key: LifecycleKey,
+    causal_root: CausalRoot,
+    reconstruction_source: LifecycleDigest,
+    stage: LifecycleStage,
+    payload: DurablePayloadReference,
+}
+
+impl TerminalValidateNoSuccessorClaim {
+    /// Compare one sealed body-store outcome with the complete ledger identity.
+    pub(in crate::sumeragi) fn matches_outcome(
+        &self,
+        outcome: &DurableBodyValidationOutcome,
+    ) -> bool {
+        super::projection::recovered_validate_no_successor_ledger_identity_is_authenticated(
+            self.context,
+            self.key,
+            self.causal_root,
+            self.reconstruction_source,
+            self.stage,
+            self.payload,
+            outcome,
+        )
+    }
+
+    fn into_authenticated(self) -> AuthenticatedValidateNoSuccessorRecovery {
+        AuthenticatedValidateNoSuccessorRecovery {
+            key: self.key,
+            causal_root: self.causal_root,
+            reconstruction_source: self.reconstruction_source,
+            stage: self.stage,
+            payload: self.payload,
+        }
+    }
+}
+
 /// Move-only, post-authentication join between durable logical rows and their
 /// exact storage-reconstructed work.
 ///
 /// Constructors stay inside the lifecycle authority. Production storage code
 /// receives this value only after the exhaustive effect classifier, body/WAL
 /// reconciliation, and Certified-Serve payload resolver have authenticated all
-/// of its parts. The move-only payload cut may retain authenticated store-only
-/// crash tails; durable open removes those orphans only after every ledger
-/// Serve resolves exactly and the reconciled ledger has been published.
+/// of its parts. Terminal no-successor Validate rows additionally require an
+/// exact body-store outcome bound to their immutable parent identity. The
+/// move-only payload cut may retain authenticated store-only crash tails;
+/// durable open removes those orphans only after every ledger Serve resolves
+/// exactly and the reconciled ledger has been published.
 #[derive(Debug)]
 #[must_use]
 pub(crate) struct AuthenticatedLifecycleRecoveryCut {
     context: LifecycleContext,
+    /// Exact already-opened frame classified by the storage-only assembler.
+    /// Durable open rejects a different reread for every production and focused
+    /// test cut; there is no unauthenticated frame bypass.
+    authenticated_ledger: LifecycleLedgerV1,
     candidates: BTreeMap<LifecycleKey, CandidateAdmission>,
+    validate_no_successor: BTreeMap<LifecycleKey, AuthenticatedValidateNoSuccessorRecovery>,
     serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
 }
 
 impl AuthenticatedLifecycleRecoveryCut {
-    /// Assemble an exact cut from already authenticated, sealed projections.
-    /// Duplicate semantic keys are rejected rather than overwritten.
+    /// Assemble an exact test fixture from already authenticated projections.
+    ///
+    /// Production recovery must use the sealed storage-only factory matching
+    /// its durable inputs: [`Self::assemble_storage_only`],
+    /// [`Self::assemble_storage_only_with_body_validation_outcomes`],
+    /// [`Self::assemble_storage_only_with_recovered_wal_sign`], or
+    /// [`Self::assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes`].
+    /// This raw candidate surface deliberately does not exist outside test
+    /// builds.
+    #[cfg(test)]
     pub(super) fn from_authenticated_parts(
-        context: LifecycleContext,
+        authenticated_ledger: LifecycleLedgerV1,
         candidates: impl IntoIterator<Item = CandidateAdmission>,
+        validate_no_successor: impl IntoIterator<
+            Item = (CandidateAdmission, DurableBodyValidationOutcome),
+        >,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
     ) -> Option<Self> {
+        let context = authenticated_ledger.context();
         if digest_bytes(serve_payloads.context_id().0.as_ref()) != context.id()
             || serve_payloads.height() != context.height()
         {
@@ -67,12 +153,424 @@ impl AuthenticatedLifecycleRecoveryCut {
                 return None;
             }
         }
+        let mut validate_no_successor_map = BTreeMap::new();
+        for (candidate, outcome) in validate_no_successor {
+            if candidate_map.contains_key(&candidate.key)
+                || !super::projection::recovered_validate_no_successor_is_authenticated(
+                    context, &candidate, &outcome,
+                )
+            {
+                return None;
+            }
+            let authenticated = AuthenticatedValidateNoSuccessorRecovery {
+                key: candidate.key,
+                causal_root: candidate.causal_root,
+                reconstruction_source: candidate.reconstruction_source,
+                stage: candidate.stage,
+                payload: candidate.payload,
+            };
+            if validate_no_successor_map
+                .insert(candidate.key, authenticated)
+                .is_some()
+            {
+                return None;
+            }
+        }
         Some(Self {
             context,
+            authenticated_ledger,
             candidates: candidate_map,
+            validate_no_successor: validate_no_successor_map,
             serve_payloads,
         })
     }
+
+    // STORAGE_ONLY_LIFECYCLE_RECOVERY_ASSEMBLER_BEGIN
+    /// Assemble the bounded storage-only recovery cut from one exact opened frame.
+    ///
+    /// This factory has no caller-supplied candidate surface. Certified-Serve
+    /// and its adjacent ProducerTurn are reconstructed exclusively through the
+    /// authenticated payload cut. Every other live row fails closed until a
+    /// typed durable replay authority exists. Classification borrows both
+    /// inputs; success moves them into the seal, while failure retains them in
+    /// [`LifecycleRecoveryAssemblyError`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an owned typed failure when a live ordinary row lacks durable
+    /// replay authority, a terminal Validate/no-successor row lacks its body
+    /// outcome, or Certified-Serve storage does not cover the frame exactly.
+    #[allow(dead_code)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn assemble_storage_only(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
+        if let Err(kind) = validate_storage_only_recovery(&ledger, &serve_payloads) {
+            return Err(LifecycleRecoveryAssemblyError {
+                kind,
+                _authenticated_ledger: ledger,
+                _serve_payloads: serve_payloads,
+            });
+        }
+        Ok(Self {
+            context: ledger.context(),
+            authenticated_ledger: ledger,
+            candidates: BTreeMap::new(),
+            validate_no_successor: BTreeMap::new(),
+            serve_payloads,
+        })
+    }
+
+    /// Assemble storage-only recovery while consuming exact terminal Validate outcomes.
+    ///
+    /// All ledger and Certified-Serve checks finish before the body-store
+    /// catalog is detached. The aggregate cut then selects every terminal
+    /// Validate/no-successor claim exactly once; any missing or ambiguous row
+    /// restores the complete catalog before this owned error is returned.
+    /// Unrelated validation outcomes are restored when the selected set is
+    /// committed, so recovered-WAL success authority is not consumed here.
+    #[allow(dead_code)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn assemble_storage_only_with_body_validation_outcomes(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: &mut V2BodyStore,
+    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
+        Self::assemble_storage_only_with_terminal_validate_outcomes(
+            ledger,
+            serve_payloads,
+            body_store,
+            None,
+        )
+    }
+
+    /// Assemble one exact post-fsync recovered-WAL Sign crash cut.
+    ///
+    /// This remains a storage-only factory: its only additional input is the
+    /// opaque projection minted by the installed recovered-WAL registry row.
+    /// Exactly that projection's live Sign child may cross the ordinary-row
+    /// fail-closed classifier. A live Validate parent, a foreign Sign, or any
+    /// other live ordinary row is still rejected. The projection is borrowed,
+    /// so the installed registry authority remains with the caller; the exact
+    /// ledger frame and move-only Serve cut move into either the seal or the
+    /// owned failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an owned typed failure if the repaired frame does not contain
+    /// the exact installed live Sign child or otherwise fails the bounded
+    /// storage-only census.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::result_large_err)]
+    // TODO: Invoke this only inside the consuming installed-registry startup
+    // transaction; never expose its logical recovery cut as standalone
+    // production authority.
+    pub(super) fn assemble_storage_only_with_recovered_wal_sign(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        projection: &AuthenticatedRecoveredWalSignProjection,
+    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
+        let candidates = match assemble_storage_only_recovered_wal_candidates(
+            &ledger,
+            &serve_payloads,
+            projection,
+        ) {
+            Ok(candidates) => candidates,
+            Err(kind) => {
+                return Err(LifecycleRecoveryAssemblyError {
+                    kind,
+                    _authenticated_ledger: ledger,
+                    _serve_payloads: serve_payloads,
+                });
+            }
+        };
+        Ok(Self {
+            context: ledger.context(),
+            authenticated_ledger: ledger,
+            candidates,
+            validate_no_successor: BTreeMap::new(),
+            serve_payloads,
+        })
+    }
+
+    /// Assemble a repaired-WAL Sign cut together with terminal Validate outcomes.
+    ///
+    /// The opaque installed Sign projection remains borrowed while the exact
+    /// repaired parent/child pair, every other durable row, Certified-Serve
+    /// coverage, and the aggregate body-outcome catalog are authenticated.
+    #[allow(dead_code)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: &mut V2BodyStore,
+        projection: &AuthenticatedRecoveredWalSignProjection,
+    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
+        Self::assemble_storage_only_with_terminal_validate_outcomes(
+            ledger,
+            serve_payloads,
+            body_store,
+            Some(projection),
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn assemble_storage_only_with_terminal_validate_outcomes(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: &mut V2BodyStore,
+        recovered_wal: Option<&AuthenticatedRecoveredWalSignProjection>,
+    ) -> Result<Self, LifecycleRecoveryAssemblyError> {
+        let (candidates, claims) =
+            match assemble_storage_only_candidates_and_terminal_validate_claims(
+                &ledger,
+                &serve_payloads,
+                recovered_wal,
+            ) {
+                Ok(assembled) => assembled,
+                Err(kind) => {
+                    return Err(LifecycleRecoveryAssemblyError {
+                        kind,
+                        _authenticated_ledger: ledger,
+                        _serve_payloads: serve_payloads,
+                    });
+                }
+            };
+        if claims.is_empty() {
+            return Ok(Self {
+                context: ledger.context(),
+                authenticated_ledger: ledger,
+                candidates,
+                validate_no_successor: BTreeMap::new(),
+                serve_payloads,
+            });
+        }
+
+        let mut catalog = match body_store.detach_terminal_validate_outcome_catalog() {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                let detail = match error {
+                    RecoveredTerminalValidateOutcomeCatalogError::UnrevalidatedMarkers => {
+                        "durable markers have not completed semantic replay"
+                    }
+                    RecoveredTerminalValidateOutcomeCatalogError::AmbiguousOutcome => {
+                        "one proposal is present in both closed outcome maps"
+                    }
+                };
+                return Err(LifecycleRecoveryAssemblyError {
+                    kind: LifecycleRecoveryAssemblyErrorKind::TerminalValidateOutcomeCatalog(
+                        detail,
+                    ),
+                    _authenticated_ledger: ledger,
+                    _serve_payloads: serve_payloads,
+                });
+            }
+        };
+        for claim in claims.values() {
+            if !catalog.select_exact_terminal_validate(claim) {
+                return Err(LifecycleRecoveryAssemblyError {
+                    kind: LifecycleRecoveryAssemblyErrorKind::MissingTerminalValidateOutcome {
+                        ordinal: claim.ordinal,
+                        stage: claim.stage,
+                    },
+                    _authenticated_ledger: ledger,
+                    _serve_payloads: serve_payloads,
+                });
+            }
+        }
+        let validate_no_successor = claims
+            .into_values()
+            .map(|claim| (claim.key, claim.into_authenticated()))
+            .collect();
+        let recovery = Self {
+            context: ledger.context(),
+            authenticated_ledger: ledger,
+            candidates,
+            validate_no_successor,
+            serve_payloads,
+        };
+        catalog.commit_selected();
+        Ok(recovery)
+    }
+    // STORAGE_ONLY_LIFECYCLE_RECOVERY_ASSEMBLER_END
+
+    fn authenticates_opened_ledger(&self, opened: &LifecycleLedgerV1) -> bool {
+        &self.authenticated_ledger == opened
+    }
+
+    /// Assemble the empty logical side of a focused recovered-WAL fixture from
+    /// a real authenticated payload-store cut.
+    #[cfg(test)]
+    pub(crate) fn empty_for_recovered_wal_test(
+        verified: &VerifiedHeightContext,
+        authenticated_ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+    ) -> Option<Self> {
+        if authenticated_ledger.context()
+            != super::projection::lifecycle_context(verified.context())
+        {
+            return None;
+        }
+        Self::from_authenticated_parts(authenticated_ledger, [], [], serve_payloads)
+    }
+
+    // RECOVERED_WAL_SIGN_RECOVERY_SPLICE_BEGIN
+    /// Replace one exact recovered Validate parent by its authenticated WAL
+    /// Sign successor, or accept an already-repaired exact child.
+    ///
+    /// The comparison is complete before mutation. A recovery cut with neither
+    /// exact side, both sides, a foreign context, or a terminal no-successor
+    /// claim therefore stays byte-for-byte unchanged. The caller retains the
+    /// closed concrete registry row which authenticated both candidates; this
+    /// method never exposes either candidate outside the sealed startup path.
+    pub(super) fn splice_recovered_wal_sign(
+        &mut self,
+        projection: &AuthenticatedRecoveredWalSignProjection,
+    ) -> bool {
+        if !projection.belongs_to_context(self.context)
+            || self
+                .validate_no_successor
+                .contains_key(&projection.parent_key())
+            || self
+                .validate_no_successor
+                .contains_key(&projection.child_key())
+        {
+            return false;
+        }
+        projection.splice_candidates(&mut self.candidates)
+    }
+
+    /// Revalidate the post-splice recovery ownership without exposing either
+    /// retained candidate.
+    pub(super) fn owns_recovered_wal_sign(
+        &self,
+        projection: &AuthenticatedRecoveredWalSignProjection,
+    ) -> bool {
+        projection.belongs_to_context(self.context)
+            && !self
+                .validate_no_successor
+                .contains_key(&projection.parent_key())
+            && !self
+                .validate_no_successor
+                .contains_key(&projection.child_key())
+            && projection.owns_spliced_candidates(&self.candidates)
+    }
+
+    /// Seed the opaque installed projection's exact Validate parent.
+    #[cfg(test)]
+    pub(super) fn seed_recovered_wal_parent_for_test(
+        &mut self,
+        projection: &AuthenticatedRecoveredWalSignProjection,
+    ) -> bool {
+        projection.belongs_to_context(self.context)
+            && self.candidates.is_empty()
+            && self.validate_no_successor.is_empty()
+            && projection.seed_parent_candidate_for_test(&mut self.candidates)
+    }
+
+    /// Seed the opaque installed projection's exact Sign child.
+    #[cfg(test)]
+    pub(super) fn seed_recovered_wal_child_for_test(
+        &mut self,
+        projection: &AuthenticatedRecoveredWalSignProjection,
+    ) -> bool {
+        projection.belongs_to_context(self.context)
+            && self.candidates.is_empty()
+            && self.validate_no_successor.is_empty()
+            && projection.seed_child_candidate_for_test(&mut self.candidates)
+    }
+
+    /// Seed both opaque projection sides for an ambiguity-preservation test.
+    #[cfg(test)]
+    pub(super) fn seed_both_recovered_wal_candidates_for_test(
+        &mut self,
+        projection: &AuthenticatedRecoveredWalSignProjection,
+    ) -> bool {
+        projection.belongs_to_context(self.context)
+            && self.candidates.is_empty()
+            && self.validate_no_successor.is_empty()
+            && projection.seed_both_candidates_for_test(&mut self.candidates)
+    }
+    // RECOVERED_WAL_SIGN_RECOVERY_SPLICE_END
+}
+
+/// Owned failure from the storage-only recovery-cut assembler.
+///
+/// The exact opened LedgerV1 frame and the move-only authenticated Serve cut
+/// remain sealed here on every failure. A caller may therefore fail-stop
+/// without discarding either durable authority or accidentally retrying from a
+/// different frame.
+#[derive(Debug, Error)]
+#[error("{kind}")]
+#[must_use = "failed lifecycle recovery assembly still owns durable authority"]
+pub(crate) struct LifecycleRecoveryAssemblyError {
+    #[source]
+    kind: LifecycleRecoveryAssemblyErrorKind,
+    _authenticated_ledger: LifecycleLedgerV1,
+    _serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+}
+
+impl LifecycleRecoveryAssemblyError {
+    /// Borrow the typed, non-authorizing diagnostic.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn kind(&self) -> &LifecycleRecoveryAssemblyErrorKind {
+        &self.kind
+    }
+}
+
+/// Exhaustive reason why durable storage could not form one recovery cut.
+#[derive(Debug, Error)]
+pub(crate) enum LifecycleRecoveryAssemblyErrorKind {
+    /// One live ordinary row has no exact durable carrier reconstruction.
+    #[error(
+        "live lifecycle ordinal {ordinal} ({work_class:?}, {stage:?}) has no durable recovery authority"
+    )]
+    MissingDurableRecoveryAuthority {
+        /// Immutable ledger ordinal of the unsupported live row.
+        ordinal: u128,
+        /// Exhaustive logical work class retained by LedgerV1.
+        work_class: LifecycleWorkClass,
+        /// Exact immutable execution stage retained by LedgerV1.
+        stage: LifecycleStage,
+    },
+    /// A terminal Validate/no-child tombstone lost its consumed body outcome.
+    #[error("terminal Validate ordinal {ordinal} ({stage:?}) has no authenticated body outcome")]
+    MissingTerminalValidateOutcome {
+        /// Immutable ledger ordinal of the no-successor tombstone.
+        ordinal: u128,
+        /// Exact immutable Validate stage retained by LedgerV1.
+        stage: LifecycleStage,
+    },
+    /// The body-store recovery catalog is not ready for exact terminal coverage.
+    #[error("terminal Validate body-outcome catalog is unavailable: {0}")]
+    TerminalValidateOutcomeCatalog(&'static str),
+    /// A checksummed record could not be decoded into the closed schema.
+    #[error("lifecycle ordinal {ordinal} has invalid durable {field}")]
+    InvalidDurableRecord {
+        /// Immutable ledger ordinal of the malformed row.
+        ordinal: u128,
+        /// Closed field name which failed typed decoding.
+        field: &'static str,
+    },
+    /// Work class and execution stage no longer form one closed schema pair.
+    #[error(
+        "lifecycle ordinal {ordinal} has inconsistent durable class/stage ({work_class:?}, {stage:?})"
+    )]
+    InvalidDurableRecordShape {
+        /// Immutable ledger ordinal of the malformed row.
+        ordinal: u128,
+        /// Decoded logical work class.
+        work_class: LifecycleWorkClass,
+        /// Decoded immutable execution stage.
+        stage: LifecycleStage,
+    },
+    /// The opaque installed recovered-WAL projection and repaired frame differ.
+    #[error("recovered-WAL Sign storage recovery is incomplete: {0}")]
+    RecoveredWalSign(&'static str),
+    /// The authenticated Serve cut did not resolve the ledger exactly.
+    #[error("Certified-Serve storage recovery is incomplete: {0}")]
+    CertifiedServe(#[source] LifecycleOpenError),
 }
 
 /// Failure to open the sole durable lifecycle authority for one height.
@@ -110,7 +608,203 @@ impl From<CertifiedServePayloadStoreError> for LifecycleOpenError {
     }
 }
 
+/// In-memory durable-open result before either local store is published.
+///
+/// The coordinator has completed exhaustive recovery and rebinding, but its
+/// LedgerV1 projection and payload-orphan pruning remain uncommitted. This
+/// closed stage lets the recovered-WAL registry transaction compare its exact
+/// installed Sign row before any durable open publication occurs.
+#[must_use = "prepared lifecycle open has not published its durable stores"]
+pub(super) struct PreparedLifecycleCoordinatorOpen {
+    coordinator: LifecycleCoordinator,
+    store: LifecycleLedgerStoreV1,
+    retained_serve_payloads: BTreeSet<CertifiedServePayloadId>,
+}
+
+/// Fail-stop durable-open commit error retaining the complete prepared state.
+#[must_use = "failed lifecycle open still owns its prepared coordinator authority"]
+pub(super) struct LifecycleOpenCommitError {
+    error: LifecycleOpenError,
+    _prepared: PreparedLifecycleCoordinatorOpen,
+}
+
+impl LifecycleOpenCommitError {
+    fn into_error(self) -> LifecycleOpenError {
+        self.error
+    }
+}
+
+impl PreparedLifecycleCoordinatorOpen {
+    /// Borrow the completely rebound coordinator before store publication.
+    pub(super) const fn coordinator(&self) -> &LifecycleCoordinator {
+        &self.coordinator
+    }
+
+    /// Borrow the exact opened LedgerV1 store before publication.
+    pub(super) const fn store(&self) -> &LifecycleLedgerStoreV1 {
+        &self.store
+    }
+
+    /// Publish the exact coordinator projection, then prune authenticated
+    /// payload orphans, retaining this whole stage on either failure.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn commit(
+        mut self,
+        payload_store: &mut CertifiedServePayloadStoreV1,
+        recovery: &AuthenticatedLifecycleRecoveryCut,
+    ) -> Result<LifecycleCoordinator, LifecycleOpenCommitError> {
+        let projection = match LifecycleLedgerV1::from_coordinator(&self.coordinator) {
+            Ok(projection) => projection,
+            Err(error) => {
+                return Err(LifecycleOpenCommitError {
+                    error: error.into(),
+                    _prepared: self,
+                });
+            }
+        };
+        if let Err(error) = self.store.persist(&projection) {
+            return Err(LifecycleOpenCommitError {
+                error: error.into(),
+                _prepared: self,
+            });
+        }
+        if let Err(error) = payload_store
+            .prune_authenticated_orphans(&recovery.serve_payloads, &self.retained_serve_payloads)
+        {
+            return Err(LifecycleOpenCommitError {
+                error: error.into(),
+                _prepared: self,
+            });
+        }
+        self.coordinator.ledger_store = Some(self.store);
+        Ok(self.coordinator)
+    }
+}
+
 impl LifecycleCoordinator {
+    fn reconcile_store_ahead_terminal_serve(
+        &mut self,
+        serve_ordinal: u128,
+        mut candidate: CandidateAdmission,
+        update: TerminalUpdate,
+    ) -> Result<(), LifecycleOpenError> {
+        if update.ordinal != serve_ordinal
+            || !update
+                .replay
+                .exactly_matches_recovered_candidate(self.active_context, &candidate)
+        {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store-ahead replay family changed its recovered candidate",
+            )
+            .into());
+        }
+        let producer_ordinal = self.producer_debts.get(&serve_ordinal).copied().ok_or(
+            LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store-ahead Serve has no adjacent producer debt",
+            ),
+        )?;
+        if !update.replay.exactly_advances_pending_records(
+            self.active_context,
+            self.records
+                .get(&serve_ordinal)
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "payload-store-ahead Serve record disappeared",
+                ))?,
+            self.durable_records.get(&serve_ordinal).ok_or(
+                LifecycleOpenErrorKind::InvalidRecovery(
+                    "payload-store-ahead Serve metadata disappeared",
+                ),
+            )?,
+            self.records
+                .get(&producer_ordinal)
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "payload-store-ahead producer record disappeared",
+                ))?,
+            self.durable_records.get(&producer_ordinal).ok_or(
+                LifecycleOpenErrorKind::InvalidRecovery(
+                    "payload-store-ahead producer metadata disappeared",
+                ),
+            )?,
+        ) {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store-ahead frame is not the exact Pending pair successor",
+            )
+            .into());
+        }
+        let producer =
+            candidate
+                .producer_turn
+                .as_ref()
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "payload-store-ahead Serve lost its producer companion",
+                ))?;
+        self.durable_records
+            .get_mut(&serve_ordinal)
+            .expect("preflight retained Serve metadata")
+            .replay_authority = candidate.replay_authority.clone();
+        self.durable_records
+            .get_mut(&producer_ordinal)
+            .expect("preflight retained ProducerTurn metadata")
+            .replay_authority = producer.replay_authority.clone();
+        if !matches!(
+            self.records[&serve_ordinal].state,
+            LifecycleState::Waiting(wait)
+                if matches!(wait.source, super::WaitSource::Recovery(_))
+        ) || self
+            .rebind_recovered_candidate(serve_ordinal, &mut candidate)
+            .is_err()
+        {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store-ahead candidate did not rebind exactly",
+            )
+            .into());
+        }
+        if !update.replay.exactly_matches_rebound_records(
+            self.active_context,
+            &self.records[&serve_ordinal],
+            &self.durable_records[&serve_ordinal],
+            &self.records[&producer_ordinal],
+            &self.durable_records[&producer_ordinal],
+        ) {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "rebound payload-store-ahead pair changed before settlement",
+            )
+            .into());
+        }
+        let expected_payload = update.payload;
+        let expected_outcome = update.outcome;
+        let (payload, outcome, serve_replay, producer_replay) =
+            update.replay.consume_terminal_rebind();
+        if payload != expected_payload || outcome != expected_outcome {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store-ahead terminal projection changed during settlement",
+            )
+            .into());
+        }
+        let serve_metadata = self
+            .durable_records
+            .get_mut(&serve_ordinal)
+            .expect("rebound Serve metadata remains present");
+        serve_metadata.payload = payload;
+        serve_metadata.replay_authority = serve_replay;
+        self.durable_records
+            .get_mut(&producer_ordinal)
+            .expect("rebound ProducerTurn metadata remains present")
+            .replay_authority = producer_replay;
+        self.finish_terminal(serve_ordinal, outcome).map_err(|_| {
+            LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store terminal cut could not settle its Serve",
+            )
+        })?;
+        if self.durable_records[&serve_ordinal].payload != expected_payload {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "terminal payload projection changed during settlement",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     /// Open the sole durable coordinator from a verified height context.
     ///
     /// The persisted ledger owns the ordinal high-water mark. Every live row
@@ -133,24 +827,63 @@ impl LifecycleCoordinator {
         Self::open_with_authority(authority, ledger_root, payload_store, recovery)
     }
 
+    /// Open with an already authenticated bounded episode authority.
     pub(super) fn open_with_authority(
         authority: AuthenticatedEpisodeAuthority,
         ledger_root: &Path,
         payload_store: &mut CertifiedServePayloadStoreV1,
-        mut recovery: AuthenticatedLifecycleRecoveryCut,
+        recovery: AuthenticatedLifecycleRecoveryCut,
     ) -> Result<Self, LifecycleOpenError> {
+        Self::open_with_authority_borrowed(authority, ledger_root, payload_store, &recovery)
+    }
+
+    // RECOVERED_WAL_SIGN_BORROWED_OPEN_BEGIN
+    /// Open while retaining the move-only authenticated recovery cut outside
+    /// the coordinator transaction.
+    ///
+    /// Recovered-WAL startup needs this form so every failure can keep the
+    /// exact payload authentication and installed registry borrow sealed for a
+    /// fail-stop restart. Candidate values are cloned only into the new
+    /// coordinator; no storage or concrete-work authority is duplicated.
+    pub(super) fn open_with_authority_borrowed(
+        authority: AuthenticatedEpisodeAuthority,
+        ledger_root: &Path,
+        payload_store: &mut CertifiedServePayloadStoreV1,
+        recovery: &AuthenticatedLifecycleRecoveryCut,
+    ) -> Result<Self, LifecycleOpenError> {
+        let prepared =
+            Self::prepare_with_authority_borrowed(authority, ledger_root, payload_store, recovery)?;
+        prepared
+            .commit(payload_store, recovery)
+            .map_err(LifecycleOpenCommitError::into_error)
+    }
+
+    /// Complete recovery and rebinding without publishing either local store.
+    pub(super) fn prepare_with_authority_borrowed(
+        authority: AuthenticatedEpisodeAuthority,
+        ledger_root: &Path,
+        payload_store: &CertifiedServePayloadStoreV1,
+        recovery: &AuthenticatedLifecycleRecoveryCut,
+    ) -> Result<PreparedLifecycleCoordinatorOpen, LifecycleOpenError> {
         let context = authority.context();
         if recovery.context != context {
             return Err(LifecycleOpenErrorKind::InvalidRecovery("foreign recovery context").into());
         }
         payload_store.validate_authenticated_cut(&recovery.serve_payloads)?;
         let (store, ledger) = LifecycleLedgerStoreV1::open(ledger_root, context)?;
+        if !recovery.authenticates_opened_ledger(&ledger) {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "lifecycle ledger changed after recovery-cut authentication",
+            )
+            .into());
+        }
+        validate_terminal_validate_no_successor_recovery(&ledger, &recovery.validate_no_successor)?;
         let records_by_key = decoded_records_by_key(&ledger)?;
         let (serve_candidates, terminal_updates, retained_serve_payloads) =
             resolve_serve_payloads(context, &ledger, &records_by_key, &recovery.serve_payloads)?;
+        let mut recovered_candidates = recovery.candidates.clone();
         for candidate in serve_candidates {
-            if recovery
-                .candidates
+            if recovered_candidates
                 .insert(candidate.key, candidate)
                 .is_some()
             {
@@ -168,7 +901,11 @@ impl LifecycleCoordinator {
             .collect::<BTreeMap<_, _>>();
         let mut candidates_by_ordinal = BTreeMap::new();
         let mut producer_coverage = BTreeSet::new();
-        for (_, mut candidate) in std::mem::take(&mut recovery.candidates) {
+        let terminal_updates_by_ordinal = terminal_updates
+            .iter()
+            .map(|update| (update.ordinal, update))
+            .collect::<BTreeMap<_, _>>();
+        for (_, mut candidate) in recovered_candidates {
             candidate.canonicalize_geometry().map_err(|_| {
                 LifecycleOpenErrorKind::InvalidRecovery("invalid physical geometry")
             })?;
@@ -177,8 +914,9 @@ impl LifecycleCoordinator {
                     "recovered candidate has no durable semantic row",
                 ),
             )?;
-            validate_candidate_record(record, &candidate)?;
             let ordinal = record.ordinal();
+            let terminal_update = terminal_updates_by_ordinal.get(&ordinal).copied();
+            validate_candidate_record(ledger.context(), record, &candidate, terminal_update)?;
             if candidates_by_ordinal
                 .insert(ordinal, candidate.clone())
                 .is_some()
@@ -213,11 +951,25 @@ impl LifecycleCoordinator {
                             "Serve has no adjacent durable producer",
                         ),
                     )?;
+                    let replay_matches = terminal_update.map_or_else(
+                        || producer_record.replay_matches_producer(producer),
+                        |update| {
+                            update
+                                .replay
+                                .exactly_matches_recovered_candidate(ledger.context(), &candidate)
+                                && record.replay_is_exact_pending_predecessor(
+                                    ledger.context(),
+                                    producer_record,
+                                    &update.replay,
+                                )
+                        },
+                    );
                     if producer_record.key() != Some(producer.key)
                         || producer_record.owner() != record.owner()
                         || producer_record.work_class() != Some(LifecycleWorkClass::ProducerTurn)
                         || producer_record.stage() != Some(producer.stage)
                         || producer_record.reconstruction_source() != producer.reconstruction_source
+                        || !replay_matches
                     {
                         return Err(LifecycleOpenErrorKind::InvalidRecovery(
                             "producer companion changed durable semantics",
@@ -257,6 +1009,7 @@ impl LifecycleCoordinator {
                 (_, None) => {}
             }
         }
+        drop(terminal_updates_by_ordinal);
 
         let mut required_candidates = BTreeSet::new();
         let mut required_producers = BTreeSet::new();
@@ -311,7 +1064,15 @@ impl LifecycleCoordinator {
             )
             .into());
         }
+        let mut terminal_updates = terminal_updates
+            .into_iter()
+            .map(|update| (update.ordinal, update))
+            .collect::<BTreeMap<_, _>>();
         for (ordinal, candidate) in candidates_by_ordinal {
+            if let Some(update) = terminal_updates.remove(&ordinal) {
+                coordinator.reconcile_store_ahead_terminal_serve(ordinal, candidate, update)?;
+                continue;
+            }
             if matches!(
                 coordinator.records[&ordinal].state,
                 LifecycleState::Terminal(_)
@@ -331,18 +1092,11 @@ impl LifecycleCoordinator {
                 }
             }
         }
-        for (ordinal, outcome, expected_payload) in terminal_updates {
-            coordinator.finish_terminal(ordinal, outcome).map_err(|_| {
-                LifecycleOpenErrorKind::InvalidRecovery(
-                    "payload-store terminal cut could not settle its Serve",
-                )
-            })?;
-            if coordinator.durable_records[&ordinal].payload != expected_payload {
-                return Err(LifecycleOpenErrorKind::InvalidRecovery(
-                    "terminal payload projection changed during settlement",
-                )
-                .into());
-            }
+        if !terminal_updates.is_empty() {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store-ahead Serve transition has no exact candidate owner",
+            )
+            .into());
         }
         if coordinator.records.values().any(|record| {
             matches!(
@@ -355,14 +1109,13 @@ impl LifecycleCoordinator {
                 LifecycleOpenErrorKind::InvalidRecovery("recovery work remains unbound").into(),
             );
         }
-        store.persist(&super::ledger::LifecycleLedgerV1::from_coordinator(
-            &coordinator,
-        )?)?;
-        payload_store
-            .prune_authenticated_orphans(&recovery.serve_payloads, &retained_serve_payloads)?;
-        coordinator.ledger_store = Some(store);
-        Ok(coordinator)
+        Ok(PreparedLifecycleCoordinatorOpen {
+            coordinator,
+            store,
+            retained_serve_payloads,
+        })
     }
+    // RECOVERED_WAL_SIGN_BORROWED_OPEN_END
 
     /// Retire one context and durably open its immediate verified successor.
     ///
@@ -566,7 +1319,65 @@ impl LifecycleCoordinator {
     }
 
     fn retire_for_rollover(&mut self, snapshot: &RolloverSnapshot) -> Result<(), CoordinatorFault> {
+        let cancellations = snapshot
+            .serve_cancellations
+            .iter()
+            .map(|receipt| (digest_bytes(receipt.id().request_hash().as_ref()), *receipt))
+            .collect::<BTreeMap<_, _>>();
         for ordinal in &snapshot.retire_ordinals {
+            let Some(record) = self.records.get(ordinal) else {
+                return Err(CoordinatorFault::InvalidRollover);
+            };
+            if !matches!(record.state, LifecycleState::Terminal(_))
+                && record.work_class == LifecycleWorkClass::CertifiedServe
+                && self.ledger_store.is_some()
+            {
+                let DurablePayloadReference::CertifiedServePending { request, .. } = self
+                    .durable_records
+                    .get(ordinal)
+                    .ok_or(CoordinatorFault::InvalidRollover)?
+                    .payload
+                else {
+                    return Err(CoordinatorFault::InvalidRollover);
+                };
+                let receipt = cancellations
+                    .get(&request)
+                    .copied()
+                    .ok_or(CoordinatorFault::InvalidRollover)?;
+                let producer_ordinal = self
+                    .producer_debts
+                    .get(ordinal)
+                    .copied()
+                    .ok_or(CoordinatorFault::InvalidRollover)?;
+                let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_negative_receipt(
+                    self.active_context,
+                    &self.records[ordinal],
+                    &self.durable_records[ordinal],
+                    self.records
+                        .get(&producer_ordinal)
+                        .ok_or(CoordinatorFault::InvalidRollover)?,
+                    self.durable_records
+                        .get(&producer_ordinal)
+                        .ok_or(CoordinatorFault::InvalidRollover)?,
+                    receipt,
+                )
+                .ok_or(CoordinatorFault::InvalidRollover)?;
+                let (payload, outcome, serve_replay, producer_replay) =
+                    terminal.consume_terminal_rebind();
+                if outcome != TerminalOutcome::Cancelled {
+                    return Err(CoordinatorFault::InvalidRollover);
+                }
+                let metadata = self
+                    .durable_records
+                    .get_mut(ordinal)
+                    .expect("rollover preflight retained Serve metadata");
+                metadata.payload = payload;
+                metadata.replay_authority = serve_replay;
+                self.durable_records
+                    .get_mut(&producer_ordinal)
+                    .expect("rollover preflight retained ProducerTurn metadata")
+                    .replay_authority = producer_replay;
+            }
             if !self
                 .records
                 .get(ordinal)
@@ -626,9 +1437,7 @@ impl LifecycleCoordinator {
             || serve.key != candidate.key
             || serve.owner.causal_root() != candidate.causal_root
             || serve.stage != candidate.stage
-            || !self.durable_records[&serve_ordinal]
-                .payload
-                .same_admission_material(candidate.payload)
+            || !self.durable_records[&serve_ordinal].matches_admission(&candidate)
             || !self.retry_companion_matches(serve, &candidate)
         {
             return Err(LifecycleOpenErrorKind::InvalidRecovery(
@@ -669,6 +1478,52 @@ impl LifecycleCoordinator {
     }
 }
 
+fn validate_terminal_validate_no_successor_recovery(
+    ledger: &LifecycleLedgerV1,
+    recovered: &BTreeMap<LifecycleKey, AuthenticatedValidateNoSuccessorRecovery>,
+) -> Result<(), LifecycleOpenError> {
+    let mut expected = BTreeMap::new();
+    for record in ledger.records() {
+        if record.work_class() != Some(LifecycleWorkClass::Validate)
+            || record.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || record.continuation() != Some(DurableContinuation::AdvancedNoSuccessor)
+        {
+            continue;
+        }
+        let key = record.key().ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+            "terminal Validate key cannot be decoded",
+        ))?;
+        let proof = AuthenticatedValidateNoSuccessorRecovery {
+            key,
+            causal_root: record.owner().causal_root(),
+            reconstruction_source: record.reconstruction_source(),
+            stage: record
+                .stage()
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "terminal Validate stage cannot be decoded",
+                ))?,
+            payload: record
+                .durable_payload()
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "terminal Validate body-frame payload cannot be decoded",
+                ))?,
+        };
+        if expected.insert(key, proof).is_some() {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "terminal Validate recovery identity is duplicated",
+            )
+            .into());
+        }
+    }
+    if &expected != recovered {
+        return Err(LifecycleOpenErrorKind::InvalidRecovery(
+            "terminal Validate no-successor recovery coverage is not exact",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn decoded_records_by_key(
     ledger: &super::ledger::LifecycleLedgerV1,
 ) -> Result<BTreeMap<LifecycleKey, &LifecycleLedgerRecordV1>, LifecycleOpenError> {
@@ -704,16 +1559,32 @@ fn digest_bytes(bytes: &[u8]) -> LifecycleDigest {
 }
 
 fn validate_candidate_record(
+    context: LifecycleContext,
     record: &LifecycleLedgerRecordV1,
     candidate: &CandidateAdmission,
+    terminal_update: Option<&TerminalUpdate>,
 ) -> Result<(), LifecycleOpenError> {
-    if record.owner().causal_root() != candidate.causal_root
+    let replay_matches = terminal_update.map_or_else(
+        || record.replay_matches_candidate(candidate),
+        |update| {
+            update.ordinal == record.ordinal()
+                && update
+                    .payload
+                    .matches_terminal(LifecycleWorkClass::CertifiedServe, Some(update.outcome))
+                && update
+                    .replay
+                    .exactly_matches_recovered_candidate(context, candidate)
+        },
+    );
+    if !candidate.replay_authority_is_exact(context)
+        || record.owner().causal_root() != candidate.causal_root
         || record.work_class() != Some(candidate.work_class)
         || record.stage() != Some(candidate.stage)
         || record.reconstruction_source() != candidate.reconstruction_source
         || record
             .durable_payload()
             .is_none_or(|payload| !payload.same_admission_material(candidate.payload))
+        || !replay_matches
         || candidate.initial_state != super::InitialLifecycleState::Ready
     {
         return Err(LifecycleOpenErrorKind::InvalidRecovery(
@@ -724,7 +1595,12 @@ fn validate_candidate_record(
     Ok(())
 }
 
-type TerminalUpdate = (u128, TerminalOutcome, DurablePayloadReference);
+struct TerminalUpdate {
+    ordinal: u128,
+    outcome: TerminalOutcome,
+    payload: DurablePayloadReference,
+    replay: CertifiedServeTerminalReplayAuthorityPairV1,
+}
 
 #[allow(clippy::too_many_lines)]
 fn resolve_serve_payloads(
@@ -779,7 +1655,7 @@ fn resolve_serve_payloads(
             LifecycleOpenErrorKind::InvalidRecovery("Serve payload is missing from storage"),
         )?;
         retained.insert(payload.id());
-        let (candidate, resolved, projected_terminal) =
+        let (candidate, resolved, projected_terminal, projected_replay) =
             super::projection::recovered_certified_serve_projection(context, payload)
                 .map_err(|_| {
                     LifecycleOpenErrorKind::InvalidRecovery(
@@ -811,6 +1687,34 @@ fn resolve_serve_payloads(
                 )
                 .into());
             }
+            let producer =
+                candidate
+                    .producer_turn
+                    .as_ref()
+                    .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                        "steady Serve recovery lost its producer replay authority",
+                    ))?;
+            let producer_record = record
+                .ordinal()
+                .checked_add(1)
+                .and_then(|ordinal| ledger_record_at(ledger, ordinal))
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "steady Serve recovery lost its adjacent producer row",
+                ))?;
+            if !record.replay_matches_candidate(&candidate)
+                || !producer_record.replay_matches_producer(producer)
+            {
+                return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                    "steady Serve recovery frame changed its exact persisted family",
+                )
+                .into());
+            }
+            if projected_terminal.is_some() != projected_replay.is_some() {
+                return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                    "terminal Serve recovery lost its exact replay family",
+                )
+                .into());
+            }
         } else {
             let outcome = match (durable, resolved, projected_terminal) {
                 (
@@ -836,7 +1740,15 @@ fn resolve_serve_payloads(
                 )
                 .into());
             }
-            updates.push((record.ordinal(), outcome, resolved));
+            let replay = projected_replay.ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                "payload-store-ahead Serve lost its terminal replay family",
+            ))?;
+            updates.push(TerminalUpdate {
+                ordinal: record.ordinal(),
+                outcome,
+                payload: resolved,
+                replay,
+            });
         }
 
         let producer_is_live = record
@@ -864,4 +1776,1613 @@ fn resolve_serve_payloads(
         .into());
     }
     Ok((candidates, updates, retained))
+}
+
+fn validate_storage_only_recovery(
+    ledger: &LifecycleLedgerV1,
+    serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
+) -> Result<(), LifecycleRecoveryAssemblyErrorKind> {
+    for record in ledger.records() {
+        classify_storage_only_record(record)?;
+    }
+    validate_storage_only_serve_recovery(ledger, serve_payloads)
+}
+
+fn terminal_validate_no_successor_claim(
+    context: LifecycleContext,
+    record: &LifecycleLedgerRecordV1,
+) -> Result<Option<TerminalValidateNoSuccessorClaim>, LifecycleRecoveryAssemblyErrorKind> {
+    let ordinal = record.ordinal();
+    let work_class =
+        record
+            .work_class()
+            .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                ordinal,
+                field: "work class",
+            })?;
+    let stage = record
+        .stage()
+        .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+            ordinal,
+            field: "stage",
+        })?;
+    let terminal =
+        record
+            .terminal()
+            .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                ordinal,
+                field: "terminal",
+            })?;
+    let continuation =
+        record
+            .continuation()
+            .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                ordinal,
+                field: "continuation",
+            })?;
+    if work_class != LifecycleWorkClass::Validate
+        || terminal != Some(TerminalOutcome::Advanced)
+        || continuation != DurableContinuation::AdvancedNoSuccessor
+    {
+        return Ok(None);
+    }
+    let key = record
+        .key()
+        .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+            ordinal,
+            field: "key",
+        })?;
+    let payload = record.durable_payload().ok_or(
+        LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+            ordinal,
+            field: "payload",
+        },
+    )?;
+    Ok(Some(TerminalValidateNoSuccessorClaim {
+        context,
+        ordinal,
+        key,
+        causal_root: record.owner().causal_root(),
+        reconstruction_source: record.reconstruction_source(),
+        stage,
+        payload,
+    }))
+}
+
+fn assemble_storage_only_candidates_and_terminal_validate_claims(
+    ledger: &LifecycleLedgerV1,
+    serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
+    recovered_wal: Option<&AuthenticatedRecoveredWalSignProjection>,
+) -> Result<
+    (
+        BTreeMap<LifecycleKey, CandidateAdmission>,
+        BTreeMap<LifecycleKey, TerminalValidateNoSuccessorClaim>,
+    ),
+    LifecycleRecoveryAssemblyErrorKind,
+> {
+    if recovered_wal.is_some_and(|projection| !projection.belongs_to_context(ledger.context())) {
+        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+            "installed projection belongs to another lifecycle context",
+        ));
+    }
+
+    let mut candidates = BTreeMap::new();
+    let mut claims = BTreeMap::new();
+    for record in ledger.records() {
+        match classify_storage_only_record(record) {
+            Ok(()) => {}
+            Err(LifecycleRecoveryAssemblyErrorKind::MissingTerminalValidateOutcome { .. }) => {
+                let Some(claim) = terminal_validate_no_successor_claim(ledger.context(), record)?
+                else {
+                    return Err(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                        ordinal: record.ordinal(),
+                        field: "terminal Validate recovery claim",
+                    });
+                };
+                if claims.insert(claim.key, claim).is_some() {
+                    return Err(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                        ordinal: record.ordinal(),
+                        field: "duplicate terminal Validate recovery key",
+                    });
+                }
+            }
+            Err(LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority { .. })
+                if recovered_wal
+                    .is_some_and(|projection| record.key() == Some(projection.child_key())) =>
+            {
+                let projection = recovered_wal.expect("guard proves a recovered-WAL projection");
+                if !projection.insert_repaired_child_from_record(
+                    ledger.context(),
+                    record,
+                    &mut candidates,
+                ) {
+                    return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                        "live Sign row changed installed owner, ordinal, or admission semantics",
+                    ));
+                }
+            }
+            Err(kind) => return Err(kind),
+        }
+    }
+
+    if let Some(projection) = recovered_wal {
+        if !projection.owns_spliced_candidates(&candidates) {
+            return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                "repaired frame has no exact live installed Sign child",
+            ));
+        }
+        if !projection.repaired_pair_is_exact(ledger.context(), ledger.records()) {
+            return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                "repaired frame lost the exact terminal Validate parent or typed Sign edge",
+            ));
+        }
+    } else if !candidates.is_empty() {
+        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+            "storage-only assembly created a Sign child without installed authority",
+        ));
+    }
+    validate_storage_only_serve_recovery(ledger, serve_payloads)?;
+    Ok((candidates, claims))
+}
+
+fn assemble_storage_only_recovered_wal_candidates(
+    ledger: &LifecycleLedgerV1,
+    serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
+    projection: &AuthenticatedRecoveredWalSignProjection,
+) -> Result<BTreeMap<LifecycleKey, CandidateAdmission>, LifecycleRecoveryAssemblyErrorKind> {
+    if !projection.belongs_to_context(ledger.context()) {
+        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+            "installed projection belongs to another lifecycle context",
+        ));
+    }
+    let mut candidates = BTreeMap::new();
+    for record in ledger.records() {
+        match classify_storage_only_record(record) {
+            Ok(()) => {}
+            Err(LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority { .. })
+                if record.key() == Some(projection.child_key()) =>
+            {
+                if !projection.insert_repaired_child_from_record(
+                    ledger.context(),
+                    record,
+                    &mut candidates,
+                ) {
+                    return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                        "live Sign row changed installed owner, ordinal, or admission semantics",
+                    ));
+                }
+            }
+            Err(kind) => return Err(kind),
+        }
+    }
+    if !projection.owns_spliced_candidates(&candidates) {
+        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+            "repaired frame has no exact live installed Sign child",
+        ));
+    }
+    if !projection.repaired_pair_is_exact(ledger.context(), ledger.records()) {
+        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+            "repaired frame lost the exact terminal Validate parent or typed Sign edge",
+        ));
+    }
+    validate_storage_only_serve_recovery(ledger, serve_payloads)?;
+    Ok(candidates)
+}
+
+fn validate_storage_only_serve_recovery(
+    ledger: &LifecycleLedgerV1,
+    serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
+) -> Result<(), LifecycleRecoveryAssemblyErrorKind> {
+    let records = decoded_records_by_key(ledger)
+        .map_err(LifecycleRecoveryAssemblyErrorKind::CertifiedServe)?;
+    let (serve_candidates, terminal_updates, _retained) =
+        resolve_serve_payloads(ledger.context(), ledger, &records, serve_payloads)
+            .map_err(LifecycleRecoveryAssemblyErrorKind::CertifiedServe)?;
+    validate_storage_only_serve_coverage(ledger, &records, &serve_candidates, &terminal_updates)
+        .map_err(LifecycleRecoveryAssemblyErrorKind::CertifiedServe)
+}
+
+// STORAGE_ONLY_LIFECYCLE_RECOVERY_CLASSIFIER_BEGIN
+fn classify_storage_only_record(
+    record: &LifecycleLedgerRecordV1,
+) -> Result<(), LifecycleRecoveryAssemblyErrorKind> {
+    let ordinal = record.ordinal();
+    let work_class =
+        record
+            .work_class()
+            .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                ordinal,
+                field: "work class",
+            })?;
+    let stage = record
+        .stage()
+        .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+            ordinal,
+            field: "stage",
+        })?;
+    let terminal =
+        record
+            .terminal()
+            .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                ordinal,
+                field: "terminal",
+            })?;
+    let continuation =
+        record
+            .continuation()
+            .ok_or(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecord {
+                ordinal,
+                field: "continuation",
+            })?;
+
+    let stage_work_class = match stage.kind() {
+        LifecycleStageKind::SignProposal => LifecycleWorkClass::SignProposal,
+        LifecycleStageKind::SignPrepareVote | LifecycleStageKind::SignCommitVote => {
+            LifecycleWorkClass::SignVote
+        }
+        LifecycleStageKind::SignTimeoutVote => LifecycleWorkClass::SignTimeout,
+        LifecycleStageKind::FetchBody => LifecycleWorkClass::Fetch,
+        LifecycleStageKind::StoreBody => LifecycleWorkClass::Store,
+        LifecycleStageKind::ValidateBody => LifecycleWorkClass::Validate,
+        LifecycleStageKind::ApplyDecision => LifecycleWorkClass::Apply,
+        LifecycleStageKind::BroadcastProposal
+        | LifecycleStageKind::BroadcastPrepareVote
+        | LifecycleStageKind::BroadcastCommitVote
+        | LifecycleStageKind::BroadcastPrepareQc
+        | LifecycleStageKind::BroadcastCommitQc
+        | LifecycleStageKind::BroadcastTimeoutVote
+        | LifecycleStageKind::BroadcastTc => LifecycleWorkClass::Broadcast,
+        LifecycleStageKind::EnterView => LifecycleWorkClass::EnterView,
+        LifecycleStageKind::ReportProposalEquivocation
+        | LifecycleStageKind::ReportVoteEquivocation
+        | LifecycleStageKind::ReportTimeoutEquivocation => LifecycleWorkClass::EquivocationReport,
+        LifecycleStageKind::ReportInvalidBody => LifecycleWorkClass::InvalidBodyReport,
+        LifecycleStageKind::CertifiedServe => LifecycleWorkClass::CertifiedServe,
+        LifecycleStageKind::ProducerTurn => LifecycleWorkClass::ProducerTurn,
+    };
+    if stage_work_class != work_class {
+        return Err(
+            LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecordShape {
+                ordinal,
+                work_class,
+                stage,
+            },
+        );
+    }
+
+    if work_class == LifecycleWorkClass::Validate
+        && terminal == Some(TerminalOutcome::Advanced)
+        && continuation == DurableContinuation::AdvancedNoSuccessor
+    {
+        return Err(
+            LifecycleRecoveryAssemblyErrorKind::MissingTerminalValidateOutcome { ordinal, stage },
+        );
+    }
+    match work_class {
+        LifecycleWorkClass::CertifiedServe | LifecycleWorkClass::ProducerTurn => Ok(()),
+        LifecycleWorkClass::SignProposal
+        | LifecycleWorkClass::SignVote
+        | LifecycleWorkClass::SignTimeout
+        | LifecycleWorkClass::Fetch
+        | LifecycleWorkClass::Store
+        | LifecycleWorkClass::Validate
+        | LifecycleWorkClass::Apply
+        | LifecycleWorkClass::Broadcast
+        | LifecycleWorkClass::EnterView
+        | LifecycleWorkClass::EquivocationReport
+        | LifecycleWorkClass::InvalidBodyReport => terminal.map_or_else(
+            || {
+                Err(
+                    LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority {
+                        ordinal,
+                        work_class,
+                        stage,
+                    },
+                )
+            },
+            |_| Ok(()),
+        ),
+    }
+}
+// STORAGE_ONLY_LIFECYCLE_RECOVERY_CLASSIFIER_END
+
+fn validate_storage_only_serve_coverage(
+    ledger: &LifecycleLedgerV1,
+    records: &BTreeMap<LifecycleKey, &LifecycleLedgerRecordV1>,
+    candidates: &[CandidateAdmission],
+    terminal_updates: &[TerminalUpdate],
+) -> Result<(), LifecycleOpenError> {
+    let mut covered_serves = BTreeSet::new();
+    let mut covered_producers = BTreeSet::new();
+    let terminal_updates = terminal_updates
+        .iter()
+        .map(|update| (update.ordinal, update))
+        .collect::<BTreeMap<_, _>>();
+    for candidate in candidates {
+        if candidate.work_class != LifecycleWorkClass::CertifiedServe {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "storage-only payload projection produced non-Serve work",
+            )
+            .into());
+        }
+        let record =
+            records
+                .get(&candidate.key)
+                .copied()
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "storage-only Serve projection has no durable owner",
+                ))?;
+        let terminal_update = terminal_updates.get(&record.ordinal()).copied();
+        validate_candidate_record(ledger.context(), record, candidate, terminal_update)?;
+        if !covered_serves.insert(record.ordinal()) {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "storage-only Serve projection duplicated one ledger row",
+            )
+            .into());
+        }
+        let producer_ordinal =
+            record
+                .ordinal()
+                .checked_add(1)
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "storage-only Serve producer ordinal overflowed",
+                ))?;
+        let producer_record = ledger_record_at(ledger, producer_ordinal).ok_or(
+            LifecycleOpenErrorKind::InvalidRecovery(
+                "storage-only Serve projection lost its adjacent producer",
+            ),
+        )?;
+        let producer =
+            candidate
+                .producer_turn
+                .as_ref()
+                .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                    "storage-only Serve projection lacks its producer companion",
+                ))?;
+        let replay_matches = terminal_update.map_or_else(
+            || producer_record.replay_matches_producer(producer),
+            |update| {
+                update
+                    .replay
+                    .exactly_matches_recovered_candidate(ledger.context(), candidate)
+                    && record.replay_is_exact_pending_predecessor(
+                        ledger.context(),
+                        producer_record,
+                        &update.replay,
+                    )
+            },
+        );
+        if producer_record.key() != Some(producer.key)
+            || producer_record.owner() != record.owner()
+            || producer_record.work_class() != Some(LifecycleWorkClass::ProducerTurn)
+            || producer_record.stage() != Some(producer.stage)
+            || producer_record.reconstruction_source() != producer.reconstruction_source
+            || !replay_matches
+        {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "storage-only producer projection changed durable semantics",
+            )
+            .into());
+        }
+        if producer_record.terminal().flatten().is_none()
+            && !covered_producers.insert(producer_ordinal)
+        {
+            return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                "storage-only producer projection duplicated one ledger row",
+            )
+            .into());
+        }
+    }
+
+    let mut expected_serves = BTreeSet::new();
+    let mut expected_producers = BTreeSet::new();
+    for record in ledger.records() {
+        let terminal = record
+            .terminal()
+            .ok_or(LifecycleOpenErrorKind::InvalidRecovery(
+                "storage-only coverage cannot decode durable terminal",
+            ))?;
+        match record.work_class() {
+            Some(LifecycleWorkClass::CertifiedServe) => {
+                let producer_is_live = record
+                    .ordinal()
+                    .checked_add(1)
+                    .and_then(|ordinal| ledger_record_at(ledger, ordinal))
+                    .is_some_and(|producer| producer.terminal().flatten().is_none());
+                if terminal.is_none() || producer_is_live {
+                    expected_serves.insert(record.ordinal());
+                }
+            }
+            Some(LifecycleWorkClass::ProducerTurn) if terminal.is_none() => {
+                expected_producers.insert(record.ordinal());
+            }
+            Some(
+                LifecycleWorkClass::SignProposal
+                | LifecycleWorkClass::SignVote
+                | LifecycleWorkClass::SignTimeout
+                | LifecycleWorkClass::Fetch
+                | LifecycleWorkClass::Store
+                | LifecycleWorkClass::Validate
+                | LifecycleWorkClass::Apply
+                | LifecycleWorkClass::Broadcast
+                | LifecycleWorkClass::EnterView
+                | LifecycleWorkClass::EquivocationReport
+                | LifecycleWorkClass::InvalidBodyReport
+                | LifecycleWorkClass::ProducerTurn,
+            ) => {}
+            None => {
+                return Err(LifecycleOpenErrorKind::InvalidRecovery(
+                    "storage-only coverage cannot decode durable work class",
+                )
+                .into());
+            }
+        }
+    }
+    if covered_serves != expected_serves || covered_producers != expected_producers {
+        return Err(LifecycleOpenErrorKind::InvalidRecovery(
+            "storage-only Serve/producer recovery coverage is not exact",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    #[cfg(feature = "bls")]
+    use std::num::NonZeroU64;
+
+    #[cfg(feature = "bls")]
+    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    #[cfg(feature = "bls")]
+    use iroha_data_model::{
+        block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+        peer::PeerId,
+    };
+    #[cfg(feature = "bls")]
+    use tempfile::TempDir;
+
+    #[cfg(feature = "bls")]
+    use super::super::schema::DurableContinuationEdge;
+    use super::super::schema::{
+        CausalRoot, DurableContinuation, LifecyclePhase, LifecycleRound, LifecycleStageKind,
+        OwnerId, PredecessorScope,
+    };
+    use super::*;
+    #[cfg(feature = "bls")]
+    use crate::sumeragi::{
+        v2_body_store::{V2BodyStore, ValidatedBodyReceipt},
+        v2_chunks::encode_payload,
+    };
+
+    #[cfg(feature = "bls")]
+    struct EmptyAuthenticatedPayloadFixture {
+        context: LifecycleContext,
+        verified: VerifiedHeightContext,
+        root: TempDir,
+        payload_store: CertifiedServePayloadStoreV1,
+        payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: V2BodyStore,
+        keys: Vec<KeyPair>,
+    }
+
+    #[cfg(feature = "bls")]
+    fn empty_authenticated_payload_fixture() -> EmptyAuthenticatedPayloadFixture {
+        let mut keys = (0xC1_u8..=0xC4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic assembler BLS key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let roster = keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = wire::HeightContext {
+            network_id: crate::sumeragi::synthetic_network_id(
+                "storage-only-lifecycle-recovery-assembler-test",
+            ),
+            protocol_version: wire::PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: 100,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"storage-only recovery AMX context"),
+            execution_policy_hash: Hash::new(b"storage-only recovery execution policy"),
+            da_layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 1_048_576,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 1_048_576,
+                max_chunk_count: 2,
+            },
+            leader_seed: [0xC5; 32],
+        };
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture BLS proof of possession")
+            })
+            .collect();
+        let verified = VerifiedHeightContext::genesis(context, proofs)
+            .expect("verify assembler height context");
+        let root = TempDir::new().expect("temporary assembler storage root");
+        let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
+            root.path().join("body"),
+            verified.context().clone(),
+        )
+        .expect("open empty body store");
+        let (payload_store, recovered) =
+            CertifiedServePayloadStoreV1::open(&root.path().join("payload"), verified.context())
+                .expect("open empty payload store");
+        let payloads = recovered
+            .authenticate(&verified, &keys[0], &body_store)
+            .expect("authenticate empty payload cut");
+        EmptyAuthenticatedPayloadFixture {
+            context: super::super::projection::lifecycle_context(verified.context()),
+            verified,
+            root,
+            payload_store,
+            payloads,
+            body_store,
+            keys,
+        }
+    }
+
+    #[cfg(feature = "bls")]
+    fn empty_authenticated_payload_cut() -> (
+        LifecycleContext,
+        AuthenticatedCertifiedServePayloadRecoveryCut,
+    ) {
+        let EmptyAuthenticatedPayloadFixture {
+            context, payloads, ..
+        } = empty_authenticated_payload_fixture();
+        (context, payloads)
+    }
+
+    #[cfg(feature = "bls")]
+    fn terminal_validate_record_with_body_outcome(
+        fixture: &mut EmptyAuthenticatedPayloadFixture,
+        ordinal: u128,
+        view: u64,
+        rejected: bool,
+    ) -> LifecycleLedgerRecordV1 {
+        let wire_context = fixture.verified.context();
+        let round = wire::ConsensusRound {
+            context_id: wire_context.id(),
+            height: wire_context.height,
+            view,
+        };
+        let leader = wire_context.leader(view);
+        let leader_index = usize::try_from(leader).expect("small fixture leader index");
+        let header = BlockHeader::new(
+            NonZeroU64::new(round.height).expect("non-zero fixture height"),
+            None,
+            None,
+            None,
+            1_000_u64.saturating_add(view),
+            view,
+        );
+        let signature =
+            SignatureOf::try_from_hash(fixture.keys[leader_index].private_key(), header.hash())
+                .expect("sign terminal Validate body");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(leader), signature),
+            header,
+            Vec::new(),
+        );
+        let canonical_wire = block.encode_wire().expect("encode terminal Validate body");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let manifest = encode_payload(wire_context, round, subject, &canonical_wire)
+            .expect("encode terminal Validate payload")
+            .manifest()
+            .clone();
+        let receipt = fixture
+            .body_store
+            .store(manifest.clone(), canonical_wire)
+            .expect("persist terminal Validate body");
+        let replay = super::super::replay_authority::exact_local_body_record_fixture(
+            fixture.context,
+            crate::sumeragi::v2_core::EventTag::new(
+                round.height,
+                round.view,
+                crate::sumeragi::v2_core::Generation::new(0),
+            ),
+            manifest,
+            &receipt,
+            LifecycleStageKind::ValidateBody,
+        )
+        .expect("exact stored body mints one canonical Validate fixture");
+        if rejected {
+            let _rejected = fixture
+                .body_store
+                .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                    Err::<wire::ExecutionCommitment, _>(
+                        "deterministic terminal Validate rejection".to_owned(),
+                    )
+                })
+                .expect("persist terminal Validate rejection");
+        } else {
+            let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+            let _validated = fixture
+                .body_store
+                .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                    Ok::<_, String>(commitment)
+                })
+                .expect("persist terminal Validate success");
+        }
+
+        let causal_root = CausalRoot::new(LifecycleDigest::new(
+            [u8::try_from(ordinal).expect("small fixture ordinal"); 32],
+        ));
+        LifecycleLedgerRecordV1::new(
+            replay.key,
+            OwnerId::new(causal_root, ordinal),
+            ordinal,
+            replay.work_class,
+            replay.stage,
+            Some(TerminalOutcome::Advanced),
+            causal_root.digest(),
+            replay.payload,
+            replay.authority,
+            DurableContinuation::AdvancedNoSuccessor,
+        )
+        .expect("construct terminal Validate body-outcome record")
+    }
+
+    #[cfg(feature = "bls")]
+    fn sign_proposal_record(
+        context: LifecycleContext,
+        ordinal: u128,
+        marker: u8,
+        terminal: Option<TerminalOutcome>,
+    ) -> LifecycleLedgerRecordV1 {
+        let causal_root = CausalRoot::new(LifecycleDigest::new([marker; 32]));
+        let replay = super::super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::SignProposal,
+            u8::try_from(ordinal).expect("small SignProposal fixture ordinal"),
+        );
+        LifecycleLedgerRecordV1::new(
+            replay.key,
+            OwnerId::new(causal_root, ordinal),
+            ordinal,
+            replay.work_class,
+            replay.stage,
+            terminal,
+            causal_root.digest(),
+            replay.payload,
+            replay.authority,
+            DurableContinuation::None,
+        )
+        .expect("construct SignProposal record")
+    }
+
+    #[cfg(feature = "bls")]
+    fn live_sign_proposal_ledger(context: LifecycleContext) -> LifecycleLedgerV1 {
+        let record = sign_proposal_record(context, 1, 0xC6, None);
+        LifecycleLedgerV1::new(context, 1, vec![record], BTreeMap::new())
+            .expect("construct live SignProposal ledger")
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn storage_only_assembler_seals_an_empty_exact_frame() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let ledger = LifecycleLedgerV1::empty(context);
+        let recovery =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only(ledger.clone(), payloads)
+                .expect("empty storage census assembles exactly");
+
+        assert_eq!(recovery.context, context);
+        assert_eq!(recovery.authenticated_ledger, ledger);
+        assert!(recovery.candidates.is_empty());
+        assert!(recovery.validate_no_successor.is_empty());
+        assert!(recovery.authenticates_opened_ledger(&ledger));
+        let foreign = LifecycleLedgerV1::empty(LifecycleContext::new(
+            LifecycleDigest::new([0xC7; 32]),
+            context.height(),
+        ));
+        assert!(!recovery.authenticates_opened_ledger(&foreign));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn storage_only_assembler_consumes_exact_success_and_rejection_outcomes() {
+        let mut fixture = empty_authenticated_payload_fixture();
+        let validated = terminal_validate_record_with_body_outcome(&mut fixture, 1, 0, false);
+        let rejected = terminal_validate_record_with_body_outcome(&mut fixture, 2, 1, true);
+        let ledger = LifecycleLedgerV1::new(
+            fixture.context,
+            2,
+            vec![validated, rejected],
+            BTreeMap::new(),
+        )
+        .expect("construct two-outcome terminal Validate ledger");
+        let strict = AuthenticatedLifecycleRecoveryCut::assemble_storage_only(
+            ledger.clone(),
+            fixture.payloads,
+        )
+        .expect_err("the body-free factory must reject terminal Validate tombstones");
+        assert!(matches!(
+            strict.kind(),
+            LifecycleRecoveryAssemblyErrorKind::MissingTerminalValidateOutcome { .. }
+        ));
+        let LifecycleRecoveryAssemblyError {
+            _serve_payloads: payloads,
+            ..
+        } = strict;
+
+        let recovery =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_body_validation_outcomes(
+                ledger.clone(),
+                payloads,
+                &mut fixture.body_store,
+            )
+            .expect("consume both exact terminal Validate outcomes");
+
+        assert_eq!(recovery.authenticated_ledger, ledger);
+        assert_eq!(recovery.validate_no_successor.len(), 2);
+        assert!(recovery.candidates.is_empty());
+        assert!(fixture.body_store.validated_recovery_catalog().is_empty());
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn terminal_validate_catalog_failure_restores_prior_exact_selection() {
+        let mut fixture = empty_authenticated_payload_fixture();
+        let first = terminal_validate_record_with_body_outcome(&mut fixture, 1, 0, false);
+        let second = terminal_validate_record_with_body_outcome(&mut fixture, 2, 1, true);
+        assert!(
+            first.key().expect("decode first key") < second.key().expect("decode second key"),
+            "the exact first claim must be selected before the substituted second claim"
+        );
+        let exact = LifecycleLedgerV1::new(
+            fixture.context,
+            2,
+            vec![first.clone(), second.clone()],
+            BTreeMap::new(),
+        )
+        .expect("construct exact two-outcome ledger");
+        let DurablePayloadReference::BodyFrame(mut substituted_frame) = second
+            .durable_payload()
+            .expect("decode second terminal body frame")
+        else {
+            panic!("terminal Validate must retain a BodyFrame")
+        };
+        substituted_frame.frame = LifecycleDigest::new([0xCE; 32]);
+        let substituted = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            second.key().expect("decode second key"),
+            second.owner(),
+            second.ordinal(),
+            second.work_class().expect("decode second class"),
+            second.stage().expect("decode second stage"),
+            second.terminal().expect("decode second terminal"),
+            second.reconstruction_source(),
+            DurablePayloadReference::BodyFrame(substituted_frame),
+            second.continuation().expect("decode second continuation"),
+        )
+        .expect("construct checksum-valid substituted body frame");
+        assert!(matches!(
+            LifecycleLedgerV1::new(
+                fixture.context,
+                2,
+                vec![first, substituted],
+                BTreeMap::new(),
+            ),
+            Err(super::super::ledger::LifecycleLedgerError::InvalidLedger(_))
+        ));
+        let recovery =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_body_validation_outcomes(
+                exact,
+                fixture.payloads,
+                &mut fixture.body_store,
+            )
+            .expect("structural replay rejection leaves every exact outcome available");
+        assert_eq!(recovery.validate_no_successor.len(), 2);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn repaired_wal_sign_and_terminal_validate_outcome_assemble_together() {
+        let mut fixture = empty_authenticated_payload_fixture();
+        let terminal = terminal_validate_record_with_body_outcome(&mut fixture, 3, 3, true);
+        let (projection, repaired) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                fixture.context,
+                0xCF,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let mut records = repaired.records().to_vec();
+        records.push(terminal);
+        let combined = LifecycleLedgerV1::new(fixture.context, 3, records, BTreeMap::new())
+            .expect("construct repaired WAL plus terminal Validate ledger");
+
+        let recovery = AuthenticatedLifecycleRecoveryCut::
+            assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes(
+                combined.clone(),
+                fixture.payloads,
+                &mut fixture.body_store,
+                &projection,
+            )
+            .expect("assemble repaired Sign and terminal outcome atomically");
+        assert_eq!(recovery.authenticated_ledger, combined);
+        assert_eq!(recovery.candidates.len(), 1);
+        assert_eq!(recovery.validate_no_successor.len(), 1);
+        assert!(recovery.owns_recovered_wal_sign(&projection));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn storage_only_assembler_failure_retains_frame_and_payload_authority() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let ledger = live_sign_proposal_ledger(context);
+        let expected = ledger.clone();
+        let error = AuthenticatedLifecycleRecoveryCut::assemble_storage_only(ledger, payloads)
+            .expect_err("live SignProposal lacks storage-only replay authority");
+
+        assert!(matches!(
+            error.kind(),
+            LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority {
+                ordinal: 1,
+                work_class: LifecycleWorkClass::SignProposal,
+                stage,
+            } if stage.kind() == LifecycleStageKind::SignProposal
+        ));
+        assert_eq!(error._authenticated_ledger, expected);
+        assert!(error._serve_payloads.is_empty());
+        assert_eq!(
+            digest_bytes(error._serve_payloads.context_id().0.as_ref()),
+            context.id()
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn storage_only_assembler_still_rejects_repaired_wal_sign_child() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let (_projection, ledger) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD0,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let error = AuthenticatedLifecycleRecoveryCut::assemble_storage_only(ledger, payloads)
+            .expect_err("unqualified storage-only recovery must reject the live Sign child");
+
+        assert!(matches!(
+            error.kind(),
+            LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority {
+                ordinal: 2,
+                work_class: LifecycleWorkClass::SignVote,
+                stage,
+            } if stage.kind() == LifecycleStageKind::SignPrepareVote
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_assembler_seals_exact_repaired_child_and_frame() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let (projection, ledger) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD1,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let recovery =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
+                ledger.clone(),
+                payloads,
+                &projection,
+            )
+            .expect("exact repaired Sign child must assemble");
+
+        assert_eq!(recovery.authenticated_ledger, ledger);
+        assert!(projection.owns_spliced_candidates(&recovery.candidates));
+        assert!(recovery.authenticates_opened_ledger(&ledger));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_assembler_rejects_foreign_live_sign_child() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let (projection, _own_ledger) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD2,
+            )
+            .expect("construct installed WAL projection fixture");
+        let (_foreign_projection, foreign_ledger) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD3,
+            )
+            .expect("construct foreign repaired WAL ledger fixture");
+        let expected = foreign_ledger.clone();
+        let error =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
+                foreign_ledger,
+                payloads,
+                &projection,
+            )
+            .expect_err("foreign live Sign must not consume installed WAL authority");
+
+        assert!(matches!(
+            error.kind(),
+            LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority {
+                ordinal: 2,
+                work_class: LifecycleWorkClass::SignVote,
+                ..
+            }
+        ));
+        assert_eq!(error._authenticated_ledger, expected);
+        assert!(error._serve_payloads.is_empty());
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_assembler_rejects_exact_child_at_wrong_durable_ordinal() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let (projection, repaired) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD9,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let parent = repaired.records().first().expect("repaired fixture parent");
+        let child = repaired.records().get(1).expect("repaired fixture child");
+        let displaced_parent = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            parent.key().expect("decode parent key"),
+            parent.owner(),
+            parent.ordinal(),
+            parent.work_class().expect("decode parent class"),
+            parent.stage().expect("decode parent stage"),
+            parent.terminal().expect("decode parent terminal"),
+            parent.reconstruction_source(),
+            parent.durable_payload().expect("decode parent payload"),
+            DurableContinuation::successor(DurableContinuationEdge::ValidateToSignPrepare, 3),
+        )
+        .expect("construct displaced repaired parent");
+        let filler = sign_proposal_record(context, 2, 0xDA, Some(TerminalOutcome::Cancelled));
+        let displaced_child = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            child.key().expect("decode child key"),
+            child.owner(),
+            3,
+            child.work_class().expect("decode child class"),
+            child.stage().expect("decode child stage"),
+            child.terminal().expect("decode child terminal"),
+            child.reconstruction_source(),
+            child.durable_payload().expect("decode child payload"),
+            child.continuation().expect("decode child continuation"),
+        )
+        .expect("construct displaced repaired child");
+        let ledger = LifecycleLedgerV1::new(
+            context,
+            3,
+            vec![displaced_parent, filler, displaced_child],
+            BTreeMap::new(),
+        )
+        .expect("construct valid wrong-ordinal repaired frame");
+        let error =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
+                ledger,
+                payloads,
+                &projection,
+            )
+            .expect_err("semantic child at a foreign durable address must fail closed");
+
+        assert!(matches!(
+            error.kind(),
+            LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(message)
+                if message.contains("owner, ordinal")
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_assembler_rejects_an_extra_live_ordinary_row() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let (projection, repaired) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD4,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let mut records = repaired.records().to_vec();
+        records.push(sign_proposal_record(context, 3, 0xD5, None));
+        let ledger = LifecycleLedgerV1::new(context, 3, records, BTreeMap::new())
+            .expect("construct repaired ledger with extra live work");
+        let error =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
+                ledger,
+                payloads,
+                &projection,
+            )
+            .expect_err("one opaque WAL projection cannot authorize extra live work");
+
+        assert!(matches!(
+            error.kind(),
+            LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority {
+                ordinal: 3,
+                work_class: LifecycleWorkClass::SignProposal,
+                ..
+            }
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_assembler_rejects_exact_child_with_foreign_first_owner_row() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let (projection, repaired) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xDB,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let child = repaired
+            .records()
+            .get(1)
+            .expect("repaired fixture Sign child")
+            .clone();
+        let owner = child.owner();
+        let replay = super::super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::SignProposal,
+            1,
+        );
+        let foreign_parent = LifecycleLedgerRecordV1::new(
+            replay.key,
+            owner,
+            1,
+            replay.work_class,
+            replay.stage,
+            Some(TerminalOutcome::Cancelled),
+            owner.causal_root().digest(),
+            replay.payload,
+            replay.authority,
+            DurableContinuation::None,
+        )
+        .expect("construct same-owner foreign first row");
+        let ledger = LifecycleLedgerV1::new(
+            context,
+            child.ordinal(),
+            vec![foreign_parent, child],
+            BTreeMap::new(),
+        )
+        .expect("construct structurally valid child-only repaired impostor");
+        let error =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
+                ledger,
+                payloads,
+                &projection,
+            )
+            .expect_err("exact Sign child cannot replace its typed Validate parent edge");
+
+        assert!(matches!(
+            error.kind(),
+            LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(message)
+                if message.contains("terminal Validate parent")
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_assembler_rejects_pre_repair_live_validate() {
+        let (context, payloads) = empty_authenticated_payload_cut();
+        let (projection, repaired) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD6,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let repaired_parent = repaired
+            .records()
+            .first()
+            .expect("repaired fixture retains its Validate parent");
+        let live_parent = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+            repaired_parent.key().expect("decode parent key"),
+            repaired_parent.owner(),
+            repaired_parent.ordinal(),
+            repaired_parent.work_class().expect("decode parent class"),
+            repaired_parent.stage().expect("decode parent stage"),
+            None,
+            repaired_parent.reconstruction_source(),
+            repaired_parent
+                .durable_payload()
+                .expect("decode parent payload"),
+            DurableContinuation::None,
+        )
+        .expect("construct pre-repair live Validate parent");
+        let ledger = LifecycleLedgerV1::new(context, 1, vec![live_parent], BTreeMap::new())
+            .expect("construct pre-repair WAL ledger");
+        let error =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
+                ledger,
+                payloads,
+                &projection,
+            )
+            .expect_err("post-repair factory must not authorize the old live Validate parent");
+
+        assert!(matches!(
+            error.kind(),
+            LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority {
+                ordinal: 1,
+                work_class: LifecycleWorkClass::Validate,
+                ..
+            }
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_assembled_cut_rejects_same_context_stale_reread() {
+        let EmptyAuthenticatedPayloadFixture {
+            context,
+            verified,
+            root,
+            payload_store,
+            payloads,
+            ..
+        } = empty_authenticated_payload_fixture();
+        let (projection, repaired) =
+            AuthenticatedRecoveredWalSignProjection::repaired_ledger_fixture_for_test(
+                context, 0xD7,
+            )
+            .expect("construct repaired WAL ledger fixture");
+        let recovery =
+            AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_sign(
+                repaired.clone(),
+                payloads,
+                &projection,
+            )
+            .expect("assemble exact production-shaped repaired cut");
+
+        let mut stale_records = repaired.records().to_vec();
+        stale_records.push(sign_proposal_record(
+            context,
+            3,
+            0xD8,
+            Some(TerminalOutcome::Cancelled),
+        ));
+        let stale = LifecycleLedgerV1::new(context, 3, stale_records, BTreeMap::new())
+            .expect("construct valid same-context stale frame");
+        assert!(!recovery.authenticates_opened_ledger(&stale));
+
+        let ledger_root = root.path().join("ledger");
+        let (ledger_store, opened) = LifecycleLedgerStoreV1::open(&ledger_root, context)
+            .expect("open stale-reread ledger store");
+        assert_eq!(opened, LifecycleLedgerV1::empty(context));
+        ledger_store
+            .persist(&stale)
+            .expect("persist same-context stale frame");
+        let authority = authority::recovered_wal_test_authority(&verified)
+            .expect("construct focused recovered-WAL authority");
+        let prepared = LifecycleCoordinator::prepare_with_authority_borrowed(
+            authority,
+            &ledger_root,
+            &payload_store,
+            &recovery,
+        );
+        let Err(LifecycleOpenError(LifecycleOpenErrorKind::InvalidRecovery(message))) = prepared
+        else {
+            panic!("durable open did not reject the changed authenticated ledger frame")
+        };
+        assert_eq!(
+            message,
+            "lifecycle ledger changed after recovery-cut authentication"
+        );
+    }
+
+    fn classifier_record(
+        ordinal: u128,
+        work_class: LifecycleWorkClass,
+        stage_kind: LifecycleStageKind,
+        terminal: Option<TerminalOutcome>,
+        continuation: DurableContinuation,
+    ) -> LifecycleLedgerRecordV1 {
+        let context = LifecycleContext::new(LifecycleDigest::new([0x91; 32]), 11);
+        let replay = super::super::replay_authority::exact_record_fixture(
+            context,
+            stage_kind,
+            u8::try_from(ordinal).expect("small classifier view"),
+        );
+        assert_eq!(replay.work_class, work_class);
+        let causal_root = CausalRoot::new(LifecycleDigest::new(
+            [u8::try_from(ordinal).expect("small classifier marker"); 32],
+        ));
+        LifecycleLedgerRecordV1::new(
+            replay.key,
+            OwnerId::new(causal_root, ordinal),
+            ordinal,
+            work_class,
+            replay.stage,
+            terminal,
+            causal_root.digest(),
+            replay.payload,
+            replay.authority,
+            continuation,
+        )
+        .expect("construct classifier-only durable record")
+    }
+
+    fn ordinary_stage_inventory() -> [(LifecycleWorkClass, LifecycleStageKind); 20] {
+        [
+            (
+                LifecycleWorkClass::SignProposal,
+                LifecycleStageKind::SignProposal,
+            ),
+            (
+                LifecycleWorkClass::SignVote,
+                LifecycleStageKind::SignPrepareVote,
+            ),
+            (
+                LifecycleWorkClass::SignVote,
+                LifecycleStageKind::SignCommitVote,
+            ),
+            (
+                LifecycleWorkClass::SignTimeout,
+                LifecycleStageKind::SignTimeoutVote,
+            ),
+            (LifecycleWorkClass::Fetch, LifecycleStageKind::FetchBody),
+            (LifecycleWorkClass::Store, LifecycleStageKind::StoreBody),
+            (
+                LifecycleWorkClass::Validate,
+                LifecycleStageKind::ValidateBody,
+            ),
+            (LifecycleWorkClass::Apply, LifecycleStageKind::ApplyDecision),
+            (
+                LifecycleWorkClass::Broadcast,
+                LifecycleStageKind::BroadcastProposal,
+            ),
+            (
+                LifecycleWorkClass::Broadcast,
+                LifecycleStageKind::BroadcastPrepareVote,
+            ),
+            (
+                LifecycleWorkClass::Broadcast,
+                LifecycleStageKind::BroadcastCommitVote,
+            ),
+            (
+                LifecycleWorkClass::Broadcast,
+                LifecycleStageKind::BroadcastPrepareQc,
+            ),
+            (
+                LifecycleWorkClass::Broadcast,
+                LifecycleStageKind::BroadcastCommitQc,
+            ),
+            (
+                LifecycleWorkClass::Broadcast,
+                LifecycleStageKind::BroadcastTimeoutVote,
+            ),
+            (
+                LifecycleWorkClass::Broadcast,
+                LifecycleStageKind::BroadcastTc,
+            ),
+            (LifecycleWorkClass::EnterView, LifecycleStageKind::EnterView),
+            (
+                LifecycleWorkClass::EquivocationReport,
+                LifecycleStageKind::ReportProposalEquivocation,
+            ),
+            (
+                LifecycleWorkClass::EquivocationReport,
+                LifecycleStageKind::ReportVoteEquivocation,
+            ),
+            (
+                LifecycleWorkClass::EquivocationReport,
+                LifecycleStageKind::ReportTimeoutEquivocation,
+            ),
+            (
+                LifecycleWorkClass::InvalidBodyReport,
+                LifecycleStageKind::ReportInvalidBody,
+            ),
+        ]
+    }
+
+    #[test]
+    fn storage_only_classifier_rejects_every_live_ordinary_stage_typed() {
+        for (index, (work_class, stage_kind)) in ordinary_stage_inventory().into_iter().enumerate()
+        {
+            let ordinal = u128::try_from(index + 1).expect("small classifier ordinal");
+            let record = classifier_record(
+                ordinal,
+                work_class,
+                stage_kind,
+                None,
+                DurableContinuation::None,
+            );
+            let Err(LifecycleRecoveryAssemblyErrorKind::MissingDurableRecoveryAuthority {
+                ordinal: observed_ordinal,
+                work_class: observed_class,
+                stage: observed_stage,
+            }) = classify_storage_only_record(&record)
+            else {
+                panic!("live {work_class:?}/{stage_kind:?} did not fail with typed authority debt")
+            };
+            assert_eq!(observed_ordinal, ordinal);
+            assert_eq!(observed_class, work_class);
+            assert_eq!(observed_stage.kind(), stage_kind);
+        }
+    }
+
+    #[test]
+    fn storage_only_classifier_accepts_terminal_inventory_and_serve_pair_only() {
+        for (ordinal, work_class, stage_kind) in [
+            (
+                1,
+                LifecycleWorkClass::CertifiedServe,
+                LifecycleStageKind::CertifiedServe,
+            ),
+            (
+                2,
+                LifecycleWorkClass::ProducerTurn,
+                LifecycleStageKind::ProducerTurn,
+            ),
+        ] {
+            let record = classifier_record(
+                ordinal,
+                work_class,
+                stage_kind,
+                None,
+                DurableContinuation::None,
+            );
+            assert!(classify_storage_only_record(&record).is_ok());
+        }
+        for (index, (work_class, stage_kind)) in ordinary_stage_inventory()
+            .into_iter()
+            .chain([
+                (
+                    LifecycleWorkClass::CertifiedServe,
+                    LifecycleStageKind::CertifiedServe,
+                ),
+                (
+                    LifecycleWorkClass::ProducerTurn,
+                    LifecycleStageKind::ProducerTurn,
+                ),
+            ])
+            .enumerate()
+        {
+            let ordinal = u128::try_from(index + 1).expect("small classifier ordinal");
+            let record = classifier_record(
+                ordinal,
+                work_class,
+                stage_kind,
+                Some(TerminalOutcome::Cancelled),
+                DurableContinuation::None,
+            );
+            assert!(
+                classify_storage_only_record(&record).is_ok(),
+                "terminal {work_class:?}/{stage_kind:?} should need no physical carrier"
+            );
+        }
+        assert_eq!(LifecycleWorkClass::ALL.len(), 13);
+        assert_eq!(LifecycleStageKind::ALL.len(), 22);
+    }
+
+    #[test]
+    fn storage_only_classifier_rejects_a_class_stage_mismatch() {
+        let record = classifier_record(
+            3,
+            LifecycleWorkClass::SignProposal,
+            LifecycleStageKind::FetchBody,
+            Some(TerminalOutcome::Cancelled),
+            DurableContinuation::None,
+        );
+        assert!(matches!(
+            classify_storage_only_record(&record),
+            Err(LifecycleRecoveryAssemblyErrorKind::InvalidDurableRecordShape {
+                ordinal: 3,
+                work_class: LifecycleWorkClass::SignProposal,
+                stage,
+            }) if stage.kind() == LifecycleStageKind::FetchBody
+        ));
+    }
+
+    #[test]
+    fn storage_only_classifier_checks_validate_no_successor_before_terminality() {
+        let record = classifier_record(
+            7,
+            LifecycleWorkClass::Validate,
+            LifecycleStageKind::ValidateBody,
+            Some(TerminalOutcome::Advanced),
+            DurableContinuation::AdvancedNoSuccessor,
+        );
+        let Err(LifecycleRecoveryAssemblyErrorKind::MissingTerminalValidateOutcome {
+            ordinal,
+            stage,
+        }) = classify_storage_only_record(&record)
+        else {
+            panic!("terminal Validate/no-successor lost its typed body-outcome debt")
+        };
+        assert_eq!(ordinal, 7);
+        assert_eq!(stage.kind(), LifecycleStageKind::ValidateBody);
+    }
+
+    #[test]
+    fn storage_only_assembler_source_is_sealed_and_exhaustive() {
+        let source = include_str!("v2_lifecycle_open.rs");
+        let assembler_start = source
+            .find("// STORAGE_ONLY_LIFECYCLE_RECOVERY_ASSEMBLER_BEGIN")
+            .expect("locate storage-only assembler");
+        let assembler_end = source[assembler_start..]
+            .find("// STORAGE_ONLY_LIFECYCLE_RECOVERY_ASSEMBLER_END")
+            .map(|offset| assembler_start + offset)
+            .expect("locate storage-only assembler end");
+        let assembler = &source[assembler_start..assembler_end];
+        for required in [
+            "ledger: LifecycleLedgerV1",
+            "serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut",
+            "validate_storage_only_recovery(&ledger, &serve_payloads)",
+            "_authenticated_ledger: ledger",
+            "_serve_payloads: serve_payloads",
+            "authenticated_ledger: ledger",
+            "assemble_storage_only_with_recovered_wal_sign(",
+            "projection: &AuthenticatedRecoveredWalSignProjection",
+            "assemble_storage_only_recovered_wal_candidates(",
+            "assemble_storage_only_with_body_validation_outcomes(",
+            "assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes(",
+            "detach_terminal_validate_outcome_catalog()",
+            "select_exact_terminal_validate(claim)",
+            "catalog.commit_selected()",
+        ] {
+            assert!(assembler.contains(required), "assembler omitted {required}");
+        }
+        for forbidden in [
+            "CandidateAdmission",
+            "from_authenticated_parts",
+            "into_parts",
+        ] {
+            assert!(
+                !assembler.contains(forbidden),
+                "assembler exposes forbidden raw surface {forbidden}"
+            );
+        }
+
+        let classifier_start = source
+            .find("// STORAGE_ONLY_LIFECYCLE_RECOVERY_CLASSIFIER_BEGIN")
+            .expect("locate storage-only classifier");
+        let classifier_end = source[classifier_start..]
+            .find("// STORAGE_ONLY_LIFECYCLE_RECOVERY_CLASSIFIER_END")
+            .map(|offset| classifier_start + offset)
+            .expect("locate storage-only classifier end");
+        let classifier = &source[classifier_start..classifier_end];
+        for stage in [
+            "SignProposal",
+            "SignPrepareVote",
+            "SignCommitVote",
+            "SignTimeoutVote",
+            "FetchBody",
+            "StoreBody",
+            "ValidateBody",
+            "ApplyDecision",
+            "BroadcastProposal",
+            "BroadcastPrepareVote",
+            "BroadcastCommitVote",
+            "BroadcastPrepareQc",
+            "BroadcastCommitQc",
+            "BroadcastTimeoutVote",
+            "BroadcastTc",
+            "EnterView",
+            "ReportProposalEquivocation",
+            "ReportVoteEquivocation",
+            "ReportTimeoutEquivocation",
+            "ReportInvalidBody",
+            "CertifiedServe",
+            "ProducerTurn",
+        ] {
+            assert!(
+                classifier.contains(&format!("LifecycleStageKind::{stage}")),
+                "classifier omitted stage {stage}"
+            );
+        }
+        assert!(classifier.contains("MissingDurableRecoveryAuthority"));
+        assert!(classifier.contains("MissingTerminalValidateOutcome"));
+        assert!(source.contains("#[cfg(test)]\n    pub(super) fn from_authenticated_parts("));
+        assert!(source.contains("&self.authenticated_ledger == opened"));
+        assert!(source.contains("if !recovery.authenticates_opened_ledger(&ledger)"));
+        assert!(
+            source
+                .contains("projection.repaired_pair_is_exact(ledger.context(), ledger.records())")
+        );
+
+        let production = source
+            .split("\n#[cfg(test)]\nmod recovery_tests {")
+            .next()
+            .expect("lifecycle open has one production prefix");
+        assert_eq!(
+            production
+                .matches("assemble_storage_only_with_recovered_wal_sign(")
+                .count(),
+            1,
+            "post-repair assembly must remain inside the future consuming installed-cut join"
+        );
+        assert_eq!(
+            production
+                .matches("assemble_storage_only_with_body_validation_outcomes(")
+                .count(),
+            1,
+            "terminal Validate storage assembly has one sealed production entry point"
+        );
+    }
+
+    fn terminal_validate_no_successor_ledger()
+    -> (LifecycleLedgerV1, AuthenticatedValidateNoSuccessorRecovery) {
+        let context = LifecycleContext::new(LifecycleDigest::new([0x81; 32]), 9);
+        let replay = super::super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::ValidateBody,
+            4,
+        );
+        let key = replay.key;
+        let causal_root = CausalRoot::new(LifecycleDigest::new([0x83; 32]));
+        let owner = OwnerId::new(causal_root, 1);
+        let stage = replay.stage;
+        let payload = replay.payload;
+        let record = LifecycleLedgerRecordV1::new(
+            key,
+            owner,
+            1,
+            replay.work_class,
+            stage,
+            Some(TerminalOutcome::Advanced),
+            causal_root.digest(),
+            payload,
+            replay.authority,
+            DurableContinuation::AdvancedNoSuccessor,
+        )
+        .expect("construct terminal Validate ledger record");
+        let ledger = LifecycleLedgerV1::new(context, 1, vec![record], BTreeMap::new())
+            .expect("construct exact terminal Validate ledger");
+        let proof = AuthenticatedValidateNoSuccessorRecovery {
+            key,
+            causal_root,
+            reconstruction_source: causal_root.digest(),
+            stage,
+            payload,
+        };
+        (ledger, proof)
+    }
+
+    #[test]
+    fn terminal_validate_no_successor_requires_exact_recovery_coverage() {
+        let (ledger, proof) = terminal_validate_no_successor_ledger();
+        assert!(
+            validate_terminal_validate_no_successor_recovery(&ledger, &BTreeMap::new()).is_err()
+        );
+
+        let exact = BTreeMap::from([(proof.key, proof)]);
+        assert!(validate_terminal_validate_no_successor_recovery(&ledger, &exact).is_ok());
+
+        let mut foreign = proof;
+        foreign.reconstruction_source = LifecycleDigest::new([0x86; 32]);
+        assert!(
+            validate_terminal_validate_no_successor_recovery(
+                &ledger,
+                &BTreeMap::from([(foreign.key, foreign)]),
+            )
+            .is_err()
+        );
+
+        let mut substituted = proof;
+        let DurablePayloadReference::BodyFrame(mut frame) = substituted.payload else {
+            panic!("terminal Validate proof must retain one body frame");
+        };
+        frame.frame = LifecycleDigest::new([0x87; 32]);
+        substituted.payload = DurablePayloadReference::BodyFrame(frame);
+        assert!(
+            validate_terminal_validate_no_successor_recovery(
+                &ledger,
+                &BTreeMap::from([(substituted.key, substituted)]),
+            )
+            .is_err()
+        );
+    }
 }

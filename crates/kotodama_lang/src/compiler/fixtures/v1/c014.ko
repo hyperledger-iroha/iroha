@@ -1,0 +1,6 @@
+
+seiyaku JsonAssetDefinitionTest {
+  view fn run(Json ev) {
+    let _asset = ev.get_asset_definition_id(Name::parse("asset_definition_id"));
+  }
+}

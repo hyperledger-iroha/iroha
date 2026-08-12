@@ -559,7 +559,7 @@ PASSIVE_RECOVERY_RAW_TEST_CHECKS = (
         ),
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
         "quiet_retransmission_tick_services_one_retained_historical_session",
         (
             "quiet_historical_recovery_fixture",

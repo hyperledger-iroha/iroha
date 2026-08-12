@@ -1,9 +1,31 @@
 # Roadmap
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Build-efficiency closeout
+
+- Preserve the reviewed 5,067,263-line first-party Rust baseline and the
+  4,560,536-line ten-percent ceiling. The current 5,018,658-line ratchet leaves
+  a 458,122-line gap; do not redefine the baseline, count moved test code as a
+  physical reduction, or weaken required runtime, security, consensus, SDK, or
+  release-evidence behavior to close it.
+- Add the new source and fixture files to the eventual signed commit, then rerun
+  the strict SDK source-closure guard from the tracked candidate. Keep the
+  staged merge-resolution layer and unstaged optimization layer reviewable
+  until that signed commit is prepared.
+- Obtain the reviewed workspace lockfile that matches the merged manifests
+  without locally regenerating `Cargo.lock`. From that immutable candidate, run
+  the full locked workspace build and tests, strict all-target/all-feature
+  Clippy, ABI and canonical wire goldens, focused Sumeragi/Kura recovery suites,
+  and representative four-validator deterministic consensus tests.
+- Capture comparable `valid: true` cold/warm and compiler-work reports for the
+  baseline and candidate with identical source, lock, toolchain, arguments,
+  environment, and host. Expand compile-unit coverage beyond the current
+  data-model graph to the daemon, CLI, and workspace release lanes before
+  claiming reduced compiler work or runtime performance neutrality.
 
 ## Exact network identity completion
 
@@ -26801,10 +26823,10 @@ versions, and hashes are receipt-bound.
 
 The current release-support suites are green at 11/11 seed-matrix, 189/189
 release-receipt, and 71/71 protected-bootstrap tests. The source-bound release
-gate now requires exactly 5,289 proof-fidelity cases and 26 formal-launcher
+gate now requires exactly 5,291 proof-fidelity cases and 26 formal-launcher
 cases. The source-derived proof-fidelity composition is 5,189 ledger/checker
 cases, 28 pinned-Verus evidence cases, 15 TLC-normalizer cases, eight
-reviewed-Rust closure cases, 29 Native/passive multilane source-contract cases,
+reviewed-Rust closure cases, 31 Native/passive multilane source-contract cases,
 and twenty selected layout/wire cases. It includes
 the new fail-closed mutations for exact-request coalescing, exact-output
 lifecycle source seals, and durable Apply-tombstone monotonicity. Fresh

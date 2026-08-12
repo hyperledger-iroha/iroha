@@ -1,0 +1,11 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn main() authorize("CompilerFixture") {
+  let Secret<int> secret = crypto::private_input(0);
+  let Secret<int> blinding = crypto::private_input(1);
+  let commitment = crypto::valcom(left: secret, right: blinding);
+  crypto::commit_output();
+}
+
+}

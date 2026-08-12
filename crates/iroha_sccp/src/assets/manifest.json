@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "source_commit": "47cdc2d11e90d7034b57ae97fb460005020f037d",
+  "source_slice_hash_scope": "complete Rust constant declaration including trailing LF",
+  "assets": [
+    {
+      "path": "go_rng_cooked_i64le_v1.bin",
+      "byte_length": 4856,
+      "sha256": "1928503b93a563e491119a5889baba73d1605b90b63634c14a408805797a7c7b",
+      "layout": "607 two's-complement i64 words in little-endian order",
+      "source_preimages": [
+        {
+          "path": "../bsc_native.rs",
+          "constant": "GO_RNG_COOKED",
+          "physical_lines": 609,
+          "sha256": "b915841e452dc962de97d8631459e1f7949717c012958d64d2faf4d4784e5e19"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(AssetDefinitionId asset) {
+  ledger::asset::register(asset_definition: Name::parse("bad"), name: "ROSE", scale: 1, mintable: 0);
+}
+
+}

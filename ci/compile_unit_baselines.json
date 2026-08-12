@@ -1,5 +1,6 @@
 {
   "iroha_data_model_lib": {
+    "artifact_identity": "cargo-package-target-features-profile-v2",
     "artifact_scope": "workspace",
     "budget_min_growth": 3,
     "budget_percent": 2,
@@ -10,7 +11,8 @@
       "iroha_data_model"
     ],
     "target": "lib",
-    "toolchain": "1.93.1"
+    "toolchain": "1.93.1",
+    "workspace": false
   },
-  "schema_version": 1
+  "schema_version": 2
 }

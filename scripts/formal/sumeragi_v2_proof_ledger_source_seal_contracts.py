@@ -139,7 +139,7 @@ match role {
     NodeRole::Validator => kura
         .claim_autonomous_lifecycle_process_generation(
             context.network_id,
-            local_peer,
+            local_peer
         )
         .map(Some)
         .map_err(|error| {
@@ -509,17 +509,30 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     "crates/iroha_core/src/sumeragi/v2.rs": (
         "tests/v2_adapter_activation_context.rs",
+        "tests/v2_adapter_04_wal_recovery.rs",
+        "tests/v2_adapter_05_direct_lifecycle.rs",
         "tests/v2_adapter_01_replay_and_registry.rs",
         "tests/v2_adapter_02_view_and_lock_progress.rs",
         "tests/v2_adapter_03_tc_and_terminal_ingress.rs",
     ),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs": (
+        "tests/v2_lifecycle_coordinator_explorer_cases.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs": (
+        "v2_lifecycle_replay_authority_payload_projection.rs",
+        "tests/v2_lifecycle_replay_authority_fixtures.rs",
+        "tests/v2_lifecycle_replay_authority_cases.rs",
+    ),
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs": (
+        "v2_lifecycle_work_registry_validate_recovery.rs",
         "tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs",
         "tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs",
         "tests/v2_lifecycle_work_registry_exact_registry_cases.rs",
+        "tests/v2_lifecycle_work_registry_replay_evidence_cases.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_runtime.rs": (
         "tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs",
+        "tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
         "v2_worker/exact_output_rollover_claim.rs",
@@ -577,6 +590,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "tests/v2_core_terminal_transactionality.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
+        "tests/v2_effects_03_locked_body_and_sidecar.rs",
         "tests/v2_effects_kura_tip_replay.rs",
         "tests/v2_effects_01_view_churn_and_runtime_steps.rs",
         "tests/v2_effects_02_admission_handoffs.rs",
@@ -1035,7 +1049,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "c9c5192fe1e4b7042a76aced8da8fcbafe51d4ed4a0f5ad6608c0b81492864a6"
     ),
     "drive_effects": (
-        "2809b126a882253d9170f8667a953a32b447089df93fc3d20185d5e54a9c52f5"
+        "7493eed9736bb149f208b8990ba5f1b69d1b9aa6645dc8c2ded7c91a87a20255"
     ),
     "pop_fence_dependency_with_ownership": (
         "cf5a9312b16db72176857a1dfad4e7b64636f7bebd7edc7142f052ec3a2e567b"
@@ -1084,7 +1098,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
     "dispatch_one_adapter_deferred": (
-        "d87f6e86b65a0b37be7198f880ad2103a4e99c7eb72d2ad32b376865c40d45da"
+        "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
     "dispatch_one_fence_dependency": (
         "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
@@ -1297,8 +1311,8 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "runtime_ingress_validate_frozen_physical": (
         "51990098b63ed265a79a1617ff4e22c54a1a9eb740efea948df9950ba8f4a1b5"
     ),
-    "runtime_ingress_matches_authenticated": (
-        "3410a728fe3134093e26ff812c98325edf39a6a265fa1d1bf48639ad70710583"
+    "runtime_ingress_exactly_matches_authenticated": (
+        "bd5cfafeb6e9ea0c7a2bd11e92a3cf9e49e8b952bd33586389ff01d751cf8d57"
     ),
     "runtime_ingress_can_merge_downstream": (
         "0a9b6424c76b8d53a6e630431e3e9153d20e25d755abbe38384c5f59e9064553"
@@ -1307,7 +1321,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "55f59286a356c0cd1c47b572db72660dcdedcc40f3946c2e3b62c7eb5c805e92"
     ),
     "runtime_driver_dispatch": (
-        "a20f3f9675cacba345a174bba5fa8370f0f76225f8e3e040971c2d7f15800990"
+        "cc2e5b6036d7e6107d052e4e4bf3b87355fff389b3749b69a7fbf643e63629ad"
     ),
     "runtime_driver_dispatch_deferred": (
         "f80c271a6766106b620e6b0dcbd7fb3a37db63fece634c09818ddb74498202d9"
@@ -1340,7 +1354,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "37ebb9c8e38cf6d1eda06a31a83570c40f45771f0847adea36d3305d7a6d38bc"
     ),
     "reconcile_deferred_runtime_ownership_after_retirement": (
-        "fb99631aa84450b5b8d2d0ebf09b70d0e5e687868d89977bf8334b554e67b572"
+        "dd51598b026d3c5bc97abfcf934b04438ac3f57f1f7577fa6faac4c084953603"
     ),
     "active_leader_wire_runtime_ordinals": (
         "60659f35ec4d592990db68069fb1373bc2af662711fb11a14db1078d8b395dc6"
@@ -1358,7 +1372,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "6fccf9497abffa385d06a6e4f4fd9a0f641745ca51b17f8b6e7dcede26c449eb"
     ),
     "accept_driver_dispatch": (
-        "650c7e0b0c9e1af79cb835080e7ff5f9cdf63a0e80e476586c211e6566e6d9f9"
+        "33e443dbffe23a764940bf525a0a65a2539a96af0616dd954ec0c9ce0906207b"
     ),
     # The public enqueue alias is shared with the timeout-episode inventory;
     # the two admission predicates retain independently reviewed seals.
@@ -1927,7 +1941,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "2a48078e9a5ffd2d2fc9d57011089be27f15e847b346ba2ff1c3b0a4343d4815"
     ),
     "install_view": (
-        "1bfb225d59691d1816c1d6f2a814797cd2eec5da3839f88d3e577556168639f5"
+        "aead33e5d7df955164b9ff8764dc4aefbe46648b96041d5c056fb4f366d3697d"
     ),
     "commit_fetch_completion": (
         "ee63eedba56be13b1af788f81f9f69dc380a834bc0a8d0b36e1de3910f041f92"
@@ -2682,7 +2696,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
 # semantic ordering fragments below so failures identify the violated seam.
 _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "consume_effects": (
-        "57b9d6bea9617195166706b31b032d22c8c4e462d15044cd11be10120984cb4a"
+        "59deecb4349fb6061e438508940ffb96dd4dcc87169db3c23727f18267a3e6ce"
     ),
     "retain_effect_batch": (
         "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
@@ -3283,7 +3297,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
     # Bound after every isolated target-state initialization mutation was
     # rejected through all changed-item aliases.
     "with_driver_and_lifecycle_ordinals": (
-        "c64394eb23aa7a0f2cebc630ac2c35558f6a31b54653d52bf4157cf065179b80"
+        "ba31ffeba2ffc96269ae8d531d5d5a6a01fc80a5af50346e672c54e9fea9bc53"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"

@@ -65,12 +65,19 @@ use super::{
     },
     v2::{
         AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
-        DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource,
+        DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredEventKind,
         DeferredOccurrenceOwnershipEvidence, DeferredRuntimeOwnershipSeal, DeferredServiceEvidence,
-        ProducerContinuationHandoffEvidence, SumeragiV2Adapter, classify_decided_local_proposal,
-        proposal_is_safe_for_lock,
+        LiveWalFrameIdentity, ProducerContinuationHandoffEvidence, RecoveredWalFrameIdentity,
+        RecoveredWalVoteSign, RegisteredPrepareInvalidBodyReportCapability, SignRequest,
+        SumeragiV2Adapter, classify_decided_local_proposal, proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
+    v2_lifecycle_coordinator::{
+        AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
+        DurableValidateReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
+        LocalValidateReplayEvidenceV1, RecoveredWalVoteReplayEvidenceV1,
+        RemoteProposalFetchReplayEvidenceV1,
+    },
 };
 
 #[cfg(test)]
@@ -959,7 +966,11 @@ impl RuntimeIngressOwnershipEvidence {
             )
     }
 
-    fn matches_authenticated(&self, authenticated: &AuthenticatedConsensusMessage) -> bool {
+    /// Match this frozen receiver carrier to one exact authenticated envelope.
+    pub(in crate::sumeragi) fn exactly_matches_authenticated(
+        &self,
+        authenticated: &AuthenticatedConsensusMessage,
+    ) -> bool {
         self.validate_frozen_physical()
             && self.runtime_bytes.as_ref() == authenticated.canonical_wire_bytes().as_slice()
     }
@@ -2285,6 +2296,377 @@ pub(crate) struct RuntimeEffectOwnership {
     owner: RuntimeLifecycleOwner,
     causality: RuntimeEffectCausality,
     binding: Option<RuntimeEffectCandidateBinding>,
+    remote_proposal_fetch_replay: Option<RemoteProposalFetchReplayEvidenceV1>,
+}
+
+/// One-shot runtime-only permit for minting authenticated remote Proposal replay evidence.
+///
+/// Only the production dispatch carrier can construct this value after the
+/// signed envelope and its frozen receiver ownership have met. The non-Copy
+/// marker prevents the same dispatch occurrence from minting two envelopes.
+#[derive(Debug)]
+pub(in crate::sumeragi) struct RemoteProposalReplayMintPermit {
+    _linearity: RemoteProposalReplayMintLinearity,
+}
+
+#[derive(Debug)]
+struct RemoteProposalReplayMintLinearity;
+
+impl Drop for RemoteProposalReplayMintLinearity {
+    fn drop(&mut self) {}
+}
+
+impl RemoteProposalReplayMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: RemoteProposalReplayMintLinearity,
+        }
+    }
+}
+
+/// Exact authenticated Proposal plus its frozen direct-ingress carrier.
+///
+/// This value exists only between adapter dispatch and exact effect binding,
+/// or in the bounded deferred-ordinal map while the same Proposal waits behind
+/// reducer debt. It exposes no envelope, ingress, or scalar parts.
+struct AuthenticatedRemoteProposalDispatchOrigin {
+    authenticated: AuthenticatedConsensusMessage,
+    ingress: RuntimeIngressOwnershipEvidence,
+}
+
+impl AuthenticatedRemoteProposalDispatchOrigin {
+    fn new(
+        authenticated: AuthenticatedConsensusMessage,
+        ingress: RuntimeIngressOwnershipEvidence,
+    ) -> Option<Self> {
+        if !matches!(
+            authenticated.payload(),
+            wire::ConsensusMessageV2Payload::Proposal(_)
+        ) || !ingress.exactly_matches_authenticated(&authenticated)
+        {
+            return None;
+        }
+        Some(Self {
+            authenticated,
+            ingress,
+        })
+    }
+
+    fn rebind_retained_ingress(self, retained: RuntimeIngressOwnershipEvidence) -> Option<Self> {
+        if !retained.exactly_matches_authenticated(&self.authenticated) {
+            return None;
+        }
+        if self.ingress != retained {
+            let mut merged = self.ingress.clone();
+            merged.merge_downstream(retained.clone()).ok()?;
+            if merged != retained {
+                return None;
+            }
+        }
+        Some(Self {
+            authenticated: self.authenticated,
+            ingress: retained,
+        })
+    }
+
+    fn merge_retained(
+        self,
+        incumbent: Self,
+        retained: RuntimeIngressOwnershipEvidence,
+    ) -> Option<Self> {
+        if !self
+            .authenticated
+            .same_wire_envelope(&incumbent.authenticated)
+            || incumbent
+                .rebind_retained_ingress(retained.clone())
+                .is_none()
+        {
+            return None;
+        }
+        self.rebind_retained_ingress(retained)
+    }
+
+    fn bind_exact_fetch(
+        self,
+        effect: &AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Option<RemoteProposalFetchReplayEvidenceV1> {
+        RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
+            RemoteProposalReplayMintPermit::new(),
+            self.authenticated,
+            self.ingress,
+            effect,
+            pending,
+        )
+    }
+}
+
+/// One-shot runtime-only permit for minting local pre-intent replay authority.
+///
+/// Only the serialized active-view producer cut can construct this value. Its
+/// private non-Copy marker keeps an exact scheduling owner from being reused to
+/// manufacture a second replay seal.
+#[derive(Debug)]
+pub(in crate::sumeragi) struct LocalBodyReplayMintPermit {
+    _linearity: LocalBodyReplayMintLinearity,
+}
+
+#[derive(Debug)]
+struct LocalBodyReplayMintLinearity;
+
+impl Drop for LocalBodyReplayMintLinearity {
+    fn drop(&mut self) {}
+}
+
+impl LocalBodyReplayMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: LocalBodyReplayMintLinearity,
+        }
+    }
+}
+
+/// Linear composite owning both one local Store capability and its replay seal.
+///
+/// Cloneable Store/Validate scheduling metadata may be projected only after an
+/// exact-effect check; the non-decodable replay seal itself stays inside this
+/// composite until the body store returns its exact durable receipt.
+#[derive(Debug)]
+#[must_use = "local proposal ownership must remain attached to its pre-intent replay seal"]
+pub(crate) struct LocalProposalEffectOwnership {
+    ownership: RuntimeEffectOwnership,
+    replay: LocalBodyPreIntentReplaySealV1,
+}
+
+/// Inert exact key for one owned `LocalProposalReady` runtime command.
+///
+/// The key is not replay authority: it only lets the executor keep a
+/// non-Clone authority beside the cloneable FIFO command and later prove that
+/// the exact command, causal root, and ProposalIntent successor met again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct LocalProposalReadyCommandIdentity {
+    tag: EventTag,
+    command_hash: iroha_crypto::Hash,
+    causal_lifecycle_key: iroha_crypto::Hash,
+    projection_hash: iroha_crypto::Hash,
+}
+
+fn local_proposal_ready_command_projection_hash(
+    identity: &LocalProposalReadyCommandIdentity,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:local-proposal-ready-command:v1");
+    append_runtime_identity_tag(&mut projection, identity.tag);
+    append_runtime_identity_field(&mut projection, identity.command_hash.as_ref());
+    append_runtime_identity_field(&mut projection, identity.causal_lifecycle_key.as_ref());
+    iroha_crypto::Hash::new(projection)
+}
+
+impl LocalProposalReadyCommandIdentity {
+    /// Derive the inert key only from an exact owned Validate completion.
+    pub(in crate::sumeragi) fn from_exact_handoff(
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+        durable_receipt: &DurableBodyReceipt,
+        validated_receipt: &ValidatedBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Option<Self> {
+        let predecessor = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let successor = BodyPipelineCompletionEvidence::LocalProposalReady {
+            manifest: manifest.clone(),
+            durable_receipt: durable_receipt.clone(),
+            validated_receipt: validated_receipt.clone(),
+        };
+        if !ownership.exactly_authorizes_body_pipeline_successor(&predecessor, tag, &successor) {
+            return None;
+        }
+        let command = AdapterCommand::LocalProposalReady {
+            manifest: manifest.clone(),
+            durable_receipt: durable_receipt.clone(),
+            validated_receipt: validated_receipt.clone(),
+        };
+        let command = command.exact_runtime_command_identity();
+        if !command.validate_exact() {
+            return None;
+        }
+        let mut identity = Self {
+            tag,
+            command_hash: command.canonical_hash,
+            causal_lifecycle_key: ownership.owner().causal_origin().lifecycle_key,
+            projection_hash: iroha_crypto::Hash::new([]),
+        };
+        identity.projection_hash = local_proposal_ready_command_projection_hash(&identity);
+        identity.validate_exact().then_some(identity)
+    }
+
+    fn validate_exact(&self) -> bool {
+        self.projection_hash == local_proposal_ready_command_projection_hash(self)
+    }
+
+    /// Compare the cloneable FIFO command with its retained Validate owner.
+    pub(in crate::sumeragi) fn exactly_matches_handoff(
+        &self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+        durable_receipt: &DurableBodyReceipt,
+        validated_receipt: &ValidatedBodyReceipt,
+        validate_pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        let command = AdapterCommand::LocalProposalReady {
+            manifest: manifest.clone(),
+            durable_receipt: durable_receipt.clone(),
+            validated_receipt: validated_receipt.clone(),
+        }
+        .exact_runtime_command_identity();
+        let validate_effect = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        self.validate_exact()
+            && self.tag == tag
+            && command.validate_exact()
+            && self.command_hash == command.canonical_hash
+            && self.causal_lifecycle_key == validate_pending.causal_lifecycle_key
+            && validate_pending.exactly_binds_adapter_effect(&validate_effect)
+    }
+
+    /// Match only the exact ProposalIntent successor of this queued handoff.
+    pub(in crate::sumeragi) fn exactly_matches_proposal_intent(
+        &self,
+        validate_pending: &PendingRuntimeEffectBinding,
+        manifest: &wire::PayloadManifest,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Proposal(proposal),
+        } = effect
+        else {
+            return false;
+        };
+        let validate_effect = AdapterEffect::ValidateBody {
+            tag: self.tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        self.validate_exact()
+            && *tag == self.tag
+            && proposal.signature.is_empty()
+            && proposal.round == manifest.round
+            && proposal.subject == manifest.subject
+            && proposal.manifest == *manifest
+            && validate_pending.exactly_binds_adapter_effect(&validate_effect)
+            && validate_pending.causal_lifecycle_key == self.causal_lifecycle_key
+            && ownership.exactly_binds_adapter_effect(effect)
+            && ownership.owner().causal_origin().lifecycle_key == self.causal_lifecycle_key
+    }
+}
+
+impl LocalProposalEffectOwnership {
+    fn from_exact_assemble_body(
+        ownership: RuntimeEffectOwnership,
+        effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+    ) -> Option<Self> {
+        let pending = ownership.pending_adapter_effect_binding(effect)?;
+        let replay = LocalBodyPreIntentReplaySealV1::from_exact_assemble_body(
+            LocalBodyReplayMintPermit::new(),
+            effect,
+            pending,
+            manifest,
+        )?;
+        Some(Self { ownership, replay })
+    }
+
+    /// Project scheduling metadata only for this composite's exact Store work.
+    pub(in crate::sumeragi) fn exact_store_task_ownership(
+        &self,
+        effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+    ) -> Option<RuntimeEffectOwnership> {
+        (self.ownership.exactly_binds_adapter_effect(effect)
+            && self.replay.exactly_matches_store(effect, manifest))
+        .then(|| self.ownership.clone())
+    }
+
+    /// Compare a retained Store task without exposing either authority part.
+    pub(in crate::sumeragi) fn exactly_matches_store_task(
+        &self,
+        effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        self.ownership == *ownership
+            && self.ownership.exactly_binds_adapter_effect(effect)
+            && self.replay.exactly_matches_store(effect, manifest)
+    }
+
+    /// Preflight the fixed Store-to-Validate projection without releasing the seal.
+    pub(in crate::sumeragi) fn exactly_projects_validate_task(
+        &self,
+        store_effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+        receipt: &DurableBodyReceipt,
+        validate_effect: &AdapterEffect,
+        validate_ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        let Some(validate_pending) =
+            validate_ownership.pending_adapter_effect_binding(validate_effect)
+        else {
+            return false;
+        };
+        self.replay.exactly_projects_validate(
+            store_effect,
+            manifest,
+            receipt,
+            validate_effect,
+            &validate_pending,
+        )
+    }
+
+    /// Consume the composite through the exact durable Store-to-Validate cut.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn project_exact_validate(
+        self,
+        store_effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+        receipt: &DurableBodyReceipt,
+        validate_effect: &AdapterEffect,
+        validate_ownership: &RuntimeEffectOwnership,
+    ) -> Result<LocalValidateReplayEvidenceV1, Self> {
+        let Some(validate_pending) =
+            validate_ownership.pending_adapter_effect_binding(validate_effect)
+        else {
+            return Err(self);
+        };
+        let Self { ownership, replay } = self;
+        match replay.bind_and_project_validate(
+            store_effect,
+            manifest,
+            receipt,
+            validate_effect,
+            &validate_pending,
+        ) {
+            Ok(evidence) => Ok(evidence),
+            Err(replay) => Err(Self { ownership, replay }),
+        }
+    }
+
+    /// Construct the same closed composite for production-shaped executor tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        ownership: RuntimeEffectOwnership,
+        effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+    ) -> Option<Self> {
+        Self::from_exact_assemble_body(ownership, effect, manifest)
+    }
 }
 
 /// Move-only, ordinal-free authority for one exact adapter effect awaiting
@@ -2305,6 +2687,209 @@ pub(crate) struct PendingRuntimeEffectBinding {
     candidate_statement: Option<RuntimeCandidateSemanticStatement>,
     candidate_semantic_identity: Option<iroha_crypto::Hash>,
     projection_hash: iroha_crypto::Hash,
+}
+
+/// Move-only restart successor derived from one exact recovered WAL vote.
+///
+/// The consuming projection retains the complete verified WAL
+/// sequence/persistence/frame-hash identity, the authenticated PrepareQC needed
+/// by a recovered Commit vote, the exact unsigned `Sign` effect, the exact
+/// Validate predecessor effect, and both ordinal-free causal bindings. It
+/// cannot be cloned or minted from caller-supplied vote coordinates.
+#[derive(Debug)]
+#[must_use = "a recovered WAL vote successor must be joined to startup lifecycle recovery"]
+pub(crate) struct RecoveredWalVoteSuccessor {
+    wal_identity: RecoveredWalFrameIdentity,
+    replay_evidence: RecoveredWalVoteReplayEvidenceV1,
+    predecessor_effect: AdapterEffect,
+    predecessor_pending: PendingRuntimeEffectBinding,
+    effect: AdapterEffect,
+    pending: PendingRuntimeEffectBinding,
+    _prepare_certificate: Option<wire::QuorumCertificate>,
+}
+
+/// Unforgeable one-shot permit for the recovered-WAL candidate projection seam.
+///
+/// Its field and constructor are private to this runtime module. Replay and
+/// ledger evidence accept it only so separated evidence/effect parts cannot
+/// invoke their candidate constructors.
+pub(in crate::sumeragi) struct RecoveredWalCandidateProjectionPermit {
+    _linearity: RecoveredWalCandidateProjectionLinearity,
+}
+
+struct RecoveredWalCandidateProjectionLinearity;
+
+impl Drop for RecoveredWalCandidateProjectionLinearity {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredWalCandidateProjectionPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredWalCandidateProjectionLinearity,
+        }
+    }
+}
+
+/// Ownership-preserving failure from the consuming recovered-WAL projection.
+#[must_use = "failed recovered WAL projection retains its move-only successor"]
+pub(crate) enum RecoveredWalVoteProjectionFailure {
+    /// The opaque WAL frame identity no longer matched its persisted locator.
+    InvalidWalIdentity(RecoveredWalVoteSuccessor),
+    /// The canonical replay evidence no longer matched the retained Sign vote.
+    InvalidReplayEvidence(RecoveredWalVoteSuccessor),
+    /// The selected persisted or durable Validate parent did not match.
+    Parent(RecoveredWalVoteSuccessor),
+    /// The recovered WAL evidence could not authorize its exact Sign child.
+    Child(RecoveredWalVoteSuccessor),
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredWalVoteSuccessor {
+    /// Revalidate the complete opaque WAL-frame identity retained by this successor.
+    const fn wal_identity_is_exact(&self) -> bool {
+        self.wal_identity.is_exact()
+    }
+
+    /// Revalidate the inert canonical replay envelope against the retained Sign effect.
+    pub(in crate::sumeragi) fn replay_evidence_is_exact(&self) -> bool {
+        let AdapterEffect::Sign {
+            tag,
+            request: super::v2::SignRequest::Vote(vote),
+        } = &self.effect
+        else {
+            return false;
+        };
+        self.replay_evidence
+            .exactly_matches_recovered_vote(self.wal_identity, *tag, vote)
+    }
+
+    /// Consume this successor through an exact persisted ledger-parent seal.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_ledger_lifecycle_projection(
+        self,
+        verified: &VerifiedHeightContext,
+        parent: &AuthenticatedRecoveredWalValidateLedgerParent,
+    ) -> Result<AuthenticatedRecoveredWalVoteProjection, RecoveredWalVoteProjectionFailure> {
+        if !self.wal_identity_is_exact() {
+            return Err(RecoveredWalVoteProjectionFailure::InvalidWalIdentity(self));
+        }
+        if !self.replay_evidence_is_exact() {
+            return Err(RecoveredWalVoteProjectionFailure::InvalidReplayEvidence(
+                self,
+            ));
+        }
+        let Some(parent_candidate) = parent.project_recovered_candidate(
+            RecoveredWalCandidateProjectionPermit::new(),
+            verified,
+            &self.predecessor_effect,
+            &self.predecessor_pending,
+        ) else {
+            return Err(RecoveredWalVoteProjectionFailure::Parent(self));
+        };
+        let Some(child_candidate) = self.replay_evidence.project_recovered_vote_candidate(
+            RecoveredWalCandidateProjectionPermit::new(),
+            verified,
+            self.wal_identity,
+            &self.effect,
+            &self.pending,
+        ) else {
+            return Err(RecoveredWalVoteProjectionFailure::Child(self));
+        };
+        Ok(
+            AuthenticatedRecoveredWalVoteProjection::from_runtime_projection(
+                RecoveredWalCandidateProjectionPermit::new(),
+                self,
+                parent_candidate,
+                child_candidate,
+            ),
+        )
+    }
+
+    /// Consume this successor through its retained durable Validate origin.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_durable_lifecycle_projection(
+        self,
+        verified: &VerifiedHeightContext,
+        receipt: &DurableBodyReceipt,
+        evidence: &DurableValidateReplayEvidenceV1,
+    ) -> Result<AuthenticatedRecoveredWalVoteProjection, RecoveredWalVoteProjectionFailure> {
+        if !self.wal_identity_is_exact() {
+            return Err(RecoveredWalVoteProjectionFailure::InvalidWalIdentity(self));
+        }
+        if !self.replay_evidence_is_exact() {
+            return Err(RecoveredWalVoteProjectionFailure::InvalidReplayEvidence(
+                self,
+            ));
+        }
+        let Some(parent_candidate) = evidence.project_recovered_validate_candidate(
+            RecoveredWalCandidateProjectionPermit::new(),
+            verified,
+            &self.predecessor_effect,
+            receipt,
+            &self.predecessor_pending,
+        ) else {
+            return Err(RecoveredWalVoteProjectionFailure::Parent(self));
+        };
+        let Some(child_candidate) = self.replay_evidence.project_recovered_vote_candidate(
+            RecoveredWalCandidateProjectionPermit::new(),
+            verified,
+            self.wal_identity,
+            &self.effect,
+            &self.pending,
+        ) else {
+            return Err(RecoveredWalVoteProjectionFailure::Child(self));
+        };
+        Ok(
+            AuthenticatedRecoveredWalVoteProjection::from_runtime_projection(
+                RecoveredWalCandidateProjectionPermit::new(),
+                self,
+                parent_candidate,
+                child_candidate,
+            ),
+        )
+    }
+
+    /// Revalidate both retained effects against their opaque pending bindings.
+    pub(in crate::sumeragi) fn concrete_pair_is_exact(&self) -> bool {
+        self.predecessor_pending
+            .exactly_binds_adapter_effect(&self.predecessor_effect)
+            && self.pending.exactly_binds_adapter_effect(&self.effect)
+    }
+
+    /// Match one validated body to the retained Validate-to-Sign coordinates.
+    pub(in crate::sumeragi) fn concrete_pair_matches_validation(
+        &self,
+        validated: &ValidatedBodyReceipt,
+    ) -> bool {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: validate_tag,
+                round: validate_round,
+                subject: validate_subject,
+            },
+            AdapterEffect::Sign {
+                tag: sign_tag,
+                request: super::v2::SignRequest::Vote(vote),
+            },
+        ) = (&self.predecessor_effect, &self.effect)
+        else {
+            return false;
+        };
+        self.concrete_pair_is_exact()
+            && validate_tag == sign_tag
+            && validated.durable().context_id() == validate_round.context_id
+            && validated.durable().round() == *validate_round
+            && validated.durable().subject() == *validate_subject
+            && vote.proposal_round == *validate_round
+            && vote.subject == *validate_subject
+            && vote.execution_commitment == validated.execution_commitment()
+    }
+
+    /// Borrow only the child effect needed by closed registry installation.
+    pub(in crate::sumeragi) const fn installed_child_effect(&self) -> &AdapterEffect {
+        &self.effect
+    }
 }
 
 fn pending_runtime_effect_binding_projection_hash(
@@ -2332,7 +2917,152 @@ fn pending_runtime_effect_binding_projection_hash(
     iroha_crypto::Hash::new(projection)
 }
 
+/// Reconstruct the exact ordinal-free Validate-to-Sign successor named by a
+/// ledger-authenticated parent and the adapter-authenticated final WAL vote.
+///
+/// No legacy runtime owner or lifecycle ordinal participates. The causal key
+/// comes only from the opaque LedgerV1 projection, while the inherited body
+/// statement is rebuilt from the exact recovered vote and the ledger's
+/// ordinary-versus-Prepare authority bit. Failure returns the WAL authority
+/// intact and exposes no predecessor effect or pending binding.
+#[cfg_attr(not(test), allow(dead_code))]
+#[allow(clippy::result_large_err)]
+pub(crate) fn reconstruct_recovered_wal_vote_successor(
+    parent: &AuthenticatedRecoveredWalValidateLedgerParent,
+    recovered: RecoveredWalVoteSign,
+) -> Result<RecoveredWalVoteSuccessor, RecoveredWalVoteSign> {
+    if !parent.exactly_matches_recovered_vote(&recovered) {
+        return Err(recovered);
+    }
+    let vote = recovered.vote();
+    let predecessor = AdapterEffect::ValidateBody {
+        tag: recovered.tag(),
+        round: vote.proposal_round,
+        subject: vote.subject,
+    };
+    let inherited = RuntimeCandidateSemanticStatement::new(
+        vote.round,
+        vote.proposal_round,
+        Some(vote.subject),
+        parent
+            .inherited_prepare_authority()
+            .then_some(wire::GlobalPhase::Prepare),
+        parent
+            .inherited_prepare_authority()
+            .then_some(vote.execution_commitment),
+    );
+    let Some(candidate) =
+        production_adapter_effect_candidate_binding(&predecessor, Some(&inherited))
+            .ok()
+            .flatten()
+    else {
+        return Err(recovered);
+    };
+    if candidate.statement != Some(inherited) {
+        return Err(recovered);
+    }
+    let effect_kind = production_adapter_effect_kind(&predecessor);
+    let effect_identity = runtime_effect_identity_hash(
+        effect_kind,
+        &production_adapter_effect_semantic_identity(&predecessor),
+    );
+    let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+        candidate.kind,
+        &candidate.semantic_identity,
+    ));
+    let causal_lifecycle_key = parent.runtime_causal_lifecycle_key();
+    let projection_hash = pending_runtime_effect_binding_projection_hash(
+        &causal_lifecycle_key,
+        effect_kind,
+        &effect_identity,
+        candidate.kind,
+        candidate.statement,
+        candidate_semantic_identity.as_ref(),
+    );
+    let pending = PendingRuntimeEffectBinding {
+        causal_lifecycle_key,
+        effect_kind,
+        effect_identity,
+        candidate_kind: candidate.kind,
+        candidate_statement: candidate.statement,
+        candidate_semantic_identity,
+        projection_hash,
+    };
+    if !pending.validate_exact(&predecessor) {
+        return Err(recovered);
+    }
+    pending
+        .project_recovered_wal_vote_successor(&predecessor, recovered)
+        .map_err(|(_pending, recovered)| recovered)
+}
+
 impl PendingRuntimeEffectBinding {
+    /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
+    ///
+    /// The causal key is derived from the non-decodable post-fsync frame seal
+    /// and complete effect identity. `Apply` is deliberately excluded because
+    /// its pending owner must instead project from the retained Validate
+    /// predecessor after the durable body receipt joins the WAL source.
+    pub(super) fn from_exact_live_wal_append(
+        wal_identity: &LiveWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !wal_identity.is_exact()
+            || !matches!(
+                effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Proposal(_)
+                        | SignRequest::Vote(_)
+                        | SignRequest::TimeoutVote(_),
+                    ..
+                } | AdapterEffect::EnterView { .. }
+            )
+        {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(effect);
+        let semantic_identity = production_adapter_effect_semantic_identity(effect);
+        let effect_identity = runtime_effect_identity_hash(effect_kind, &semantic_identity);
+        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()?;
+        let (candidate_kind, candidate_statement, candidate_semantic_identity) =
+            candidate.map_or((RUNTIME_CANDIDATE_KIND_NONE, None, None), |candidate| {
+                (
+                    candidate.kind,
+                    candidate.statement,
+                    Some(runtime_effect_candidate_semantic_hash(
+                        candidate.kind,
+                        &candidate.semantic_identity,
+                    )),
+                )
+            });
+        let mut causal_preimage = Vec::new();
+        causal_preimage.extend_from_slice(b"iroha:sumeragi:v2:live-wal-pending-root:v1");
+        append_runtime_identity_field(
+            &mut causal_preimage,
+            &wal_identity.persisted_locator().encode(),
+        );
+        append_runtime_identity_field(&mut causal_preimage, &semantic_identity);
+        let causal_lifecycle_key = iroha_crypto::Hash::new(causal_preimage);
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate_kind,
+            candidate_statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let pending = Self {
+            causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind,
+            candidate_statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        pending.validate_exact(effect).then_some(pending)
+    }
+
     /// Borrow the immutable runtime causal-origin lifecycle key.
     pub(crate) const fn causal_lifecycle_key(&self) -> &iroha_crypto::Hash {
         &self.causal_lifecycle_key
@@ -2429,6 +3159,81 @@ impl PendingRuntimeEffectBinding {
             return None;
         };
         if predecessor_tag != successor_tag
+            || predecessor_round != successor_round
+            || predecessor_subject != successor_subject
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
+        if candidate.statement != Some(inherited) {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+
+    /// Project the exact ordinary Proposal-Fetch successor into Store.
+    ///
+    /// The Proposal signature and receiver ingress remain in the opaque replay
+    /// envelope; this method moves only the already-sealed runtime causal
+    /// binding. Certified Fetches are deliberately excluded so the two replay
+    /// origins cannot be interchanged by matching body coordinates.
+    pub(in crate::sumeragi) fn project_proposal_fetch_store_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::FetchBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+                manifest: Some(_),
+                certified_sources,
+                certificate: None,
+            },
+            AdapterEffect::StoreBody {
+                tag: successor_tag,
+                round: successor_round,
+                subject: successor_subject,
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if !certified_sources.is_empty()
+            || predecessor_tag != successor_tag
             || predecessor_round != successor_round
             || predecessor_subject != successor_subject
             || !self.validate_exact(predecessor)
@@ -2623,6 +3428,517 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
+
+    /// Project the exact Prepare-vote `Sign` successor of one successfully
+    /// completed ordinary `ValidateBody`.
+    ///
+    /// The Validate predecessor must still carry no quorum authority. The
+    /// unsigned vote acquires Prepare authority for the exact inherited round,
+    /// proposal round, subject, tag, and newly validated execution commitment.
+    /// A Prepare- or Commit-authorized predecessor is rejected because those
+    /// reducer states have different closed continuations. The returned value
+    /// remains inert deterministic data; only the future sealed Validate
+    /// transaction may pair it with the adapter-produced signing request.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn project_validate_sign_prepare_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::Sign {
+                tag: successor_tag,
+                request: super::v2::SignRequest::Vote(vote),
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if predecessor_tag != successor_tag
+            || successor_tag.height() != vote.round.height
+            || successor_tag.view() != vote.round.view
+            || vote.phase != wire::GlobalPhase::Prepare
+            || vote.proposal_round != *predecessor_round
+            || vote.subject != *predecessor_subject
+            || !vote.signature.is_empty()
+            || vote.execution_commitment.validate().is_err()
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
+        let successor_statement = candidate.statement?;
+        if inherited.phase.is_some()
+            || inherited.execution_commitment.is_some()
+            || successor_statement.phase != Some(wire::GlobalPhase::Prepare)
+            || successor_statement.execution_commitment.is_none()
+            || inherited.context_id != successor_statement.context_id
+            || inherited.round != successor_statement.round
+            || inherited.proposal_round != successor_statement.proposal_round
+            || inherited.subject != successor_statement.subject
+        {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+
+    /// Project the exact Commit-vote `Sign` successor of one successfully
+    /// completed Prepare-authorized `ValidateBody`.
+    ///
+    /// The inherited candidate statement is the route-neutral proof that the
+    /// body-stage owner already carried a registered Prepare certificate. The
+    /// unsigned Commit vote must preserve every coordinate and the execution
+    /// commitment while monotonically promoting that Prepare authority.
+    ///
+    /// TODO: a legitimate ordinary Validate may observe a concurrently
+    /// registered PrepareQC after this binding was minted. Keep that case
+    /// fail-closed until the sealed adapter/registry join can supply a
+    /// non-forgeable registered-carrier refinement capability.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn project_validate_sign_commit_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::Sign {
+                tag: successor_tag,
+                request: super::v2::SignRequest::Vote(vote),
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if predecessor_tag != successor_tag
+            || successor_tag.height() != vote.round.height
+            || successor_tag.view() != vote.round.view
+            || vote.phase != wire::GlobalPhase::Commit
+            || vote.proposal_round != *predecessor_round
+            || vote.subject != *predecessor_subject
+            || !vote.signature.is_empty()
+            || vote.execution_commitment.validate().is_err()
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
+        let successor_statement = candidate.statement?;
+        if inherited.commit_refinement_to(successor_statement)
+            != Some(RuntimeCandidateAuthorityRefinement::PromotePrepare)
+        {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+
+    /// Consume one adapter-authenticated WAL vote into its exact Validate
+    /// successor binding.
+    ///
+    /// Prepare replay uses the ordinary Validate-to-Prepare projection. Commit
+    /// replay first accepts the existing inherited-Prepare projection, then
+    /// admits the one restart-only refinement where an ordinary Validate was
+    /// already in flight when the adapter durably registered the exact
+    /// PrepareQC carried by `LockAndCommit`. The move-only WAL authority is
+    /// consumed together with the predecessor binding on success and both are
+    /// returned intact on failure, so neither authority can mint more than one
+    /// usable successor.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn project_recovered_wal_vote_successor(
+        self,
+        predecessor: &AdapterEffect,
+        recovered: RecoveredWalVoteSign,
+    ) -> Result<RecoveredWalVoteSuccessor, (Self, RecoveredWalVoteSign)> {
+        if !recovered.replay_evidence_is_exact() {
+            return Err((self, recovered));
+        }
+        let successor = AdapterEffect::Sign {
+            tag: recovered.tag(),
+            request: super::v2::SignRequest::Vote(recovered.vote().clone()),
+        };
+        let pending = match recovered.vote().phase {
+            wire::GlobalPhase::Prepare => {
+                if recovered.prepare_certificate().is_some() {
+                    None
+                } else {
+                    self.project_validate_sign_prepare_successor(predecessor, &successor)
+                }
+            }
+            wire::GlobalPhase::Commit => self
+                .project_validate_sign_commit_successor(predecessor, &successor)
+                .or_else(|| {
+                    self.project_recovered_ordinary_validate_commit_successor(
+                        predecessor,
+                        &successor,
+                        recovered.prepare_certificate()?,
+                    )
+                }),
+        };
+        let Some(pending) = pending else {
+            return Err((self, recovered));
+        };
+        let wal_identity = recovered.wal_identity();
+        let replay_evidence = recovered.replay_evidence().clone();
+        let prepare_certificate = recovered.prepare_certificate().cloned();
+        drop(recovered);
+        Ok(RecoveredWalVoteSuccessor {
+            wal_identity,
+            replay_evidence,
+            predecessor_effect: predecessor.clone(),
+            predecessor_pending: self,
+            effect: successor,
+            pending,
+            _prepare_certificate: prepare_certificate,
+        })
+    }
+
+    fn project_recovered_ordinary_validate_commit_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+        prepare: &wire::QuorumCertificate,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::Sign {
+                tag: successor_tag,
+                request: super::v2::SignRequest::Vote(vote),
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if predecessor_tag != successor_tag
+            || successor_tag.height() != vote.round.height
+            || successor_tag.view() != vote.round.view
+            || vote.phase != wire::GlobalPhase::Commit
+            || vote.proposal_round != *predecessor_round
+            || vote.subject != *predecessor_subject
+            || !vote.signature.is_empty()
+            || vote.execution_commitment.validate().is_err()
+            || prepare.phase != wire::GlobalPhase::Prepare
+            || prepare.round != vote.round
+            || prepare.proposal_round != vote.proposal_round
+            || prepare.subject != vote.subject
+            || prepare.execution_commitment != vote.execution_commitment
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        if inherited.phase.is_some()
+            || inherited.execution_commitment.is_some()
+            || inherited.context_id != vote.round.context_id
+            || inherited.round != vote.round
+            || inherited.proposal_round != vote.proposal_round
+            || inherited.subject != Some(vote.subject)
+        {
+            return None;
+        }
+        let registered_prepare = RuntimeCandidateSemanticStatement::new(
+            vote.round,
+            vote.proposal_round,
+            Some(vote.subject),
+            Some(wire::GlobalPhase::Prepare),
+            Some(vote.execution_commitment),
+        );
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&registered_prepare))
+                .ok()??;
+        let successor_statement = candidate.statement?;
+        if registered_prepare.commit_refinement_to(successor_statement)
+            != Some(RuntimeCandidateAuthorityRefinement::PromotePrepare)
+        {
+            return None;
+        }
+
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+
+    /// Project the exact invalid-certified-body report emitted by one failed
+    /// Prepare-authorized `ValidateBody` completion.
+    ///
+    /// Reports are not scheduler candidates, so the successor deliberately
+    /// carries no candidate statement. Its complete certificate bytes remain
+    /// bound by the concrete effect identity, while the certificate's phase,
+    /// round, proposal round, subject, and commitment must exactly match the
+    /// registered Prepare-carrier semantics inherited by the predecessor.
+    ///
+    /// An ordinary Validate which observed Prepare only after installation is
+    /// handled by the separate move-only registered-Prepare projection below;
+    /// this inherited path never accepts that refinement implicitly.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn project_validate_report_invalid_certified_body_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::ReportInvalidCertifiedBody {
+                subject: successor_subject,
+                certificate,
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if predecessor_tag.height() != certificate.round.height
+            || predecessor_tag.view() != certificate.round.view
+            || certificate.phase != wire::GlobalPhase::Prepare
+            || certificate.round != *predecessor_round
+            || certificate.proposal_round != *predecessor_round
+            || certificate.subject != *predecessor_subject
+            || successor_subject != predecessor_subject
+            || certificate.execution_commitment.validate().is_err()
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        let registered_carrier = RuntimeCandidateSemanticStatement::new(
+            certificate.round,
+            certificate.proposal_round,
+            Some(certificate.subject),
+            Some(certificate.phase),
+            Some(certificate.execution_commitment),
+        );
+        if inherited != registered_carrier
+            || inherited.phase != Some(wire::GlobalPhase::Prepare)
+            || production_adapter_effect_candidate_binding(successor, Some(&inherited))
+                .ok()?
+                .is_some()
+        {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            RUNTIME_CANDIDATE_KIND_NONE,
+            None,
+            None,
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
+            candidate_statement: None,
+            candidate_semantic_identity: None,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+
+    /// Project the exact invalid-body report observed after an ordinary
+    /// Validate owner was installed but before its matching PrepareQC arrived.
+    ///
+    /// The registered-Prepare capability is move-only and can be minted only
+    /// by the fixed adapter rejection preview after checking its post-step
+    /// registry. It supplies no statement, certificate, effect, or pending
+    /// parts; this projection still derives every child field internally.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn project_validate_report_invalid_certified_body_with_registered_prepare(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+        registered: &RegisteredPrepareInvalidBodyReportCapability,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::ReportInvalidCertifiedBody {
+                subject: successor_subject,
+                certificate,
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if !registered.exactly_matches_report(successor)
+            || predecessor_tag.height() != certificate.round.height
+            || predecessor_tag.view() != certificate.round.view
+            || certificate.phase != wire::GlobalPhase::Prepare
+            || certificate.round != *predecessor_round
+            || certificate.proposal_round != *predecessor_round
+            || certificate.subject != *predecessor_subject
+            || successor_subject != predecessor_subject
+            || certificate.execution_commitment.validate().is_err()
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        if inherited.phase.is_some()
+            || inherited.execution_commitment.is_some()
+            || inherited.context_id != certificate.round.context_id
+            || inherited.round != certificate.round
+            || inherited.proposal_round != certificate.proposal_round
+            || inherited.subject != Some(certificate.subject)
+        {
+            return None;
+        }
+        let registered_carrier = RuntimeCandidateSemanticStatement::new(
+            certificate.round,
+            certificate.proposal_round,
+            Some(certificate.subject),
+            Some(wire::GlobalPhase::Prepare),
+            Some(certificate.execution_commitment),
+        );
+        if production_adapter_effect_candidate_binding(successor, Some(&registered_carrier))
+            .ok()?
+            .is_some()
+        {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            RUNTIME_CANDIDATE_KIND_NONE,
+            None,
+            None,
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
+            candidate_statement: None,
+            candidate_semantic_identity: None,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
 }
 
 impl PartialEq for RuntimeEffectOwnership {
@@ -2643,6 +3959,7 @@ impl RuntimeEffectOwnership {
             owner,
             causality: RuntimeEffectCausality::Inherit,
             binding: None,
+            remote_proposal_fetch_replay: None,
         }
     }
 
@@ -2651,6 +3968,7 @@ impl RuntimeEffectOwnership {
             owner,
             causality: RuntimeEffectCausality::Fresh(kind),
             binding: None,
+            remote_proposal_fetch_replay: None,
         }
     }
 
@@ -2720,6 +4038,61 @@ impl RuntimeEffectOwnership {
             projection_hash,
         };
         pending.validate_exact(effect).then_some(pending)
+    }
+
+    /// Clone the opaque authenticated-Proposal replay envelope only for its exact Fetch.
+    pub(in crate::sumeragi) fn exact_remote_proposal_fetch_replay(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Option<RemoteProposalFetchReplayEvidenceV1> {
+        let replay = self.remote_proposal_fetch_replay.as_ref()?;
+        let pending = self.pending_adapter_effect_binding(effect)?;
+        replay
+            .exactly_matches_fetch_pending(effect, &pending)
+            .then(|| replay.clone())
+    }
+
+    /// Attach genuine authenticated-Proposal replay evidence to one test Fetch owner.
+    ///
+    /// This uses the same frozen fair-ingress projection and private production
+    /// mint as runtime dispatch; it does not construct replay source parts.
+    #[cfg(test)]
+    pub(crate) fn bind_authenticated_remote_proposal_replay_for_test(
+        &mut self,
+        proposal: wire::Proposal,
+        effect: &AdapterEffect,
+    ) -> bool {
+        if self.remote_proposal_fetch_replay.is_some() {
+            return false;
+        }
+        let authenticated = AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal),
+        ));
+        let message = authenticated.wire_envelope_for_test();
+        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
+            super::message::BlockMessage::V2(message.clone()),
+            None,
+        ));
+        let Some(fair_ingress) = admitted.take_ingress_ownership() else {
+            return false;
+        };
+        let Some(ingress) =
+            RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, fair_ingress)
+        else {
+            return false;
+        };
+        let Some(origin) = AuthenticatedRemoteProposalDispatchOrigin::new(authenticated, ingress)
+        else {
+            return false;
+        };
+        let Some(pending) = self.pending_adapter_effect_binding(effect) else {
+            return false;
+        };
+        let Some(replay) = origin.bind_exact_fetch(effect, pending) else {
+            return false;
+        };
+        self.remote_proposal_fetch_replay = Some(replay);
+        true
     }
 
     /// Return whether this exact predecessor capability authorizes one body
@@ -8555,7 +9928,7 @@ impl BoundedIngress<AdapterCommand> {
         ingress_ownership: RuntimeIngressOwnershipEvidence,
         restored_owner: Option<(&RuntimeLifecycleOwner, u8)>,
     ) -> Result<EventTag, EnqueueError> {
-        if !ingress_ownership.matches_authenticated(&authenticated) {
+        if !ingress_ownership.exactly_matches_authenticated(&authenticated) {
             return Err(EnqueueError::FailClosed);
         }
         let certified_fence_escape =
@@ -9328,6 +10701,7 @@ pub(crate) struct RuntimeDriverDispatch<E> {
     deferred_ordinal: Option<u128>,
     retry_unadmitted: bool,
     producer_handoff: Option<ProducerContinuationHandoffToken>,
+    remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>,
 }
 
 /// Current command carrier at the runtime-to-adapter dispatch seam.
@@ -9457,6 +10831,7 @@ impl<E> RuntimeDriverDispatch<E> {
             deferred_ordinal: None,
             retry_unadmitted: false,
             producer_handoff: None,
+            remote_proposal_replay: None,
         }
     }
 }
@@ -9555,6 +10930,16 @@ pub(crate) trait RuntimeDriver {
         &mut self,
         command: TaggedCommand<Self::Command>,
     ) -> Result<RuntimeDriverDispatch<Self::Effect>, Self::Error>;
+    /// Consume one authenticated Proposal dispatch origin into the exact
+    /// ordinary Fetch ownership emitted by the same reducer macro-step.
+    fn bind_remote_proposal_fetch_replay(
+        &self,
+        _origin: AuthenticatedRemoteProposalDispatchOrigin,
+        _effects: &[Self::Effect],
+        _ownership: &mut [RuntimeEffectOwnership],
+    ) -> Result<(), ()> {
+        Err(())
+    }
     /// Bind one scheduler-validated lifecycle to a timer transition whose
     /// compact driver method otherwise carries only the reducer tag.
     fn bind_selected_producer_lifecycle(
@@ -9876,6 +11261,27 @@ impl RuntimeDriver for SumeragiV2Adapter {
         if authenticated != tagged.ingress_ownership.is_some() {
             return Err(AdapterError::RuntimeIngressOwnershipViolation);
         }
+        let remote_proposal_replay = match (&tagged.command, &tagged.ingress_ownership) {
+            (AdapterCommand::Authenticated(message), Some(ingress))
+                if matches!(
+                    message.payload(),
+                    wire::ConsensusMessageV2Payload::Proposal(_)
+                ) =>
+            {
+                Some(
+                    AuthenticatedRemoteProposalDispatchOrigin::new(
+                        message.clone(),
+                        ingress.clone(),
+                    )
+                    .ok_or(AdapterError::RuntimeIngressOwnershipViolation)?,
+                )
+            }
+            (AdapterCommand::Authenticated(_), Some(_)) => None,
+            (AdapterCommand::Authenticated(_), None) | (_, Some(_)) => {
+                return Err(AdapterError::RuntimeIngressOwnershipViolation);
+            }
+            (_, None) => None,
+        };
         self.bind_selected_producer_lifecycle(
             tagged.causal_origin.lifecycle_key.clone(),
             lifecycle_ordinal,
@@ -9888,7 +11294,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
                     let ownership = ingress_ownership
                         .as_ref()
                         .ok_or(AdapterError::RuntimeIngressOwnershipViolation)?;
-                    if !ownership.matches_authenticated(&message) {
+                    if !ownership.exactly_matches_authenticated(&message) {
                         return Err(AdapterError::RuntimeIngressOwnershipViolation);
                     }
                     // Authenticated network ingress is deliberately retagged by the
@@ -9939,7 +11345,42 @@ impl RuntimeDriver for SumeragiV2Adapter {
             deferred_ordinal,
             retry_unadmitted,
             producer_handoff,
+            remote_proposal_replay,
         })
+    }
+
+    fn bind_remote_proposal_fetch_replay(
+        &self,
+        origin: AuthenticatedRemoteProposalDispatchOrigin,
+        effects: &[Self::Effect],
+        ownership: &mut [RuntimeEffectOwnership],
+    ) -> Result<(), ()> {
+        if effects.len() != ownership.len() {
+            return Err(());
+        }
+        let mut fetches = effects.iter().enumerate().filter(|(_, effect)| {
+            matches!(
+                effect,
+                AdapterEffect::FetchBody {
+                    certificate: None,
+                    ..
+                }
+            )
+        });
+        let Some((index, effect)) = fetches.next() else {
+            // An authenticated Proposal can terminate as ignored,
+            // equivocation, or policy rejection without owning Fetch work.
+            return Ok(());
+        };
+        if fetches.next().is_some() || ownership[index].remote_proposal_fetch_replay.is_some() {
+            return Err(());
+        }
+        let pending = ownership[index]
+            .pending_adapter_effect_binding(effect)
+            .ok_or(())?;
+        let replay = origin.bind_exact_fetch(effect, pending).ok_or(())?;
+        ownership[index].remote_proposal_fetch_replay = Some(replay);
+        Ok(())
     }
 
     fn bind_selected_producer_lifecycle(
@@ -9990,6 +11431,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
                 deferred_ordinal,
                 retry_unadmitted,
                 producer_handoff,
+                remote_proposal_replay: None,
             }
         })
     }
@@ -10008,6 +11450,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
                 deferred_ordinal,
                 retry_unadmitted,
                 producer_handoff,
+                remote_proposal_replay: None,
             }
         })
     }
@@ -10741,6 +12184,8 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     ingress: BoundedIngress<D::Command>,
     deferred_ingress_ownership: BTreeMap<u128, RuntimeIngressOwnershipEvidence>,
     deferred_lifecycle_ownership: BTreeMap<u128, RuntimeDeferredLifecycleOwnership>,
+    /// Authenticated Proposal tokens waiting in the same bounded deferred owners.
+    deferred_remote_proposal_replay: BTreeMap<u128, AuthenticatedRemoteProposalDispatchOrigin>,
     /// FIFO owners which received one exact dependency-predecessor turn but
     /// hit retryable adapter capacity while the same signing fence remained.
     /// They are temporarily excluded from that fence's dependency minimum so
@@ -10782,6 +12227,8 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     retransmit_owner_physical_cut: Option<u128>,
     dormant_fresh_lifecycle_owners:
         BTreeMap<(RuntimeFreshRootKind, iroha_crypto::Hash), RuntimeLifecycleOwner>,
+    /// At most one direct Proposal origin awaiting exact effect binding.
+    pending_remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>,
     pending_effect_ownership: Option<Vec<RuntimeEffectOwnership>>,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: usize,
@@ -10873,6 +12320,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             ingress,
             deferred_ingress_ownership: BTreeMap::new(),
             deferred_lifecycle_ownership: BTreeMap::new(),
+            deferred_remote_proposal_replay: BTreeMap::new(),
             fence_retry_blocked_fifo_owners: Vec::new(),
             fence_retry_signature_fence_identity: None,
             ingress_physical_cut: 1,
@@ -10892,6 +12340,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retransmit_owner: None,
             retransmit_owner_physical_cut: None,
             dormant_fresh_lifecycle_owners: BTreeMap::new(),
+            pending_remote_proposal_replay: None,
             pending_effect_ownership: None,
             external_lifecycle_owners: Vec::new(),
             // Before the effect executor installs its configured pending-work
@@ -11020,6 +12469,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         effects: &[D::Effect],
     ) -> Result<(), EnqueueError> {
         if effects.is_empty() {
+            if let Some(origin) = self.pending_remote_proposal_replay.take() {
+                self.driver
+                    .bind_remote_proposal_fetch_replay(origin, effects, &mut [])
+                    .map_err(|()| EnqueueError::FailClosed)?;
+            }
             return Ok(());
         }
         if self.pending_effect_ownership.is_some() {
@@ -11122,6 +12576,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 )?;
             }
             ownership.push(evidence);
+        }
+        if let Some(origin) = self.pending_remote_proposal_replay.take() {
+            self.driver
+                .bind_remote_proposal_fetch_replay(origin, effects, &mut ownership)
+                .map_err(|()| EnqueueError::FailClosed)?;
         }
         self.pending_effect_ownership = Some(ownership);
         Ok(())
@@ -11481,7 +12940,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         tag: EventTag,
         manifest: &wire::PayloadManifest,
-    ) -> Result<RuntimeEffectOwnership, String> {
+    ) -> Result<LocalProposalEffectOwnership, String> {
         if self.fail_closed {
             return Err("Sumeragi v2 runtime is fail-closed".to_owned());
         }
@@ -11511,12 +12970,19 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 round: manifest.round,
                 subject: manifest.subject,
             };
-            return bind_adapter_effect_batch_ownership(
+            let ownership = bind_adapter_effect_batch_ownership(
                 std::slice::from_ref(&effect),
                 vec![RuntimeEffectOwnership::inherited(ownership.owner().clone())],
             )?
             .pop()
-            .ok_or_else(|| "local proposal StoreBody binding was empty".to_owned());
+            .ok_or_else(|| "local proposal StoreBody binding was empty".to_owned())?;
+            return LocalProposalEffectOwnership::from_exact_assemble_body(
+                ownership, &effect, manifest,
+            )
+            .ok_or_else(|| {
+                "local proposal StoreBody replay seal did not match its active-view owner"
+                    .to_owned()
+            });
         }
         if self.clocks_armed && tag == self.round_tag {
             self.latch_fail_closed(
@@ -11540,7 +13006,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             round: manifest.round,
             subject: manifest.subject,
         };
-        bind_adapter_effect_batch_ownership(
+        let ownership = bind_adapter_effect_batch_ownership(
             std::slice::from_ref(&effect),
             vec![RuntimeEffectOwnership::fresh(
                 owner,
@@ -11548,7 +13014,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             )],
         )?
         .pop()
-        .ok_or_else(|| "local proposal StoreBody binding was empty".to_owned())
+        .ok_or_else(|| "local proposal StoreBody binding was empty".to_owned())?;
+        LocalProposalEffectOwnership::from_exact_assemble_body(ownership, &effect, manifest)
+            .ok_or_else(|| {
+                "local proposal StoreBody replay seal did not match its fresh owner".to_owned()
+            })
     }
 
     /// Return whether the runner may begin one local proposal for this view.
@@ -12033,10 +13503,21 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         lifecycle.retain(|ordinal, _| active.contains(ordinal));
         let mut ingress = self.deferred_ingress_ownership.clone();
         ingress.retain(|ordinal, _| authenticated.contains(ordinal));
+        self.deferred_remote_proposal_replay
+            .retain(|ordinal, _| authenticated.contains(ordinal));
         if !deferred_lifecycle_ordinals_are_unique(&lifecycle)
             || ingress.iter().any(|(ordinal, ownership)| {
                 !ownership.validate_frozen_physical() || !lifecycle.contains_key(ordinal)
             })
+            || self
+                .deferred_remote_proposal_replay
+                .iter()
+                .any(|(ordinal, origin)| {
+                    ingress.get(ordinal) != Some(&origin.ingress)
+                        || !origin
+                            .ingress
+                            .exactly_matches_authenticated(&origin.authenticated)
+                })
             || lifecycle.iter().any(|(ordinal, owner)| {
                 owner.deferred_admission_ordinal != *ordinal
                     || !owner.validate_active_against_ingress(
@@ -12222,7 +13703,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             deferred_ordinal,
             retry_unadmitted,
             producer_handoff,
+            remote_proposal_replay,
         } = dispatch;
+        if self.pending_remote_proposal_replay.is_some() {
+            self.latch_fail_closed("a Proposal replay origin overtook exact effect binding");
+            return Err(RuntimeError::FailClosed);
+        }
         let clock_physical_cut = match self.clock_owner_physical_cut_for(parent) {
             Ok(cut) => cut,
             Err(_) => {
@@ -12364,6 +13850,65 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             || !active.iter().all(|ordinal| retained.contains_key(ordinal))
         {
             self.latch_fail_closed("driver dispatch lost deferred lifecycle ownership");
+            return Err(RuntimeError::FailClosed);
+        }
+        self.deferred_remote_proposal_replay
+            .retain(|ordinal, _| active.contains(ordinal));
+        match (retry_unadmitted, deferred_ordinal, remote_proposal_replay) {
+            (true, None, Some(origin)) => {
+                // The exact authenticated command is restored by the caller;
+                // its immutable token and ingress carrier mint a fresh sealed
+                // projection on the later dispatch attempt.
+                drop(origin);
+            }
+            (true, None, None) => {}
+            (false, Some(ordinal), Some(origin)) => {
+                let retained_ingress = self
+                    .deferred_ingress_ownership
+                    .get(&ordinal)
+                    .cloned()
+                    .ok_or_else(|| {
+                        self.latch_fail_closed(
+                            "deferred Proposal replay origin lost its ingress carrier",
+                        );
+                        RuntimeError::FailClosed
+                    })?;
+                let origin = if let Some(incumbent) =
+                    self.deferred_remote_proposal_replay.remove(&ordinal)
+                {
+                    origin.merge_retained(incumbent, retained_ingress)
+                } else {
+                    origin.rebind_retained_ingress(retained_ingress)
+                }
+                .ok_or_else(|| {
+                    self.latch_fail_closed(
+                        "deferred Proposal replay origin changed its authenticated carrier",
+                    );
+                    RuntimeError::FailClosed
+                })?;
+                self.deferred_remote_proposal_replay.insert(ordinal, origin);
+            }
+            (false, None, Some(origin)) => {
+                self.pending_remote_proposal_replay = Some(origin);
+            }
+            (false, Some(_), None) | (false, None, None) => {}
+            (true, Some(_), _) => {
+                self.latch_fail_closed("retryable Proposal dispatch retained deferred ownership");
+                return Err(RuntimeError::FailClosed);
+            }
+        }
+        if self
+            .deferred_remote_proposal_replay
+            .iter()
+            .any(|(ordinal, origin)| {
+                !active.contains(ordinal)
+                    || self.deferred_ingress_ownership.get(ordinal) != Some(&origin.ingress)
+                    || !origin
+                        .ingress
+                        .exactly_matches_authenticated(&origin.authenticated)
+            })
+        {
+            self.latch_fail_closed("deferred Proposal replay map lost exact bounded ownership");
             return Err(RuntimeError::FailClosed);
         }
         self.deferred_lifecycle_ownership = retained;
@@ -14716,12 +16261,37 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let ingress_ownership = self
             .deferred_ingress_ownership
             .remove(&evidence.admission_ordinal);
+        let remote_proposal_replay = self
+            .deferred_remote_proposal_replay
+            .remove(&evidence.admission_ordinal);
         if evidence.is_authenticated_ingress() != ingress_ownership.is_some()
             || self.reconcile_deferred_ingress_ownership(None).is_err()
         {
             self.latch_fail_closed("deferred service lost authenticated ingress ownership");
             return Err(RuntimeError::FailClosed);
         }
+        let remote_proposal_replay = match (
+            evidence.event_kind,
+            remote_proposal_replay,
+            ingress_ownership.as_ref(),
+        ) {
+            (DeferredEventKind::ProposalReceived, Some(origin), Some(ingress)) => origin
+                .rebind_retained_ingress(ingress.clone())
+                .ok_or_else(|| {
+                    self.latch_fail_closed(
+                        "deferred Proposal replay origin changed its selected ingress carrier",
+                    );
+                    RuntimeError::FailClosed
+                })?
+                .into(),
+            (DeferredEventKind::ProposalReceived, _, _) | (_, Some(_), _) => {
+                self.latch_fail_closed(
+                    "deferred Proposal replay origin did not match its selected event",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+            (_, None, _) => None,
+        };
         self.retain_scheduler_ownership(
             RuntimeSelectedOwnerKind::Deferred,
             round_tag,
@@ -14736,6 +16306,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             schedule,
             schedule,
         )?;
+        if self.pending_remote_proposal_replay.is_some() {
+            self.latch_fail_closed("deferred Proposal replay origin overtook effect binding");
+            return Err(RuntimeError::FailClosed);
+        }
+        self.pending_remote_proposal_replay = remote_proposal_replay;
         if self
             .retain_effect_ownership(
                 RuntimeEffectSource::Deferred,
@@ -16761,7 +18336,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         durable_receipt: DurableBodyReceipt,
         validated_receipt: ValidatedBodyReceipt,
         ownership: &RuntimeEffectOwnership,
-    ) -> Result<(), EnqueueError> {
+    ) -> Result<LocalProposalReadyCommandIdentity, EnqueueError> {
+        let identity = LocalProposalReadyCommandIdentity::from_exact_handoff(
+            tag,
+            &manifest,
+            &durable_receipt,
+            &validated_receipt,
+            ownership,
+        )
+        .ok_or(EnqueueError::FailClosed)?;
         let evidence = BodyPipelineCompletionEvidence::LocalProposalReady {
             manifest: manifest.clone(),
             durable_receipt: durable_receipt.clone(),
@@ -16776,7 +18359,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 validated_receipt,
             },
             ownership,
-        )
+        )?;
+        Ok(identity)
     }
 
     /// Enqueue successful canonical reconstruction with the exact fetch tag.
@@ -18366,6 +19950,7 @@ mod tests {
                     deferred_ordinal: None,
                     retry_unadmitted: true,
                     producer_handoff: None,
+                    remote_proposal_replay: None,
                 });
             }
             self.delivered.push((tagged.tag, value));
@@ -18810,6 +20395,61 @@ mod tests {
         }
     }
 
+    fn pending_validate_binding_for_test(
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        certificate: Option<wire::QuorumCertificate>,
+        owner_marker: u128,
+    ) -> (AdapterEffect, PendingRuntimeEffectBinding) {
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        };
+        let validate = AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        };
+        let store_binding = if let Some(certificate) = certificate {
+            let fetch = AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                manifest: None,
+                certified_sources: Vec::new(),
+                certificate: Some(certificate),
+            };
+            let fetch_binding = bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&fetch),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, owner_marker)],
+            )
+            .expect("bind one certified Fetch fixture")
+            .pop()
+            .expect("one certified Fetch fixture owner")
+            .pending_adapter_effect_binding(&fetch)
+            .expect("certified Fetch fixture mints one pending binding");
+            fetch_binding
+                .project_certified_fetch_store_successor(&fetch, &store)
+                .expect("certified Fetch fixture derives Store")
+        } else {
+            bind_adapter_effect_batch_ownership(
+                std::slice::from_ref(&store),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, owner_marker)],
+            )
+            .expect("bind one ordinary Store fixture")
+            .pop()
+            .expect("one ordinary Store fixture owner")
+            .pending_adapter_effect_binding(&store)
+            .expect("ordinary Store fixture mints one pending binding")
+        };
+        let validate_binding = store_binding
+            .project_store_validate_successor(&store, &validate)
+            .expect("Store fixture derives Validate");
+        (validate, validate_binding)
+    }
+
     fn signed_runtime_timeout_certificate(
         context: &wire::HeightContext,
         keys: &[KeyPair],
@@ -19193,6 +20833,440 @@ mod tests {
                 .project_validate_apply_successor(&validate, &apply)
                 .is_none(),
             "the projected Apply binding cannot duplicate predecessor authority"
+        );
+    }
+
+    #[test]
+    fn live_wal_payload_free_pending_roots_bind_all_five_stages_and_exact_frames() {
+        let (context, keys) = authenticated_runtime_context();
+        let wire::ConsensusMessageV2Payload::Proposal(mut proposal) =
+            signed_runtime_proposal(&context, &keys, 0x68).payload
+        else {
+            unreachable!("runtime proposal fixture")
+        };
+        proposal.signature.clear();
+        let prepare = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x69,
+            wire::GlobalPhase::Prepare,
+        );
+        let tag = EventTag::new(context.height, 0, Generation::new(9));
+        let prepare_vote = wire::Vote {
+            round: prepare.round,
+            proposal_round: prepare.proposal_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: prepare.subject,
+            execution_commitment: prepare.execution_commitment,
+            signer: prepare.signers[0],
+            signature: Vec::new(),
+        };
+        let commit_vote = wire::Vote {
+            phase: wire::GlobalPhase::Commit,
+            ..prepare_vote.clone()
+        };
+        let timeout_vote = wire::TimeoutVote {
+            round: prepare.round,
+            highest_prepare_qc: Some(prepare),
+            signer: 0,
+            signature: Vec::new(),
+        };
+        let enter = wire::TimeoutCertificate {
+            round: timeout_vote.round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: timeout_vote.highest_prepare_qc.clone(),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0x69; 96],
+            }],
+        };
+        let effects = [
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Proposal(proposal),
+            },
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(prepare_vote),
+            },
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(commit_vote),
+            },
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::TimeoutVote(timeout_vote),
+            },
+            AdapterEffect::EnterView {
+                tag,
+                certificate: enter,
+                protected_lock: None,
+            },
+        ];
+        let mut roots = Vec::new();
+        for (index, effect) in effects.iter().enumerate() {
+            let sequence = u64::try_from(index).expect("small stage index");
+            let frame_hash = if index == 0 {
+                [0; 32]
+            } else {
+                [u8::try_from(index).expect("small stage marker"); 32]
+            };
+            let identity = LiveWalFrameIdentity::for_test(
+                sequence,
+                sequence.checked_add(1).expect("bounded persistence id"),
+                frame_hash,
+            );
+            let pending =
+                PendingRuntimeEffectBinding::from_exact_live_wal_append(&identity, effect)
+                    .expect("exact payload-free live WAL effect derives one pending owner");
+            assert!(pending.exactly_binds_adapter_effect(effect));
+            roots.push(*pending.causal_lifecycle_key());
+        }
+        assert_eq!(roots.iter().collect::<BTreeSet<_>>().len(), effects.len());
+
+        let first = LiveWalFrameIdentity::for_test(9, 10, [0; 32]);
+        let second = LiveWalFrameIdentity::for_test(10, 11, [0; 32]);
+        let first_pending =
+            PendingRuntimeEffectBinding::from_exact_live_wal_append(&first, &effects[0])
+                .expect("zero-valued digest remains structurally valid");
+        let second_pending =
+            PendingRuntimeEffectBinding::from_exact_live_wal_append(&second, &effects[0])
+                .expect("second exact locator derives a pending owner");
+        assert_ne!(
+            first_pending.causal_lifecycle_key(),
+            second_pending.causal_lifecycle_key(),
+            "identical effects from different exact WAL frames cannot share causal authority"
+        );
+    }
+
+    #[test]
+    fn pending_validate_projects_exact_prepare_commit_and_report_successors() {
+        let (context, keys) = authenticated_runtime_context();
+        let prepare = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x6B,
+            wire::GlobalPhase::Prepare,
+        );
+        let tag = EventTag::new(context.height, prepare.round.view, Generation::new(4));
+        let (validate, ordinary_validate) = pending_validate_binding_for_test(
+            tag,
+            prepare.proposal_round,
+            prepare.subject,
+            None,
+            74,
+        );
+        let (_, prepare_validate) = pending_validate_binding_for_test(
+            tag,
+            prepare.proposal_round,
+            prepare.subject,
+            Some(prepare.clone()),
+            75,
+        );
+
+        let prepare_sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(wire::Vote {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                phase: wire::GlobalPhase::Prepare,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer: prepare.signers[0],
+                signature: Vec::new(),
+            }),
+        };
+        let prepare_sign_binding = ordinary_validate
+            .project_validate_sign_prepare_successor(&validate, &prepare_sign)
+            .expect("ordinary Validate acquires exact Prepare-vote authority");
+        assert!(prepare_sign_binding.exactly_binds_adapter_effect(&prepare_sign));
+        assert_eq!(
+            prepare_sign_binding.causal_lifecycle_key(),
+            ordinary_validate.causal_lifecycle_key()
+        );
+        let prepare_statement = prepare_sign_binding
+            .candidate_statement()
+            .expect("Prepare Sign carries one candidate statement");
+        assert_eq!(prepare_statement.phase(), Some(wire::GlobalPhase::Prepare));
+        assert_eq!(
+            prepare_statement.execution_commitment(),
+            Some(prepare.execution_commitment)
+        );
+
+        let commit_sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(wire::Vote {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                phase: wire::GlobalPhase::Commit,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer: prepare.signers[0],
+                signature: Vec::new(),
+            }),
+        };
+        let commit_sign_binding = prepare_validate
+            .project_validate_sign_commit_successor(&validate, &commit_sign)
+            .expect("Prepare-authorized Validate promotes to exact Commit vote");
+        assert!(commit_sign_binding.exactly_binds_adapter_effect(&commit_sign));
+        assert_eq!(
+            commit_sign_binding.causal_lifecycle_key(),
+            prepare_validate.causal_lifecycle_key()
+        );
+        let commit_statement = commit_sign_binding
+            .candidate_statement()
+            .expect("Commit Sign carries one candidate statement");
+        assert_eq!(commit_statement.phase(), Some(wire::GlobalPhase::Commit));
+        assert_eq!(
+            commit_statement.execution_commitment(),
+            Some(prepare.execution_commitment)
+        );
+
+        let report = AdapterEffect::ReportInvalidCertifiedBody {
+            subject: prepare.subject,
+            certificate: prepare,
+        };
+        let report_binding = prepare_validate
+            .project_validate_report_invalid_certified_body_successor(&validate, &report)
+            .expect("Prepare-authorized Validate derives its exact invalid-body report");
+        assert!(report_binding.exactly_binds_adapter_effect(&report));
+        assert_eq!(
+            report_binding.causal_lifecycle_key(),
+            prepare_validate.causal_lifecycle_key()
+        );
+        assert_eq!(report_binding.candidate_statement(), None);
+        assert_ne!(
+            report_binding.exact_effect_identity(),
+            prepare_validate.exact_effect_identity()
+        );
+    }
+
+    #[test]
+    fn pending_validate_successor_projection_rejects_forged_coordinates_and_authority() {
+        let (context, keys) = authenticated_runtime_context();
+        let prepare = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x6C,
+            wire::GlobalPhase::Prepare,
+        );
+        let commit = signed_runtime_quorum_certificate(&context, &keys, 0x6C);
+        let tag = EventTag::new(context.height, prepare.round.view, Generation::new(5));
+        let (validate, ordinary_validate) = pending_validate_binding_for_test(
+            tag,
+            prepare.proposal_round,
+            prepare.subject,
+            None,
+            76,
+        );
+        let (_, prepare_validate) = pending_validate_binding_for_test(
+            tag,
+            prepare.proposal_round,
+            prepare.subject,
+            Some(prepare.clone()),
+            77,
+        );
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: prepare.proposal_round,
+            subject: prepare.subject,
+        };
+        let prepare_sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(wire::Vote {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                phase: wire::GlobalPhase::Prepare,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer: prepare.signers[0],
+                signature: Vec::new(),
+            }),
+        };
+        let commit_sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(wire::Vote {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                phase: wire::GlobalPhase::Commit,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer: prepare.signers[0],
+                signature: Vec::new(),
+            }),
+        };
+        let report = AdapterEffect::ReportInvalidCertifiedBody {
+            subject: prepare.subject,
+            certificate: prepare.clone(),
+        };
+
+        assert!(
+            ordinary_validate
+                .project_validate_sign_prepare_successor(&validate, &commit_sign)
+                .is_none(),
+            "Prepare projection rejects a Commit vote"
+        );
+        assert!(
+            prepare_validate
+                .project_validate_sign_commit_successor(&validate, &prepare_sign)
+                .is_none(),
+            "Commit projection rejects a Prepare vote"
+        );
+        let commit_report = AdapterEffect::ReportInvalidCertifiedBody {
+            subject: commit.subject,
+            certificate: commit,
+        };
+        assert!(
+            prepare_validate
+                .project_validate_report_invalid_certified_body_successor(
+                    &validate,
+                    &commit_report,
+                )
+                .is_none(),
+            "invalid-body reporting requires Prepare rather than Commit authority"
+        );
+
+        let foreign = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x6D,
+            wire::GlobalPhase::Prepare,
+        );
+        let changed_commitment_sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(wire::Vote {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                phase: wire::GlobalPhase::Commit,
+                subject: prepare.subject,
+                execution_commitment: foreign.execution_commitment,
+                signer: prepare.signers[0],
+                signature: Vec::new(),
+            }),
+        };
+        assert!(
+            prepare_validate
+                .project_validate_sign_commit_successor(&validate, &changed_commitment_sign)
+                .is_none(),
+            "Commit vote cannot change the registered Prepare commitment"
+        );
+        let mut changed_commitment_certificate = prepare.clone();
+        changed_commitment_certificate.execution_commitment = foreign.execution_commitment;
+        let changed_commitment_report = AdapterEffect::ReportInvalidCertifiedBody {
+            subject: prepare.subject,
+            certificate: changed_commitment_certificate,
+        };
+        assert!(
+            prepare_validate
+                .project_validate_report_invalid_certified_body_successor(
+                    &validate,
+                    &changed_commitment_report,
+                )
+                .is_none(),
+            "report cannot change the registered Prepare commitment"
+        );
+
+        let wrong_tag_prepare = AdapterEffect::Sign {
+            tag: EventTag::new(context.height, prepare.round.view, Generation::new(6)),
+            request: SignRequest::Vote(wire::Vote {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                phase: wire::GlobalPhase::Prepare,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer: prepare.signers[0],
+                signature: Vec::new(),
+            }),
+        };
+        assert!(
+            ordinary_validate
+                .project_validate_sign_prepare_successor(&validate, &wrong_tag_prepare)
+                .is_none(),
+            "Sign successor must retain the complete predecessor tag"
+        );
+        let wrong_tag_validate = AdapterEffect::ValidateBody {
+            tag: EventTag::new(context.height, prepare.round.view, Generation::new(6)),
+            round: prepare.proposal_round,
+            subject: prepare.subject,
+        };
+        assert!(
+            prepare_validate
+                .project_validate_report_invalid_certified_body_successor(
+                    &wrong_tag_validate,
+                    &report,
+                )
+                .is_none(),
+            "report projection requires the exactly bound Validate tag"
+        );
+
+        let wrong_subject_sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(wire::Vote {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                phase: wire::GlobalPhase::Commit,
+                subject: foreign.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer: prepare.signers[0],
+                signature: Vec::new(),
+            }),
+        };
+        assert!(
+            prepare_validate
+                .project_validate_sign_commit_successor(&validate, &wrong_subject_sign)
+                .is_none(),
+            "Sign successor cannot change the validated subject"
+        );
+        let mut wrong_subject_certificate = prepare.clone();
+        wrong_subject_certificate.subject = foreign.subject;
+        let wrong_subject_report = AdapterEffect::ReportInvalidCertifiedBody {
+            subject: foreign.subject,
+            certificate: wrong_subject_certificate,
+        };
+        assert!(
+            prepare_validate
+                .project_validate_report_invalid_certified_body_successor(
+                    &validate,
+                    &wrong_subject_report,
+                )
+                .is_none(),
+            "report cannot change the validated subject"
+        );
+
+        assert!(
+            ordinary_validate
+                .project_validate_sign_prepare_successor(&store, &prepare_sign)
+                .is_none(),
+            "Store cannot stand in for the exact Validate predecessor"
+        );
+        assert!(
+            prepare_validate
+                .project_validate_sign_commit_successor(&store, &commit_sign)
+                .is_none(),
+            "Store cannot stand in for the exact Validate predecessor"
+        );
+        assert!(
+            prepare_validate
+                .project_validate_report_invalid_certified_body_successor(&store, &report)
+                .is_none(),
+            "Store cannot stand in for the exact Validate predecessor"
+        );
+        assert!(
+            ordinary_validate
+                .project_validate_sign_commit_successor(&validate, &commit_sign)
+                .is_none(),
+            "ordinary Validate needs an opaque concurrent-Prepare refinement capability"
+        );
+        assert!(
+            ordinary_validate
+                .project_validate_report_invalid_certified_body_successor(&validate, &report)
+                .is_none(),
+            "ordinary Validate needs an opaque registered-report carrier capability"
+        );
+        assert!(
+            prepare_validate
+                .project_validate_sign_prepare_successor(&validate, &prepare_sign)
+                .is_none(),
+            "Prepare-authorized Validate cannot regress to the ordinary Prepare-sign branch"
         );
     }
 
@@ -28625,6 +30699,240 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin() {
+        let directory = TempDir::new().expect("temporary remote Proposal replay directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime for authenticated Proposal replay");
+
+        let proposal = signed_runtime_proposal(&context, &keys, 0xA7);
+        let mut wrong_signature = proposal.clone();
+        let wire::ConsensusMessageV2Payload::Proposal(wrong) = &mut wrong_signature.payload else {
+            unreachable!("signed Proposal fixture has one Proposal payload")
+        };
+        wrong.signature[0] ^= 0xFF;
+        assert!(
+            runtime.enqueue_network(wrong_signature).is_err(),
+            "a substituted signature cannot mint remote Proposal replay authority"
+        );
+        runtime
+            .enqueue_network(proposal)
+            .expect("enqueue exact authenticated Proposal");
+        let RuntimeStep::Advanced(fetch_effects) = runtime.step(now).expect("dispatch Proposal")
+        else {
+            panic!("authenticated Proposal unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("Proposal publishes scheduler ownership");
+        let [fetch_effect] = fetch_effects.as_slice() else {
+            panic!("Proposal must emit one exact Fetch: {fetch_effects:?}")
+        };
+        let AdapterEffect::FetchBody {
+            tag,
+            manifest: Some(manifest),
+            certificate: None,
+            certified_sources,
+            ..
+        } = fetch_effect
+        else {
+            panic!("authenticated ordinary Proposal must emit manifest-bound Fetch")
+        };
+        assert!(certified_sources.is_empty());
+        let tag = *tag;
+        let manifest = manifest.clone();
+        let fetch_ownership = runtime
+            .take_effect_ownership(fetch_effects.len())
+            .expect("Fetch retains exact runtime ownership")
+            .pop()
+            .expect("one Fetch has one exact owner");
+        let fetch_pending = fetch_ownership
+            .pending_adapter_effect_binding(fetch_effect)
+            .expect("Fetch owns one exact pending binding");
+        let fetch_replay = fetch_ownership
+            .exact_remote_proposal_fetch_replay(fetch_effect)
+            .expect("authenticated Proposal attaches its replay origin");
+        assert!(fetch_replay.exactly_matches_fetch_pending(fetch_effect, &fetch_pending));
+        assert!(fetch_replay.exactly_matches_retry(&fetch_replay.clone(), fetch_effect,));
+        let mut foreign_manifest_fetch = fetch_effect.clone();
+        let AdapterEffect::FetchBody {
+            manifest: Some(foreign_manifest),
+            ..
+        } = &mut foreign_manifest_fetch
+        else {
+            unreachable!("ordinary Fetch fixture retains one manifest")
+        };
+        foreign_manifest.chunk_root = Hash::new(b"foreign remote Proposal manifest root");
+        assert!(
+            fetch_ownership
+                .exact_remote_proposal_fetch_replay(&foreign_manifest_fetch)
+                .is_none()
+        );
+        let mut certified_fetch = fetch_effect.clone();
+        let AdapterEffect::FetchBody { certificate, .. } = &mut certified_fetch else {
+            unreachable!("fixture remains FetchBody")
+        };
+        *certificate = Some(signed_runtime_quorum_certificate(&context, &keys, 0xA8));
+        assert!(
+            fetch_ownership
+                .exact_remote_proposal_fetch_replay(&certified_fetch)
+                .is_none(),
+            "certified Fetch cannot inherit ordinary Proposal replay origin"
+        );
+        let _proposal_terminals = runtime.take_leader_wire_runtime_terminals();
+
+        let reservation = runtime
+            .reserve_body_available_with_owner(tag, manifest.clone(), &fetch_ownership)
+            .expect("reserve exact reconstructed body");
+        runtime
+            .commit_body_available(reservation)
+            .expect("publish exact BodyAvailable successor");
+        let RuntimeStep::Advanced(store_effects) =
+            runtime.step(now).expect("dispatch BodyAvailable")
+        else {
+            panic!("BodyAvailable unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("BodyAvailable publishes scheduler ownership");
+        let [store_effect] = store_effects.as_slice() else {
+            panic!("BodyAvailable must emit one Store: {store_effects:?}")
+        };
+        let store_ownership = runtime
+            .take_effect_ownership(store_effects.len())
+            .expect("Store retains exact Fetch causal owner")
+            .pop()
+            .expect("one Store has one exact owner");
+        let store_pending = store_ownership
+            .pending_adapter_effect_binding(store_effect)
+            .expect("Store owns one exact pending binding");
+        assert!(fetch_replay.exactly_projects_store(store_effect, &store_pending));
+        let foreign_store_ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(store_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 98_001)],
+        )
+        .expect("bind foreign Store root")
+        .pop()
+        .expect("one foreign Store owner");
+        let foreign_store_pending = foreign_store_ownership
+            .pending_adapter_effect_binding(store_effect)
+            .expect("foreign Store has one binding");
+        assert!(
+            fetch_replay
+                .clone()
+                .project_exact_store(store_effect, &foreign_store_pending)
+                .is_err(),
+            "matching coordinates cannot splice a foreign causal root"
+        );
+        let Ok(store_replay) = fetch_replay.project_exact_store(store_effect, &store_pending)
+        else {
+            panic!("exact Fetch owner projects one Store replay carrier")
+        };
+        assert!(store_replay.exactly_matches_store_pending(store_effect, &store_pending));
+
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let mut foreign_manifest = manifest.clone();
+        foreign_manifest.chunk_root = Hash::new(b"foreign durable remote Proposal frame");
+        let foreign_durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&foreign_manifest),
+        );
+        assert!(
+            store_replay
+                .clone()
+                .bind_durable_body(store_effect, &foreign_durable)
+                .is_err(),
+            "a substituted durable BodyFrame cannot complete Store replay evidence"
+        );
+        let Ok(stored_replay) = store_replay.bind_durable_body(store_effect, &durable) else {
+            panic!("exact durable receipt completes Store replay evidence")
+        };
+        assert!(stored_replay.exactly_matches_store(store_effect, &durable));
+
+        runtime
+            .enqueue_body_stored_with_owner(
+                tag,
+                manifest.round,
+                manifest.subject,
+                durable.clone(),
+                &store_ownership,
+            )
+            .expect("enqueue exact durable Store completion");
+        let RuntimeStep::Advanced(validate_effects) =
+            runtime.step(now).expect("dispatch BodyStored")
+        else {
+            panic!("BodyStored unexpectedly idled")
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("BodyStored publishes scheduler ownership");
+        let [validate_effect] = validate_effects.as_slice() else {
+            panic!("BodyStored must emit one Validate: {validate_effects:?}")
+        };
+        let validate_ownership = runtime
+            .take_effect_ownership(validate_effects.len())
+            .expect("Validate retains exact Store causal owner")
+            .pop()
+            .expect("one Validate has one exact owner");
+        let validate_pending = validate_ownership
+            .pending_adapter_effect_binding(validate_effect)
+            .expect("Validate owns one exact pending binding");
+        let foreign_validate_ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(validate_effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 98_002)],
+        )
+        .expect("bind foreign Validate root")
+        .pop()
+        .expect("one foreign Validate owner");
+        let foreign_validate_pending = foreign_validate_ownership
+            .pending_adapter_effect_binding(validate_effect)
+            .expect("foreign Validate has one binding");
+        assert!(
+            stored_replay
+                .clone()
+                .project_exact_validate(
+                    store_effect,
+                    &durable,
+                    validate_effect,
+                    &foreign_validate_pending,
+                )
+                .is_err(),
+            "matching Validate coordinates cannot splice a foreign causal root"
+        );
+        let Ok(validate_replay) = stored_replay.project_exact_validate(
+            store_effect,
+            &durable,
+            validate_effect,
+            &validate_pending,
+        ) else {
+            panic!("exact Store owner projects one Validate replay carrier")
+        };
+        assert!(validate_replay.exactly_matches_validate_pending(
+            validate_effect,
+            &durable,
+            &validate_pending,
+        ));
+        let queued_before_drop = runtime.queued_commands();
+        drop(validate_replay);
+        assert_eq!(runtime.queued_commands(), queued_before_drop);
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
     fn periodic_decision_store_retry_carries_durable_commit_authority() {
         let directory = TempDir::new().expect("temporary periodic Decision-store directory");
         let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
@@ -31916,2327 +34224,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn decision_retirement_releases_queued_leader_wire_runtime_owner() {
-        let directory = TempDir::new().expect("temporary leader-wire Decision directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let fixture = leader_wire_proposal_fixture(
-            &directory,
-            &context,
-            &keys,
-            0xC1,
-            runtime.ingress.lifecycle_ordinals.clone(),
-        );
-        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &fixture.message.payload else {
-            unreachable!("leader-wire fixture carries Proposal")
-        };
-        runtime
-            .enqueue_network_with_ingress_ownership(
-                fixture.message.clone(),
-                fixture.ownership.clone(),
-            )
-            .expect("enqueue proposal with durable leader-wire runtime ownership");
-        let ordinal = fixture.receipt.owner().admission_ordinal();
-        assert_eq!(
-            runtime.leader_wire_runtime_receipts.get(&ordinal),
-            Some(&fixture.receipt)
-        );
-
-        let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"leader-wire Decision state root"),
-            Hash::new(b"leader-wire Decision event root"),
-            Hash::new(b"leader-wire Decision reject root"),
-            1,
-            Hash::new(b"leader-wire Decision fee root"),
-        );
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(proposal.round, proposal.subject, commitment,)
-                .expect("Decision retires queued proposal ownership"),
-            DecisionProposalRetirement::default()
-        );
-        assert_eq!(runtime.queued_commands(), 0);
-        assert!(!runtime.leader_wire_runtime_receipts.contains_key(&ordinal));
-        let terminals = runtime.take_leader_wire_runtime_terminals();
-        let [LeaderWireRuntimeTerminal::Volatile(receipt)] = terminals.as_slice() else {
-            panic!("Decision retirement must emit one volatile leader-wire terminal")
-        };
-        assert_volatile_leader_wire_release(&fixture, receipt);
-        assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
-
-        let now = Instant::now();
-        runtime
-            .arm_live_clocks(now)
-            .expect("arm runtime after consuming Decision terminal");
-        assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
-        let directory = TempDir::new().expect("temporary leader-wire lock directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let fixture = leader_wire_proposal_fixture(
-            &directory,
-            &context,
-            &keys,
-            0xC2,
-            runtime.ingress.lifecycle_ordinals.clone(),
-        );
-        let (proposal, _deferred_ordinal) =
-            bind_authenticated_deferred_proposal_for_test(&mut runtime, &fixture);
-        let ordinal = fixture.receipt.owner().admission_ordinal();
-        assert_eq!(
-            runtime.leader_wire_runtime_receipts.get(&ordinal),
-            Some(&fixture.receipt)
-        );
-
-        let locked_subject = runtime_manifest(&context, 0xC3).subject;
-        assert_ne!(locked_subject, proposal.subject);
-        assert_eq!(
-            runtime
-                .retire_unsafe_proposals_for_lock(proposal.round, locked_subject)
-                .expect("lock retires unsafe Busy-deferred proposal"),
-            1
-        );
-        assert!(
-            runtime
-                .driver
-                .authenticated_deferred_admission_ordinals()
-                .is_empty()
-        );
-        assert!(runtime.deferred_ingress_ownership.is_empty());
-        assert!(runtime.deferred_lifecycle_ownership.is_empty());
-        assert!(!runtime.leader_wire_runtime_receipts.contains_key(&ordinal));
-        let terminals = runtime.take_leader_wire_runtime_terminals();
-        let [LeaderWireRuntimeTerminal::Volatile(receipt)] = terminals.as_slice() else {
-            panic!("lock retirement must emit one volatile leader-wire terminal")
-        };
-        assert_volatile_leader_wire_release(&fixture, receipt);
-        assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
-
-        let now = Instant::now();
-        runtime
-            .arm_live_clocks(now)
-            .expect("arm runtime after consuming lock terminal");
-        assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
-        assert!(!runtime.fail_closed);
-
-        // A BodyAvailable continuation can own an older causal lifecycle than
-        // a proposal which crossed into Busy while the shared reducer fence
-        // was closed. Once the fence opens, servicing that completion removes
-        // the conflicting Busy proposal inside the adapter dispatch. The
-        // runtime must terminalize the removed proposal's durable leader-wire
-        // receipt after classifying the selected completion owner.
-        let dispatch_directory =
-            TempDir::new().expect("temporary dispatch-side leader-wire retirement directory");
-        let (mut dispatch_runtime, dispatch_context, dispatch_keys) =
-            authenticated_network_runtime(&dispatch_directory, RuntimeQueueConfig::new(8, 1, 1));
-        let dispatch_tag = dispatch_runtime.round_tag();
-        let body_parent = dispatch_runtime
-            .mint_fresh_lifecycle_owner(
-                dispatch_tag,
-                CommandClass::Progress,
-                RuntimeFreshRootKind::StartupRecovery,
-                b"older-body-available-continuation",
-            )
-            .expect("reserve the older body continuation lifecycle");
-        let body_ownership =
-            RuntimeEffectOwnership::fresh(body_parent, RuntimeFreshRootKind::StartupRecovery);
-        let dispatch_fixture = leader_wire_proposal_fixture(
-            &dispatch_directory,
-            &dispatch_context,
-            &dispatch_keys,
-            0xCB,
-            dispatch_runtime.ingress.lifecycle_ordinals.clone(),
-        );
-        let (busy_proposal, busy_ordinal) =
-            bind_authenticated_deferred_proposal_for_test(&mut dispatch_runtime, &dispatch_fixture);
-        assert!(
-            body_ownership.owner().lifecycle_ordinal()
-                < dispatch_fixture.receipt.owner().admission_ordinal(),
-            "the reconstructed body retains the frozen predecessor lifecycle"
-        );
-        let canonical_body = b"canonical body superseding Busy proposal".to_vec();
-        let canonical_chunks =
-            wire::encode_payload_chunks(dispatch_context.da_layout, &canonical_body)
-                .expect("canonically encode the conflicting Busy body");
-        // Deliberate negative data: the alternate body has canonical RS16
-        // geometry, while the manifest remains bound to the original proposal
-        // subject so BodyAvailable exercises exact conflict retirement.
-        let canonical_manifest = wire::PayloadManifest::derive(
-            &dispatch_context,
-            busy_proposal.round,
-            busy_proposal.subject,
-            u64::try_from(canonical_body.len()).expect("small canonical body length fits u64"),
-            &canonical_chunks,
-        )
-        .expect("derive a structurally valid conflicting canonical manifest");
-        assert_ne!(canonical_manifest, busy_proposal.manifest);
-        let reservation = dispatch_runtime
-            .reserve_body_available_with_owner(dispatch_tag, canonical_manifest, &body_ownership)
-            .expect("reserve the older causal BodyAvailable owner");
-        dispatch_runtime
-            .commit_body_available(reservation)
-            .expect("publish the exact BodyAvailable completion");
-        assert_eq!(dispatch_runtime.queued_commands(), 1);
-        assert!(
-            dispatch_runtime
-                .eligible_deferred_admission_ordinals()
-                .expect("compare the two exact lifecycle owners")
-                .is_empty(),
-            "the later Busy proposal cannot overtake the older body continuation"
-        );
-        assert!(
-            dispatch_runtime
-                .deferred_lifecycle_ownership
-                .contains_key(&busy_ordinal)
-        );
-
-        let dispatch_now = Instant::now();
-        dispatch_runtime
-            .arm_live_clocks(dispatch_now)
-            .expect("arm runtime for dispatch-side retirement");
-        let body_step = dispatch_runtime
-            .step(dispatch_now)
-            .expect("the older BodyAvailable owner receives the FIFO turn");
-        let body_scheduling = dispatch_runtime
-            .take_last_scheduler_ownership()
-            .expect("BodyAvailable dispatch retains exact scheduler ownership");
-        assert_eq!(body_scheduling.selected, RuntimeSelectedOwnerKind::Fifo);
-        let RuntimeStep::Advanced(body_effects) = body_step else {
-            panic!("BodyAvailable dispatch unexpectedly idled")
-        };
-        dispatch_runtime
-            .take_effect_ownership(body_effects.len())
-            .expect("consume BodyAvailable effect ownership");
-        assert_eq!(dispatch_runtime.queued_commands(), 0);
-        assert!(
-            dispatch_runtime
-                .driver
-                .authenticated_deferred_admission_ordinals()
-                .is_empty()
-        );
-        assert!(dispatch_runtime.deferred_ingress_ownership.is_empty());
-        assert!(dispatch_runtime.deferred_lifecycle_ownership.is_empty());
-        let dispatch_receipt_ordinal = dispatch_fixture.receipt.owner().admission_ordinal();
-        assert!(
-            !dispatch_runtime
-                .leader_wire_runtime_receipts
-                .contains_key(&dispatch_receipt_ordinal)
-        );
-        let dispatch_terminals = dispatch_runtime.take_leader_wire_runtime_terminals();
-        let [LeaderWireRuntimeTerminal::Volatile(receipt)] = dispatch_terminals.as_slice() else {
-            panic!("BodyAvailable cleanup must retire the orphaned Busy proposal receipt")
-        };
-        assert_volatile_leader_wire_release(&dispatch_fixture, receipt);
-        assert!(!dispatch_runtime.fail_closed);
-
-        // Materializing the same older completion can prune a conflicting
-        // proposal which is still in FIFO rather than Busy. Its durable
-        // receipt is allowed to remain Runtime only while the exact finite
-        // BodyAvailable predecessor is physically queued; servicing that
-        // predecessor must publish the volatile terminal in the same turn.
-        let queued_directory =
-            TempDir::new().expect("temporary queued leader-wire retirement directory");
-        let (mut queued_runtime, queued_context, queued_keys) =
-            authenticated_network_runtime(&queued_directory, RuntimeQueueConfig::new(8, 1, 1));
-        let queued_tag = queued_runtime.round_tag();
-        let queued_body_parent = queued_runtime
-            .mint_fresh_lifecycle_owner(
-                queued_tag,
-                CommandClass::Progress,
-                RuntimeFreshRootKind::StartupRecovery,
-                b"older-queued-body-available-continuation",
-            )
-            .expect("reserve the older queued body lifecycle");
-        let queued_body_ownership = RuntimeEffectOwnership::fresh(
-            queued_body_parent,
-            RuntimeFreshRootKind::StartupRecovery,
-        );
-        let queued_fixture = leader_wire_proposal_fixture(
-            &queued_directory,
-            &queued_context,
-            &queued_keys,
-            0xCC,
-            queued_runtime.ingress.lifecycle_ordinals.clone(),
-        );
-        let wire::ConsensusMessageV2Payload::Proposal(queued_proposal) =
-            &queued_fixture.message.payload
-        else {
-            unreachable!("queued leader-wire fixture carries Proposal")
-        };
-        queued_runtime
-            .enqueue_network_with_ingress_ownership(
-                queued_fixture.message.clone(),
-                queued_fixture.ownership.clone(),
-            )
-            .expect("enqueue the conflicting leader-wire proposal");
-        let queued_receipt_ordinal = queued_fixture.receipt.owner().admission_ordinal();
-        assert!(
-            queued_body_ownership.owner().lifecycle_ordinal() < queued_receipt_ordinal,
-            "the body completion retains the older causal lifecycle"
-        );
-        let queued_canonical_body = b"canonical body superseding queued proposal".to_vec();
-        let queued_canonical_chunks =
-            wire::encode_payload_chunks(queued_context.da_layout, &queued_canonical_body)
-                .expect("canonically encode the conflicting queued body");
-        // Deliberate negative data: retain the queued proposal's original
-        // subject while deriving over the alternate body's complete RS16
-        // sequence so this remains a semantic conflict, not malformed chunks.
-        let queued_canonical_manifest = wire::PayloadManifest::derive(
-            &queued_context,
-            queued_proposal.round,
-            queued_proposal.subject,
-            u64::try_from(queued_canonical_body.len())
-                .expect("small queued canonical body length fits u64"),
-            &queued_canonical_chunks,
-        )
-        .expect("derive a conflicting canonical manifest for the queued proposal");
-        assert_ne!(queued_canonical_manifest, queued_proposal.manifest);
-        let queued_reservation = queued_runtime
-            .reserve_body_available_with_owner(
-                queued_tag,
-                queued_canonical_manifest,
-                &queued_body_ownership,
-            )
-            .expect("reserve the queued-prune BodyAvailable owner");
-        queued_runtime
-            .commit_body_available(queued_reservation)
-            .expect("atomically replace the conflicting FIFO proposal");
-        assert_eq!(queued_runtime.queued_commands(), 1);
-        assert!(
-            queued_runtime
-                .ingress
-                .commands
-                .iter()
-                .all(|queued| matches!(&queued.command, AdapterCommand::BodyAvailable { .. }))
-        );
-        assert_eq!(
-            queued_runtime
-                .leader_wire_runtime_receipts
-                .get(&queued_receipt_ordinal),
-            Some(&queued_fixture.receipt),
-            "the finite queued completion temporarily owns retirement of the pruned receipt"
-        );
-        assert!(queued_runtime.pending_leader_wire_terminals.is_empty());
-
-        let queued_now = Instant::now();
-        queued_runtime
-            .arm_live_clocks(queued_now)
-            .expect("arm runtime for queued-prune retirement");
-        let queued_body_step = queued_runtime
-            .step(queued_now)
-            .expect("service the exact queued BodyAvailable predecessor");
-        let queued_scheduling = queued_runtime
-            .take_last_scheduler_ownership()
-            .expect("queued BodyAvailable dispatch retains scheduler ownership");
-        assert_eq!(queued_scheduling.selected, RuntimeSelectedOwnerKind::Fifo);
-        let RuntimeStep::Advanced(queued_body_effects) = queued_body_step else {
-            panic!("queued BodyAvailable dispatch unexpectedly idled")
-        };
-        queued_runtime
-            .take_effect_ownership(queued_body_effects.len())
-            .expect("consume queued BodyAvailable effect ownership");
-        assert_eq!(queued_runtime.queued_commands(), 0);
-        assert!(
-            !queued_runtime
-                .leader_wire_runtime_receipts
-                .contains_key(&queued_receipt_ordinal)
-        );
-        let queued_terminals = queued_runtime.take_leader_wire_runtime_terminals();
-        let [LeaderWireRuntimeTerminal::Volatile(receipt)] = queued_terminals.as_slice() else {
-            panic!("queued proposal pruning must emit one volatile leader-wire terminal")
-        };
-        assert_volatile_leader_wire_release(&queued_fixture, receipt);
-        assert!(!queued_runtime.fail_closed);
-    }
-
-    #[test]
-    fn production_authenticated_preflight_is_never_semantic_only_coalesce() {
-        let directory = TempDir::new().expect("temporary authenticated-preflight directory");
-        let (runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let message = signed_runtime_proposal(&context, &keys, 0xC4);
-        let authenticated = runtime
-            .driver
-            .authenticate(message)
-            .expect("authenticate the production Proposal command");
-        let command = AdapterCommand::Authenticated(authenticated);
-
-        assert_eq!(
-            runtime
-                .driver
-                .preflight_runtime_command_admission(runtime.round_tag(), &command),
-            RuntimeCommandAdmissionPreflight::Admit
-        );
-    }
-
-    #[test]
-    fn semantic_only_authenticated_coalesce_fails_before_receipt_registration() {
-        let directory = TempDir::new().expect("temporary coalesce-defense directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let existing = signed_runtime_proposal(&context, &keys, 0xC5);
-        runtime
-            .enqueue_network(existing)
-            .expect("retain an existing authenticated semantic owner");
-        let queued_before = runtime.queued_commands();
-
-        let candidate = leader_wire_proposal_fixture(
-            &directory,
-            &context,
-            &keys,
-            0xC6,
-            runtime.ingress.lifecycle_ordinals.clone(),
-        );
-        let candidate_ownership = RuntimeIngressOwnershipEvidence::from_fair_ingress(
-            &candidate.message,
-            candidate.ownership.clone(),
-        )
-        .expect("project the fresh leader-wire runtime receipt");
-        assert!(
-            candidate_ownership
-                .leader_wire_runtime_receipt()
-                .expect("inspect exact candidate receipt")
-                .is_some()
-        );
-        assert!(runtime.leader_wire_runtime_receipts.is_empty());
-
-        assert!(matches!(
-            runtime.reject_authenticated_preflight_coalescence(
-                RuntimeCommandAdmissionPreflight::Coalesce,
-            ),
-            Err(NetworkIngressError::FailClosed)
-        ));
-        assert_eq!(
-            runtime.queued_commands(),
-            queued_before,
-            "defensive rejection must not delete the existing semantic owner"
-        );
-        assert!(
-            runtime.leader_wire_runtime_receipts.is_empty(),
-            "semantic-only coalescence cannot register an ownerless runtime receipt"
-        );
-        assert!(runtime.pending_leader_wire_terminals.is_empty());
-        assert!(runtime.fail_closed);
-    }
-
-    #[test]
-    fn decision_retires_proposal_owners_but_preserves_body_and_application_completions() {
-        let directory = TempDir::new().expect("temporary decision-retirement directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(12, 1, 1));
-        let owner_tag = runtime.round_tag();
-        let receipts = |manifest: &wire::PayloadManifest| {
-            let durable = DurableBodyReceipt::for_test(
-                context.id(),
-                manifest.round,
-                manifest.subject,
-                HashOf::new(manifest),
-            );
-            let validated = ValidatedBodyReceipt::for_test(durable.clone());
-            (durable, validated)
-        };
-
-        let decision_manifest = runtime_manifest(&context, 0xD0);
-        let (decision_durable, decision_validated) = receipts(&decision_manifest);
-        let decision_commitment = decision_validated.execution_commitment();
-        runtime
-            .enqueue_network(signed_runtime_proposal(&context, &keys, 0xD1))
-            .expect("enqueue authenticated proposal at decided height");
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: decision_manifest.clone(),
-                durable_receipt: decision_durable.clone(),
-                validated_receipt: decision_validated,
-            },
-        );
-        let other_local_manifest = runtime_manifest(&context, 0xD2);
-        let (other_durable, other_validated) = receipts(&other_local_manifest);
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: other_local_manifest.clone(),
-                durable_receipt: other_durable,
-                validated_receipt: other_validated,
-            },
-        );
-        runtime
-            .enqueue_body_available(owner_tag, decision_manifest.clone())
-            .expect("enqueue body-recovery completion");
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::BodyStored {
-                round: decision_manifest.round,
-                subject: decision_manifest.subject,
-                receipt: decision_durable,
-            },
-        );
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::ApplicationCompleted(decision_manifest.subject),
-        );
-
-        let deferred_proposal = match signed_runtime_proposal(&context, &keys, 0xD3).payload {
-            wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal,
-            _ => unreachable!("fixture is a proposal"),
-        };
-        runtime
-            .driver
-            .defer_authenticated_proposal_for_test(owner_tag, &deferred_proposal)
-            .expect("stage Busy-deferred authenticated proposal");
-        let deferred_local_manifest = runtime_manifest(&context, 0xD4);
-        runtime
-            .driver
-            .defer_body_pipeline_stage_for_test(
-                owner_tag,
-                &deferred_local_manifest,
-                DeferredBodyPipelineStageForTest::LocalProposalReady,
-            )
-            .expect("stage Busy-deferred LocalProposalReady");
-        let deferred_body_manifest = runtime_manifest(&context, 0xD5);
-        runtime
-            .driver
-            .defer_body_pipeline_stage_for_test(
-                owner_tag,
-                &deferred_body_manifest,
-                DeferredBodyPipelineStageForTest::BodyStored,
-            )
-            .expect("stage Busy-deferred body-store completion");
-        assert_eq!(
-            runtime
-                .driver
-                .status()
-                .expect("status before decision retirement")
-                .liveness
-                .work
-                .candidate,
-            wire::SumeragiV2LocalWorkStage::Complete
-        );
-
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(
-                    decision_manifest.round,
-                    decision_manifest.subject,
-                    decision_commitment,
-                )
-                .expect("retire proposal work after decision"),
-            DecisionProposalRetirement::new(Some(owner_tag), 0),
-            "the exact current-tag LocalProposalReady owner must remain queued"
-        );
-        assert_eq!(runtime.queued_commands(), 4);
-        assert!(runtime.ingress.commands.iter().all(|queued| !matches!(
-            &queued.command,
-            AdapterCommand::Authenticated(authenticated)
-                if matches!(
-                    authenticated.payload(),
-                    wire::ConsensusMessageV2Payload::Proposal(_)
-                )
-        )));
-        assert!(runtime.ingress.commands.iter().any(|queued| matches!(
-            &queued.command,
-            AdapterCommand::LocalProposalReady { manifest, .. }
-                if manifest == &decision_manifest
-        )));
-        assert!(
-            runtime
-                .ingress
-                .commands
-                .iter()
-                .any(|queued| matches!(&queued.command, AdapterCommand::BodyAvailable { .. }))
-        );
-        assert!(
-            runtime
-                .ingress
-                .commands
-                .iter()
-                .any(|queued| matches!(&queued.command, AdapterCommand::BodyStored { .. }))
-        );
-        assert!(
-            runtime
-                .ingress
-                .commands
-                .iter()
-                .any(|queued| matches!(&queued.command, AdapterCommand::ApplicationCompleted(_)))
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .status()
-                .expect("status after decision retirement")
-                .liveness
-                .work
-                .candidate,
-            wire::SumeragiV2LocalWorkStage::Idle,
-            "decision retirement clears stale active proposal state"
-        );
-        let deferred_local_commitment = receipts(&deferred_local_manifest).1.execution_commitment();
-        assert_eq!(
-            runtime
-                .ingress
-                .decided_local_proposal_counts(
-                    owner_tag,
-                    deferred_local_manifest.round,
-                    deferred_local_manifest.subject,
-                    deferred_local_commitment,
-                )
-                .merge(runtime.driver.deferred_decided_local_proposal_counts(
-                    owner_tag,
-                    deferred_local_manifest.round,
-                    deferred_local_manifest.subject,
-                    deferred_local_commitment,
-                )),
-            DecisionLocalProposalCounts::default(),
-            "all nonmatching local proposal completions were retired"
-        );
-
-        assert_eq!(
-            runtime
-                .retire_body_pipeline_completions(
-                    owner_tag,
-                    decision_manifest.round,
-                    decision_manifest.subject,
-                )
-                .expect("body recovery remains queued after decision"),
-            RetiredBodyPipelineCompletions {
-                body_available: 1,
-                body_stored: 1,
-                validation: 0,
-                local_proposal: 1,
-            }
-        );
-        assert_eq!(
-            runtime
-                .retire_body_pipeline_completions(
-                    owner_tag,
-                    deferred_body_manifest.round,
-                    deferred_body_manifest.subject,
-                )
-                .expect("Busy-deferred body store remains queued after decision"),
-            RetiredBodyPipelineCompletions {
-                body_available: 0,
-                body_stored: 1,
-                validation: 0,
-                local_proposal: 0,
-            }
-        );
-        assert_eq!(runtime.queued_commands(), 1);
-        assert!(matches!(
-            runtime.ingress.commands.front().map(|queued| &queued.command),
-            Some(AdapterCommand::ApplicationCompleted(subject))
-                if *subject == decision_manifest.subject
-        ));
-
-        let duplicate_manifest = runtime_manifest(&context, 0xD6);
-        let (duplicate_durable, duplicate_validated) = receipts(&duplicate_manifest);
-        let duplicate_commitment = duplicate_validated.execution_commitment();
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: duplicate_manifest.clone(),
-                durable_receipt: duplicate_durable,
-                validated_receipt: duplicate_validated,
-            },
-        );
-        runtime
-            .driver
-            .defer_body_pipeline_stage_for_test(
-                owner_tag,
-                &duplicate_manifest,
-                DeferredBodyPipelineStageForTest::LocalProposalReady,
-            )
-            .expect("stage duplicate exact local completion in Busy-deferred lane");
-        assert_eq!(runtime.queued_commands(), 2);
-        assert_eq!(
-            runtime
-                .ingress
-                .decided_local_proposal_counts(
-                    owner_tag,
-                    duplicate_manifest.round,
-                    duplicate_manifest.subject,
-                    duplicate_commitment,
-                )
-                .retainable(),
-            1,
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_decided_local_proposal_counts(
-                    owner_tag,
-                    duplicate_manifest.round,
-                    duplicate_manifest.subject,
-                    duplicate_commitment,
-                )
-                .retainable(),
-            1,
-        );
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(
-                    duplicate_manifest.round,
-                    duplicate_manifest.subject,
-                    duplicate_commitment,
-                )
-                .expect_err("duplicate exact local completion ownership must fail"),
-            "Sumeragi v2 decided local proposal completion has duplicate serialized owners"
-        );
-        assert!(runtime.fail_closed);
-        assert_eq!(
-            runtime.queued_commands(),
-            2,
-            "preflight must retain the application and ingress proposal owners"
-        );
-        assert_eq!(
-            runtime
-                .ingress
-                .decided_local_proposal_counts(
-                    owner_tag,
-                    duplicate_manifest.round,
-                    duplicate_manifest.subject,
-                    duplicate_commitment,
-                )
-                .retainable(),
-            1,
-        );
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_decided_local_proposal_counts(
-                    owner_tag,
-                    duplicate_manifest.round,
-                    duplicate_manifest.subject,
-                    duplicate_commitment,
-                )
-                .retainable(),
-            1,
-            "preflight must retain the Busy-deferred proposal owner"
-        );
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(
-                    duplicate_manifest.round,
-                    duplicate_manifest.subject,
-                    duplicate_commitment,
-                )
-                .expect_err("fail-closed runtime must reject a second proposal retirement"),
-            "Sumeragi v2 runtime is fail-closed"
-        );
-        assert_eq!(
-            runtime.enqueue_signature(owner_tag, vec![0xD6]),
-            Err(EnqueueError::FailClosed)
-        );
-        assert!(matches!(
-            runtime.step(Instant::now()),
-            Err(RuntimeError::FailClosed)
-        ));
-    }
-
-    #[test]
-    fn decision_retires_stale_local_completion_for_durable_recovery() {
-        let directory = TempDir::new().expect("temporary stale-decision directory");
-        let (mut runtime, context, _keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let stale_tag = runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0xD7);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        let validated = ValidatedBodyReceipt::for_test(durable.clone());
-        let commitment = validated.execution_commitment();
-        stage_completion_for_queue_test(
-            &mut runtime,
-            stale_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: manifest.clone(),
-                durable_receipt: durable,
-                validated_receipt: validated,
-            },
-        );
-
-        runtime.round_tag = EventTag::new(
-            stale_tag.height(),
-            stale_tag.view().saturating_add(1),
-            Generation::new(stale_tag.generation().get().saturating_add(1)),
-        );
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(manifest.round, manifest.subject, commitment,)
-                .expect("retire stale exact completion after certified view change"),
-            DecisionProposalRetirement::new(None, 1)
-        );
-        assert_eq!(runtime.queued_commands(), 0);
-        assert!(!runtime.fail_closed);
-        runtime
-            .enqueue_body_available(runtime.round_tag(), manifest)
-            .expect("durable reconstruction can claim the current reducer tag");
-    }
-
-    #[test]
-    fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
-        const PHASE_INVENTORY: [&str; 2] =
-            ["decided_local_proposal_ready", "application_completed"];
-
-        let directory = TempDir::new().expect("temporary Decision-race directory");
-        let (mut runtime, context, _keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0xD9);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        let validated = ValidatedBodyReceipt::for_test(durable.clone());
-        let commitment = validated.execution_commitment();
-        let decision = wire::QuorumCertificate {
-            round: manifest.round,
-            proposal_round: manifest.round,
-            phase: wire::GlobalPhase::Commit,
-            subject: manifest.subject,
-            execution_commitment: commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0xD9; 96],
-        };
-        runtime
-            .ingress
-            .enqueue_authenticated(
-                owner_tag,
-                CommandClass::Progress,
-                AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
-                )),
-            )
-            .expect("enqueue the older CommitQC progress item");
-        // The completion is admitted second. The class cursor may select
-        // between siblings of one lifecycle, but it cannot move this later
-        // local callback ahead of the already-admitted Decision.
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: manifest.clone(),
-                durable_receipt: durable.clone(),
-                validated_receipt: validated.clone(),
-            },
-        );
-        runtime
-            .enqueue_local_proposal(
-                owner_tag,
-                manifest.clone(),
-                durable.clone(),
-                validated.clone(),
-            )
-            .expect("an exact trusted retry coalesces with its existing owner");
-        assert_eq!(runtime.queued_commands(), 2);
-        runtime.ingress.next_class = CommandClass::Progress;
-        let now = Instant::now();
-        runtime.arm_live_clocks(now).expect("arm runtime clocks");
-
-        let RuntimeStep::Advanced(decision_effects) = runtime
-            .step_and_take_scheduler_ownership_for_test(now)
-            .expect("Progress cursor installs Decision")
-        else {
-            panic!("queued CommitQC must advance the reducer")
-        };
-        assert!(matches!(
-            decision_effects.as_slice(),
-            [AdapterEffect::FetchBody {
-                subject,
-                certificate: Some(certificate),
-                ..
-            }] if *subject == manifest.subject && certificate == &decision
-        ));
-        assert_eq!(runtime.queued_commands(), 1);
-
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(manifest.round, manifest.subject, commitment,)
-                .expect("Decision cleanup preserves the exact completion"),
-            DecisionProposalRetirement::new(Some(owner_tag), 0)
-        );
-        let RuntimeStep::Advanced(completion_effects) = runtime
-            .step_and_take_scheduler_ownership_for_test(now)
-            .expect("fair completion service reaches the reducer")
-        else {
-            panic!("retained completion must advance the reducer")
-        };
-        assert!(matches!(
-            completion_effects.as_slice(),
-            [AdapterEffect::Apply {
-                subject,
-                certificate,
-                ..
-            }] if *subject == manifest.subject && certificate == &decision
-        ));
-        assert!(!completion_effects.iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::FetchBody { .. } | AdapterEffect::StoreBody { .. }
-        )));
-        assert_eq!(runtime.queued_commands(), 0);
-
-        let mut suppressed_phases = Vec::new();
-        let next_ordinal = runtime.ingress.next_admission_ordinal;
-        runtime
-            .enqueue_local_proposal(owner_tag, manifest.clone(), durable, validated)
-            .expect("the decided validated body suppresses a drained local completion retry");
-        assert_eq!(runtime.queued_commands(), 0);
-        assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-        suppressed_phases.push("decided_local_proposal_ready");
-
-        runtime
-            .enqueue_application_completed(owner_tag, manifest.subject)
-            .expect("enqueue exact Apply acknowledgement");
-        assert!(matches!(
-            runtime
-                .step_and_take_scheduler_ownership_for_test(now)
-                .expect("dispatch exact Apply acknowledgement"),
-            RuntimeStep::Advanced(ref effects) if effects.is_empty()
-        ));
-        let next_ordinal = runtime.ingress.next_admission_ordinal;
-        for _ in 0..3 {
-            runtime
-                .enqueue_application_completed(owner_tag, manifest.subject)
-                .expect("an applied-height acknowledgement retry is a monotone stutter");
-        }
-        assert_eq!(runtime.queued_commands(), 0);
-        assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-        suppressed_phases.push("application_completed");
-        assert_eq!(suppressed_phases, PHASE_INVENTORY);
-    }
-
-    #[test]
-    fn decision_cleanup_preserves_unique_busy_deferred_completion() {
-        let directory = TempDir::new().expect("temporary Busy-deferred Decision directory");
-        let (mut runtime, context, _keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0xDA);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        let commitment = ValidatedBodyReceipt::for_test(durable).execution_commitment();
-        runtime
-            .driver
-            .defer_body_pipeline_stage_for_test(
-                owner_tag,
-                &manifest,
-                DeferredBodyPipelineStageForTest::LocalProposalReady,
-            )
-            .expect("stage exact Busy-deferred completion");
-
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(manifest.round, manifest.subject, commitment,)
-                .expect("retain exact Busy-deferred completion"),
-            DecisionProposalRetirement::new(Some(owner_tag), 0)
-        );
-        assert_eq!(runtime.queued_commands(), 0);
-        assert_eq!(
-            runtime
-                .driver
-                .deferred_decided_local_proposal_counts(
-                    owner_tag,
-                    manifest.round,
-                    manifest.subject,
-                    commitment,
-                )
-                .retainable(),
-            1
-        );
-    }
-
-    #[test]
-    fn decision_commitment_mismatch_fails_closed_before_retirement() {
-        let directory = TempDir::new().expect("temporary mismatched-decision directory");
-        let (mut runtime, context, _keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let owner_tag = runtime.round_tag();
-        let manifest = runtime_manifest(&context, 0xD8);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        let validated = ValidatedBodyReceipt::for_test(durable.clone());
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"decision mismatch parent state"),
-            Hash::new(b"decision mismatch post state"),
-            Hash::new(b"decision mismatch ordinary writes"),
-            1,
-            Hash::new(b"decision mismatch executed block"),
-        );
-        assert_ne!(validated.execution_commitment(), conflicting_commitment);
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::LocalProposalReady {
-                manifest: manifest.clone(),
-                durable_receipt: durable,
-                validated_receipt: validated,
-            },
-        );
-
-        assert_eq!(
-            runtime
-                .retire_proposal_work_after_decision(
-                    manifest.round,
-                    manifest.subject,
-                    conflicting_commitment,
-                )
-                .expect_err("Decision commitment drift must fail closed"),
-            "Sumeragi v2 decided local proposal evidence conflicts with the durable Decision"
-        );
-        assert!(runtime.fail_closed);
-        assert_eq!(
-            runtime.queued_commands(),
-            1,
-            "conflict preflight must preserve the original evidence for diagnosis"
-        );
-        assert!(matches!(
-            runtime.ingress.commands.front().map(|queued| &queued.command),
-            Some(AdapterCommand::LocalProposalReady {
-                manifest: queued,
-                ..
-            }) if queued == &manifest
-        ));
-    }
-
-    #[test]
-    fn unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation() {
-        for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
-            let directory = TempDir::new().expect("temporary unbound-vote directory");
-            let (mut runtime, context, keys) =
-                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-            let manifest = runtime_manifest(&context, 0xD7);
-            let durable = DurableBodyReceipt::for_test(
-                context.id(),
-                manifest.round,
-                manifest.subject,
-                HashOf::new(&manifest),
-            );
-            let validated = ValidatedBodyReceipt::for_test(durable);
-            let signed_vote = signed_runtime_vote(
-                &keys,
-                manifest.round,
-                phase,
-                manifest.subject,
-                validated.execution_commitment(),
-            );
-
-            let far_future_round = wire::ConsensusRound {
-                view: u64::MAX,
-                ..manifest.round
-            };
-            let signed_far_future = signed_runtime_vote(
-                &keys,
-                far_future_round,
-                phase,
-                manifest.subject,
-                validated.execution_commitment(),
-            );
-            assert!(
-                runtime.can_admit_network_message(&signed_far_future),
-                "a structurally valid far-future {phase:?} vote must drain without certified local view authority"
-            );
-            assert!(matches!(
-                runtime.enqueue_network(signed_far_future),
-                Err(NetworkIngressError::Authentication(
-                    AdapterError::MissingExecutionCommitment
-                ))
-            ));
-            assert_eq!(runtime.queued_commands(), 0);
-            assert!(
-                !runtime.fail_closed,
-                "rejecting a far-future unbound {phase:?} vote must not poison the runtime"
-            );
-
-            let mut malformed_future = signed_vote.clone();
-            let wire::ConsensusMessageV2Payload::Vote(malformed_vote) =
-                &mut malformed_future.payload
-            else {
-                unreachable!("fixture is a direct vote");
-            };
-            malformed_vote.round.view = u64::MAX;
-            malformed_vote.proposal_round.view = u64::MAX;
-            malformed_vote.signature.clear();
-            assert!(
-                runtime.can_admit_network_message(&malformed_future),
-                "a structurally invalid far-future {phase:?} vote must drain for normal rejection"
-            );
-            assert!(matches!(
-                runtime.enqueue_network(malformed_future),
-                Err(NetworkIngressError::Authentication(_))
-            ));
-            assert_eq!(runtime.queued_commands(), 0);
-
-            assert!(
-                !runtime.can_admit_network_message(&signed_vote),
-                "an early {phase:?} vote must remain fair-ingress owned until its proposal is validated"
-            );
-            // The mutating seam still rejects a caller that bypasses the
-            // non-mutating fair-ingress gate.
-            assert!(matches!(
-                runtime.enqueue_network(signed_vote.clone()),
-                Err(NetworkIngressError::Authentication(
-                    AdapterError::MissingExecutionCommitment
-                ))
-            ));
-            assert_eq!(runtime.queued_commands(), 0);
-            assert!(
-                !runtime.fail_closed,
-                "recoverable {phase:?} authentication rejection must not poison the runtime"
-            );
-
-            let proposer = context.leader(manifest.round.view);
-            let mut proposal = wire::Proposal {
-                round: manifest.round,
-                proposer,
-                subject: manifest.subject,
-                manifest: manifest.clone(),
-                justification: wire::ProposalJustification::ParentCommit(
-                    wire::ParentCommitJustification { certificate: None },
-                ),
-                signature: Vec::new(),
-            };
-            proposal.signature = Signature::new(
-                keys[usize::try_from(proposer).expect("small proposer index")].private_key(),
-                &proposal.signature_preimage(),
-            )
-            .payload()
-            .to_vec();
-            runtime
-                .enqueue_network(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::Proposal(proposal),
-                ))
-                .expect("matching proposal establishes a pending body pipeline");
-            assert_eq!(runtime.queued_commands(), 1);
-            assert!(
-                !runtime.can_admit_network_message(&signed_vote),
-                "the {phase:?} vote remains a recoverable fair-ingress prerequisite while validation is pending"
-            );
-            runtime
-                .arm_live_clocks(Instant::now())
-                .expect("arm fixture clocks before dispatch");
-            runtime
-                .step_and_take_scheduler_ownership_for_test(Instant::now())
-                .expect("dispatch matching proposal");
-            assert_eq!(runtime.queued_commands(), 0);
-            assert!(
-                !runtime.can_admit_network_message(&signed_vote),
-                "the registered manifest keeps the {phase:?} vote deferred while validation is pending"
-            );
-            assert!(!runtime.fail_closed);
-
-            let reducer_tag_before_binding = runtime.driver.current_tag();
-            let reducer_body_before_binding = runtime
-                .driver
-                .body_state_for_test(manifest.round, manifest.subject);
-            runtime
-                .bind_validated_body(&manifest, &validated)
-                .expect("live validation establishes canonical commitment authority");
-            assert_eq!(
-                runtime.driver.current_tag(),
-                reducer_tag_before_binding,
-                "wire-authority binding cannot retag the reducer"
-            );
-            assert_eq!(
-                runtime
-                    .driver
-                    .body_state_for_test(manifest.round, manifest.subject),
-                reducer_body_before_binding,
-                "wire-authority binding cannot revive a reducer consumer"
-            );
-            assert!(
-                runtime.can_admit_network_message(&signed_vote),
-                "the retained fair-ingress {phase:?} vote becomes drainable after validation"
-            );
-
-            let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"conflicting early vote parent state"),
-                Hash::new(b"conflicting early vote post state"),
-                Hash::new(b"conflicting early vote ordinary writes"),
-                1,
-                Hash::new(b"conflicting early vote executed block"),
-            );
-            assert_ne!(
-                conflicting_commitment,
-                validated.execution_commitment(),
-                "the conflict fixture must differ from canonical validation"
-            );
-            let conflicting_vote = signed_runtime_vote(
-                &keys,
-                manifest.round,
-                phase,
-                manifest.subject,
-                conflicting_commitment,
-            );
-            assert!(
-                runtime.can_admit_network_message(&conflicting_vote),
-                "a conflicting bound {phase:?} vote must drain for authenticated rejection"
-            );
-            assert!(matches!(
-                runtime.enqueue_network(conflicting_vote),
-                Err(NetworkIngressError::Authentication(
-                    AdapterError::ConflictingExecutionCommitment
-                ))
-            ));
-            assert_eq!(runtime.queued_commands(), 0);
-            assert!(
-                !runtime.fail_closed,
-                "conflicting {phase:?} vote rejection must not poison the runtime"
-            );
-
-            runtime
-                .enqueue_network(signed_vote)
-                .expect("the same signed canonical vote becomes admissible after validation");
-            assert_eq!(runtime.queued_commands(), 1);
-            assert!(!runtime.fail_closed);
-
-            let stale_directory = TempDir::new().expect("temporary stale-vote directory");
-            let (mut stale_runtime, stale_context, stale_keys) =
-                authenticated_network_runtime(&stale_directory, RuntimeQueueConfig::new(8, 1, 1));
-            let stale_manifest = runtime_manifest(&stale_context, 0xD9);
-            let stale_durable = DurableBodyReceipt::for_test(
-                stale_context.id(),
-                stale_manifest.round,
-                stale_manifest.subject,
-                HashOf::new(&stale_manifest),
-            );
-            let stale_validated = ValidatedBodyReceipt::for_test(stale_durable);
-            let stale_message = signed_runtime_vote(
-                &stale_keys,
-                stale_manifest.round,
-                phase,
-                stale_manifest.subject,
-                stale_validated.execution_commitment(),
-            );
-            assert!(
-                !stale_runtime.can_admit_network_message(&stale_message),
-                "an unbound {phase:?} vote is retained while its view remains active"
-            );
-            let initial = stale_runtime.round_tag();
-            let next = EventTag::new(
-                initial.height(),
-                initial.view() + 1,
-                Generation::new(initial.generation().get() + 1),
-            );
-            observe_enter_view_for_test(&mut stale_runtime, initial, next, &stale_manifest);
-            assert!(
-                stale_runtime.can_admit_network_message(&stale_message),
-                "view change releases an unmatched stale {phase:?} vote for bounded rejection"
-            );
-        }
-    }
-
-    #[test]
-    fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
-        let directory = TempDir::new().expect("temporary runtime ingress directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(5, 1, 1));
-        let original = signed_runtime_proposal(&context, &keys, 1);
-        let second = signed_runtime_proposal(&context, &keys, 2);
-        let third = signed_runtime_proposal(&context, &keys, 3);
-        let transport = match &original.payload {
-            wire::ConsensusMessageV2Payload::Proposal(proposal) => wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadManifest(proposal.manifest.clone()),
-            ),
-            _ => unreachable!("fixture is a proposal"),
-        };
-
-        let owner_tag = runtime
-            .enqueue_network(original.clone())
-            .expect("first authenticated proposal owns one normal slot");
-        assert_eq!(runtime.queued_commands(), 1);
-        assert_eq!(
-            runtime
-                .enqueue_network(original.clone())
-                .expect("exact duplicate coalesces below the normal boundary"),
-            owner_tag
-        );
-        assert_eq!(runtime.queued_commands(), 1);
-
-        let mut invalid = third.clone();
-        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &mut invalid.payload else {
-            unreachable!("fixture is a proposal")
-        };
-        proposal.signature[0] ^= 0x80;
-        assert!(matches!(
-            runtime.enqueue_network(invalid),
-            Err(NetworkIngressError::Authentication(_))
-        ));
-        assert_eq!(runtime.queued_commands(), 1);
-
-        runtime
-            .enqueue_network(second.clone())
-            .expect("non-identical authenticated proposal uses ordinary capacity");
-        assert_eq!(runtime.queued_commands(), 2);
-        assert_eq!(
-            runtime
-                .enqueue_network(original.clone())
-                .expect("exact duplicate coalesces at reserved capacity"),
-            owner_tag
-        );
-        assert!(matches!(
-            runtime.enqueue_network(third.clone()),
-            Err(NetworkIngressError::Backpressure(
-                EnqueueError::ReservedCapacity
-            ))
-        ));
-
-        let cursor_before = runtime.ingress.next_class;
-        let tags_before = runtime
-            .ingress
-            .commands
-            .iter()
-            .map(|queued| queued.tag)
-            .collect::<Vec<_>>();
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![4]),
-        );
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![5]),
-        );
-        assert_eq!(runtime.queued_commands(), 4);
-        assert!(runtime.can_admit_network_message(&original));
-        assert!(!runtime.can_admit_network_message(&third));
-        assert_eq!(
-            runtime
-                .enqueue_network(original.clone())
-                .expect("exact authenticated duplicate coalesces at full ordinary capacity"),
-            owner_tag
-        );
-        assert_eq!(runtime.queued_commands(), 4);
-        assert_eq!(runtime.ingress.next_class, cursor_before);
-        assert_eq!(
-            runtime
-                .ingress
-                .commands
-                .iter()
-                .take(tags_before.len())
-                .map(|queued| queued.tag)
-                .collect::<Vec<_>>(),
-            tags_before
-        );
-        assert!(matches!(
-            runtime.enqueue_network(third),
-            Err(NetworkIngressError::Backpressure(EnqueueError::Full))
-        ));
-
-        runtime.fail_closed = true;
-        assert!(matches!(
-            runtime.enqueue_network(original.clone()),
-            Err(NetworkIngressError::FailClosed)
-        ));
-        assert!(matches!(
-            runtime.enqueue_network(transport.clone()),
-            Err(NetworkIngressError::FailClosed)
-        ));
-        runtime.fail_closed = false;
-        assert!(matches!(
-            runtime.enqueue_network(transport),
-            Err(NetworkIngressError::TransportPayload)
-        ));
-    }
-
-    #[test]
-    fn certified_commit_uses_physical_slot_reserved_from_completions() {
-        let directory = TempDir::new().expect("temporary certified-capacity directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
-        let owner_tag = runtime.round_tag();
-
-        for signature in [vec![3], vec![4], vec![5]] {
-            stage_completion_for_queue_test(
-                &mut runtime,
-                owner_tag,
-                AdapterCommand::SignatureCompleted(signature),
-            );
-        }
-        assert_eq!(runtime.queued_commands(), 3);
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-
-        let commit =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate(&context, &keys, 0xE0),
-            ));
-        assert!(
-            runtime.can_admit_network_message(&commit),
-            "the authenticated CommitQC owns the one slot hidden from completion producers"
-        );
-        runtime
-            .enqueue_network(commit)
-            .expect("the CommitQC consumes its reserved physical slot");
-        assert_eq!(runtime.queued_commands(), 4);
-        assert!(matches!(
-            runtime.ingress.check_capacity(CommandClass::Completion),
-            Err(EnqueueError::Full)
-        ));
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn certified_commit_arriving_first_preserves_every_ordinary_reserve() {
-        let directory = TempDir::new().expect("temporary certified-order directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
-        let owner_tag = runtime.round_tag();
-
-        let commit =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate(&context, &keys, 0xD0),
-            ));
-        runtime
-            .enqueue_network(commit)
-            .expect("the early CommitQC is charged to the certified slot");
-        assert_eq!(
-            runtime.remaining_completion_capacity(),
-            7,
-            "charging the CommitQC to its own slot leaves every ordinary position free"
-        );
-
-        for marker in 0xD1..=0xD5 {
-            let prepare =
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                    signed_runtime_quorum_certificate_for_phase(
-                        &context,
-                        &keys,
-                        marker,
-                        wire::GlobalPhase::Prepare,
-                    ),
-                ));
-            runtime
-                .enqueue_network(prepare)
-                .expect("ordinary Progress capacity is independent of certificate arrival order");
-        }
-        assert_eq!(runtime.remaining_completion_capacity(), 2);
-
-        let manifest = runtime_manifest(&context, 0xD6);
-        let body_reservation = runtime
-            .ingress
-            .reserve_canonical_body_available(owner_tag, manifest)
-            .expect("BodyAvailable can reserve the first completion slot after an early CommitQC");
-        assert_eq!(runtime.queued_commands(), 6);
-        assert_eq!(runtime.remaining_completion_capacity(), 1);
-        runtime
-            .ingress
-            .commit_canonical_body_available(body_reservation)
-            .expect("the reserved BodyAvailable materializes without another capacity charge");
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![4]),
-        );
-        assert_eq!(runtime.queued_commands(), 8);
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-        assert!(matches!(
-            runtime.ingress.check_capacity(CommandClass::Completion),
-            Err(EnqueueError::Full)
-        ));
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn prepare_qc_cannot_spend_the_certified_physical_credit() {
-        let directory = TempDir::new().expect("temporary certified-classifier directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
-        let certificate = |marker, phase| {
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate_for_phase(&context, &keys, marker, phase),
-            ))
-        };
-
-        for marker in [0xB0, 0xB1] {
-            runtime
-                .enqueue_network(certificate(marker, wire::GlobalPhase::Prepare))
-                .expect("the two ordinary Progress positions accept PrepareQCs");
-        }
-        assert!(matches!(
-            runtime.enqueue_network(certificate(0xB2, wire::GlobalPhase::Prepare)),
-            Err(NetworkIngressError::Backpressure(
-                EnqueueError::ReservedCapacity
-            ))
-        ));
-
-        runtime
-            .enqueue_network(certificate(0xB3, wire::GlobalPhase::Commit))
-            .expect("only the CommitQC receives the certified physical credit");
-        assert_eq!(runtime.queued_commands(), 3);
-        assert_eq!(runtime.remaining_completion_capacity(), 1);
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn distinct_certificates_share_exactly_one_physical_credit() {
-        let directory = TempDir::new().expect("temporary certified-credit directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
-        let owner_tag = runtime.round_tag();
-        let commit = |marker| {
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate(&context, &keys, marker),
-            ))
-        };
-
-        for marker in 0xC0..=0xC2 {
-            runtime
-                .enqueue_network(commit(marker))
-                .expect("one certified root uses the extra slot and the others use Progress");
-        }
-        assert_eq!(runtime.queued_commands(), 3);
-        assert_eq!(runtime.remaining_completion_capacity(), 1);
-        assert!(
-            !runtime.can_admit_network_message(&commit(0xC3)),
-            "a fourth certificate cannot receive a second physical credit"
-        );
-        assert!(matches!(
-            runtime.enqueue_network(commit(0xC3)),
-            Err(NetworkIngressError::Backpressure(
-                EnqueueError::ReservedCapacity
-            ))
-        ));
-
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![0xC4]),
-        );
-        assert_eq!(runtime.queued_commands(), 4);
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
-        let directory = TempDir::new().expect("temporary certified-retirement directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
-        let owner_tag = runtime.round_tag();
-        let certificate = |marker, phase| {
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate_for_phase(&context, &keys, marker, phase),
-            ))
-        };
-
-        runtime
-            .enqueue_network(certificate(0xA0, wire::GlobalPhase::Commit))
-            .expect("the CommitQC owns the single certified credit");
-        for marker in [0xA1, 0xA2] {
-            runtime
-                .enqueue_network(certificate(marker, wire::GlobalPhase::Prepare))
-                .expect("ordinary Progress fills its exact class allocation");
-        }
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![0xA3]),
-        );
-        assert_eq!(runtime.queued_commands(), 4);
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-
-        let (retired, _) = runtime
-            .ingress
-            .pop_pacemaker_progress_with_ownership(
-                |_| true,
-                |command| command.is_certified_fence_escape(),
-            )
-            .expect("the certified priority seam remains exact")
-            .expect("the retained CommitQC is selectable");
-        assert!(retired.command.is_certified_fence_escape());
-        assert_eq!(runtime.queued_commands(), 3);
-        assert_eq!(
-            runtime.remaining_completion_capacity(),
-            0,
-            "retiring the sole certificate removes its credit as well as its physical owner"
-        );
-        assert!(matches!(
-            runtime.ingress.check_capacity(CommandClass::Completion),
-            Err(EnqueueError::Full)
-        ));
-
-        runtime
-            .ingress
-            .pop_next()
-            .expect("one ordinary FIFO service turn opens completion admission");
-        assert_eq!(runtime.remaining_completion_capacity(), 1);
-        assert!(
-            runtime
-                .ingress
-                .check_capacity(CommandClass::Completion)
-                .is_ok()
-        );
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn unpublished_body_replacement_cannot_overbook_the_certified_slot() {
-        let directory = TempDir::new().expect("temporary body-replacement directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
-        let owner_tag = runtime.round_tag();
-        let proposal = signed_runtime_proposal(&context, &keys, 0x94);
-        let mut canonical = match &proposal.payload {
-            wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal.manifest.clone(),
-            _ => unreachable!("runtime proposal fixture has Proposal payload"),
-        };
-        canonical.chunk_hashes = vec![Hash::new(b"canonical replacement chunk"); 2];
-        canonical.chunk_root = Hash::new(b"canonical replacement root");
-
-        runtime
-            .enqueue_network(proposal)
-            .expect("the conflicting proposal occupies Normal capacity");
-        runtime
-            .enqueue_network(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::QuorumCertificate(
-                    signed_runtime_quorum_certificate_for_phase(
-                        &context,
-                        &keys,
-                        0x95,
-                        wire::GlobalPhase::Prepare,
-                    ),
-                ),
-            ))
-            .expect("ordinary Progress occupies its class allocation");
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![0x96]),
-        );
-        assert_eq!(runtime.queued_commands(), 3);
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-
-        let reservation = runtime
-            .ingress
-            .reserve_canonical_body_available(owner_tag, canonical)
-            .expect("the unpublished body atomically replaces its conflicting proposal");
-        assert_eq!(
-            runtime.queued_commands(),
-            2,
-            "the conflicting proposal must retire before the reservation becomes live"
-        );
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-        runtime
-            .ingress
-            .abort_canonical_body_available(reservation.clone());
-
-        runtime
-            .enqueue_network(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(
-                    signed_runtime_timeout_certificate(&context, &keys),
-                ),
-            ))
-            .expect("the retained unpublished body cannot exclude the certified escape");
-        assert_eq!(runtime.queued_commands(), 3);
-        assert_eq!(
-            runtime
-                .ingress
-                .occupied_with_dormant_reservations()
-                .expect("bounded live ownership remains countable"),
-            4
-        );
-
-        runtime
-            .ingress
-            .commit_canonical_body_available(reservation)
-            .expect("the exact token materializes without changing total ownership");
-        assert_eq!(runtime.queued_commands(), 4);
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-        let snapshot = runtime.ingress.ownership_snapshot();
-        assert!(snapshot.validate_identity());
-        for (fifo_position, owner) in snapshot.occurrence_owners.iter().enumerate() {
-            assert_eq!(
-                snapshot.occurrence_index.get(&owner.admission_ordinal),
-                Some(&fifo_position),
-                "a reserved earlier admission materialized at the FIFO tail without corrupting its exact position"
-            );
-        }
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
-        let start = Instant::now();
-        let owner_tag = tag(0);
-        let mut driver = FakeDriver::new(owner_tag);
-        driver.retry_once.insert(0xE2);
-        driver.signature_fence_active = true;
-        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(6, 2, 1));
-        enqueue_fake(
-            &mut runtime,
-            owner_tag,
-            CommandClass::Progress,
-            FakeCommand::record(0xE2),
-        )
-        .expect("admit one unblocked retryable Progress root");
-        bind_fake_local_deferred_target_for_test(&mut runtime, b"pacemaker-retry-target");
-
-        let first = runtime
-            .dispatch_one_pacemaker_progress(start)
-            .expect("retryable pacemaker dispatch remains exact")
-            .expect("the unmarked occurrence owns one bounded turn");
-        assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        let evidence = runtime
-            .take_last_scheduler_ownership()
-            .expect("retry retains exact scheduler evidence");
-        assert_eq!(
-            evidence.selected,
-            RuntimeSelectedOwnerKind::PacemakerProgressRetryRetained
-        );
-        assert!(evidence.fence_retry_marker_required);
-        assert!(evidence.fence_retry_blocked_fifo_before.is_empty());
-        let [retained_marker] = evidence.fence_retry_blocked_fifo_after.as_slice() else {
-            panic!("retry installs exactly one physical occurrence marker")
-        };
-        let retained_marker = retained_marker.clone();
-        assert_eq!(evidence.validate_exact(), Ok(()));
-
-        let mut missing_requirement = evidence.clone();
-        missing_requirement.fence_retry_marker_required = false;
-        missing_requirement.projection_hash =
-            runtime_scheduler_projection_hash(&missing_requirement);
-        assert_eq!(
-            missing_requirement.validate_exact(),
-            Err(RuntimeSchedulerEvidenceError::InvalidProjection),
-            "a coherently rehashed retry cannot omit its required marker transition"
-        );
-
-        assert!(
-            runtime
-                .dispatch_one_pacemaker_progress(start)
-                .expect("marked pacemaker selection remains valid")
-                .is_none(),
-            "the same retryable occurrence cannot spin on the next turn"
-        );
-        assert!(runtime.last_scheduler_ownership().is_none());
-
-        runtime
-            .reconcile_fence_retry_blocked_fifo_owners()
-            .expect("a duplicate certified transition preserves the same fence owner");
-        assert_eq!(
-            runtime.fence_retry_blocked_fifo_owners,
-            vec![retained_marker.clone()]
-        );
-
-        runtime.driver.signature_fence_identity += 1;
-        runtime
-            .reconcile_fence_retry_blocked_fifo_owners()
-            .expect("a successor signer retires the prior fence's retry exclusions");
-        assert!(runtime.fence_retry_blocked_fifo_owners.is_empty());
-        assert!(runtime.fence_retry_signature_fence_identity.is_none());
-
-        runtime
-            .retain_fence_retry_blocked_fifo_owner(retained_marker)
-            .expect("the still-queued occurrence can bind to the successor fence");
-        runtime.ingress.commands.pop_front();
-        runtime
-            .reconcile_fence_retry_blocked_fifo_owners()
-            .expect("an independently retired exact occurrence prunes its marker");
-        assert!(runtime.fence_retry_blocked_fifo_owners.is_empty());
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn fence_predecessor_retry_gets_one_bounded_dependency_turn() {
-        let start = Instant::now();
-        let owner_tag = tag(0);
-        let mut driver = FakeDriver::new(owner_tag);
-        driver.signature_fence_active = true;
-        assert!(driver.retry_once.insert(0xD1));
-        let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(6, 2, 1));
-        enqueue_fake(
-            &mut runtime,
-            owner_tag,
-            CommandClass::Normal,
-            FakeCommand::record(0xD1),
-        )
-        .expect("admit one pre-target retryable predecessor");
-
-        let target_ordinal =
-            bind_fake_local_deferred_target_for_test(&mut runtime, b"retryable-fence-target");
-        assert_eq!(
-            runtime
-                .physically_eligible_deferred_admission_ordinals()
-                .expect("the target remains physically eligible behind its predecessor"),
-            BTreeSet::from([target_ordinal])
-        );
-        assert!(
-            runtime
-                .eligible_deferred_admission_ordinals()
-                .expect("ordinary deferred eligibility remains logically ordered")
-                .is_empty(),
-            "serviceable deferred work may not overtake its older FIFO predecessor"
-        );
-
-        let first = runtime
-            .dispatch_one_fence_dependency(start, None)
-            .expect("the retryable predecessor dependency remains exact")
-            .expect("the oldest predecessor owns one bounded turn");
-        assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        let evidence = runtime
-            .take_last_scheduler_ownership()
-            .expect("retry retains exact fence-dependency evidence");
-        assert_eq!(
-            evidence.selected,
-            RuntimeSelectedOwnerKind::FencePredecessorRetryRetained
-        );
-        assert!(evidence.fence_retry_marker_required);
-        assert!(evidence.fence_retry_blocked_fifo_before.is_empty());
-        assert_eq!(evidence.fence_retry_blocked_fifo_after.len(), 1);
-        assert_eq!(evidence.queue_before, evidence.queue_after);
-        assert_eq!(evidence.validate_exact(), Ok(()));
-        assert_eq!(runtime.queued_commands(), 1);
-
-        assert!(
-            runtime
-                .dispatch_one_fence_dependency(start, None)
-                .expect("the marked dependency set remains valid")
-                .is_none(),
-            "the same retryable predecessor cannot spin ahead of its fence completion"
-        );
-        assert!(runtime.last_scheduler_ownership().is_none());
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
-        let directory = TempDir::new().expect("temporary stale-certified directory");
-        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
-            &directory,
-            RuntimeQueueConfig::new(6, 2, 1),
-            Some(0),
-        );
-        let now = Instant::now();
-        runtime
-            .arm_live_clocks(now)
-            .expect("arm runtime before installing two certified views");
-
-        for certificate_view in [0_u64, 1] {
-            runtime
-                .enqueue_network(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::TimeoutCertificate(
-                        signed_runtime_timeout_certificate_for_view(
-                            &context,
-                            &keys,
-                            certificate_view,
-                        ),
-                    ),
-                ))
-                .expect("admit the next exact view certificate");
-            let advanced = runtime
-                .try_step_pacemaker_escape(now)
-                .expect("certified view installation remains exact")
-                .expect("the next TC owns one pacemaker turn");
-            let RuntimeStep::Advanced(effects) = advanced else {
-                panic!("certified view installation unexpectedly idled")
-            };
-            assert!(matches!(
-                effects.as_slice(),
-                [AdapterEffect::EnterView { tag, .. }]
-                    if tag.view() == certificate_view + 1
-            ));
-            runtime
-                .take_last_scheduler_ownership()
-                .expect("view installation retains exact scheduler evidence");
-            runtime
-                .take_effect_ownership(effects.len())
-                .expect("consume the installed view's effect ownership");
-        }
-
-        let signer_tag = runtime.round_tag();
-        assert_eq!(signer_tag.view(), 2);
-        let timeout = runtime
-            .driver
-            .timeout_elapsed(signer_tag)
-            .expect("open the view-two local TimeoutVote signer");
-        assert!(matches!(
-            timeout.effects(),
-            [AdapterEffect::Sign {
-                request: SignRequest::TimeoutVote(_),
-                ..
-            }]
-        ));
-        assert!(runtime.driver.signature_fence_is_active());
-
-        let prepare = |marker| {
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate_for_phase_at_view(
-                    &context,
-                    &keys,
-                    marker,
-                    wire::GlobalPhase::Prepare,
-                    2,
-                ),
-            ))
-        };
-        runtime
-            .enqueue_network(prepare(0xE7))
-            .expect("admit the deferred PrepareQC target");
-        let deferred = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("PrepareQC Busy handoff remains exact")
-            .expect("the first PrepareQC owns one pacemaker turn");
-        assert!(matches!(deferred, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        runtime
-            .take_last_scheduler_ownership()
-            .expect("Busy PrepareQC retains exact scheduler evidence");
-        assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
-        assert!(!runtime.driver.deferred_work_is_serviceable());
-
-        let highest_prepare = signed_runtime_quorum_certificate_for_phase_at_view(
-            &context,
-            &keys,
-            0xE9,
-            wire::GlobalPhase::Prepare,
-            0,
-        );
-        let stale_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let signers = vec![0, 1, 2];
-        let stale_preimage = wire::TimeoutVote {
-            round: stale_round,
-            highest_prepare_qc: Some(highest_prepare.clone()),
-            signer: signers[0],
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let stale_shares = signers
-            .iter()
-            .map(|signer| {
-                Signature::new(
-                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
-                    &stale_preimage,
-                )
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let stale_share_refs = stale_shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let stale = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
-                round: stale_round,
-                groups: vec![wire::TimeoutVoteGroup {
-                    highest_prepare_qc: Some(highest_prepare),
-                    signers,
-                    aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
-                        &stale_share_refs,
-                    )
-                    .expect("aggregate the stale certified fixture"),
-                }],
-            }),
-        );
-        let marked_prepare = prepare(0xE8);
-        let marked_source = context.roster[1].validator.clone();
-        let stale_source = context.roster[2].validator.clone();
-        let (_leader_wire_directory, _leader_wire_ingress, ownerships) =
-            preowned_leader_wire_ownerships(
-                &context,
-                &[
-                    (marked_prepare.clone(), marked_source),
-                    (stale.clone(), stale_source),
-                ],
-                runtime.ingress.lifecycle_ordinals.clone(),
-            );
-        let [marked_ownership, stale_ownership]: [FairV2IngressOwnershipEvidence; 2] = ownerships
-            .try_into()
-            .expect("fixture creates one pre-cut marker and one post-cut certified owner");
-        let target_cut = runtime
-            .deferred_lifecycle_ownership
-            .values()
-            .next()
-            .expect("the PrepareQC target retains its frozen physical cut")
-            .physical_cut;
-        assert!(
-            u128::from(
-                marked_ownership
-                    .physical_admission_ordinal()
-                    .expect("marked PrepareQC owns a physical occurrence")
-            ) < target_cut
-        );
-        assert!(
-            u128::from(
-                stale_ownership
-                    .physical_admission_ordinal()
-                    .expect("stale TC owns a physical occurrence")
-            ) >= target_cut,
-            "the stale certified command must exercise the pacemaker path, not the pre-cut dependency path"
-        );
-
-        runtime
-            .enqueue_network_with_ingress_ownership(marked_prepare, marked_ownership)
-            .expect("admit one exact blocked FIFO occurrence");
-        let marker = runtime
-            .ingress
-            .commands
-            .front()
-            .and_then(|queued| {
-                queued
-                    .cached_queue_occurrence_owner(&runtime.ingress.selection_source_identity)
-                    .cloned()
-            })
-            .expect("blocked PrepareQC retains its exact occurrence owner");
-        runtime
-            .retain_fence_retry_blocked_fifo_owner(marker.clone())
-            .expect("bind the exact retry exclusion to the active signer");
-        let marker_before = runtime.fence_retry_blocked_fifo_owners.clone();
-        runtime
-            .enqueue_network_with_ingress_ownership(stale, stale_ownership)
-            .expect("admit a valid but stale certified escape");
-
-        let escaped = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("stale certified scheduling remains exact")
-            .expect("the authenticated stale TC owns one pacemaker turn");
-        assert!(matches!(escaped, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        let evidence = runtime
-            .take_last_scheduler_ownership()
-            .expect("stale TC retains exact scheduler evidence");
-        assert_eq!(
-            evidence.selected,
-            RuntimeSelectedOwnerKind::PacemakerProgress
-        );
-        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &evidence.candidate else {
-            panic!("stale TC owns one exact authenticated FIFO occurrence")
-        };
-        assert_eq!(
-            candidate.selection_seal.kind,
-            RuntimeQueueSelectionKind::PacemakerCertifiedProgress
-        );
-        assert_eq!(evidence.fence_retry_blocked_fifo_before, marker_before);
-        assert_eq!(evidence.fence_retry_blocked_fifo_after, marker_before);
-        assert_eq!(evidence.validate_exact(), Ok(()));
-        assert!(runtime.driver.signature_fence_is_active());
-        runtime
-            .reconcile_fence_retry_blocked_fifo_owners()
-            .expect("the unchanged view-two signer preserves its retry exclusion");
-        assert_eq!(runtime.fence_retry_blocked_fifo_owners, marker_before);
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
-        let directory = TempDir::new().expect("temporary certified-prefix directory");
-        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
-            &directory,
-            RuntimeQueueConfig::new(4, 1, 1),
-            Some(0),
-        );
-        let now = Instant::now();
-        runtime
-            .arm_live_clocks(now)
-            .expect("arm runtime before opening the signing fence");
-        let owner_tag = runtime.round_tag();
-        let timeout = runtime
-            .driver
-            .timeout_elapsed(owner_tag)
-            .expect("open one local TimeoutVote signing fence");
-        assert!(matches!(
-            timeout.effects(),
-            [AdapterEffect::Sign {
-                request: SignRequest::TimeoutVote(_),
-                ..
-            }]
-        ));
-
-        let prepare = |marker| {
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                signed_runtime_quorum_certificate_for_phase(
-                    &context,
-                    &keys,
-                    marker,
-                    wire::GlobalPhase::Prepare,
-                ),
-            ))
-        };
-        runtime
-            .enqueue_network(prepare(0xE1))
-            .expect("admit the first PrepareQC");
-        let first = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("first PrepareQC scheduling is valid")
-            .expect("first PrepareQC owns a pacemaker turn");
-        assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        let first_owner = runtime
-            .take_last_scheduler_ownership()
-            .expect("first PrepareQC retains scheduler ownership");
-        assert_eq!(
-            first_owner.selected,
-            RuntimeSelectedOwnerKind::PacemakerProgress
-        );
-        assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
-        assert!(!runtime.driver().deferred_work_is_serviceable());
-
-        runtime
-            .enqueue_network(prepare(0xE2))
-            .expect("admit the second PrepareQC");
-        assert!(
-            runtime
-                .try_step_pacemaker_escape(now)
-                .expect("blocked PrepareQC classification is valid")
-                .is_none(),
-            "pacemaker escape cannot repeatedly redispatch a fence-blocked PrepareQC"
-        );
-        assert!(runtime.last_scheduler_ownership().is_none());
-        assert_eq!(runtime.queued_commands(), 1);
-
-        runtime
-            .enqueue_network(prepare(0xE3))
-            .expect("fill the second ordinary Progress slot");
-        stage_completion_for_queue_test(
-            &mut runtime,
-            owner_tag,
-            AdapterCommand::SignatureCompleted(vec![0xE4]),
-        );
-        assert_eq!(runtime.queued_commands(), 3);
-        assert_eq!(runtime.remaining_completion_capacity(), 0);
-
-        let tc =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
-                signed_runtime_timeout_certificate(&context, &keys),
-            ));
-        assert!(
-            runtime.can_admit_network_message(&tc),
-            "the certified escape slot remains available after every ordinary slot fills"
-        );
-        runtime
-            .enqueue_network(tc)
-            .expect("the TC consumes the reserved certified slot");
-        assert_eq!(runtime.queued_commands(), 4);
-
-        let certified = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("certified selection remains valid")
-            .expect("the later TC bypasses the older retry owner");
-        let RuntimeStep::Advanced(effects) = certified else {
-            panic!("certified TC unexpectedly idled")
-        };
-        assert!(matches!(
-            effects.as_slice(),
-            [AdapterEffect::EnterView { tag, .. }] if tag.view() == owner_tag.view() + 1
-        ));
-        let certified_owner = runtime
-            .take_last_scheduler_ownership()
-            .expect("TC retains exact certified scheduler ownership");
-        assert_eq!(
-            certified_owner.selected,
-            RuntimeSelectedOwnerKind::PacemakerProgress
-        );
-        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &certified_owner.candidate else {
-            panic!("TC must own one exact queued candidate")
-        };
-        assert_eq!(
-            candidate.selection_seal.kind,
-            RuntimeQueueSelectionKind::PacemakerCertifiedProgress
-        );
-        assert!(certified_owner.validate_exact().is_ok());
-        runtime
-            .take_effect_ownership(effects.len())
-            .expect("the executor consumes the TC EnterView ownership");
-        assert!(runtime.driver().deferred_work_is_serviceable());
-        let retired = runtime
-            .try_step_pacemaker_escape(now)
-            .expect("the now-unblocked retained PrepareQC remains schedulable")
-            .expect("the retained PrepareQC receives its terminal service turn");
-        assert!(matches!(retired, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
-        runtime
-            .take_last_scheduler_ownership()
-            .expect("retired PrepareQC preserves its exact scheduler owner");
-        assert!(runtime.deferred_ingress_ownership.is_empty());
-        assert!(runtime.deferred_lifecycle_ownership.is_empty());
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer() {
-        let directory = TempDir::new().expect("temporary multi-source TC directory");
-        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
-            &directory,
-            RuntimeQueueConfig::new(4, 1, 1),
-            Some(0),
-        );
-        let now = Instant::now();
-        runtime
-            .arm_live_clocks(now)
-            .expect("arm runtime before authenticated ingress");
-        let round_tag = runtime.round_tag();
-        let timeout_effects = runtime
-            .driver
-            .timeout_elapsed(round_tag)
-            .expect("install a local signing fence")
-            .into_effects();
-        assert!(matches!(
-            timeout_effects.as_slice(),
-            [AdapterEffect::Sign {
-                request: SignRequest::TimeoutVote(_),
-                ..
-            }]
-        ));
-
-        let message =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
-                signed_runtime_timeout_certificate(&context, &keys),
-            ));
-        let first_source = PeerId::new(keys[1].public_key().clone());
-        let second_source = PeerId::new(keys[2].public_key().clone());
-        assert_eq!(
-            runtime
-                .enqueue_network_with_ingress_ownership(
-                    message.clone(),
-                    fair_network_ownership(&message, first_source),
-                )
-                .expect("the first authenticated TC carrier owns the runtime command"),
-            round_tag
-        );
-        assert_eq!(
-            runtime
-                .enqueue_network_with_ingress_ownership(
-                    message.clone(),
-                    fair_network_ownership(&message, second_source),
-                )
-                .expect("the same TC from another source coalesces"),
-            round_tag
-        );
-        assert_eq!(
-            runtime.queued_commands(),
-            1,
-            "one exact aggregate TC must retain every bounded source carrier"
-        );
-        let retained = runtime
-            .ingress
-            .commands
-            .front()
-            .and_then(|queued| queued.ingress_ownership.as_ref())
-            .expect("the coalesced TC retains exact ingress ownership");
-        assert!(retained.validate_exact());
-        assert_eq!(retained.direct.len(), 2);
-
-        let effects = match runtime.step(now) {
-            Ok(RuntimeStep::Advanced(effects)) => effects,
-            other => panic!("authenticated TC did not apply immediately: {other:?}"),
-        };
-        assert!(matches!(
-            effects.as_slice(),
-            [AdapterEffect::EnterView { tag, .. }] if tag.view() == round_tag.view() + 1
-        ));
-        let selected = runtime
-            .take_last_scheduler_ownership()
-            .expect("the applied TC dispatch retains its exact runtime owner");
-        assert!(selected.validate_exact().is_ok());
-        let RuntimeSelectedCandidateOwnership::Exact(candidate) = &selected.candidate else {
-            panic!("the applied TC must retain its exact queued owner")
-        };
-        assert!(
-            candidate
-                .ingress_ownership
-                .as_ref()
-                .is_some_and(|ownership| {
-                    ownership.validate_exact() && ownership.direct.len() == 2
-                })
-        );
-        runtime
-            .take_effect_ownership(effects.len())
-            .expect("the executor consumes the TC EnterView owner");
-        assert!(runtime.deferred_ingress_ownership.is_empty());
-        assert!(runtime.deferred_lifecycle_ownership.is_empty());
-        assert!(!runtime.fail_closed);
-    }
-
-    #[test]
-    fn admitted_progress_cannot_be_starved_by_older_normal_churn() {
-        let start = Instant::now();
-        let initial = tag(0);
-        let mut runtime = runtime(
-            FakeDriver::new(initial),
-            start,
-            RuntimeQueueConfig::new(7, 2, 1),
-        );
-        for value in 0..3 {
-            enqueue_fake(
-                &mut runtime,
-                initial,
-                CommandClass::Normal,
-                FakeCommand::record(value),
-            )
-            .unwrap();
-        }
-        for value in 100..140 {
-            assert_eq!(
-                enqueue_fake(
-                    &mut runtime,
-                    initial,
-                    CommandClass::Normal,
-                    FakeCommand::record(value)
-                ),
-                Err(EnqueueError::ReservedCapacity)
-            );
-        }
-        enqueue_fake(
-            &mut runtime,
-            initial,
-            CommandClass::Progress,
-            FakeCommand::record(200),
-        )
-        .expect("CommitQC/progress reserve remains available");
-
-        let initial_queue = runtime.queue_snapshot(start);
-        assert_eq!(initial_queue.normal.depth, 3);
-        assert_eq!(initial_queue.progress.depth, 1);
-
-        runtime
-            .step_and_take_scheduler_ownership_for_test(start)
-            .expect("bounded class service selects admitted Progress");
-        assert_eq!(runtime.driver.delivered.last(), Some(&(initial, 200)));
-
-        for (expected, replacement) in [(0, 3), (1, 4), (2, 5)] {
-            runtime
-                .step_and_take_scheduler_ownership_for_test(start)
-                .expect("normal work resumes after the bounded Progress turn");
-            assert_eq!(runtime.driver.delivered.last(), Some(&(initial, expected)));
-            enqueue_fake(
-                &mut runtime,
-                initial,
-                CommandClass::Normal,
-                FakeCommand::record(replacement),
-            )
-            .expect("later normal churn may refill only the vacated normal slot");
-        }
-        assert_eq!(
-            runtime.driver.delivered,
-            vec![(initial, 200), (initial, 0), (initial, 1), (initial, 2)]
-        );
-        let queue = runtime.queue_snapshot(start);
-        assert_eq!(queue.normal.depth, 3);
-        assert_eq!(queue.normal.capacity, 3);
-        assert_eq!(queue.normal.max_service_debt, 0);
-        assert_eq!(queue.progress.depth, 0);
-        assert_eq!(queue.completion.depth, 0);
-    }
-
+    include!("tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs");
     #[test]
     fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late() {
         let start = Instant::now();

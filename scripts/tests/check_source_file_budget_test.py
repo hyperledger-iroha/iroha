@@ -81,6 +81,7 @@ def test_evaluate_enforces_the_optional_aggregate_rust_ceiling() -> None:
     aggregate = MODULE.AggregateRustBudget(
         baseline=1_000,
         ceiling=900,
+        ratchet_ceiling=950,
         working_target=850,
     )
     configured = MODULE.Budget(
@@ -95,11 +96,19 @@ def test_evaluate_enforces_the_optional_aggregate_rust_ceiling() -> None:
         "crates/b/tests/cases.rs": 301,
         "scripts/helper.py": 10,
     }
-    finding = MODULE.evaluate(counts, configured)
+    assert MODULE.evaluate(counts, configured) == []
+    finding = MODULE.evaluate(
+        {
+            "crates/a/src/lib.rs": 650,
+            "crates/b/tests/cases.rs": 301,
+            "scripts/helper.py": 10,
+        },
+        configured,
+    )
     assert [(item.path, item.message) for item in finding] == [
         (
             "<aggregate Rust>",
-            "901 lines exceeds the repository ceiling 900",
+            "951 lines exceeds the aggregate ratchet 950",
         )
     ]
     assert MODULE.evaluate(
@@ -153,6 +162,7 @@ def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
                 "aggregate_rust": {
                     "baseline": 10_000,
                     "ceiling": 9_000,
+                    "ratchet_ceiling": 10_250,
                     "working_target": 8_500,
                 },
             }
@@ -165,14 +175,33 @@ def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
     assert parsed.aggregate_rust == MODULE.AggregateRustBudget(
         baseline=10_000,
         ceiling=9_000,
+        ratchet_ceiling=10_250,
         working_target=8_500,
     )
+
+
+def test_load_budget_requires_the_aggregate_rust_contract(tmp_path: Path) -> None:
+    path = tmp_path / "budget.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "limits": {"production": 5_000, "test": 3_000},
+                "excluded_prefixes": [],
+                "exceptions": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="aggregate_rust.*mandatory"):
+        MODULE.load_budget(path)
 
 
 def test_baseline_payload_preserves_aggregate_targets() -> None:
     aggregate = MODULE.AggregateRustBudget(
         baseline=10_000,
         ceiling=9_000,
+        ratchet_ceiling=10_250,
         working_target=8_500,
     )
     payload = MODULE.baseline_payload(
@@ -185,8 +214,50 @@ def test_baseline_payload_preserves_aggregate_targets() -> None:
     assert payload["aggregate_rust"] == {
         "baseline": 10_000,
         "ceiling": 9_000,
+        "ratchet_ceiling": 10_250,
         "working_target": 8_500,
     }
+
+
+@pytest.mark.parametrize(
+    ("aggregate", "message"),
+    [
+        (
+            {
+                "baseline": 10_000,
+                "ceiling": 9_001,
+                "ratchet_ceiling": 10_250,
+            },
+            "at least a 10% reduction",
+        ),
+        (
+            {
+                "baseline": 10_000,
+                "ceiling": 9_000,
+                "ratchet_ceiling": 8_999,
+            },
+            "ratchet_ceiling must not be below",
+        ),
+    ],
+)
+def test_load_budget_rejects_invalid_aggregate_contract(
+    tmp_path: Path, aggregate: dict[str, int], message: str
+) -> None:
+    path = tmp_path / "budget.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "limits": {"production": 5_000, "test": 3_000},
+                "excluded_prefixes": [],
+                "exceptions": {},
+                "aggregate_rust": aggregate,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=message):
+        MODULE.load_budget(path)
 
 
 def test_source_line_count_uses_logical_lines_and_rejects_symlinks(

@@ -1,0 +1,18 @@
+
+            struct Pair { int first, int second }
+
+            fn set(int index) -> bool {
+                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
+                let Pair replacement = Pair { first: 3, second: 4 };
+                values.try_set(
+                    index: index,
+                    value: replacement,
+                )
+            }
+
+            fn push() -> bool {
+                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
+                let Pair replacement = Pair { first: 3, second: 4 };
+                values.try_push(replacement)
+            }
+        

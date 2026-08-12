@@ -53,6 +53,7 @@ class AggregateRustBudget:
 
     baseline: int
     ceiling: int
+    ratchet_ceiling: int
     working_target: int | None
 
 
@@ -169,37 +170,52 @@ def load_budget(path: Path) -> Budget:
         )
 
     raw_aggregate = payload.get("aggregate_rust")
-    aggregate_rust = None
-    if raw_aggregate is not None:
-        if not isinstance(raw_aggregate, dict):
-            raise ValueError("aggregate_rust must be a JSON object")
-        baseline = parse_non_negative_int(
-            raw_aggregate.get("baseline"), "aggregate_rust.baseline"
+    if not isinstance(raw_aggregate, dict):
+        raise ValueError(
+            "aggregate_rust must be a JSON object; the repository-wide "
+            "Rust reduction contract is mandatory"
         )
-        ceiling = parse_non_negative_int(
-            raw_aggregate.get("ceiling"), "aggregate_rust.ceiling"
+    baseline = parse_non_negative_int(
+        raw_aggregate.get("baseline"), "aggregate_rust.baseline"
+    )
+    ceiling = parse_non_negative_int(
+        raw_aggregate.get("ceiling"), "aggregate_rust.ceiling"
+    )
+    ratchet_ceiling = parse_non_negative_int(
+        raw_aggregate.get("ratchet_ceiling", ceiling),
+        "aggregate_rust.ratchet_ceiling",
+    )
+    raw_working_target = raw_aggregate.get("working_target")
+    working_target = (
+        None
+        if raw_working_target is None
+        else parse_non_negative_int(
+            raw_working_target, "aggregate_rust.working_target"
         )
-        raw_working_target = raw_aggregate.get("working_target")
-        working_target = (
-            None
-            if raw_working_target is None
-            else parse_non_negative_int(
-                raw_working_target, "aggregate_rust.working_target"
-            )
+    )
+    if baseline == 0 or ceiling == 0:
+        raise ValueError("aggregate_rust baseline and ceiling must be greater than zero")
+    if ceiling > baseline:
+        raise ValueError("aggregate_rust.ceiling must not exceed its baseline")
+    if ceiling * 10 > baseline * 9:
+        raise ValueError(
+            "aggregate_rust.ceiling must require at least a 10% reduction "
+            "from its baseline"
         )
-        if baseline == 0 or ceiling == 0:
-            raise ValueError("aggregate_rust baseline and ceiling must be greater than zero")
-        if ceiling > baseline:
-            raise ValueError("aggregate_rust.ceiling must not exceed its baseline")
-        if working_target is not None and working_target > ceiling:
-            raise ValueError(
-                "aggregate_rust.working_target must not exceed its ceiling"
-            )
-        aggregate_rust = AggregateRustBudget(
-            baseline=baseline,
-            ceiling=ceiling,
-            working_target=working_target,
+    if ratchet_ceiling < ceiling:
+        raise ValueError(
+            "aggregate_rust.ratchet_ceiling must not be below its ceiling"
         )
+    if working_target is not None and working_target > ceiling:
+        raise ValueError(
+            "aggregate_rust.working_target must not exceed its ceiling"
+        )
+    aggregate_rust = AggregateRustBudget(
+        baseline=baseline,
+        ceiling=ceiling,
+        ratchet_ceiling=ratchet_ceiling,
+        working_target=working_target,
+    )
 
     return Budget(
         production_limit=production_limit,
@@ -339,12 +355,12 @@ def evaluate(counts: dict[str, int], budget: Budget) -> list[Finding]:
         rust_lines = sum(
             lines for path, lines in counts.items() if path.endswith(".rs")
         )
-        if rust_lines > budget.aggregate_rust.ceiling:
+        if rust_lines > budget.aggregate_rust.ratchet_ceiling:
             findings.append(
                 Finding(
                     "<aggregate Rust>",
-                    f"{rust_lines} lines exceeds the repository ceiling "
-                    f"{budget.aggregate_rust.ceiling}",
+                    f"{rust_lines} lines exceeds the aggregate ratchet "
+                    f"{budget.aggregate_rust.ratchet_ceiling}",
                 )
             )
     return findings
@@ -384,6 +400,7 @@ def baseline_payload(
         payload["aggregate_rust"] = {
             "baseline": aggregate_rust.baseline,
             "ceiling": aggregate_rust.ceiling,
+            "ratchet_ceiling": aggregate_rust.ratchet_ceiling,
         }
         if aggregate_rust.working_target is not None:
             payload["aggregate_rust"]["working_target"] = (
@@ -417,12 +434,16 @@ def main() -> int:
             test_limit = DEFAULT_TEST_LIMIT
             excluded_prefixes = DEFAULT_EXCLUDED_PREFIXES
             aggregate_rust = None
-            if baseline_path.exists():
-                current = load_budget(baseline_path)
-                production_limit = current.production_limit
-                test_limit = current.test_limit
-                excluded_prefixes = current.excluded_prefixes
-                aggregate_rust = current.aggregate_rust
+            if not baseline_path.exists():
+                raise ValueError(
+                    "refusing to create an unreviewed source budget without "
+                    "the mandatory aggregate_rust provenance contract"
+                )
+            current = load_budget(baseline_path)
+            production_limit = current.production_limit
+            test_limit = current.test_limit
+            excluded_prefixes = current.excluded_prefixes
+            aggregate_rust = current.aggregate_rust
             counts = collect_counts(
                 root,
                 tracked_paths(root),
@@ -475,9 +496,12 @@ def main() -> int:
         report["aggregate_rust"] = {
             "baseline": budget.aggregate_rust.baseline,
             "ceiling": budget.aggregate_rust.ceiling,
+            "ratchet_ceiling": budget.aggregate_rust.ratchet_ceiling,
             "working_target": budget.aggregate_rust.working_target,
             "reduction_from_baseline": budget.aggregate_rust.baseline - rust_lines,
-            "headroom_to_ceiling": budget.aggregate_rust.ceiling - rust_lines,
+            "objective_met": rust_lines <= budget.aggregate_rust.ceiling,
+            "gap_to_ceiling": max(0, rust_lines - budget.aggregate_rust.ceiling),
+            "headroom_to_ratchet": budget.aggregate_rust.ratchet_ceiling - rust_lines,
             "gap_to_working_target": (
                 None
                 if budget.aggregate_rust.working_target is None
@@ -493,6 +517,17 @@ def main() -> int:
         f"findings={len(findings)}",
         file=human_stream,
     )
+    if budget.aggregate_rust is not None:
+        aggregate_report = report["aggregate_rust"]
+        print(
+            "aggregate_rust: "
+            f"baseline={aggregate_report['baseline']} "
+            f"goal={aggregate_report['ceiling']} "
+            f"ratchet={aggregate_report['ratchet_ceiling']} "
+            f"objective_met={str(aggregate_report['objective_met']).lower()} "
+            f"gap={aggregate_report['gap_to_ceiling']}",
+            file=human_stream,
+        )
     for finding in findings:
         print(f"ERROR: {finding.path}: {finding.message}", file=human_stream)
 

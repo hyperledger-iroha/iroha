@@ -1,0 +1,5 @@
+
+        seiyaku SidecarFixture {
+            view fn answer() -> int { return 42; }
+        }
+        

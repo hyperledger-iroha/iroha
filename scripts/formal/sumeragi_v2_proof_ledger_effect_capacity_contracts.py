@@ -1,5 +1,80 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py.
 
+def _consume_effects_replay_transfer_order_errors(
+    effects_path: Path,
+    consume_effects: RustItem | None,
+) -> list[str]:
+    """Require one ordered ownership, replay-transfer, and commit corridor."""
+
+    if consume_effects is None:
+        return []
+    tokens = rust_code_tokens(consume_effects.body)
+    ordered_sequences = (
+        "self.runtime.reconciliation_frontier()",
+        "self.preflight_effect_batch_frontier(&effects, frontier)",
+        "self.runtime.take_effect_ownership(&effects)",
+        "self.plan_local_proposal_replay_consumptions(&effects, &ownership)",
+        "self.retain_effect_batch_at_frontier(effects, ownership, frontier)",
+        "for projection in local_proposal_replay_projections",
+        "self.commit_reconciliation_frontier(frontier, services)",
+        "self.drain_retained_effect_batch(services, true)",
+    )
+    positions = [
+        _token_sequence_positions(tokens, rust_code_tokens(sequence))
+        for sequence in ordered_sequences
+    ]
+    if any(len(found) != 1 for found in positions) or any(
+        left[0] >= right[0]
+        for left, right in zip(positions, positions[1:])
+        if left and right
+    ):
+        return [
+            f"{effects_path}:{consume_effects.line}: executor must acquire one "
+            "frontier, preflight and take ownership, plan local replay, retain "
+            "the complete batch, transfer each preflighted replay authority, "
+            "commit reconciliation, and drain in that order"
+        ]
+    return []
+
+
+def _drive_effects_wal_frame_source_fidelity_errors(
+    adapter_path: Path,
+    drive_effects: RustItem | None,
+) -> list[str]:
+    """Bind a persisted reducer id to the exact appended WAL frame."""
+
+    if drive_effects is None:
+        return []
+    tokens = rust_code_tokens(drive_effects.body)
+    sequences = (
+        "let receipt = match self.wal.append(&payload)",
+        "self.wal.recovered_records().last().is_some_and(|record|",
+        "record.exactly_matches_receipt(receipt)",
+        "record.payload() == payload.as_slice()",
+        "receipt.sequence().checked_add(1) != Some(id.get())",
+        "|| !retained_frame_is_exact",
+        "AdapterError::WalFrameIdentityMismatch",
+        "self.pending_persistence_id = None;",
+        "let persisted = reducer::Event::Persisted { tag, id };",
+        "self.step_reducer(persisted.clone())",
+    )
+    positions = [
+        _token_sequence_positions(tokens, rust_code_tokens(sequence))
+        for sequence in sequences
+    ]
+    if any(len(found) != 1 for found in positions) or any(
+        left[0] >= right[0]
+        for left, right in zip(positions, positions[1:])
+        if left and right
+    ):
+        return [
+            f"{adapter_path}:{drive_effects.line}: drive_effects must validate "
+            "the exact appended WAL receipt and retained payload before reducer "
+            "continuation"
+        ]
+    return []
+
+
 def _effect_capacity_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -609,31 +684,10 @@ let ownership = match self.runtime.take_effect_ownership(&effects) {
         "executor must close fail-stop output while preserving the typed Runtime ownership error",
         errors,
     )
-    _require_rust_token_sequence(
-        effects_path,
-        consume_effects,
-        """
-let frontier = self
-    .runtime
-    .reconciliation_frontier()
-    .map_err(EffectExecutorError::Runtime)
-    .map_err(|error| self.close(error, services))?;
-if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
-    return Err(self.close(error, services));
-}
-let ownership = match self.runtime.take_effect_ownership(&effects) {
-    Ok(ownership) => ownership,
-    Err(error) => {
-        return Err(self.close(EffectExecutorError::Runtime(error), services));
-    }
-};
-if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
-    return Err(self.close(error, services));
-}
-if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
-""",
-        "executor must retain the complete batch before committing its atomically observed reducer frontier",
-        errors,
+    errors.extend(
+        _consume_effects_replay_transfer_order_errors(
+            effects_path, consume_effects
+        )
     )
 
     effect_runtime_context = (

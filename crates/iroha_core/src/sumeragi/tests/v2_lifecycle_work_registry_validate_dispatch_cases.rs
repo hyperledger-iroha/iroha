@@ -24,13 +24,17 @@
     #[cfg(feature = "bls")]
     use super::super::{
         AdmissionDecision, CapacityClass, LifecycleCoordinator, LifecycleState, WaitToken,
-        concrete_admission::{DurableValidateDispatchError, LifecycleWorkRegistryHolder},
+        concrete_admission::{
+            DurableValidateDispatchError, LifecycleWorkRegistryHolder,
+            ReadyValidateDemandAttestationError,
+        },
         schema::CapacityGeometry,
     };
     use super::*;
     #[cfg(feature = "bls")]
     use crate::sumeragi::v2_chunks::encode_payload;
     use crate::sumeragi::{
+        v2::{ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity},
         v2_core::{EventTag, Generation},
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
@@ -56,6 +60,122 @@
 
     fn effect(marker: u8) -> AdapterEffect {
         effect_at_generation(marker, u64::from(marker))
+    }
+
+    fn direct_signed_pending(
+        effect: &AdapterEffect,
+        tag: EventTag,
+        ordinal: u128,
+    ) -> PendingRuntimeEffectBinding {
+        bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+        )
+        .expect("bind direct signed registry fixture")
+        .pop()
+        .expect("one direct signed registry fixture owner")
+        .pending_adapter_effect_binding(effect)
+        .expect("mint direct signed pending binding")
+    }
+
+    fn direct_signed_vote(marker: u8, subject_marker: u8) -> wire::Vote {
+        let context_id =
+            wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new([marker, 0xD1])));
+        let round = wire::ConsensusRound {
+            context_id,
+            height: 7,
+            view: 2,
+        };
+        wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new([subject_marker, 0xD2])),
+                payload_hash: Hash::new([subject_marker, 0xD3]),
+            },
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new([marker, 0xD4]),
+                Hash::new([marker, 0xD5]),
+                Hash::new([marker, 0xD6]),
+                1,
+                Hash::new([marker, 0xD7]),
+            ),
+            signer: 0,
+            signature: vec![subject_marker, 0xD8],
+        }
+    }
+
+    fn recovered_wal_projection_candidate(
+        phase: LifecyclePhase,
+        work_class: LifecycleWorkClass,
+        stage_kind: LifecycleStageKind,
+        marker: u8,
+    ) -> CandidateAdmission {
+        let context = LifecycleContext::new(LifecycleDigest::new([0x31; 32]), 7);
+        let replay =
+            super::super::replay_authority::exact_record_fixture(context, stage_kind, marker);
+        assert_eq!((replay.key.phase(), replay.work_class), (phase, work_class));
+        let root = super::super::CausalRoot::new(LifecycleDigest::new([0x34; 32]));
+        let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        CandidateAdmission::new(
+            replay.key,
+            root,
+            work_class,
+            LifecycleStage::new(stage_kind, PredecessorScope::Independent),
+            InitialLifecycleState::Ready,
+            root.digest(),
+            replay.payload,
+            replay.authority,
+            super::super::PhysicalGeometry::new(
+                [PhysicalSlot::new(slot, LifecycleDigest::new([marker; 32]))],
+                [slot],
+            ),
+            None,
+        )
+    }
+
+    #[test]
+    fn recovered_wal_projection_never_overwrites_foreign_opposite_key_occupants() {
+        let parent = recovered_wal_projection_candidate(
+            LifecyclePhase::Validate,
+            LifecycleWorkClass::Validate,
+            LifecycleStageKind::ValidateBody,
+            0x41,
+        );
+        let child = recovered_wal_projection_candidate(
+            LifecyclePhase::Prepare,
+            LifecycleWorkClass::SignVote,
+            LifecycleStageKind::SignPrepareVote,
+            0x42,
+        );
+        let owner = OwnerId::new(parent.causal_root, 1);
+        let effect_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        let projection = AuthenticatedRecoveredWalSignProjection {
+            parent: parent.clone(),
+            child: child.clone(),
+            parent_address: ConcreteWorkAddress::new(owner, 1, effect_slot)
+                .expect("exact recovered parent address"),
+            child_address: ConcreteWorkAddress::new(owner, 2, effect_slot)
+                .expect("exact recovered child address"),
+        };
+
+        let mut foreign_child = child.clone();
+        foreign_child.reconstruction_source = LifecycleDigest::new([0x51; 32]);
+        let mut parent_with_foreign_child =
+            BTreeMap::from([(parent.key, parent.clone()), (child.key, foreign_child)]);
+        let before = parent_with_foreign_child.clone();
+        assert!(!projection.splice_candidates(&mut parent_with_foreign_child));
+        assert_eq!(parent_with_foreign_child, before);
+
+        let mut foreign_parent = parent.clone();
+        foreign_parent.reconstruction_source = LifecycleDigest::new([0x52; 32]);
+        let mut child_with_foreign_parent =
+            BTreeMap::from([(parent.key, foreign_parent), (child.key, child)]);
+        let before = child_with_foreign_parent.clone();
+        assert!(!projection.splice_candidates(&mut child_with_foreign_parent));
+        assert_eq!(child_with_foreign_parent, before);
     }
 
     fn concrete(effect: AdapterEffect, legacy_ordinal: u128) -> ConcreteLifecycleWork {
@@ -114,8 +234,9 @@
                 super::super::LifecycleStageKind::StoreBody,
                 super::super::PredecessorScope::Independent,
             ),
-            rank: super::super::SchedulerRank::new(3, 0, 0, 0, 0, 0, 0, 0),
+            rank: super::super::SchedulerRank::new(4, 0, 0, 0, 0, 0, 0, 0),
             physical_slots: BTreeMap::from([(slot, digest)]),
+            output_reservation: None,
         }
     }
 
@@ -142,8 +263,9 @@
                 super::super::LifecycleStageKind::FetchBody,
                 super::super::PredecessorScope::Independent,
             ),
-            rank: super::super::SchedulerRank::new(3, 0, 0, 0, 0, 0, 0, 0),
+            rank: super::super::SchedulerRank::new(5, 0, 0, 0, 0, 0, 0, 0),
             physical_slots: BTreeMap::from([(slot, digest)]),
+            output_reservation: None,
         }
     }
 
@@ -202,7 +324,9 @@
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: format!("durable-store-registry-{marker}").into(),
+            network_id: crate::sumeragi::synthetic_network_id(&format!(
+                "durable-store-registry-{marker}"
+            )),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 1,
@@ -249,36 +373,73 @@
             block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 0xB1])),
             payload_hash: Hash::new([marker, 0xB2]),
         };
+        let manifest = wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout: context.da_layout,
+            chunk_hashes: vec![Hash::new([marker, 0xC1])],
+            chunk_root: Hash::new([marker, 0xC2]),
+        };
+        let expected_manifest_hash = HashOf::new(&manifest);
+        let durable_receipt =
+            DurableBodyReceipt::for_test(round.context_id, round, subject, expected_manifest_hash);
+        let fetch_effect = AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(certified_pipeline_prepare_certificate_for_test(
+                &manifest,
+                &durable_receipt,
+            )),
+        };
         let effect = AdapterEffect::StoreBody {
             tag,
             round,
             subject,
         };
-        let ownership = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(&effect),
+        let fetch_ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&fetch_effect),
             vec![RuntimeEffectOwnership::fresh_for_test(
                 tag,
                 u128::from(marker) + 1,
             )],
         )
-        .expect("bind exact durable Store fixture")
+        .expect("bind exact certified Fetch fixture")
         .pop()
-        .expect("one durable Store fixture owner");
+        .expect("one certified Fetch fixture owner");
+        let ownership = fetch_ownership
+            .rebind_as_inherited_adapter_effect(&effect)
+            .expect("carry certified Fetch authority into Store");
         let pending = ownership
             .pending_adapter_effect_binding(&effect)
             .expect("mint sealed durable Store binding");
-        let mut active_context_id = [0_u8; 32];
-        active_context_id.copy_from_slice(context.id().0.as_ref());
-        let request = projection::admission_request(
-            LifecycleContext::new(LifecycleDigest::new(active_context_id), context.height),
-            &verified,
-            &effect,
-            &pending,
-        )
-        .expect("project exact durable Store fixture");
-        let AdmissionRequest::Candidate(candidate) = request else {
-            panic!("Store fixture projects one lifecycle candidate")
+        let validate_effect = AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
         };
+        let validate_pending = pending
+            .project_store_validate_successor(&effect, &validate_effect)
+            .expect("project exact certified Validate fixture pending");
+        let (replay_evidence, _validate_evidence) = certified_pipeline_replay_evidence_for_test(
+            tag,
+            &manifest,
+            &durable_receipt,
+            &validate_pending,
+        )
+        .expect("build exact certified Store replay evidence");
+        let candidate = replay_evidence
+            .project_installed_store_candidate(
+                InstalledBodyCandidateProjectionPermit::new(),
+                &verified,
+                &effect,
+                &durable_receipt,
+                &pending,
+            )
+            .expect("project exact replay-authorized durable Store fixture");
         let (physical_slots, slot_universe, consumed_slots) = candidate
             .physical_geometry
             .normalized()
@@ -299,18 +460,17 @@
             key: candidate.key,
             work_class: candidate.work_class,
             stage: candidate.stage,
-            rank: super::super::SchedulerRank::new(3, 0, 0, 0, 0, 0, 0, 0),
+            rank: super::super::SchedulerRank::new(4, 0, 0, 0, 0, 0, 0, 0),
             physical_slots,
+            output_reservation: None,
         };
-        let expected_manifest_hash = HashOf::from_untyped_unchecked(Hash::new([marker, 0xC1]));
-        let durable_receipt =
-            DurableBodyReceipt::for_test(round.context_id, round, subject, expected_manifest_hash);
         let store = DurableStoreBody {
             address,
             effect: effect.clone(),
             pending,
             durable_receipt,
             expected_manifest_hash,
+            replay_evidence,
         };
         assert!(store.validates(digest));
         let work = ConcreteLifecycleWork {
@@ -378,21 +538,38 @@
             .expect("encode durable Validate fixture payload")
             .manifest()
             .clone();
+        let expected_manifest_hash = HashOf::new(&manifest);
+        let durable_receipt =
+            DurableBodyReceipt::for_test(round.context_id, round, subject, expected_manifest_hash);
+        let fetch_effect = AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(certified_pipeline_prepare_certificate_for_test(
+                &manifest,
+                &durable_receipt,
+            )),
+        };
         let store_effect = AdapterEffect::StoreBody {
             tag,
             round,
             subject,
         };
-        let ownership = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(&store_effect),
+        let fetch_ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&fetch_effect),
             vec![RuntimeEffectOwnership::fresh_for_test(
                 tag,
                 u128::from(marker) + 1,
             )],
         )
-        .expect("bind exact durable Validate parent fixture")
+        .expect("bind exact certified Validate Fetch fixture")
         .pop()
-        .expect("one durable Validate parent fixture owner");
+        .expect("one certified Validate Fetch fixture owner");
+        let ownership = fetch_ownership
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .expect("carry certified Fetch authority into Validate parent Store");
         let store_pending = ownership
             .pending_adapter_effect_binding(&store_effect)
             .expect("mint sealed durable Validate parent binding");
@@ -416,18 +593,19 @@
             pending.exact_effect_identity(),
             store_pending.exact_effect_identity()
         );
-        let mut active_context_id = [0_u8; 32];
-        active_context_id.copy_from_slice(context.id().0.as_ref());
-        let request = projection::admission_request(
-            LifecycleContext::new(LifecycleDigest::new(active_context_id), context.height),
-            &verified,
-            &effect,
-            &pending,
-        )
-        .expect("project exact durable Validate fixture");
-        let AdmissionRequest::Candidate(candidate) = request else {
-            panic!("Validate fixture projects one lifecycle candidate")
-        };
+        let (_store_evidence, replay_evidence) =
+            certified_pipeline_replay_evidence_for_test(tag, &manifest, &durable_receipt, &pending)
+                .expect("build exact certified Validate replay evidence");
+        let replay_evidence = DurableValidateReplayEvidenceV1::certified(replay_evidence);
+        let candidate = replay_evidence
+            .project_installed_validate_candidate(
+                InstalledBodyCandidateProjectionPermit::new(),
+                &verified,
+                &effect,
+                &durable_receipt,
+                &pending,
+            )
+            .expect("project exact replay-authorized durable Validate fixture");
         let (physical_slots, slot_universe, consumed_slots) = candidate
             .physical_geometry
             .normalized()
@@ -448,18 +626,17 @@
             key: candidate.key,
             work_class: candidate.work_class,
             stage: candidate.stage,
-            rank: super::super::SchedulerRank::new(2, 0, 0, 0, 0, 0, 0, 0),
+            rank: super::super::SchedulerRank::new(3, 0, 0, 0, 0, 0, 0, 0),
             physical_slots,
+            output_reservation: None,
         };
-        let expected_manifest_hash = HashOf::new(&manifest);
-        let durable_receipt =
-            DurableBodyReceipt::for_test(round.context_id, round, subject, expected_manifest_hash);
         let validate = DurableValidateBody {
             address,
             effect: effect.clone(),
             pending,
             durable_receipt,
             expected_manifest_hash,
+            replay_evidence,
         };
         assert!(validate.validates(digest));
         let work = ConcreteLifecycleWork {
@@ -646,23 +823,21 @@
         let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &mut work.kind else {
             unreachable!("commitment fixture retains one closed Validate")
         };
+        let (_store_replay, validate_replay) = certified_pipeline_replay_evidence_for_test(
+            tag,
+            &fixture.manifest,
+            &validate.durable_receipt,
+            &upgraded_validate,
+        )
+        .expect("rebind certified Validate replay to upgraded pending authority");
         validate.pending = upgraded_validate;
+        validate.replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);
         assert!(validate.validates(digest));
 
-        let context = fixture.verified.context();
-        let mut context_id = [0_u8; 32];
-        context_id.copy_from_slice(context.id().0.as_ref());
-        let request = projection::admission_request(
-            LifecycleContext::new(LifecycleDigest::new(context_id), context.height),
-            &fixture.verified,
-            &validate.effect,
-            &validate.pending,
-        )
-        .expect("project commitment-authorized Validate fixture");
+        let candidate = validate
+            .project_candidate(&fixture.verified)
+            .expect("project commitment-authorized Validate fixture");
         assert!(fixture.registry.entries[&fixture.address].validates_at(fixture.address));
-        let AdmissionRequest::Candidate(candidate) = request else {
-            panic!("commitment-authorized Validate projects one candidate")
-        };
         assert_eq!(candidate.causal_root, fixture.lease.owner().causal_root());
         assert_eq!(candidate.work_class, fixture.lease.work_class());
         assert_eq!(candidate.stage, fixture.lease.stage());
@@ -696,13 +871,9 @@
             LifecycleDigest::new(context_id),
             fixture.lease.key().round().height(),
         );
-        let request = projection::admission_request(
-            active_context,
-            &fixture.verified,
-            &validate.effect,
-            &validate.pending,
-        )
-        .expect("project dispatch fixture Validate carrier");
+        let candidate = validate
+            .project_candidate(&fixture.verified)
+            .expect("project dispatch fixture Validate carrier");
         let high_water = fixture
             .lease
             .ordinal()
@@ -714,7 +885,7 @@
             CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 64))),
         );
         assert!(matches!(
-            coordinator.reduce_admit(request),
+            coordinator.reduce_admit(AdmissionRequest::Candidate(candidate)),
             AdmissionDecision::Admitted {
                 owner,
                 ordinal,
@@ -832,6 +1003,15 @@
                 .insert(fixture.slot, replacement_digest),
             Some(fixture.lease.physical_slots()[&fixture.slot])
         );
+        lease.output_reservation = match outcome {
+            ReadyDurableValidateFixtureOutcome::Validated => None,
+            ReadyDurableValidateFixtureOutcome::Rejected => {
+                Some(super::super::schema::LeaseCapacityReservation::new(
+                    CapacityClass::Consensus,
+                    coordinator.capacity_generation[&CapacityClass::Consensus],
+                ))
+            }
+        };
         assert_eq!(
             coordinator.records[&lease.ordinal()].state,
             LifecycleState::Ready
@@ -1072,6 +1252,43 @@
 
     #[cfg(feature = "bls")]
     #[test]
+    fn durable_validate_dispatch_rejects_a_substituted_ledger_body_frame() {
+        let (mut fixture, _directory, _store, _durable) = durable_validate_store_fixture(0xBE);
+        let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+        let metadata = coordinator
+            .durable_records
+            .get_mut(&fixture.lease.ordinal())
+            .expect("claimed Validate retains durable metadata");
+        let DurablePayloadReference::BodyFrame(mut substituted) = metadata.payload else {
+            panic!("claimed Validate must retain one durable body frame")
+        };
+        substituted.frame = LifecycleDigest::new([0xEE; 32]);
+        metadata.payload = DurablePayloadReference::BodyFrame(substituted);
+        let mut holder = take_dispatch_registry(&mut fixture);
+        let coordinator_before = format!("{coordinator:?}");
+        let registry_before = format!("{:?}", holder.registry_for_test());
+        let lease = fixture.lease.clone();
+
+        let Err((error, returned)) = coordinator.begin_durable_validate_dispatch(
+            &mut holder,
+            lease.clone(),
+            &fixture.verified,
+        ) else {
+            panic!("a ledger frame foreign to the installed carrier must fail closed")
+        };
+        assert_eq!(
+            error,
+            DurableValidateDispatchError::Registry(
+                DurableValidateExecutionError::InvalidValidateShape
+            )
+        );
+        assert_eq!(returned, lease);
+        assert_eq!(format!("{coordinator:?}"), coordinator_before);
+        assert_eq!(format!("{:?}", holder.registry_for_test()), registry_before);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     fn durable_validate_dispatch_rejects_max_generation_and_wait_source_alias() {
         {
             let (mut fixture, _directory, _store, _durable) = durable_validate_store_fixture(0xB7);
@@ -1246,6 +1463,36 @@
 
     #[cfg(feature = "bls")]
     #[test]
+    fn ready_validate_capacity_classifier_is_exact_and_drop_inert() {
+        let (fixture, _directory, _store, _durable) = durable_validate_store_fixture(0xBF);
+        let before = format!("{:?}", fixture.registry);
+        let digest = fixture.lease.physical_slots()[&fixture.slot];
+
+        let seal = fixture
+            .registry
+            .classify_ready_validate_carrier(fixture.address, digest)
+            .expect("exact durable Validate carrier mints one opaque seal");
+        assert!(seal.matches(
+            fixture.address.owner,
+            fixture.address.ordinal,
+            fixture.address.slot,
+            digest,
+        ));
+        assert!(!seal.requires_consensus_capacity());
+        assert_eq!(
+            fixture.registry.classify_ready_validate_carrier(
+                fixture.address,
+                LifecycleDigest::new([0xFF; 32]),
+            ),
+            Err(ReadyValidateCarrierError::Registry(
+                RegistryError::DigestMismatch
+            ))
+        );
+        assert_eq!(format!("{:?}", fixture.registry), before);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     fn validated_completion_atomically_publishes_exact_ready_carrier() {
         let WaitingDurableValidateFixture {
             fixture,
@@ -1303,6 +1550,13 @@
         assert!(coordinator.ready_index.contains(&ordinal));
         assert!(coordinator.active_lease.is_none());
         assert!(coordinator.ledger_store.is_none());
+        assert_eq!(
+            coordinator
+                .attest_ready_validate_demand(&holder, ordinal)
+                .expect("validated completion mints one exact scheduler attestation")
+                .capacity_class(),
+            None
+        );
 
         assert_eq!(holder.registry_for_test().entries.len(), 1);
         let installed = &holder.registry_for_test().entries[&fixture.address];
@@ -1448,6 +1702,62 @@
         assert_eq!(coordinator.observed_generation[&wait.source()], 1);
         assert!(coordinator.ready_index.contains(&ordinal));
         assert!(coordinator.ledger_store.is_none());
+        let attestation = coordinator
+            .attest_ready_validate_demand(&holder, ordinal)
+            .expect("rejected completion mints one exact scheduler attestation");
+        assert_eq!(attestation.capacity_class(), Some(CapacityClass::Consensus));
+        let ready = super::super::SchedulerReadyInputs::from_authenticated(
+            &coordinator.records[&ordinal],
+            Some(attestation),
+            [0; 6],
+        )
+        .expect("registry attestation binds one exact scheduler row");
+
+        let mut stale = coordinator.clone();
+        stale
+            .records
+            .get_mut(&ordinal)
+            .expect("rejected completion row")
+            .physical_slots
+            .insert(fixture.slot, LifecycleDigest::new([0xEF; 32]));
+        let stale_before = format!("{stale:?}");
+        assert_eq!(
+            stale.attest_ready_validate_demand(&holder, ordinal),
+            Err(ReadyValidateDemandAttestationError::Registry(
+                ReadyValidateCarrierError::Registry(RegistryError::DigestMismatch)
+            ))
+        );
+        assert_eq!(format!("{stale:?}"), stale_before);
+
+        let mut substituted = coordinator.clone();
+        let metadata = substituted
+            .durable_records
+            .get_mut(&ordinal)
+            .expect("rejected completion retains durable metadata");
+        let DurablePayloadReference::BodyFrame(mut foreign_frame) = metadata.payload else {
+            panic!("rejected completion must retain one durable body frame")
+        };
+        foreign_frame.manifest = LifecycleDigest::new([0xED; 32]);
+        metadata.payload = DurablePayloadReference::BodyFrame(foreign_frame);
+        let substituted_before = format!("{substituted:?}");
+        assert_eq!(
+            substituted.attest_ready_validate_demand(&holder, ordinal),
+            Err(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex)
+        );
+        assert_eq!(format!("{substituted:?}"), substituted_before);
+
+        let inputs = super::super::SchedulerInputs::new([], [(ordinal, ready)])
+            .expect("one unique registry-attested Ready row");
+        let super::super::TurnPlan::Execute(lease) = coordinator.plan_turn(inputs) else {
+            panic!("registry-attested rejected Validate must claim with its reservation")
+        };
+        assert_eq!(lease.ordinal(), ordinal);
+        assert_eq!(
+            lease
+                .output_reservation()
+                .map(|reservation| reservation.class()),
+            Some(CapacityClass::Consensus)
+        );
 
         assert_eq!(holder.registry_for_test().entries.len(), 1);
         let installed = &holder.registry_for_test().entries[&fixture.address];
@@ -1476,7 +1786,7 @@
                 _directory,
                 mut holder,
                 lease,
-                durable: _,
+                durable,
             } = ready_durable_validate_fixture(0xD0, ReadyDurableValidateFixtureOutcome::Validated);
             let before = format!("{:?}", holder.registry_for_test());
             let prepared = holder
@@ -1487,6 +1797,24 @@
                 prepared.outcome_kind(),
                 ReadyDurableValidateOutcomeKind::Validated
             );
+            assert!(prepared.matches_exact_lease(&lease));
+            assert!(prepared.matches_exact_durable_receipt(&durable));
+            let foreign_receipt = DurableBodyReceipt::for_test(
+                durable.context_id(),
+                durable.round(),
+                durable.subject(),
+                HashOf::from_untyped_unchecked(Hash::new(b"foreign Ready Validate manifest")),
+            );
+            assert!(!prepared.matches_exact_durable_receipt(&foreign_receipt));
+            let mut foreign_lease = lease.clone();
+            foreign_lease.id = LeaseId(
+                foreign_lease
+                    .id()
+                    .0
+                    .checked_add(1)
+                    .expect("fixture lease id remains bounded"),
+            );
+            assert!(!prepared.matches_exact_lease(&foreign_lease));
             assert!(prepared.validated_authority().is_some());
             assert!(prepared.rejected_authority().is_none());
             drop(prepared);
@@ -1499,7 +1827,7 @@
                 _directory,
                 mut holder,
                 lease,
-                durable: _,
+                durable,
             } = ready_durable_validate_fixture(0xD1, ReadyDurableValidateFixtureOutcome::Rejected);
             let before = format!("{:?}", holder.registry_for_test());
             let prepared = holder
@@ -1510,8 +1838,105 @@
                 prepared.outcome_kind(),
                 ReadyDurableValidateOutcomeKind::Rejected
             );
+            assert!(prepared.matches_exact_durable_receipt(&durable));
             assert!(prepared.rejected_authority().is_some());
             assert!(prepared.validated_authority().is_none());
+            drop(prepared);
+            assert_eq!(format!("{:?}", holder.registry_for_test()), before);
+        }
+
+        {
+            let ReadyDurableValidateFixture {
+                fixture,
+                _directory,
+                mut holder,
+                mut lease,
+                durable: _,
+            } = ready_durable_validate_fixture(0xDA, ReadyDurableValidateFixtureOutcome::Rejected);
+            lease.output_reservation = None;
+            let before = format!("{:?}", holder.registry_for_test());
+            assert!(matches!(
+                holder
+                    .registry_for_test_mut()
+                    .prepare_ready_durable_validate_execution(
+                        &lease,
+                        fixture.slot,
+                        &fixture.verified,
+                    ),
+                Err(ReadyDurableValidateExecutionError::InvalidLeaseShape)
+            ));
+            assert_eq!(format!("{:?}", holder.registry_for_test()), before);
+        }
+
+        {
+            let ReadyDurableValidateFixture {
+                fixture,
+                _directory,
+                mut holder,
+                mut lease,
+                durable: _,
+            } = ready_durable_validate_fixture(0xDB, ReadyDurableValidateFixtureOutcome::Validated);
+            lease.output_reservation = Some(super::super::schema::LeaseCapacityReservation::new(
+                CapacityClass::Consensus,
+                0,
+            ));
+            let before = format!("{:?}", holder.registry_for_test());
+            assert!(matches!(
+                holder
+                    .registry_for_test_mut()
+                    .prepare_ready_durable_validate_execution(
+                        &lease,
+                        fixture.slot,
+                        &fixture.verified,
+                    ),
+                Err(ReadyDurableValidateExecutionError::InvalidLeaseShape)
+            ));
+            assert_eq!(format!("{:?}", holder.registry_for_test()), before);
+        }
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_wal_validate_cut_detaches_only_validated_completion_and_restores_on_drop() {
+        {
+            let ReadyDurableValidateFixture {
+                fixture,
+                _directory,
+                mut holder,
+                lease,
+                durable: _,
+            } = ready_durable_validate_fixture(0xDC, ReadyDurableValidateFixtureOutcome::Validated);
+            let before = format!("{:?}", holder.registry_for_test());
+            let prepared = holder
+                .registry_for_test_mut()
+                .prepare_ready_durable_validate_execution(&lease, fixture.slot, &fixture.verified)
+                .expect("prepare exact validated recovered-WAL parent");
+            let cut = match prepared.into_recovered_wal_validate_registry_cut() {
+                Ok(cut) => cut,
+                Err(_prepared) => panic!("validated completion must detach into WAL parent cut"),
+            };
+            assert!(cut.detached_work_is_exact_for_test());
+            drop(cut);
+            assert_eq!(format!("{:?}", holder.registry_for_test()), before);
+        }
+
+        {
+            let ReadyDurableValidateFixture {
+                fixture,
+                _directory,
+                mut holder,
+                lease,
+                durable: _,
+            } = ready_durable_validate_fixture(0xDD, ReadyDurableValidateFixtureOutcome::Rejected);
+            let before = format!("{:?}", holder.registry_for_test());
+            let prepared = holder
+                .registry_for_test_mut()
+                .prepare_ready_durable_validate_execution(&lease, fixture.slot, &fixture.verified)
+                .expect("prepare exact rejected recovered-WAL parent candidate");
+            let prepared = match prepared.into_recovered_wal_validate_registry_cut() {
+                Ok(_cut) => panic!("rejected completion cannot become a WAL vote parent"),
+                Err(prepared) => prepared,
+            };
             drop(prepared);
             assert_eq!(format!("{:?}", holder.registry_for_test()), before);
         }
@@ -1704,6 +2129,25 @@
                     RegistryError::CorruptWork
                 ))
             ));
+        }
+
+        {
+            let mut exact =
+                ready_durable_validate_fixture(0xDE, ReadyDurableValidateFixtureOutcome::Rejected);
+            let foreign = durable_validate_fixture(0xDF);
+            let before = format!("{:?}", exact.holder.registry_for_test());
+            assert!(matches!(
+                exact
+                    .holder
+                    .registry_for_test_mut()
+                    .prepare_ready_durable_validate_execution(
+                        &exact.lease,
+                        exact.fixture.slot,
+                        &foreign.verified,
+                    ),
+                Err(ReadyDurableValidateExecutionError::Projection(_))
+            ));
+            assert_eq!(format!("{:?}", exact.holder.registry_for_test()), before);
         }
     }
 

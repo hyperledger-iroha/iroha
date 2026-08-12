@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
+import io
+import json
 import sys
 from pathlib import Path
 
@@ -73,6 +76,26 @@ def test_normalized_cargo_args_precedes_test_harness_separator() -> None:
         "1",
         "--",
         "--nocapture",
+    ]
+
+
+def test_normalized_cargo_args_ignores_test_harness_locked_flag() -> None:
+    """A test-binary flag cannot masquerade as Cargo's lockfile control."""
+    assert MODULE.normalized_cargo_args(
+        ["test", "-p", "iroha_core", "--", "--locked"],
+        2,
+    ) == [
+        "test",
+        "--locked",
+        "-p",
+        "iroha_core",
+        "--message-format",
+        "json-render-diagnostics",
+        "--timings",
+        "--jobs",
+        "2",
+        "--",
+        "--locked",
     ]
 
 
@@ -173,3 +196,101 @@ def test_parse_cargo_messages_has_stable_unit_inventory() -> None:
     assert fresh == 1
     assert compiled == 1
     assert all("filenames" not in unit for unit in units)
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    (
+        ("source", {"bytes": 2, "deleted": 0, "files": 1, "sha256": "bb"}),
+        ("git_revision", "new-revision"),
+        ("cargo_lock_sha256", "new-lock"),
+        ("toolchain", {"cargo": "cargo changed", "rustc": "rustc changed"}),
+        ("selected_env", {"RUSTFLAGS": "-Ctarget-cpu=generic"}),
+    ),
+)
+def test_changed_input_fields_detects_profile_input_drift(
+    field: str, replacement: object
+) -> None:
+    """Every mutable source, revision, lock, and toolchain input is rechecked."""
+    before = {
+        "cargo_args": ["build", "--locked"],
+        "cargo_lock_sha256": "old-lock",
+        "git_revision": "old-revision",
+        "jobs": 1,
+        "label": "test",
+        "profile_mode": "cold",
+        "selected_env": {},
+        "source": {"bytes": 1, "deleted": 0, "files": 1, "sha256": "aa"},
+        "toolchain": {"cargo": "cargo stable", "rustc": "rustc stable"},
+    }
+    after = copy.deepcopy(before)
+    after[field] = replacement
+
+    assert MODULE.changed_input_fields(before, after) == [field]
+    assert MODULE.changed_input_fields(before, copy.deepcopy(before)) == []
+
+
+def test_main_invalidates_successful_build_when_source_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent source edit makes an otherwise successful report unusable."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    (root / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+    source = root / "source.rs"
+    source.write_text("fn before() {}\n", encoding="utf-8")
+    external = tmp_path / "profile"
+    report_path = external / "report.json"
+
+    monkeypatch.setattr(
+        MODULE,
+        "tracked_and_untracked_paths",
+        lambda _root: ["Cargo.lock", "Cargo.toml", "source.rs"],
+    )
+
+    def identity(command: list[str], _cwd: Path) -> str:
+        return {
+            ("git", "rev-parse", "HEAD"): "revision",
+            ("cargo", "-Vv"): "cargo stable",
+            ("rustc", "-Vv"): "rustc stable",
+        }[tuple(command)]
+
+    monkeypatch.setattr(MODULE, "command_output", identity)
+    monkeypatch.setattr(MODULE.platform, "platform", lambda: "test-platform")
+
+    class Process:
+        stdout = io.StringIO("")
+
+        @staticmethod
+        def wait() -> int:
+            source.write_text("fn after() {}\n", encoding="utf-8")
+            return 0
+
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: Process(),
+    )
+
+    returncode = MODULE.main(
+        [
+            "--root",
+            str(root),
+            "--target-dir",
+            str(external / "target"),
+            "--out",
+            str(report_path),
+            "--",
+            "build",
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert returncode == MODULE.INPUT_DRIFT_EXIT_CODE
+    assert report["schema_version"] == 2
+    assert report["valid"] is False
+    assert report["result"]["returncode"] == 0
+    assert report["input_validation"]["stable"] is False
+    assert report["input_validation"]["changed_fields"] == ["source"]
+    assert report["input_sha256"] != report["input_validation"]["post_input_sha256"]

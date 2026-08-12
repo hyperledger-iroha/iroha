@@ -1,5 +1,572 @@
 """Late-bound proof-ledger cases executed in the canonical test namespace."""
 
+
+def copy_serviced_candidate_production_fixture(tmp_path: Path) -> None:
+    """Copy the durable candidate store and its adapter integration."""
+
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+
+
+def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
+    """Copy only the Rust and TLA+ sources bound by the timeout episode."""
+
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("formal/sumeragi_v2/SumeragiV2AsyncNetwork.tla"),
+        Path(
+            "formal/sumeragi_v2/"
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
+        ),
+        Path(
+            "formal/sumeragi_v2/"
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
+        ),
+        Path(
+            "formal/sumeragi_v2/"
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla"
+        ),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(module.ROOT_DIR / relative, destination)
+    return tmp_path / "formal" / "sumeragi_v2"
+
+
+def rebind_timeout_vote_episode_rust_item_seal(
+    module,
+    repo_root: Path,
+    relative: Path,
+    item_name: str,
+) -> None:
+    """Rebind only the deliberately mutated timeout-episode Rust item."""
+
+    relative = Path(relative)
+    path = repo_root / relative
+    items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1, (relative, item_name)
+    digest = module._rust_item_token_sha256(items[0])
+    rebound: list[str] = []
+    role_relatives = {
+        "ingress": Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        "runner": Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        "runtime": Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+    }
+    for key in module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256:
+        role, qualified_name = key.split("::", 1)
+        if (
+            role_relatives[role] == relative
+            and qualified_name.rsplit("::", 1)[-1] == item_name
+        ):
+            module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = digest
+            rebound.append(key)
+
+    for seals, group_relative in (
+        (
+            module._TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256,
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+        ),
+        (
+            module._TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256,
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        ),
+        (
+            module._TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256,
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        ),
+    ):
+        if group_relative == relative and item_name in seals:
+            seals[item_name] = digest
+            rebound.append(item_name)
+    assert rebound, (relative, item_name)
+
+
+def rebind_timeout_vote_episode_tla_operator_seal(
+    module,
+    formal_dir: Path,
+    filename: str,
+    symbol: str,
+) -> None:
+    """Rebind only the deliberately mutated timeout-episode operator."""
+
+    seals = module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256[filename]
+    assert symbol in seals, (filename, symbol)
+    source = (formal_dir / filename).read_text(encoding="utf-8")
+    extracted = module._top_level_operator_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None, symbol
+    body, _ = extracted
+    seals[symbol] = hashlib.sha256(
+        " ".join(body.split()).encode("utf-8")
+    ).hexdigest()
+
+
+def rebind_timeout_vote_episode_tla_theorem_seal(
+    module,
+    formal_dir: Path,
+    filename: str,
+    symbol: str,
+) -> None:
+    """Rebind only the deliberately mutated timeout-episode theorem."""
+
+    seals = module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[filename]
+    assert symbol in seals, (filename, symbol)
+    source = (formal_dir / filename).read_text(encoding="utf-8")
+    extracted = module._top_level_theorem_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None, symbol
+    body, _ = extracted
+    seals[symbol] = hashlib.sha256(
+        " ".join(body.split()).encode("utf-8")
+    ).hexdigest()
+
+
+def copy_async_source_fidelity_fixture(
+    tmp_path: Path, module, *formal_names: str
+) -> Path:
+    """Copy the async formal inputs and their production-source bindings."""
+
+    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True)
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/types.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+        Path("crates/iroha_kagami/src/localnet.rs"),
+        Path("crates/iroha_config/src/parameters/actual.rs"),
+        Path("crates/iroha_config/src/parameters/defaults.rs"),
+        Path("crates/iroha_config/src/parameters/user.rs"),
+        Path("crates/iroha_crypto/src/lib.rs"),
+        Path("crates/iroha_crypto/src/sm.rs"),
+        Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+        Path("crates/iroha_p2p/src/lib.rs"),
+        Path("crates/iroha_p2p/src/network.rs"),
+        Path("crates/iroha_p2p/src/peer.rs"),
+        Path("crates/irohad/src/main.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+        Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("scripts/render_taira_validator_bundle.py"),
+        Path("scripts/verify_sumeragi_v2.sh"),
+        Path("defaults/kagami/iroha3-taira/config.toml"),
+        Path("defaults/kagami/iroha3-taira/genesis.json"),
+        Path("configs/soranexus/taira/config.toml"),
+        Path("configs/soranexus/taira/genesis.json"),
+        Path("configs/soranexus/taira/README.md"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+    for name in dict.fromkeys(
+        (
+            *formal_names,
+            "SumeragiV2AsyncTemporalClosureProofs.tla",
+            "SumeragiV2AsyncStage6Proofs.tla",
+            "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+        )
+    ):
+        destination = formal_dir / name
+        if name == "SumeragiV2AsyncLivenessProofs.tla":
+            destination.write_text(
+                module._async_liveness_source(module.FORMAL_DIR),
+                encoding="utf-8",
+            )
+        else:
+            shutil.copyfile(module.FORMAL_DIR / name, destination)
+    return formal_dir
+
+
+def rebind_reviewed_rust_item_digests(
+    module,
+    source_path: Path,
+    item_name: str,
+    context: tuple[tuple[str, ...], ...],
+    bindings: tuple[tuple[dict[str, str], str], ...],
+) -> tuple[tuple[dict[str, str], str, str], ...]:
+    """Rebind selected seals so a mutation must trip a semantic contract."""
+
+    items = tuple(
+        item
+        for item in module.rust_items(
+            source_path.read_text(encoding="utf-8"), item_name
+        )
+        if item.brace_context == context
+    )
+    assert len(items) == 1, (source_path, item_name, context)
+    digest = module._rust_item_token_sha256(items[0])
+    original = tuple((table, key, table[key]) for table, key in bindings)
+    for table, key in bindings:
+        table[key] = digest
+    return original
+
+
+def restore_reviewed_rust_item_digests(
+    original: tuple[tuple[dict[str, str], str, str], ...],
+) -> None:
+    """Restore seals rebound by one digest-resilient semantic mutation."""
+
+    for table, key, digest in original:
+        table[key] = digest
+
+
+def assert_digest_independent_consume_effect_order_mutation(
+    module,
+    formal_dir: Path,
+    effects_path: Path,
+    mutate_effect_item,
+) -> None:
+    """Reject replay-plan/retention reordering after refreshing the item seal."""
+
+    canonical_effects = effects_path.read_text(encoding="utf-8")
+    effects_path.write_text(
+        mutate_effect_item(
+            "consume_effects",
+            "        let local_proposal_replay_projections = self\n"
+            "            .plan_local_proposal_replay_consumptions(&effects, &ownership)\n"
+            "            .map_err(|error| self.close(error, services))?;\n"
+            "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
+            "            return Err(self.close(error, services));\n"
+            "        }",
+            "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
+            "            return Err(self.close(error, services));\n"
+            "        }\n"
+            "        let local_proposal_replay_projections = self\n"
+            "            .plan_local_proposal_replay_consumptions(&effects, &ownership)\n"
+            "            .map_err(|error| self.close(error, services))?;",
+        ),
+        encoding="utf-8",
+    )
+    original = rebind_reviewed_rust_item_digests(
+        module,
+        effects_path,
+        "consume_effects",
+        (("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),),
+        ((module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256, "consume_effects"),),
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "plan local replay, retain the complete batch, transfer each preflighted replay authority"
+        in error
+        for error in errors
+    ), errors
+    assert not any(
+        "retained effect FIFO consume_effects declaration" in error
+        for error in errors
+    ), errors
+    restore_reviewed_rust_item_digests(original)
+    effects_path.write_text(canonical_effects, encoding="utf-8")
+
+
+def assert_digest_independent_drive_effect_order_mutation(
+    module,
+    formal_dir: Path,
+    adapter_path: Path,
+    mutate_drive,
+) -> None:
+    """Reject WAL-owner/event reordering after refreshing both item seals."""
+
+    canonical_adapter = adapter_path.read_text(encoding="utf-8")
+    adapter_path.write_text(
+        mutate_drive(
+            "                    self.pending_persistence_id = None;\n"
+            "                    let persisted = reducer::Event::Persisted { tag, id };",
+            "                    let persisted = reducer::Event::Persisted { tag, id };\n"
+            "                    self.pending_persistence_id = None;",
+        ),
+        encoding="utf-8",
+    )
+    original = rebind_reviewed_rust_item_digests(
+        module,
+        adapter_path,
+        "drive_effects",
+        (("impl", "SumeragiV2Adapter"),),
+        (
+            (module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256, "drive_effects"),
+            (module._SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256, "drive_effects"),
+        ),
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "drive_effects must validate the exact appended WAL receipt and retained payload"
+        in error
+        for error in errors
+    ), errors
+    assert not any(
+        "drive_effects declaration, contract, and complete control flow must match"
+        in error
+        for error in errors
+    ), errors
+    restore_reviewed_rust_item_digests(original)
+    adapter_path.write_text(canonical_adapter, encoding="utf-8")
+
+
+_FOLDED_RUNTIME_CANDIDATE_MUTATIONS = (
+    (
+        "effect_candidate_semantic_binding",
+        _RUNTIME_DRIVER_IMPL,
+        "production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())",
+        "production_adapter_effect_candidate_binding(effect, inherited)",
+        "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
+    ),
+    (
+        "effect_candidate_semantic_binding",
+        _RUNTIME_DRIVER_IMPL,
+        "if *round == proposal_round && *subject == decision_subject =>",
+        "if *round == proposal_round || *subject == decision_subject =>",
+        "durable Decision body recovery must reconstruct Commit authority only for the exact proposal round and subject",
+    ),
+    (
+        "effect_candidate_semantic_binding",
+        _RUNTIME_DRIVER_IMPL,
+        "parent.commit_refinement_to(decision_statement).is_none()",
+        "parent.commit_refinement_to(decision_statement).is_some()",
+        "durable Decision body recovery must reject an incompatible inherited authority before publication",
+    ),
+    (
+        "effect_candidate_semantic_binding",
+        _RUNTIME_DRIVER_IMPL,
+        "Some(_) | None => inherited.copied(),",
+        "Some(_) | None => None,",
+        "nonmatching or absent durable Decision recovery must preserve only the inherited authority",
+    ),
+    (
+        "body_pipeline_completion_is_owned_by",
+        _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+        "let result = (plan.retained_owner.clone(), plan.effective_statement());",
+        "let result = (ownership.owner().clone(), plan.effective_statement());",
+        "in-flight body completion coalescence must resolve, refine, and return its one exact incumbent owner",
+    ),
+    (
+        "enqueue_body_pipeline_completion_with_owner",
+        _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+        """self
+            .body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
+            .is_some()""",
+        """self
+            .body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
+            .is_none()""",
+        "owned body-completion retries must compare the incumbent before queue coalescence",
+    ),
+    (
+        "reserve_body_available_with_owner",
+        _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+        """                retained_owner,
+                retained_statement,""",
+        """                ownership.owner().clone(),
+                ownership.candidate_semantic_statement(),""",
+        "an inexact unpublished retry must retain the exact incumbent lifecycle owner and effective authority",
+    ),
+)
+
+
+def assert_folded_runtime_candidate_mutations(module, tmp_path: Path) -> None:
+    """Run added candidate mutations under one existing collected selector."""
+
+    for index, (item_name, context, old, new, diagnostic) in enumerate(
+        _FOLDED_RUNTIME_CANDIDATE_MUTATIONS
+    ):
+        case_root = tmp_path / "folded-runtime-candidate" / str(index)
+        repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(
+            case_root, module
+        )
+        runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        source = runtime_path.read_text(encoding="utf-8")
+        items = tuple(
+            item
+            for item in module.rust_items(source, item_name)
+            if item.brace_context == context
+        )
+        assert len(items) == 1, (item_name, context)
+        item = items[0]
+        assert item.source.count(old) == 1, (item_name, old)
+        start = source.index(item.source)
+        runtime_path.write_text(
+            source[:start]
+            + item.source.replace(old, new, 1)
+            + source[start + len(item.source) :],
+            encoding="utf-8",
+        )
+        errors = module._effect_capacity_production_source_fidelity_errors(
+            repo_root
+        )
+        assert any(diagnostic in error for error in errors), (
+            diagnostic,
+            errors,
+        )
+
+
+def assert_authenticated_wal_v4_negatives(
+    module,
+    tmp_path: Path,
+) -> None:
+    """Keep authenticated WAL replay checks independent of refreshed seals."""
+
+    adapter_path = tmp_path / "crates/iroha_core/src/sumeragi/v2.rs"
+    canonical_adapter = adapter_path.read_text(encoding="utf-8")
+    adapter_name = "open_with_aggregator_and_publication_with_capacity"
+    adapter_digest = module._SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256[
+        adapter_name
+    ]
+    mutate_source_once(
+        adapter_path,
+        "registry.decode_wal_entry(\n"
+        "                    record,\n",
+        "registry.decode_wal_entry(\n"
+        "                    record.payload(),\n",
+    )
+    mutated_adapter = adapter_path.read_text(encoding="utf-8")
+    adapter_items = module.rust_function_items_from_structural(
+        mutated_adapter,
+        module.mask_rust_comments_and_literals(mutated_adapter),
+        adapter_name,
+    )
+    assert len(adapter_items) == 1
+    module._SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256[adapter_name] = (
+        module._rust_item_token_sha256(adapter_items[0])
+    )
+    errors = module._serviced_candidate_production_source_fidelity_errors(
+        tmp_path
+    )
+    assert any(
+        "startup replay must decode the complete authenticated WAL record" in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+    module._SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256[adapter_name] = (
+        adapter_digest
+    )
+    adapter_path.write_text(canonical_adapter, encoding="utf-8")
+
+    regression_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs"
+    )
+    canonical_regression = regression_path.read_text(encoding="utf-8")
+    regression_name = (
+        "post_wal_oversized_continuation_fails_closed_and_replays_exact_record"
+    )
+    regression_digest = (
+        module._SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256[
+            regression_name
+        ]
+    )
+    mutate_source_once(
+        regression_path,
+        "adapter.wal.recovered_records()[0].sequence(), 0",
+        "adapter.wal.recovered_records()[0].sequence().saturating_add(1), 0",
+    )
+    mutated_regression = regression_path.read_text(encoding="utf-8")
+    regression_items = module.rust_function_items_from_structural(
+        mutated_regression,
+        module.mask_rust_comments_and_literals(mutated_regression),
+        regression_name,
+    )
+    assert len(regression_items) == 1
+    module._SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256[
+        regression_name
+    ] = module._rust_item_token_sha256(regression_items[0])
+    errors = module._serviced_candidate_production_source_fidelity_errors(
+        tmp_path
+    )
+    assert any(
+        "the post-WAL oversized-continuation regression must inspect the authenticated record sequence"
+        in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+    module._SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256[
+        regression_name
+    ] = regression_digest
+    regression_path.write_text(canonical_regression, encoding="utf-8")
+
+
+def rebind_remote_proposal_replay_mutation_digest(
+    module,
+    source_path: Path,
+    item_name: str,
+    expected_error: str,
+) -> tuple[tuple[tuple[dict[str, str], str, str], ...], str] | None:
+    """Return the rebound seal set and hash-only diagnostic for one replay seam."""
+
+    generic = (
+        ("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),
+    )
+    specs = {
+        "authenticated Proposal dispatch must derive and transfer one exact replay origin": (
+            (("impl", "RuntimeDriver", "for", "SumeragiV2Adapter"),),
+            ((module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256, "runtime_driver_dispatch"),),
+            "production authenticated runtime dispatch bridge declaration, contract",
+        ),
+        "authenticated dispatch matching must require the frozen physical ownership boundary": (
+            (("impl", "RuntimeIngressOwnershipEvidence"),),
+            ((module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256, "runtime_ingress_exactly_matches_authenticated"),),
+            "post-authentication canonical payload comparator declaration",
+        ),
+        "retirement reconciliation must prune and validate deferred Proposal replay": (
+            generic,
+            ((module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256, "reconcile_deferred_runtime_ownership_after_retirement"),),
+            "atomic deferred wrapper and orphan-receipt retirement reconciliation declaration",
+        ),
+        "driver acceptance must retain Proposal replay with its exact deferred ingress owner": (
+            generic,
+            ((module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256, "accept_driver_dispatch"),),
+            "driver dispatch ownership acceptance declaration",
+        ),
+        "deferred Proposal replay must rebind the selected ProposalReceived ingress before effect ownership": (
+            generic,
+            (
+                (module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256, "dispatch_one_adapter_deferred"),
+                (module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256, "dispatch_one_adapter_deferred"),
+            ),
+            "single adapter-deferred runtime dispatcher declaration, contract",
+        ),
+    }
+    spec = specs.get(expected_error)
+    if spec is None:
+        return None
+    context, bindings, digest_diagnostic = spec
+    return (
+        rebind_reviewed_rust_item_digests(
+            module, source_path, item_name, context, bindings
+        ),
+        digest_diagnostic,
+    )
+
+
 def exact_output_production_fixture(tmp_path: Path) -> None:
     """Copy every production source consumed by the exact-output checker."""
 
@@ -182,7 +749,7 @@ def test_restored_productive_retry_mutations_survive_regression_digest_refresh(
 def rebind_changed_same_round_expanded_source_seal(
     module, repo_root: Path
 ) -> None:
-    """Rebind only the include-expanded source changed by one mutation."""
+    """Rebind direct-fixture source seals before checking one semantic mutation."""
 
     rebound_relatives: list[str] = []
     for relative, expected_sha256 in (
@@ -202,7 +769,10 @@ def rebind_changed_same_round_expanded_source_seal(
                 observed_sha256
             )
             rebound_relatives.append(relative)
-    assert len(rebound_relatives) == 1, rebound_relatives
+    # Synthetic fixtures intentionally use the narrow direct-include reader,
+    # while production seals use the authenticated recursive closure. Nested
+    # split parents can therefore differ before the one deliberate mutation.
+    assert rebound_relatives, rebound_relatives
     errors = module._same_round_semantic_kernel_source_fidelity_errors(repo_root)
     assert not any(
         "same-round semantic kernel source must match exact reviewed SHA-256"
@@ -3719,27 +4289,15 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
             tmp_path
             / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs"
             if source_kind == "runner_test"
-            else tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+            else (
+                tmp_path
+                / "crates/iroha_core/src/sumeragi/tests/"
+                "v2_worker_equivocation_and_selected_serve_fixture.rs"
+            )
         )
     )
-    worker_test_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "pub",
-            "(",
-            "super",
-            ")",
-            "mod",
-            "tests",
-        ),
-    )
-    worker_method_context = worker_test_context + (
+    worker_test_context = ()
+    worker_method_context = (
         (
             "#",
             "[",
@@ -3753,7 +4311,7 @@ def test_selected_serve_liveness_items_survive_individual_digest_refresh(
             "SelectedServeTimeoutRecoveryFixture",
         ),
     )
-    worker_drop_context = worker_test_context + (
+    worker_drop_context = (
         (
             "#",
             "[",
@@ -3825,24 +4383,13 @@ def test_selected_serve_timeout_owner_freeze_must_precede_serve_ingress_after_di
 
     module = load_checker()
     formal_dir = local_runner_service_fixture(tmp_path, module)
-    worker_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    worker_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/tests/"
+        "v2_worker_equivocation_and_selected_serve_fixture.rs"
+    )
     source = worker_path.read_text(encoding="utf-8")
     worker_method_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "pub",
-            "(",
-            "super",
-            ")",
-            "mod",
-            "tests",
-        ),
         (
             "#",
             "[",
@@ -3913,6 +4460,7 @@ def test_selected_serve_timeout_owner_freeze_must_precede_serve_ingress_after_di
     module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
         "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode"
     ] = module._rust_item_token_sha256(mutated_methods[0])
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
     errors = module._local_runner_service_contract_source_fidelity_errors(
         module.load_ledger(),

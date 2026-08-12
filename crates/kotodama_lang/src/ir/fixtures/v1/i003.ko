@@ -1,0 +1,11 @@
+
+            fn divisor() -> decimal { 2 }
+            fn scale() -> int { 2 }
+            fn rounded(quantity value) -> quantity {
+                value.div_round(
+                    scale: scale(),
+                    mode: Rounding::floor,
+                    divisor: divisor(),
+                )
+            }
+        

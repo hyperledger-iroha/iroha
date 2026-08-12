@@ -1,0 +1,18 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn main() authorize("CompilerFixture") {
+  let trigger_id = Name::parse("wake");
+  ledger::peer::register(Json::parse("{}"));
+  ledger::peer::unregister(Json::parse("{}"));
+  ledger::trigger::register(Json::parse("{}"));
+  ledger::trigger::unregister(trigger_id);
+  ledger::trigger::set_enabled(trigger_id, 1);
+  ledger::peer::register(Json::parse("{}"));
+  ledger::peer::unregister(Json::parse("{}"));
+  ledger::trigger::register(Json::parse("{}"));
+  ledger::trigger::unregister(trigger_id);
+  ledger::trigger::set_enabled(trigger_id, 0);
+}
+
+}

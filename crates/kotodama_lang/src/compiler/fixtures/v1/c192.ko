@@ -1,0 +1,5 @@
+
+            seiyaku CompactBranchStress {
+                view fn many_diamonds(bool flag) -> int {
+                    var total = 0;
+            

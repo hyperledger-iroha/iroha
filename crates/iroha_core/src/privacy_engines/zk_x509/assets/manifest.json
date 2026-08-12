@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "source_commit": "47cdc2d11e90d7034b57ae97fb460005020f037d",
+  "source_slice_hash_scope": "complete Rust constant declaration including trailing LF",
+  "assets": [
+    {
+      "path": "sha_fixed_algebraic_child_digests_v1.bin",
+      "byte_length": 640,
+      "sha256": "2a33fe8fe231a098243d714c5b17481dc144e00b371a2bdb70134c0999ac2251",
+      "layout": "5 shapes x 4 ordered child segments x 32 digest bytes",
+      "source_preimages": [
+        {
+          "path": "../fixed_algebraic_sha.rs",
+          "constant": "SHA_FIXED_ALGEBRAIC_CHILD_DIGESTS_V1",
+          "physical_lines": 112,
+          "sha256": "982423bb22b0f963688a5f2302be44d75252c2ea50c5d4f2722d4bbfcce0ff9e"
+        }
+      ]
+    }
+  ]
+}

@@ -2235,6 +2235,7 @@ kura.claim_autonomous_lifecycle_process_generation(
                 "kura::",
                 "nexus::",
                 "merge_sidecar::",
+                "state::",
                 "zk::",
                 "block::",
                 "offline::",
@@ -2247,8 +2248,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_modules) == 41
-    assert len(set(production_modules)) == 41
+    assert len(production_modules) == 40
+    assert len(set(production_modules)) == 40
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
@@ -2389,10 +2390,10 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-release-receipt",\n                "pytest",\n                363,'
         in receipt_source
     )
-    assert "did not run exactly 5289 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 5289" in release_source
+    assert "did not run exactly 5291 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 5291" in release_source
     assert (
-        "^5289 passed in [0-9]+([.][0-9]+)?s( "
+        "^5291 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2474,7 +2475,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                5289,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                5291,'
         in receipt_source
     )
     assert "did not run exactly 26 passing tests" in release_source

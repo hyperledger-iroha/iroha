@@ -1,0 +1,6 @@
+
+seiyaku Test {
+  kotoage fn make() authorize("Admin") {
+    ledger::trigger::register(Json::parse("{\"id\":\"t1\"}"));
+  }
+}

@@ -1,0 +1,12 @@
+
+seiyaku CompilerFixture {
+
+fn main(AccountId account) {
+  ledger::account::set_detail(
+    account: account,
+    key: Name::parse("status"),
+    value: Name::parse("not_json"),
+  );
+}
+
+}

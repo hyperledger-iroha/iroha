@@ -2,26 +2,17 @@
 //! Smoke test that ZK endpoints (verify, attachments) are exposed via the merged sub-router.
 #![cfg(feature = "app_api")]
 
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use axum::http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    state::{State, World},
-};
+use iroha_core::state::World;
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
     domain::{Domain, DomainId},
-    peer::PeerId,
 };
-#[cfg(feature = "telemetry")]
-use iroha_primitives::time::TimeSource;
-use iroha_torii::Torii;
 use iroha_torii_shared::ErrorEnvelope;
 use tower::ServiceExt as _;
 
@@ -64,98 +55,21 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
     // Minimal Torii setup (no telemetry requirement for these endpoints)
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
     let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
         .build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
-    let mut world = World::with([domain], [account], []);
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
 
-    // Optional telemetry used elsewhere; not needed here, but keep setup consistent
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id.clone(),
-            ts,
-            false,
-        )
-        .0
-    };
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-
-    let app = torii.api_router_for_tests();
+    let app = torii.router();
 
     for retired_path in ["/v1/zk/verify", "/v1/zk/submit-proof"] {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(retired_path)
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::request(
+            &app,
+            fixtures::post_json_request(&(retired_path), axum::body::Body::from("{}")),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             resp.status(),
             StatusCode::NOT_FOUND,
@@ -167,13 +81,10 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
     let request = fixtures::app_signed_request(
         &account_id,
         &cfg.common.key_pair,
-        Request::builder()
-            .uri("/v1/zk/attachments")
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::get_request(&("/v1/zk/attachments")),
         &[],
     );
-    let resp = app.clone().oneshot(request).await.unwrap();
+    let resp = fixtures::request(&app, request).await.unwrap();
     assert!(matches!(
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
@@ -183,10 +94,7 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
     let request = fixtures::app_signed_request(
         &account_id,
         &cfg.common.key_pair,
-        Request::builder()
-            .uri("/v1/zk/attachments/placeholder-id")
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::get_request(&("/v1/zk/attachments/placeholder-id")),
         &[],
     );
     let resp = app.oneshot(request).await.unwrap();
@@ -201,99 +109,20 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
 async fn zk_attachments_endpoints_disabled_by_default() {
     let _guard = attachments_smoke_lock();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
 
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id.clone(),
-            ts,
-            false,
-        )
-        .0
-    };
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-
-    let app = torii.api_router_for_tests();
+    let app = torii.router();
     for request in [
-        Request::builder()
-            .uri("/v1/zk/attachments")
-            .body(axum::body::Body::empty())
-            .unwrap(),
-        Request::builder()
-            .uri("/v1/zk/attachments/count")
-            .body(axum::body::Body::empty())
-            .unwrap(),
-        Request::builder()
-            .uri(format!("/v1/zk/attachments/{}", "0".repeat(64)))
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::get_request(&("/v1/zk/attachments")),
+        fixtures::get_request(&("/v1/zk/attachments/count")),
+        fixtures::get_request(&(format!("/v1/zk/attachments/{}", "0".repeat(64)))),
         Request::builder()
             .method("DELETE")
             .uri(format!("/v1/zk/attachments/{}", "0".repeat(64)))
             .body(axum::body::Body::empty())
             .unwrap(),
     ] {
-        let resp = app.clone().oneshot(request).await.unwrap();
+        let resp = fixtures::request(&app, request).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
@@ -304,94 +133,21 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
     let _guard = attachments_smoke_lock();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
     let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
         .build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
-    let mut world = World::with([domain], [account], []);
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
 
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id.clone(),
-            ts,
-            false,
-        )
-        .0
-    };
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-
-    let app = torii.api_router_for_tests();
+    let app = torii.router();
 
     let count_request = fixtures::app_signed_request(
         &account_id,
         &cfg.common.key_pair,
-        Request::builder()
-            .uri("/v1/zk/attachments/count")
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::get_request(&("/v1/zk/attachments/count")),
         &[],
     );
-    let count_resp = app.clone().oneshot(count_request).await.unwrap();
+    let count_resp = fixtures::request(&app, count_request).await.unwrap();
     if count_resp.status() == StatusCode::OK {
         let body = count_resp.into_body().collect().await.unwrap().to_bytes();
         let json: norito::json::Value = norito::json::from_slice(&body).expect("json count body");
@@ -427,107 +183,31 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
     cfg.torii.zk_attachments_enabled = true;
     cfg.torii.attachments_sanitizer_mode =
         iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess;
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
     let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
         .build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
-    let mut world = World::with([domain], [account], []);
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
 
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id.clone(),
-            ts,
-            false,
-        )
-        .0
-    };
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-
-    let app = torii.api_router_for_tests();
+    let app = torii.router();
     let body = br#"{"backend":"demo","proof":{"bytes":[7,8,9]}}"#;
     let signed_request = fixtures::app_signed_request(
         &account_id,
         &cfg.common.key_pair,
-        Request::builder()
-            .method("POST")
-            .uri("/v1/zk/attachments")
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from(body.to_vec()))
-            .unwrap(),
+        fixtures::post_json_request(
+            &("/v1/zk/attachments"),
+            axum::body::Body::from(body.to_vec()),
+        ),
         body,
     );
     let signed_headers = signed_request.headers().clone();
 
-    let create_resp = app
-        .clone()
-        .oneshot(request_with_headers(
-            "POST",
-            "/v1/zk/attachments",
-            &signed_headers,
-            body,
-        ))
-        .await
-        .unwrap();
+    let create_resp = fixtures::request(
+        &app,
+        request_with_headers("POST", "/v1/zk/attachments", &signed_headers, body),
+    )
+    .await
+    .unwrap();
     assert_eq!(create_resp.status(), StatusCode::CREATED);
     let create_body = create_resp.into_body().collect().await.unwrap().to_bytes();
     let meta: norito::json::Value = norito::json::from_slice(&create_body).expect("json meta");
@@ -541,16 +221,12 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         Some("application/json")
     );
 
-    let replay_resp = app
-        .clone()
-        .oneshot(request_with_headers(
-            "POST",
-            "/v1/zk/attachments",
-            &signed_headers,
-            body,
-        ))
-        .await
-        .unwrap();
+    let replay_resp = fixtures::request(
+        &app,
+        request_with_headers("POST", "/v1/zk/attachments", &signed_headers, body),
+    )
+    .await
+    .unwrap();
     assert_eq!(replay_resp.status(), StatusCode::FORBIDDEN);
     let replay_body = replay_resp.into_body().collect().await.unwrap().to_bytes();
     assert_query_validation_message(&replay_body, "nonce already used");
@@ -558,13 +234,10 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
     let get_request = fixtures::app_signed_request(
         &account_id,
         &cfg.common.key_pair,
-        Request::builder()
-            .uri(format!("/v1/zk/attachments/{id}"))
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::get_request(&(format!("/v1/zk/attachments/{id}"))),
         &[],
     );
-    let get_resp = app.clone().oneshot(get_request).await.unwrap();
+    let get_resp = fixtures::request(&app, get_request).await.unwrap();
     assert_eq!(get_resp.status(), StatusCode::OK);
     assert!(
         get_resp
@@ -591,16 +264,13 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
             .unwrap(),
         &[],
     );
-    let delete_resp = app.clone().oneshot(delete_request).await.unwrap();
+    let delete_resp = fixtures::request(&app, delete_request).await.unwrap();
     assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
 
     let get_after_delete_request = fixtures::app_signed_request(
         &account_id,
         &cfg.common.key_pair,
-        Request::builder()
-            .uri(format!("/v1/zk/attachments/{id}"))
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::get_request(&(format!("/v1/zk/attachments/{id}"))),
         &[],
     );
     let get_after_delete_resp = app.oneshot(get_after_delete_request).await.unwrap();
@@ -613,96 +283,20 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
     let _guard = attachments_smoke_lock();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
 
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id.clone(),
-            ts,
-            false,
-        )
-        .0
-    };
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-
-    let app = torii.api_router_for_tests();
+    let app = torii.router();
 
     for request in [
-        Request::builder()
-            .uri("/v1/zk/attachments")
-            .body(axum::body::Body::empty())
-            .unwrap(),
-        Request::builder()
-            .uri("/v1/zk/attachments/count")
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::get_request(&("/v1/zk/attachments")),
+        fixtures::get_request(&("/v1/zk/attachments/count")),
         Request::builder()
             .method("DELETE")
             .uri(format!("/v1/zk/attachments/{}", "0".repeat(64)))
             .body(axum::body::Body::empty())
             .unwrap(),
     ] {
-        let response = app.clone().oneshot(request).await.unwrap();
+        let response = fixtures::request(&app, request).await.unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_query_validation_message(&body, "signed account headers are required");

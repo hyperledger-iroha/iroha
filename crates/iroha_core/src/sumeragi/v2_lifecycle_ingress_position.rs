@@ -45,7 +45,7 @@ impl FairIngressQueuePositions {
 /// ownership history, the queue-bound lifecycle context, and the receiver-local
 /// physical admission ordinal. The selected target additionally proves that
 /// its carrier-derived context equals this bound context. The identity contains
-/// no legacy runtime lifecycle or scheduler ordinal.
+/// no superseded runtime lifecycle or scheduler ordinal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PendingFairIngressIdentity {
     context: LifecycleContext,
@@ -1468,7 +1468,7 @@ fn append_field(projection: &mut Vec<u8>, field: &[u8]) {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{HashOf, KeyPair};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::peer::PeerId;
 
     use super::super::super::{FairV2IngressPushDisposition, InboundBlockMessage};
     use super::*;
@@ -1523,7 +1523,9 @@ mod tests {
             wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                 wire::CommitCertificateRequest {
                     protocol_version: wire::PROTOCOL_VERSION,
-                    chain_id: ChainId::from("lifecycle-ingress-position-test"),
+                    network_id: crate::sumeragi::synthetic_network_id(
+                        "lifecycle-ingress-position-test",
+                    ),
                     context_id,
                     height,
                     requester: requester.clone(),

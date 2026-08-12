@@ -2825,7 +2825,26 @@ def test_local_runner_service_contract_source_fidelity_is_current(
         formal_dir=formal_dir,
     )
 
-    assert errors == []
+    assert errors == [], errors
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        runner_path,
+        "next",
+        (("impl", "Iterator", "for", "OuterIngressTurns"),),
+        "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
+        "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
+    )
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+    assert any(
+        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_local_runner_service_contract_rejects_broadened_trust_boundary(

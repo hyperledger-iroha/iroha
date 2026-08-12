@@ -1,0 +1,11 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn batch() authorize("Admin") {
+  ledger::asset::batch::begin();
+  ledger::asset::batch::end();
+  ledger::asset::batch::begin();
+  ledger::asset::batch::end();
+}
+
+}

@@ -3678,15 +3678,14 @@ def _runtime_certified_fence_capacity_source_fidelity_errors(
 
     errors: list[str] = []
     runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-    if not runtime_path.is_file() or runtime_path.is_symlink():
-        return [
-            f"{runtime_path}: certified-fence runtime capacity source must "
-            "be a regular file"
-        ]
-    try:
-        source = runtime_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        return [f"{runtime_path}: cannot read runtime capacity source: {error}"]
+    runtime_path, source = _read_reviewed_rust_source(
+        repo_root,
+        runtime_path.relative_to(repo_root).as_posix(),
+        errors,
+        "certified-fence runtime capacity source",
+    )
+    if not source:
+        return errors
 
     config_items: dict[str, RustItem | None] = {}
     for item_name in (

@@ -1,0 +1,10 @@
+
+            seiyaku C {
+                state StateMap<int, bytes> values;
+                hajimari() {}
+                fn main() {
+                    values[7] = b"payload";
+                    let _stored = values.get(7);
+                }
+            }
+        

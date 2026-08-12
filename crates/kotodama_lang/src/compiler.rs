@@ -1893,11 +1893,7 @@ mod tests {
         let source_name = "axt_literal_validation.ko";
         let parsed = session
             .parse_compilation_unit(crate::session::CompileRequest {
-                source: r#"
-seiyaku AxtLiteralValidation {
-    kotoage fn run() authorize("AxtLiteralValidation") {}
-}
-"#,
+                source: include_str!("compiler/fixtures/v1/c001.ko"),
                 source_name: Some(source_name),
             })
             .map_err(|diagnostics| diagnostics.render_human())?;
@@ -2857,11 +2853,7 @@ seiyaku AxtLiteralValidation {
             ..CompilerOptions::default()
         };
         let compiler = Compiler::new_with_options(opts);
-        let src = r#"
-seiyaku MyC {
-  hajimari() { let a = 1; }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c002.ko");
         let code = compiler.compile_source(src).expect("compile");
         let parsed = ProgramMetadata::parse(&code).expect("parse meta");
         assert_eq!(parsed.metadata.max_cycles, 42);
@@ -2886,30 +2878,7 @@ seiyaku MyC {
     #[test]
     fn loop_phi_lowering_is_deterministic() {
         let compiler = Compiler::new();
-        let src = r#"
-seiyaku StableLoop {
-  kotoage fn main() -> int authorize("Entry") {
-    var alpha = 1;
-    var beta = 2;
-    var gamma = 3;
-    var delta = 4;
-    var epsilon = 5;
-    var cursor = 0;
-    for step in range(4) {
-      if alpha < beta {
-        gamma = gamma + delta;
-      } else {
-        delta = delta + gamma;
-      }
-      alpha = alpha + 1;
-      beta = beta + 2;
-      epsilon = epsilon + alpha;
-      cursor = step + 1;
-    }
-    return alpha + beta + gamma + delta + epsilon + cursor;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c003.ko");
         let first = compiler.compile_source(src).expect("first compile");
         for _ in 0..8 {
             let next = compiler.compile_source(src).expect("repeat compile");
@@ -3269,12 +3238,7 @@ seiyaku StableLoop {
 
     #[test]
     fn literal_and_call_heavy_minimal_program_has_no_stub_padding() {
-        let source = r#"
-seiyaku CompactBackend {
-  fn literal() -> Name { return Name::parse("counter"); }
-  kotoage fn main() -> Name  authorize("Entry") { return literal(); }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c004.ko");
         let (bytes, _manifest, report) = test_mode_compiler()
             .compile_source_with_manifest_and_report(source)
             .expect("compile compact literal/call program");
@@ -3316,15 +3280,7 @@ seiyaku CompactBackend {
 
     #[test]
     fn parameterized_entrypoint_emits_one_argument_record_decode() {
-        let source = r#"
-seiyaku ArgumentDecode {
-  kotoage fn run(int count, Name label, bytes payload) -> int authorize("Entry") {
-    let _label = label;
-    let _payload = payload;
-    return count;
-  }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c005.ko");
         let bytes = test_mode_compiler()
             .compile_source(source)
             .expect("compile parameterized entrypoint");
@@ -3363,13 +3319,7 @@ seiyaku ArgumentDecode {
 
     #[test]
     fn sum_type_join_fallbacks_do_not_become_false_constant_facts() {
-        let source = r#"
-seiyaku SumJoinFacts {
-  view fn run(Option<int> maybe, Result<int, bool> outcome) -> int {
-    return maybe.unwrap_or(0) + outcome.unwrap_or(0);
-  }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c006.ko");
         let bytes = test_mode_compiler()
             .compile_source(source)
             .expect("compile sum-type join fixture");
@@ -3546,17 +3496,7 @@ seiyaku SumJoinFacts {
 
     #[test]
     fn entrypoint_hints_include_access_hidden_behind_helper_chain() {
-        let source = r#"
-seiyaku HelperAccess {
-  state int counter;
-
-  hajimari() { counter = 0; }
-
-  fn leaf() { counter = 1; }
-  fn middle() { leaf(); }
-  kotoage fn run()  authorize("Entry") { middle(); }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c007.ko");
         let output = test_mode_compiler()
             .compile_source_output(source, None)
             .expect("compile helper-hidden state access");
@@ -3581,12 +3521,7 @@ seiyaku HelperAccess {
 
     #[test]
     fn entrypoint_hints_inherit_helper_incompleteness() {
-        let source = r#"
-seiyaku HelperAccess {
-  fn leaf(bytes path) { let value = state::get(path); }
-  kotoage fn run(bytes path)  authorize("Entry") { leaf(path); }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c008.ko");
         let output = test_mode_compiler()
             .compile_source_output(source, None)
             .expect("compile helper-hidden dynamic access");
@@ -3613,15 +3548,7 @@ seiyaku HelperAccess {
 
     #[test]
     fn unknown_state_path_call_before_literal_keeps_helper_hints_conservative() {
-        let source = r#"
-seiyaku HelperAccess {
-  fn leaf(bytes path) { let value = state::get(path); }
-  kotoage fn dynamic(bytes path) authorize("Entry") { leaf(path); }
-  kotoage fn literal() authorize("Entry") {
-    leaf(Name::parse("Counters").path(1));
-  }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c009.ko");
         let output = test_mode_compiler()
             .compile_source_output(source, None)
             .expect("compile mixed dynamic/literal helper calls");
@@ -3806,13 +3733,7 @@ seiyaku HelperAccess {
 
     #[test]
     fn unary_neg_emits_exact_int_syscall() {
-        let src = r#"
-seiyaku NegTest {
-  kotoage fn neg(int x) -> int authorize("Entry") {
-    return -x;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c010.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile neg");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
@@ -3874,21 +3795,7 @@ seiyaku NegTest {
 
     #[test]
     fn adaptive_int_comparisons_use_exact_numeric_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-view fn less(int a, int b) -> bool { return a < b; }
-view fn less_equal(int a, int b) -> bool { return a <= b; }
-view fn greater(int a, int b) -> bool { return a > b; }
-view fn greater_equal(int a, int b) -> bool { return a >= b; }
-view fn branch(int a, int b) -> int {
-  if a < b { return 1; }
-  if a >= b { return 2; }
-  return 3;
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c011.ko");
         let bytes = test_mode_compiler()
             .compile_source(src)
             .expect("compile signed comparisons");
@@ -3930,15 +3837,7 @@ view fn branch(int a, int b) -> int {
 
     #[test]
     fn logical_operators_emit_control_flow_instead_of_eager_bitwise_ops() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-fn rhs() -> bool { return true; }
-view fn both(bool value) -> bool { return value && rhs(); }
-view fn either(bool value) -> bool { return value || rhs(); }
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c012.ko");
         let bytes = test_mode_compiler()
             .compile_source(src)
             .expect("compile short-circuit expressions");
@@ -3968,13 +3867,7 @@ view fn either(bool value) -> bool { return value || rhs(); }
 
     #[test]
     fn get_quantity_emits_typed_option_quantity_syscall() {
-        let src = r#"
-seiyaku JsonNumericTest {
-  view fn run(Json ev) {
-    let Option<quantity> value = ev.get_quantity(Name::parse("value"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c013.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile get_quantity");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
@@ -3990,13 +3883,7 @@ seiyaku JsonNumericTest {
 
     #[test]
     fn get_asset_definition_id_emits_asset_definition_syscall() {
-        let src = r#"
-seiyaku JsonAssetDefinitionTest {
-  view fn run(Json ev) {
-    let _asset = ev.get_asset_definition_id(Name::parse("asset_definition_id"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c014.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
@@ -4017,49 +3904,7 @@ seiyaku JsonAssetDefinitionTest {
 
     #[test]
     fn native_escrow_builtins_emit_escrow_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("CompilerFixture") {
-  let evidence = b"00";
-  ledger::escrow::open_offer(
-    offer: Name::parse("aitai_offer"),
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    amount: 10,
-    evidence: evidence,
-  );
-  ledger::escrow::accept(Name::parse("aitai_offer"));
-  ledger::escrow::mark_payment_sent(Name::parse("aitai_offer"));
-  ledger::escrow::release(Name::parse("aitai_offer"));
-  ledger::escrow::cancel(Name::parse("aitai_offer"));
-  ledger::escrow::open_dispute(Name::parse("aitai_offer"), evidence);
-  ledger::escrow::resolve_dispute(
-    offer: Name::parse("aitai_offer"),
-    buyer_amount: 6,
-    seller_amount: 4,
-    evidence: evidence,
-  );
-  ledger::escrow::open_offer(
-    offer: Name::parse("aitai_offer_call"),
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    amount: 11,
-    evidence: evidence,
-  );
-  ledger::escrow::accept(Name::parse("aitai_offer_call"));
-  ledger::escrow::mark_payment_sent(Name::parse("aitai_offer_call"));
-  ledger::escrow::release(Name::parse("aitai_offer_call"));
-  ledger::escrow::cancel(Name::parse("aitai_offer_call"));
-  ledger::escrow::open_dispute(Name::parse("aitai_offer_call"), evidence);
-  ledger::escrow::resolve_dispute(
-    offer: Name::parse("aitai_offer_call"),
-    buyer_amount: 7,
-    seller_amount: 4,
-    evidence: evidence,
-  );
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c015.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
@@ -4164,59 +4009,19 @@ kotoage fn main() authorize("EscrowAdmin") {{
     fn escrow_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::open_offer(
-    offer: Name::parse("deal"),
-    asset_definition: Name::parse("rose"),
-    amount: 10,
-  );
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c016.ko"),
                 "ledger::escrow::open_offer expects (Name, AssetDefinitionId, quantity[, bytes evidence_hashes])",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::accept(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c017.ko"),
                 "ledger::escrow::accept expects (Name)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::open_dispute(Name::parse("deal"), 1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c018.ko"),
                 "ledger::escrow::open_dispute expects (Name[, bytes evidence_hashes])",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::resolve_dispute(
-    offer: Name::parse("deal"),
-    buyer_amount: Name::parse("buyer"),
-    seller_amount: 4,
-  );
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c019.ko"),
                 "ledger::escrow::resolve_dispute expects (Name, quantity, quantity[, bytes evidence_hashes])",
             ),
         ] {
@@ -4321,15 +4126,7 @@ kotoage fn main() authorize("CompilerFixture") {{
 
     #[test]
     fn dynamic_account_quorum_emits_checked_conversion_and_scoped_account_hints() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
-  ledger::account::set_quorum(account, quorum);
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c020.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -4369,59 +4166,27 @@ kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
     fn account_multisig_admin_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::account::add_signatory(account, Name::parse("not_json"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c021.ko"),
                 "ledger::account::add_signatory expects (AccountId, Json)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::account::set_quorum(account, Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c022.ko"),
                 "ledger::account::set_quorum expects (AccountId, int)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn main(AccountId account) { ledger::account::set_quorum(account, -1); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c023.ko"),
                 "account quorum must be in the protocol range 1..=65535",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn main(AccountId account) { ledger::account::set_quorum(account, 0); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c024.ko"),
                 "account quorum must be in the protocol range 1..=65535",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn main(AccountId account) { ledger::account::set_quorum(account, 65536); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c025.ko"),
                 "account quorum must be in the protocol range 1..=65535",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn main(AccountId account) { ledger::account::set_quorum(account, 18446744073709551616); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c026.ko"),
                 "account quorum must be in the protocol range 1..=65535",
             ),
         ] {
@@ -4492,18 +4257,7 @@ view fn read() -> quantity {{
 
     #[test]
     fn account_balance_query_builtin_rejects_invalid_arguments() {
-        let parsed = parse(
-            r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  let _balance = ledger::asset::balance(account, Name::parse("not_asset"));
-}
-
-}
-"#,
-        )
-        .expect("parse source");
+        let parsed = parse(include_str!("compiler/fixtures/v1/c027.ko")).expect("parse source");
         let err =
             analyze(&parsed).expect_err("semantic analysis should reject account balance args");
         assert!(
@@ -4582,31 +4336,11 @@ kotoage fn main() authorize("CompilerFixture") {{
     fn set_account_detail_builtin_rejects_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::account::set_detail(account: account, key: 1, value: Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c028.ko"),
                 "ledger::account::set_detail expects (AccountId, Name, Json)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::account::set_detail(
-    account: account,
-    key: Name::parse("status"),
-    value: Name::parse("not_json"),
-  );
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c029.ko"),
                 "ledger::account::set_detail expects (AccountId, Name, Json)",
             ),
         ] {
@@ -4744,39 +4478,15 @@ kotoage fn main() authorize("CompilerFixture") {{
     fn native_asset_operation_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::asset::transfer(source: account, destination: account, asset_definition: Name::parse("not_asset"), amount: 1, dataspace: DataSpaceId::parse("0"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c030.ko"),
                 "ledger::asset::transfer expects (AccountId, AccountId, AssetDefinitionId, quantity, DataSpaceId)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account, AssetDefinitionId asset) {
-  ledger::asset::mint(account: account, asset_definition: asset, amount: Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c031.ko"),
                 "ledger::asset::mint expects (AccountId, AssetDefinitionId, quantity)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account, AssetDefinitionId asset) {
-  ledger::asset::burn(account: account, asset_definition: Name::parse("not_asset"), amount: 1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c032.ko"),
                 "ledger::asset::burn expects (AccountId, AssetDefinitionId, quantity)",
             ),
         ] {
@@ -4884,51 +4594,19 @@ kotoage fn main() authorize("CompilerFixture") {{
     fn nft_asset_operation_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::nft::mint(Name::parse("bad"), account);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c033.ko"),
                 "ledger::nft::mint expects (NftId, AccountId)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(NftId nft) {
-  ledger::nft::set_metadata(nft: nft, key: 1, value: Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c034.ko"),
                 "ledger::nft::set_metadata expects (NftId, Name, Json)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::nft::burn(Name::parse("bad"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c035.ko"),
                 "ledger::nft::burn expects (NftId)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account, NftId nft) {
-  ledger::nft::transfer(source: account, nft: nft, destination: Name::parse("bad"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c036.ko"),
                 "ledger::nft::transfer expects (AccountId, NftId, AccountId)",
             ),
         ] {
@@ -5061,75 +4739,27 @@ kotoage fn main() authorize("CompilerFixture") {{
     fn lifecycle_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::domain::register(Name::parse("bad"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c037.ko"),
                 "ledger::domain::register expects (DomainId)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::account::register(Name::parse("bad"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c038.ko"),
                 "ledger::account::register expects (AccountId)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::unregister(Name::parse("bad"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c039.ko"),
                 "ledger::asset::unregister expects (AssetDefinitionId)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AssetDefinitionId asset) {
-  ledger::asset::register(asset_definition: Name::parse("bad"), name: "ROSE", scale: 1, mintable: 0);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c040.ko"),
                 "ledger::asset::register expects (AssetDefinitionId, string, int, int)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AssetDefinitionId asset, AccountId account) {
-  ledger::asset::create(asset_definition: asset, name: Json::parse("{}"), scale: 1, owner: account, mintable: 0);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c041.ko"),
                 "ledger::asset::create expects (AssetDefinitionId, string, int, AccountId, int)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::domain::transfer(source: account, domain: Json::parse("{}"), destination: account);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c042.ko"),
                 "ledger::domain::transfer expects (AccountId, DomainId, AccountId)",
             ),
         ] {
@@ -5146,25 +4776,7 @@ fn main(AccountId account) {
 
     #[test]
     fn peer_trigger_management_builtins_emit_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("CompilerFixture") {
-  let trigger_id = Name::parse("wake");
-  ledger::peer::register(Json::parse("{}"));
-  ledger::peer::unregister(Json::parse("{}"));
-  ledger::trigger::register(Json::parse("{}"));
-  ledger::trigger::unregister(trigger_id);
-  ledger::trigger::set_enabled(trigger_id, 1);
-  ledger::peer::register(Json::parse("{}"));
-  ledger::peer::unregister(Json::parse("{}"));
-  ledger::trigger::register(Json::parse("{}"));
-  ledger::trigger::unregister(trigger_id);
-  ledger::trigger::set_enabled(trigger_id, 0);
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c043.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
@@ -5199,19 +4811,7 @@ kotoage fn main() authorize("CompilerFixture") {
 
     #[test]
     fn peer_trigger_management_builtins_report_exact_trigger_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("CompilerFixture") {
-  let trigger_id = Name::parse("wake");
-  ledger::trigger::unregister(trigger_id);
-  ledger::trigger::set_enabled(trigger_id, 1);
-  ledger::trigger::unregister(trigger_id);
-  ledger::trigger::set_enabled(trigger_id, 0);
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c044.ko");
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -5309,99 +4909,35 @@ kotoage fn main() authorize("CompilerFixture") {{
     fn role_permission_peer_trigger_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::peer::register(Name::parse("bad"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c045.ko"),
                 "ledger::peer::register expects (Json)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::trigger::register(Name::parse("bad"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c046.ko"),
                 "ledger::trigger::register expects (Json)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::trigger::unregister(Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c047.ko"),
                 "ledger::trigger::unregister expects (Name)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::trigger::set_enabled(Name::parse("wake"), Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c048.ko"),
                 "ledger::trigger::set_enabled expects (Name, int)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::role::create(Name::parse("auditor"), Name::parse("read_blocks"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c049.ko"),
                 "ledger::role::create expects (Name, Json)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::role::delete(Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c050.ko"),
                 "ledger::role::delete expects (Name)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::role::grant(account, Json::parse("{}"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c051.ko"),
                 "ledger::role::grant expects (AccountId, Name)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main(AccountId account) {
-  ledger::permission::revoke(account, 1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c052.ko"),
                 "ledger::permission::revoke expects (AccountId, Name|Json)",
             ),
         ] {
@@ -5418,15 +4954,7 @@ fn main(AccountId account) {
 
     #[test]
     fn public_input_builtin_emits_public_input_syscall_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-view fn read_input() -> bytes {
-  return context::public_input(Name::parse("proof_payload"));
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c053.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -5468,18 +4996,7 @@ view fn read_input() -> bytes {
 
     #[test]
     fn public_input_builtin_rejects_invalid_arguments() {
-        let parsed = parse(
-            r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _payload = context::public_input(1);
-}
-
-}
-"#,
-        )
-        .expect("parse source");
+        let parsed = parse(include_str!("compiler/fixtures/v1/c054.ko")).expect("parse source");
         let err =
             analyze(&parsed).expect_err("semantic analysis should reject public input key type");
         assert!(
@@ -5491,17 +5008,7 @@ fn main() {
 
     #[test]
     fn debug_info_emits_the_single_v1_debug_syscall_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn inspect() -> int authorize("DebugContract") {
-  debug::info("ready");
-  debug::info(42);
-  return 1;
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c055.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -5579,24 +5086,7 @@ kotoage fn inspect() -> int authorize("DebugContract") {
 
     #[test]
     fn assertion_logging_builtins_emit_abort_and_log_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-error enum ContractError {
-  InvariantViolation = 1001,
-}
-
-kotoage fn inspect() -> int authorize("InspectContract") {
-  debug::info("ready");
-  debug::info(7);
-  test::assert(true);
-  require(true, ContractError::InvariantViolation);
-  test::assert_eq(actual: 1, expected: 1);
-  return 1;
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c056.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -5634,51 +5124,19 @@ kotoage fn inspect() -> int authorize("InspectContract") {
     fn assertion_logging_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  test::assert(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c057.ko"),
                 "test::assert expects (bool) or (bool, string|int)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  require(true, false);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c058.ko"),
                 "require expects a declared error variant as its second argument",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  debug::info(Name::parse("not_scalar"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c059.ko"),
                 "debug::info expects (string|int)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  test::assert_eq(actual: true, expected: 1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c060.ko"),
                 "test::assert_eq expects two int args",
             ),
         ] {
@@ -5696,18 +5154,7 @@ fn main() {
 
     #[test]
     fn privacy_output_builtins_emit_runtime_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("CompilerFixture") {
-  let Secret<int> secret = crypto::private_input(0);
-  let Secret<int> blinding = crypto::private_input(1);
-  let commitment = crypto::valcom(left: secret, right: blinding);
-  crypto::commit_output();
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c061.ko");
         let compiler = Compiler::new_with_options(CompilerOptions {
             force_zk: true,
             mode: CompilerMode::Test,
@@ -5746,27 +5193,11 @@ kotoage fn main() authorize("CompilerFixture") {
     fn privacy_output_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let Secret<int> _secret = crypto::private_input(Name::parse("not_index"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c062.ko"),
                 "crypto::private_input expects (int index)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  crypto::commit_output(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c063.ko"),
                 "crypto::commit_output expects no arguments",
             ),
         ] {
@@ -5911,18 +5342,7 @@ kotoage fn apply_batch() authorize("Admin") {{
 
     #[test]
     fn fastpq_batch_apply_builtin_rejects_invalid_arguments() {
-        let parsed = parse(
-            r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::batch::apply(Name::parse("not_batch"));
-}
-
-}
-"#,
-        )
-        .expect("parse source");
+        let parsed = parse(include_str!("compiler/fixtures/v1/c064.ko")).expect("parse source");
         let err = analyze(&parsed).expect_err("semantic analysis should reject batch payload type");
         assert!(
             err.message
@@ -5934,18 +5354,7 @@ fn main() {
 
     #[test]
     fn fastpq_batch_boundary_builtins_emit_boundary_syscalls_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn batch() authorize("Admin") {
-  ledger::asset::batch::begin();
-  ledger::asset::batch::end();
-  ledger::asset::batch::begin();
-  ledger::asset::batch::end();
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c065.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -6005,51 +5414,19 @@ kotoage fn batch() authorize("Admin") {
     fn fastpq_batch_boundary_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::batch::begin(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c066.ko"),
                 "ledger::asset::batch::begin expects ()",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::batch::end(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c067.ko"),
                 "ledger::asset::batch::end expects ()",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::batch::begin(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c068.ko"),
                 "ledger::asset::batch::begin expects ()",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::batch::end(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c069.ko"),
                 "ledger::asset::batch::end expects ()",
             ),
         ] {
@@ -6065,17 +5442,7 @@ fn main() {
 
     #[test]
     fn transfer_batch_builtin_lowers_entries_between_boundaries() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-  ledger::asset::transfer_batch((context::authority(), context::authority(), asset, 5));
-  ledger::asset::transfer_batch((context::authority(), context::authority(), asset, 7));
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c070.ko");
         let parsed = parse(src).expect("parse transfer_batch source");
         let typed = analyze(&parsed).expect("analyze transfer_batch source");
         let ir = ir::lower(&typed).expect("lower transfer_batch source");
@@ -6106,27 +5473,11 @@ fn main() {
     fn transfer_batch_builtin_rejects_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::transfer_batch();
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c071.ko"),
                 "ledger::asset::transfer_batch expects at least one entry",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::asset::transfer_batch(context::authority());
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c072.ko"),
                 "ledger::asset::transfer_batch expects (AccountId, AccountId, AssetDefinitionId, quantity) tuple entries",
             ),
         ] {
@@ -6195,19 +5546,7 @@ fn main() {
 
     #[test]
     fn verify_proof_builtin_emits_verify_proof_syscall_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-view fn check() -> int {
-  let envelope = b"00";
-  if crypto::verify_proof(envelope) {
-    return 1;
-  }
-  return 0;
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c073.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -6246,18 +5585,7 @@ view fn check() -> int {
 
     #[test]
     fn verify_proof_builtin_rejects_invalid_arguments() {
-        let parsed = parse(
-            r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _ok = crypto::verify_proof(Name::parse("not_envelope"));
-}
-
-}
-"#,
-        )
-        .expect("parse source");
+        let parsed = parse(include_str!("compiler/fixtures/v1/c074.ko")).expect("parse source");
         let err = analyze(&parsed).expect_err("semantic analysis should reject proof payload type");
         assert!(
             err.message.contains(
@@ -6270,15 +5598,7 @@ fn main() {
 
     #[test]
     fn prove_execution_builtin_emits_prove_execution_syscall_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-view fn proof() -> bytes {
-  return crypto::prove_execution();
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c075.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -6309,18 +5629,7 @@ view fn proof() -> bytes {
 
     #[test]
     fn prove_execution_builtin_rejects_arguments() {
-        let parsed = parse(
-            r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _proof = crypto::prove_execution(1);
-}
-
-}
-"#,
-        )
-        .expect("parse source");
+        let parsed = parse(include_str!("compiler/fixtures/v1/c076.ko")).expect("parse source");
         let err = analyze(&parsed).expect_err("semantic analysis should reject proof arguments");
         assert!(
             err.message
@@ -6401,20 +5710,7 @@ fn main() {
 
     #[test]
     fn vrf_builtins_emit_vrf_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-fn verify(bytes payload) {
-  let _proof = crypto::vrf::verify(request: payload);
-  let _batch = crypto::vrf::verify_batch(payload);
-}
-
-view fn main() {
-  verify(b"\x01\x02\x03");
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c077.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile VRF helpers");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
@@ -6493,47 +5789,17 @@ view fn main() {
     fn vrf_builtins_reject_invalid_arguments() {
         for (src, expected_code, expected_message) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let payload = b"\x01\x02\x03";
-  let _bad = crypto::vrf::verify(
-    message: payload,
-    proof: payload,
-    public_key: payload,
-    variant: 1,
-  );
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c078.ko"),
                 Some("E_RETIRED_VRF_VERIFY_ARGS"),
                 "four-register VRF verify form is retired",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::vrf::verify(request: 1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c079.ko"),
                 None,
                 "crypto::vrf::verify expects one bytes-encoded VrfVerifyRequest",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::vrf::verify_batch(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c080.ko"),
                 None,
                 "crypto::vrf::verify_batch expects (bytes)",
             ),
@@ -6553,29 +5819,7 @@ fn main() {
 
     #[test]
     fn zk_verify_builtins_emit_verify_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-fn verify(bytes payload) {
-  crypto::zk::verify_batch(payload);
-  ledger::governance::verify_ballot(payload);
-  ledger::governance::verify_tally(payload);
-}
-
-fn verify_namespaced(bytes payload) {
-  crypto::zk::verify_batch(payload);
-  ledger::governance::verify_ballot(payload);
-  ledger::governance::verify_tally(payload);
-}
-
-kotoage fn main() authorize("CompilerFixture") {
-  let payload = b"\x01\x02\x03";
-  verify(payload);
-  verify_namespaced(payload);
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c081.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
@@ -6617,27 +5861,11 @@ kotoage fn main() authorize("CompilerFixture") {
     fn zk_verify_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  crypto::zk::verify_batch(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c082.ko"),
                 "crypto::zk::verify_batch expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::governance::verify_tally(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c083.ko"),
                 "ledger::governance::verify_tally expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
             ),
         ] {
@@ -6799,22 +6027,7 @@ fn main() {{
 
     #[test]
     fn inline_submit_ballot_builtin_rejects_invalid_arguments() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bytes = ledger::governance::build_submit_ballot(
-    election_id: "election",
-    ciphertext: 1,
-    nullifier: b"00",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c084.ko");
         let expected = "ledger::governance::build_submit_ballot expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)";
         let parsed = parse(src).expect("parse invalid inline builder source");
         let err =
@@ -6828,18 +6041,7 @@ fn main() {
 
     #[test]
     fn vendor_bridge_and_subscription_builtins_emit_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn run(bytes payload) authorize("Admin") {
-  ledger::sccp::record(payload);
-  ledger::governance::submit_ballot(payload);
-  ledger::subscription::bill();
-  ledger::subscription::record_usage();
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c085.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler
             .compile_source(src)
@@ -6912,27 +6114,11 @@ kotoage fn run(bytes payload) authorize("Admin") {
     fn vendor_bridge_and_subscription_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::sccp::record(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c086.ko"),
                 "ledger::sccp::record expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::subscription::record_usage(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c087.ko"),
                 "ledger::subscription::record_usage expects no arguments",
             ),
         ] {
@@ -6981,21 +6167,7 @@ fn main() {
 
     #[test]
     fn hash_builtins_emit_hash_syscalls_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-view fn digest() -> bytes {
-  let payload = b"\x01\x02\x03";
-  let _sm3 = crypto::sm3(payload);
-  let _sha256 = crypto::sha256(payload);
-  let _sha3 = crypto::sha3(payload);
-  let _blake2b = crypto::blake2b256(payload);
-  let _keccak = crypto::keccak256(payload);
-  return crypto::iroha_hash(payload);
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c088.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -7044,27 +6216,11 @@ view fn digest() -> bytes {
     fn hash_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::sha256(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c089.ko"),
                 "crypto::sha256 expects (bytes) argument pointing to INPUT TLV",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = crypto::sm3(1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c090.ko"),
                 "crypto::sm3 expects (bytes) argument pointing to INPUT TLV",
             ),
         ] {
@@ -7080,32 +6236,7 @@ fn main() {
 
     #[test]
     fn crypto_builtins_emit_signature_and_sm4_syscalls_and_complete_access() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-view fn crypt() -> int {
-  let payload = b"\x01\x02\x03";
-  let sm2 = crypto::sm2::verify(message: payload, signature: payload, public_key: payload);
-  let sm2_distid = crypto::sm2::verify(message: payload, signature: payload, public_key: payload, distid: payload);
-  let generic = crypto::verify_signature(message: payload, signature: payload, public_key: payload, scheme: 0);
-  let gcm = crypto::sm4_gcm::seal(key: payload, nonce: payload, aad: payload, payload: payload);
-  let _opened_gcm = crypto::sm4_gcm::open(key: payload, nonce: payload, aad: payload, payload: gcm);
-  let ccm = crypto::sm4_ccm::seal(key: payload, nonce: payload, aad: payload, payload: payload, tag_length: 12);
-  let _opened_ccm = crypto::sm4_ccm::open(key: payload, nonce: payload, aad: payload, payload: ccm);
-  if !sm2 {
-    return 0;
-  }
-  if !sm2_distid {
-    return 0;
-  }
-  if !generic {
-    return 0;
-  }
-  return 1;
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c091.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -7154,68 +6285,23 @@ view fn crypt() -> int {
     fn crypto_builtins_reject_invalid_arguments() {
         for (src, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm2::verify(message: payload, signature: payload);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c092.ko"),
                 "E_MISSING_NAMED_ARGUMENT",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm2::verify(message: payload, signature: payload, public_key: payload, distid: 1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c093.ko"),
                 "crypto::sm2::verify optional distid must be provided as bytes pointer",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let payload = b"\x01\x02\x03";
-  let _bad = crypto::verify_signature(message: payload, signature: payload, public_key: payload, scheme: Name::parse("scheme"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c094.ko"),
                 "crypto::verify_signature expects scheme code as int",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm4_gcm::seal(key: payload, nonce: payload, aad: payload, payload: 1);
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c095.ko"),
                 "crypto::sm4_gcm::seal expects (bytes, bytes, bytes, bytes)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let payload = b"\x01\x02\x03";
-  let _bad = crypto::sm4_ccm::seal(key: payload, nonce: payload, aad: payload, payload: payload, tag_length: Name::parse("tag"));
-}
-
-}
-"#,
+                include_str!("compiler/fixtures/v1/c096.ko"),
                 "crypto::sm4_ccm::seal optional tag length must be int",
             ),
         ] {
@@ -7259,13 +6345,7 @@ fn main() {
 
     #[test]
     fn public_scalar_valcom_is_rejected() {
-        let src = r#"
-seiyaku CompilerFixture {
-  view fn rejected() -> int {
-    return crypto::valcom(left: 1, right: 2);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c097.ko");
         let parsed = parse(src).expect("parse public valcom source");
         let error = semantic::SemanticContext::with_zk_enabled(true)
             .analyze(&parsed)
@@ -7305,18 +6385,7 @@ seiyaku CompilerFixture {
             );
         }
 
-        let canonical = r#"
-            seiyaku CompilerFixture {
-                view fn wrapping(int left, int right) -> (int, int, int, int) {
-                    return (
-                        math::wrapping_neg(left),
-                        math::wrapping_add(left: left, right: right),
-                        math::wrapping_sub(left: left, right: right),
-                        math::wrapping_mul(left: left, right: right)
-                    );
-                }
-            }
-        "#;
+        let canonical = include_str!("compiler/fixtures/v1/c098.ko");
         test_mode_compiler()
             .compile_source(canonical)
             .expect("canonical V1 wrapping helpers must not match retired-helper diagnostics");
@@ -7324,24 +6393,7 @@ seiyaku CompilerFixture {
 
     #[test]
     fn numeric_operators_emit_the_nominal_v1_syscall_families() {
-        let source = r#"
-seiyaku CompilerFixture {
-    view fn compute(
-        int a,
-        int b,
-        decimal x,
-        decimal y,
-        quantity q,
-        quantity r,
-    ) -> (int, decimal, quantity, decimal) {
-        return (a + b, x * y, q - r, q / r);
-    }
-
-    view fn compare(quantity left, quantity right) -> bool {
-        return left >= right;
-    }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c099.ko");
         let artifact = test_mode_compiler()
             .compile_source(source)
             .expect("compile exact numeric operators");
@@ -7405,13 +6457,7 @@ seiyaku CompilerFixture {
 
     #[test]
     fn bytes_len_emits_only_the_typed_tlv_length_path_and_complete_access() {
-        let source = r#"
-seiyaku CompilerFixture {
-    view fn length(bytes value) -> int {
-        return bytes::len(value);
-    }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c100.ko");
         let (artifact, manifest) = test_mode_compiler()
             .compile_source_with_manifest(source)
             .expect("typed bytes length must compile");
@@ -7487,13 +6533,7 @@ seiyaku CompilerFixture {
     fn account_id_alias_literal_emits_resolve_account_alias_syscall() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return AccountId::parse("merchant@paynet"); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c101.ko"))
             .expect("compile alias shorthand");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -7513,13 +6553,7 @@ view fn account() -> AccountId { return AccountId::parse("merchant@paynet"); }
     fn account_id_domain_qualified_alias_literal_emits_resolve_account_alias_syscall() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return AccountId::parse("merchant@bank.paynet"); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c102.ko"))
             .expect("compile domain-qualified alias shorthand");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -7539,13 +6573,7 @@ view fn account() -> AccountId { return AccountId::parse("merchant@bank.paynet")
     fn resolve_account_alias_builtin_emits_syscall() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return ledger::account::resolve_alias("merchant@paynet"); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c103.ko"))
             .expect("compile builtin alias resolution");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -7563,14 +6591,8 @@ view fn account() -> AccountId { return ledger::account::resolve_alias("merchant
 
     #[test]
     fn resolve_account_alias_builtin_rejects_invalid_arguments() {
-        let parsed = parse(
-            r#"
-seiyaku CompilerFixture {
-fn main() { let _acct = ledger::account::resolve_alias(json::object()); }
-}
-"#,
-        )
-        .expect("parse invalid alias resolution");
+        let parsed = parse(include_str!("compiler/fixtures/v1/c104.ko"))
+            .expect("parse invalid alias resolution");
         let err = analyze(&parsed).expect_err("semantic analysis should reject alias arg type");
         assert!(
             err.message
@@ -7584,24 +6606,7 @@ fn main() { let _acct = ledger::account::resolve_alias(json::object()); }
     fn public_context_builtins_emit_syscalls() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-
-view fn main() {
-  let _authority = context::authority();
-  let _subject = context::seiyaku_subject();
-  let _now = context::current_time_ms();
-  let _height = context::block_height();
-  let _block_time = context::block_time_ms();
-  let _chain = context::chain_id();
-  let _seiyaku = context::seiyaku_address();
-  let _kotoage = context::kotoage();
-}
-
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c105.ko"))
             .expect("compile runtime sysvars");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
@@ -7654,35 +6659,19 @@ view fn main() {
     fn public_context_builtins_reject_invalid_arguments() {
         for (source, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-fn main() { let _authority = context::authority(1); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c106.ko"),
                 "context::authority expects no arguments",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn main() { let _subject = context::seiyaku_subject(1); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c107.ko"),
                 "context::seiyaku_subject expects no arguments",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn main() { let _height = context::block_height(1); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c108.ko"),
                 "context::block_height expects no arguments",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn main() { let _chain = context::chain_id(1); }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c109.ko"),
                 "context::chain_id expects no arguments",
             ),
         ] {
@@ -7702,26 +6691,7 @@ fn main() { let _chain = context::chain_id(1); }
     fn native_control_and_recovery_builtins_emit_typed_syscalls() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> cap, quantity replacement_cap, string alias, AccountId replacement, Option<string> reason) authorize("ControlAdmin") {
-  let Option<quantity> no_cap = Option::none;
-  ledger::asset::set_transfer_availability(account: account, asset_definition: asset, expected_revision: 0, incoming: false, outgoing: false, reason: reason);
-  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
-  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::some(replacement_cap));
-  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: no_cap);
-  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: cap);
-  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: Option::some(replacement_cap));
-  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: no_cap);
-  ledger::account::recovery::propose(alias: alias, replacement: replacement);
-  ledger::account::recovery::approve(alias: alias);
-  ledger::account::recovery::cancel(alias: alias);
-  ledger::account::recovery::finalize(alias: alias);
-}
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c110.ko"))
             .expect("compile typed native control and recovery calls");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
@@ -7767,73 +6737,31 @@ kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> ca
     fn native_control_and_recovery_builtins_reject_wrong_types_and_arity() {
         for (source, expected) in [
             (
-                r#"
-seiyaku CompilerFixture {
-fn apply(AccountId account, AssetDefinitionId asset) {
-  ledger::asset::set_transfer_availability(account: account, asset_definition: asset, expected_revision: 0, incoming: true, outgoing: 1, reason: Option::some("operator review"));
-}
-}
-"#,
+                include_str!("compiler/fixtures/v1/c111.ko"),
                 "ledger::asset::set_transfer_availability expects (AccountId, AssetDefinitionId, int, bool, bool, Option<string>)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn apply(AccountId account, AssetDefinitionId asset) {
-  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: true);
-}
-}
-"#,
+                include_str!("compiler/fixtures/v1/c112.ko"),
                 "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn apply(AccountId account, AssetDefinitionId asset) {
-  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: true);
-}
-}
-"#,
+                include_str!("compiler/fixtures/v1/c113.ko"),
                 "ledger::asset::set_holding_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn apply(AccountId replacement) {
-  ledger::account::recovery::propose(Name::parse("not_string"), replacement);
-}
-}
-"#,
+                include_str!("compiler/fixtures/v1/c114.ko"),
                 "ledger::account::recovery::propose expects (string, AccountId)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn apply(AccountId alias) {
-  ledger::account::recovery::approve(alias);
-}
-}
-"#,
+                include_str!("compiler/fixtures/v1/c115.ko"),
                 "ledger::account::recovery::approve expects (string)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn apply() {
-  ledger::account::recovery::cancel("alias@domain", "extra");
-}
-}
-"#,
+                include_str!("compiler/fixtures/v1/c116.ko"),
                 "ledger::account::recovery::cancel expects (string)",
             ),
             (
-                r#"
-seiyaku CompilerFixture {
-fn apply() {
-  ledger::account::recovery::finalize();
-}
-}
-"#,
+                include_str!("compiler/fixtures/v1/c117.ko"),
                 "ledger::account::recovery::finalize expects (string)",
             ),
         ] {
@@ -7852,17 +6780,7 @@ fn apply() {
     fn create_nfts_for_all_users_builtin_emits_syscall() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("NftAdmin") {
-  ledger::nft::create_for_all_users();
-}
-
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c118.ko"))
             .expect("compile create-for-all-users operation");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
@@ -7881,11 +6799,7 @@ kotoage fn main() authorize("NftAdmin") {
 
     #[test]
     fn create_nfts_for_all_users_builtin_rejects_invalid_arguments() {
-        let source = r#"
-seiyaku CompilerFixture {
-fn main() { ledger::nft::create_for_all_users(1); }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c119.ko");
         let parsed = parse(source).expect("parse invalid create-for-all-users call");
         let err = analyze(&parsed).expect_err("semantic analysis should reject unexpected args");
         assert!(
@@ -7908,13 +6822,7 @@ fn main() { ledger::nft::create_for_all_users(1); }
     fn resolve_account_alias_invalid_literal_emits_syscall() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return ledger::account::resolve_alias("merchant@"); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c120.ko"))
             .expect("compile malformed builtin alias resolution");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -7934,13 +6842,7 @@ view fn account() -> AccountId { return ledger::account::resolve_alias("merchant
     fn resolve_account_alias_domain_qualified_builtin_emits_syscall() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return ledger::account::resolve_alias("merchant@bank.paynet"); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c121.ko"))
             .expect("compile domain-qualified builtin alias resolution");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -7960,13 +6862,7 @@ view fn account() -> AccountId { return ledger::account::resolve_alias("merchant
     fn resolve_account_alias_invalid_domain_qualified_literal_emits_syscall() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return ledger::account::resolve_alias("merchant@bank."); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c122.ko"))
             .expect("compile malformed domain-qualified builtin alias resolution");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -8028,13 +6924,7 @@ view fn account() -> AccountId {{ return AccountId::parse("{canonical}"); }}
     fn account_id_invalid_alias_shaped_literal_compiles_for_runtime_resolution() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return AccountId::parse("merchant@"); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c123.ko"))
             .expect("compile invalid alias-shaped literal");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let resolve = encoding::wide::encode_sys(
@@ -8054,13 +6944,7 @@ view fn account() -> AccountId { return AccountId::parse("merchant@"); }
     fn account_id_invalid_domain_qualified_alias_shaped_literal_compiles_for_runtime_resolution() {
         let compiler = test_mode_compiler();
         let bytes = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return AccountId::parse("merchant@bank."); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c124.ko"))
             .expect("compile invalid domain-qualified alias-shaped literal");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let resolve = encoding::wide::encode_sys(
@@ -8080,13 +6964,7 @@ view fn account() -> AccountId { return AccountId::parse("merchant@bank."); }
     fn account_id_invalid_non_alias_literal_fails_compile_time_encoding() {
         let compiler = test_mode_compiler();
         let err = compiler
-            .compile_source(
-                r#"
-seiyaku CompilerFixture {
-view fn account() -> AccountId { return AccountId::parse("merchant"); }
-}
-"#,
-            )
+            .compile_source(include_str!("compiler/fixtures/v1/c125.ko"))
             .expect_err("invalid non-alias account literal should fail compile-time encoding");
         assert!(
             err.contains("invalid AccountId literal"),
@@ -8134,16 +7012,7 @@ view fn account() -> AccountId { return AccountId::parse("merchant"); }
 
     #[test]
     fn require_exports_stable_error_code_and_uses_contract_abort_syscall() {
-        let src = r#"
-seiyaku Test {
-  error enum PaymentError {
-    Unauthorized = 1001,
-  }
-  kotoage fn main()  authorize("Entry") {
-    require(1 == 1, PaymentError::Unauthorized);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c126.ko");
         let compiler = test_mode_compiler();
         let output = compiler
             .compile_source_output(src, None)
@@ -8199,13 +7068,7 @@ seiyaku Test {
 
     #[test]
     fn assert_compiles_without_zk_mode_and_uses_abort_syscall() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn main()  authorize("Entry") {
-    test::assert(1 == 1);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c127.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile assert");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
@@ -8239,13 +7102,7 @@ seiyaku Test {
 
     #[test]
     fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn main()  authorize("Entry") {
-    test::assert_eq(actual: 1, expected: 1);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c128.ko");
         let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile assert_eq");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
@@ -8279,12 +7136,7 @@ seiyaku Test {
 
     #[test]
     fn source_meta_cannot_override_build_configuration() {
-        let src = r#"
-seiyaku Test {
-  meta { zk: true; }
-  kotoage fn main()  authorize("Entry") { let x = 1; }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c129.ko");
         let compiler = Compiler::new();
         let err = compiler
             .compile_source(src)
@@ -8336,19 +7188,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_from_state_only_contract() {
-        let src = r#"
-seiyaku Test {
-  state StateMap<Name, int> Foo;
-
-  kotoage fn set(Name pool, int value)  authorize("Entry") {
-    Foo[pool] = value;
-  }
-
-  kotoage fn get(Name pool) -> int  authorize("Entry") {
-    return Foo.get(pool).unwrap_or(0);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c130.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -8362,20 +7202,7 @@ seiyaku Test {
 
     #[test]
     fn zero_arg_public_entrypoint_retains_scalar_state_hints() {
-        let src = r#"
-seiyaku Test {
-  state int counter;
-
-  hajimari() { counter = 0; }
-
-  kotoage fn run()  authorize("Entry") {
-    let current = counter;
-    if current > 0 {
-      debug::info("tick");
-    }
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c131.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -8403,23 +7230,7 @@ seiyaku Test {
 
     #[test]
     fn whole_program_dce_excludes_dead_private_dynamic_access_hints() {
-        let src = r#"
-seiyaku ReachableHints {
-  state int Counter;
-  state StateMap<int, int> DeadEntries;
-
-  hajimari() { Counter = 0; }
-
-  fn dead_lookup(int key) {
-    let _value = DeadEntries.get(key);
-    for (dead_key, dead_value) in DeadEntries.take(4) {
-      let _copy = dead_value;
-    }
-  }
-
-  view fn counter() -> int { return Counter; }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c132.ko");
         let (_bytes, manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(src)
             .expect("compile reachable access hints");
@@ -8441,40 +7252,10 @@ seiyaku ReachableHints {
     #[test]
     fn unreachable_scans_in_retained_functions_emit_no_dynamic_hints() {
         for body in [
-            r#"
-    return 0;
-    for (dead_key, dead_value) in Entries.take(4) {
-      let _copy = dead_value;
-    }
-"#,
-            r#"
-    if flag {
-      return 1;
-    } else {
-      return 2;
-    }
-    for (dead_key, dead_value) in Entries.range(1, 5) {
-      let _copy = dead_value;
-    }
-"#,
-            r#"
-    if false {
-      for (dead_key, dead_value) in Entries.take(4) {
-        let _copy = dead_value;
-      }
-    }
-    return 0;
-"#,
-            r#"
-    if true {
-      return 1;
-    } else {
-      for (dead_key, dead_value) in Entries.range(1, 5) {
-        let _copy = dead_value;
-      }
-      return 2;
-    }
-"#,
+            include_str!("compiler/fixtures/v1/c133.ko"),
+            include_str!("compiler/fixtures/v1/c134.ko"),
+            include_str!("compiler/fixtures/v1/c135.ko"),
+            include_str!("compiler/fixtures/v1/c136.ko"),
         ] {
             let source = format!(
                 r#"
@@ -8504,46 +7285,11 @@ seiyaku ReachableHintControlFlow {{
     fn expression_nested_scans_retain_post_optimization_provenance() {
         let cases = [
             (
-                r#"
-seiyaku ExpressionHintIf {
-  state StateMap<Name, int> Entries;
-
-  view fn scan(bool flag) -> int {
-    if flag {
-      var int total = 0;
-      for (key, value) in Entries.take(3) {
-        total = total + value;
-      }
-      total
-    } else {
-      0
-    }
-  }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c137.ko"),
                 ("state:Entries", "Name", "take", 3),
             ),
             (
-                r#"
-seiyaku ExpressionHintMatch {
-  state StateMap<int, int> Entries;
-
-  fn identity(int value) -> int { value }
-
-  view fn scan(Option<int> maybe) -> int {
-    return identity(match maybe {
-      Option::some(seed) => {
-        var int total = seed;
-        for (key, value) in Entries.range(1, 3) {
-          total = total + key + value;
-        }
-        total
-      },
-      Option::none => 0,
-    });
-  }
-}
-"#,
+                include_str!("compiler/fixtures/v1/c138.ko"),
                 ("state:Entries", "int", "range", 2),
             ),
         ];
@@ -8663,33 +7409,7 @@ seiyaku ExpressionHintMatch {
 
     #[test]
     fn bounded_state_map_scans_emit_exact_dynamic_read_hints() {
-        let src = r#"
-seiyaku BoundedHints {
-  state StateMap<Name, int> Names;
-  state StateMap<quantity, int> Quantities;
-  state StateMap<int, int> Empty;
-
-  view fn scan() -> int {
-    var int total = 0;
-    for (name1, value1) in Names.take(2) {
-      total = total + value1;
-    }
-    for (name2, value2) in Names.take(5) {
-      total = total + value2;
-    }
-    for (name3, value3) in Names.range(3, 7) {
-      total = total + value3;
-    }
-    for (quantity_key, quantity_value) in Quantities.range(0, 1) {
-      total = total + quantity_value;
-    }
-    for (empty_key, empty_value) in Empty.take(0) {
-      total = total + empty_value;
-    }
-    return total;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c139.ko");
         let (_bytes, manifest) = Compiler::new()
             .compile_source_with_manifest(src)
             .expect("compile bounded StateMap scans");
@@ -8725,16 +7445,7 @@ seiyaku BoundedHints {
 
     #[test]
     fn zero_length_state_map_scans_are_exact_bytecode_no_ops() {
-        let baseline = r#"
-seiyaku ZeroScanNoOp {
-  state StateMap<int, int> Entries;
-
-  view fn scan() -> int {
-    var int total = 0;
-    return total;
-  }
-}
-"#;
+        let baseline = include_str!("compiler/fixtures/v1/c140.ko");
         let (baseline_artifact, baseline_manifest) = Compiler::new()
             .compile_source_with_manifest(baseline)
             .expect("compile no-scan baseline");
@@ -8805,19 +7516,7 @@ seiyaku ExactScanProvenance {{
 
     #[test]
     fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
-        let src = r#"
-seiyaku Test {
-  state StateMap<int, int> Foo;
-
-  kotoage fn read_dyn(int k)  authorize("Entry") {
-    let _x = Foo.get(k);
-  }
-
-  kotoage fn read_lit()  authorize("Entry") {
-    let _x = Foo.get(1);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c141.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -8853,19 +7552,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_build_rejects_dynamic_state_iteration_bounds() {
-        let src = r#"
-seiyaku Test {
-  state StateMap<int, int> Foo;
-
-  kotoage fn sum(int n) -> int  authorize("Entry") {
-    var int acc = 0;
-    for (k, v) in Foo.take(n) {
-      acc = acc + v;
-    }
-    return acc;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c142.ko");
         let error = Compiler::new()
             .compile_source_with_manifest(src)
             .expect_err("V1 build must reject nonliteral iteration bounds");
@@ -8878,13 +7565,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_preserve_state_wildcard_for_dynamic_state_path() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn read(bytes path)  authorize("Entry") {
-    let _x = state::get(path);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c143.ko");
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -8911,13 +7592,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_compilation_rejects_raw_call_contract() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn relay(bytes target, Json payload) -> bytes authorize("Admin") {
-    return contract::call(contract: target, entrypoint: "settle", arguments: payload);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c144.ko");
         let error = test_mode_compiler()
             .compile_source_with_manifest(src)
             .expect_err("raw contract-call bridge must be rejected before manifest generation");
@@ -8929,13 +7604,7 @@ seiyaku Test {
 
     #[test]
     fn compile_native_json_object_with_exact_int_and_pointer_values() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn build(AccountId owner) -> Json  authorize("Entry") {
-    return json { bucket_id: 1, owner: owner };
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c145.ko");
         let compiler = Compiler::new();
         compiler
             .compile_source_with_manifest(src)
@@ -8944,17 +7613,7 @@ seiyaku Test {
 
     #[test]
     fn native_json_construction_emits_one_extended_build_syscall() {
-        let source = r#"
-seiyaku NativeJson {
-  view fn payload(string label) -> Json {
-    json {
-      z: true,
-      amount: 1.25,
-      labels: json ["primary", label],
-    }
-  }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c146.ko");
         let bytes = test_mode_compiler()
             .compile_source(source)
             .expect("compile native JSON construction");
@@ -8988,13 +7647,7 @@ seiyaku NativeJson {
 
     #[test]
     fn manifest_access_set_hints_include_register_trigger_from_json() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn make() authorize("Admin") {
-    ledger::trigger::register(Json::parse("{\"id\":\"t1\"}"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c147.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9012,19 +7665,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_nft_set_metadata_literal() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("NftAdmin") {
-  ledger::nft::set_metadata(
-    nft: NftId::parse("n0$wonderland.universal"),
-    key: Name::parse("dpn_metadata"),
-    value: Json::parse("{\"meta\":1}"),
-  );
-}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c148.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9054,17 +7695,7 @@ kotoage fn main() authorize("NftAdmin") {
 
     #[test]
     fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_set_metadata() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn set_metadata(NftId nft, Json metadata) authorize("NftAuthority") {
-    ledger::nft::set_metadata(
-      nft: nft,
-      key: Name::parse("dpn_metadata"),
-      value: metadata,
-    );
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c149.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9088,13 +7719,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_coarse_key_for_dynamic_nft_mint() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn mint(NftId nft, AccountId owner) authorize("NftAuthority") {
-    ledger::nft::mint(nft, owner);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c150.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9637,19 +8262,7 @@ kotoage fn main() authorize("AssetAdmin") {{ ledger::asset::transfer(source: Acc
 
     #[test]
     fn manifest_access_set_hints_preserve_coarse_asset_keys_for_dynamic_asset_contract() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount) authorize("Admin") {
-    ledger::asset::transfer(
-      source: from,
-      destination: to,
-      asset_definition: asset,
-      amount: amount,
-      dataspace: DataSpaceId::parse("0"),
-    );
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c151.ko");
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9680,13 +8293,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_preserve_global_wildcard_for_opaque_host_calls() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn register() authorize("Admin") {
-    ledger::peer::register(Json::parse("{}"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c152.ko");
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9821,13 +8428,7 @@ seiyaku Test {
 
     #[test]
     fn ephemeral_u64_nullifier_helper_is_rejected_from_source() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn consume() authorize("Admin") {
-    crypto::use_nullifier(42);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c153.ko");
         let compiler = Compiler::new_with_options(CompilerOptions {
             force_zk: true,
             ..CompilerOptions::default()
@@ -9883,14 +8484,7 @@ seiyaku Test {{
 
     #[test]
     fn manifest_access_set_hints_include_subscription_helpers() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn subscription() authorize("Admin") {
-    ledger::subscription::bill();
-    ledger::subscription::record_usage();
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c154.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -9914,13 +8508,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_make_adversarial_static_host_payloads_conservative() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn bad_peer() authorize("Admin") {
-    ledger::peer::register(Json::parse("{}"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c155.ko");
         let compiler = test_mode_compiler();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -10005,14 +8593,7 @@ seiyaku Test {{
 
     #[test]
     fn manifest_trigger_decl_preserves_namespaced_callback() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn arm() authorize("Entry") {}
-  trigger wake -> callee::run {
-    on time pre_commit;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c156.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -10030,27 +8611,7 @@ seiyaku Test {
 
     #[test]
     fn trigger_callback_dispatches_only_through_cntr_entry_pc() {
-        let src = r#"
-seiyaku Test {
-  state Name LastRequestId;
-
-  hajimari() {
-    LastRequestId = Name::parse("unset");
-  }
-
-  fn update_record(Name request_id) {
-    LastRequestId = request_id;
-  }
-
-  kotoage fn run()  authorize("Entry") {
-    update_record(Name::parse("request-1"));
-  }
-
-  trigger wake -> run {
-    on time pre_commit;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c157.ko");
         let compiler = Compiler::new();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -10085,23 +8646,7 @@ seiyaku Test {
 
     #[test]
     fn source_order_and_main_name_do_not_select_raw_dispatch() {
-        let src = r#"
-seiyaku Hello {
-  state int Counter;
-
-  hajimari() {
-    Counter = 1;
-  }
-
-  kotoage fn write_detail() authorize("Admin") {
-    Counter = Counter + 1;
-  }
-
-  kotoage fn main() authorize("Admin") {
-    Counter = Counter + 2;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c158.ko");
         let (bytes, manifest) = Compiler::new()
             .compile_source_with_manifest(src)
             .expect("compile manifest");
@@ -10445,29 +8990,13 @@ seiyaku Test {{
                 )),
             ),
             (
-                r#"
-seiyaku Test {
-  kotoage fn run() authorize("Entry") {}
-  trigger wake -> run {
-    on data configuration changed {}
-  }
-}
-"#
-                .to_string(),
+                include_str!("compiler/fixtures/v1/c159.ko").to_string(),
                 EventFilterBox::Data(DataEventFilter::Configuration(
                     ConfigurationEventFilter::new().for_events(ConfigurationEventSet::Changed),
                 )),
             ),
             (
-                r#"
-seiyaku Test {
-  kotoage fn run() authorize("Entry") {}
-  trigger wake -> run {
-    on data executor upgraded {}
-  }
-}
-"#
-                .to_string(),
+                include_str!("compiler/fixtures/v1/c160.ko").to_string(),
                 EventFilterBox::Data(DataEventFilter::Executor(
                     ExecutorEventFilter::new().for_events(ExecutorEventSet::Upgraded),
                 )),
@@ -10496,14 +9025,7 @@ seiyaku Test {
             pipeline::{BlockEventFilter, BlockStatus, PipelineEventFilterBox},
         };
 
-        let src = r#"
-seiyaku Test {
-  kotoage fn run() authorize("Entry") {}
-  trigger block_wake -> run {
-    on pipeline block approved;
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c161.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -10524,13 +9046,7 @@ seiyaku Test {
 
     #[test]
     fn access_hint_diagnostics_report_isi_wildcards() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn register() authorize("Admin") {
-    ledger::peer::register(Json::parse("{}"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c162.ko");
         let compiler = test_mode_compiler();
         let (_bytes, _manifest, diag) = compiler
             .compile_source_with_manifest_and_diagnostics(src)
@@ -10541,13 +9057,7 @@ seiyaku Test {
 
     #[test]
     fn access_hint_diagnostics_report_literal_trigger_spec_decode_failures() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn register() authorize("Admin") {
-    ledger::trigger::register(Json::parse("{\"name\":\"t1\"}"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c163.ko");
         let compiler = test_mode_compiler();
         let (_bytes, manifest, diag) = compiler
             .compile_source_with_manifest_and_diagnostics(src)
@@ -10571,13 +9081,7 @@ seiyaku Test {
 
     #[test]
     fn production_accepts_dynamic_state_path_access_fallback() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn read(bytes path)  authorize("Entry") {
-    let _x = state::get(path);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c164.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -10600,13 +9104,7 @@ seiyaku Test {
 
     #[test]
     fn production_rejects_literal_trigger_spec_decode_failures_with_hint() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn register() authorize("Admin") {
-    ledger::trigger::register(Json::parse("{\"name\":\"t1\"}"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c165.ko");
         let compiler = Compiler::new();
         let err = compiler
             .compile_source_with_manifest(src)
@@ -10617,13 +9115,7 @@ seiyaku Test {
 
     #[test]
     fn production_rejects_raw_call_contract_surface() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn relay(bytes target, Json payload) -> bytes authorize("Admin") {
-    return contract::call(contract: target, entrypoint: "settle", arguments: payload);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c166.ko");
         let error = Compiler::new()
             .compile_source_with_manifest(src)
             .expect_err("raw contract-call bridge must not reach production admission");
@@ -10635,19 +9127,7 @@ seiyaku Test {
 
     #[test]
     fn production_contract_invoke_quantity2_is_typed_and_conservative() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn relay(bytes target, quantity amount, quantity minimum) -> quantity authorize("Entry") {
-    return contract::invoke(
-      contract: target,
-      entrypoint: "swap_exact_in_quote_public",
-      returns: "quantity",
-      amount_in: amount,
-      min_out: minimum
-    );
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c167.ko");
         let (bytes, manifest) = Compiler::new()
             .compile_source_with_manifest(src)
             .expect("compile exact typed nested call");
@@ -10716,13 +9196,7 @@ seiyaku Test {{
 
     #[test]
     fn production_accepts_opaque_isi_access_fallback() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn register() authorize("Admin") {
-    ledger::peer::register(Json::parse("{}"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c168.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -10753,19 +9227,7 @@ seiyaku Test {
 
     #[test]
     fn production_preserves_dynamic_asset_definition_transfer_coarse_hints() {
-        let src = r#"
-seiyaku Test {
-  kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount) authorize("Admin") {
-    ledger::asset::transfer(
-      source: from,
-      destination: to,
-      asset_definition: asset,
-      amount: amount,
-      dataspace: DataSpaceId::parse("0"),
-    );
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c169.ko");
 
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
@@ -10898,20 +9360,7 @@ seiyaku Test {{
 
     #[test]
     fn explicit_global_wildcards_are_rejected() {
-        let src = r#"
-seiyaku Test {
-  #[access(read="*", write="*")]
-  kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount) authorize("Admin") {
-    ledger::asset::transfer(
-      source: from,
-      destination: to,
-      asset_definition: asset,
-      amount: amount,
-      dataspace: DataSpaceId::parse("0"),
-    );
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c170.ko");
         let compiler = Compiler::new();
         let err = compiler
             .compile_source_with_manifest(src)
@@ -10948,16 +9397,7 @@ seiyaku Test {{
 
     #[test]
     fn manifest_access_set_hints_include_literal_map_keys() {
-        let src = r#"
-seiyaku Test {
-  state StateMap<int, int> Foo;
-
-  kotoage fn main()  authorize("Entry") {
-    Foo[1] = 2;
-    let _x = Foo.get(1);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c171.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -10972,16 +9412,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_use_norito_i64_for_bool_map_keys() {
-        let src = r#"
-seiyaku Test {
-  state StateMap<bool, int> Foo;
-
-  kotoage fn main()  authorize("Entry") {
-    Foo[true] = 2;
-    let _x = Foo.get(true);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c172.ko");
         let (_bytes, manifest) = Compiler::new()
             .compile_source_with_manifest(src)
             .expect("compile bool map access hints");
@@ -10994,16 +9425,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_support_canonical_quantity_map_keys() {
-        let src = r#"
-seiyaku Test {
-  state StateMap<quantity, int> Foo;
-
-  kotoage fn main()  authorize("Entry") {
-    Foo[7.00] = 2;
-    let _x = Foo.get(7);
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c173.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -11025,16 +9447,7 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_literal_pointer_map_keys() {
-        let src = r#"
-seiyaku Test {
-  state StateMap<Name, int> Foo;
-
-  kotoage fn main()  authorize("Entry") {
-    Foo[Name::parse("alice")] = 2;
-    let _x = Foo.get(Name::parse("alice"));
-  }
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c174.ko");
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
             .compile_source_with_manifest(src)
@@ -11292,16 +9705,7 @@ mod test_mode_tests {
 
     #[test]
     fn production_mode_rejects_test_functions_instead_of_stripping_them() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-        fn helper() {}
-
-        #[test]
-        fn smoke() {}
-
-}
-"#;
+        let src = include_str!("compiler/fixtures/v1/c175.ko");
 
         let production = Compiler::new_with_options(CompilerOptions::default());
         let error = production
@@ -11393,19 +9797,7 @@ seiyaku CompilerFixture {
 
     #[test]
     fn production_rejects_tests_before_resolving_test_only_helpers() {
-        let test_only_call_src = r#"
-        seiyaku Demo {
-            kotoage fn run() authorize("Admin") {
-                debug::info("run");
-            }
-
-            #[test]
-            fn smoke() {
-                let AccountId expected = context::authority();
-                require_authority(expected);
-            }
-        }
-        "#;
+        let test_only_call_src = include_str!("compiler/fixtures/v1/c176.ko");
 
         let production = Compiler::new_with_options(CompilerOptions::default());
         let error = production
@@ -11431,28 +9823,7 @@ seiyaku CompilerFixture {
 
     #[test]
     fn test_mode_helpers_emit_private_scallx_syscalls() {
-        let src = r#"
-        seiyaku Demo {
-            kotoage fn run() authorize("Entry") {}
-
-            #[test]
-            fn smoke() {
-                let _acct = test::actor_account("issuer");
-                let _pk = test::actor_public_key("issuer");
-                let _sig = test::actor_sign(actor: "issuer", payload: b"message");
-                test::invoke_kotoage_as(
-                    actor: "issuer",
-                    kotoage: "run",
-                    arguments: Json::parse("{}"),
-                );
-                test::expect_reject_as(
-                    actor: "issuer",
-                    kotoage: "run",
-                    arguments: Json::parse("{}"),
-                );
-            }
-        }
-        "#;
+        let src = include_str!("compiler/fixtures/v1/c177.ko");
 
         let compiler = Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
@@ -11526,15 +9897,7 @@ seiyaku CompilerFixture {
 
     #[test]
     fn decimal_operators_use_extended_nominal_syscalls() {
-        let source = r#"
-seiyaku DecimalOps {
-    view fn calculate(decimal left, decimal right) -> decimal {
-        let sum = left + right;
-        let product = sum * right;
-        return product / left;
-    }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c178.ko");
         let code = Compiler::new()
             .compile_source(source)
             .expect("compile dynamic decimal operators");
@@ -11556,25 +9919,7 @@ seiyaku DecimalOps {
     fn every_typed_query_page_compiles_with_a_structural_public_schema() {
         use ivm_abi::entrypoint::{EntrypointValueTypeNodeV1 as Node, EntrypointValueTypeV1};
 
-        let source = r#"
-seiyaku TypedPages {
-  view fn accounts(int offset, int limit) -> QueryPage<AccountView> {
-    ledger::query::accounts(offset: offset, limit: limit)
-  }
-  view fn assets(int offset, int limit) -> QueryPage<AssetView> {
-    ledger::query::assets(offset: offset, limit: limit)
-  }
-  view fn asset_definitions(int offset, int limit) -> QueryPage<AssetDefinitionView> {
-    ledger::query::asset_definitions(offset: offset, limit: limit)
-  }
-  view fn domains(int offset, int limit) -> QueryPage<DomainView> {
-    ledger::query::domains(offset: offset, limit: limit)
-  }
-  view fn nfts(int offset, int limit) -> QueryPage<NftView> {
-    ledger::query::nfts(offset: offset, limit: limit)
-  }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c179.ko");
         let artifact = Compiler::new()
             .compile_source(source)
             .expect("compile every typed query-page projection");
@@ -11663,15 +10008,7 @@ seiyaku TypedPages {
 
     #[test]
     fn ordinary_struct_entrypoint_names_come_from_the_exact_abi_schema() {
-        let source = r#"
-seiyaku UserStructAbi {
-    struct Pair { int left; bool right; }
-
-    view fn echo(Pair value) -> Pair {
-        value
-    }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c180.ko");
         let artifact = Compiler::new()
             .compile_source(source)
             .expect("compile ordinary user-struct entrypoint");
@@ -11724,17 +10061,7 @@ seiyaku UserStructAbi {
 
     #[test]
     fn quantity_div_round_uses_one_extended_nominal_syscall() {
-        let source = r#"
-seiyaku RoundedQuantity {
-    view fn calculate(quantity value, decimal divisor, int scale) -> quantity {
-        return value.div_round(
-            divisor: divisor,
-            scale: scale,
-            mode: Rounding::nearest_even,
-        );
-    }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c181.ko");
         let code = Compiler::new()
             .compile_source(source)
             .expect("compile rounded quantity division");
@@ -11751,24 +10078,7 @@ seiyaku RoundedQuantity {
 
     #[test]
     fn manifest_state_descriptors_use_canonical_type_names() {
-        let src = r#"
-        seiyaku Demo {
-            state int Counter;
-            state StateMap<Name, int> Prices;
-            state Option<int> MaybeCounter;
-            state Result<bool, string> Outcome;
-
-            hajimari() {
-                Counter = 0;
-                MaybeCounter = Option::none;
-                Outcome = Result::err("not ready");
-            }
-
-            view fn get_counter() -> int {
-                return Counter;
-            }
-        }
-        "#;
+        let src = include_str!("compiler/fixtures/v1/c182.ko");
 
         let (_code, manifest) = Compiler::new()
             .compile_source_with_manifest(src)
@@ -11864,19 +10174,7 @@ seiyaku RoundedQuantity {
 
     #[test]
     fn lowering_time_abi_schemas_ignore_ambient_norito_flags() {
-        let source = r#"
-seiyaku CanonicalSchemas {
-    state int stored;
-
-    hajimari() {
-        stored = 0;
-    }
-
-    view fn inspect(int marker) -> Json {
-        return json { marker: marker, stored: stored };
-    }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c183.ko");
         let canonical = {
             let _ambient =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -11989,11 +10287,7 @@ seiyaku CanonicalSchemas {
 
     #[test]
     fn contract_identity_is_preserved_in_artifact_and_manifest() {
-        let source = r#"
-        seiyaku Treasury {
-            kotoage fn sweep() authorize("TreasuryOperator") {}
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c184.ko");
 
         let (artifact, manifest) = Compiler::new()
             .compile_source_with_manifest(source)
@@ -12009,26 +10303,7 @@ seiyaku CanonicalSchemas {
 
     #[test]
     fn user_facing_type_first_counter_example_compiles_as_a_complete_contract() {
-        let source = r#"
-seiyaku Counter {
-    const int initial = 1;
-    const int step = 2;
-
-    state int value;
-
-    hajimari() {
-        value = initial;
-    }
-
-    kotoage fn increment() authorize("CanIncrement") {
-        value = value + step;
-    }
-
-    view fn current() -> int {
-        return value;
-    }
-}
-"#;
+        let source = include_str!("compiler/fixtures/v1/c185.ko");
 
         let (artifact, manifest) = Compiler::new()
             .compile_source_with_manifest(source)
@@ -12069,17 +10344,7 @@ seiyaku Counter {
 
     #[test]
     fn leaf_identity_emits_no_frame_or_stack_traffic() {
-        let source = r#"
-        seiyaku LeafOptimization {
-            fn identity(int value) -> int {
-                return value;
-            }
-
-            view fn exposed(int value) -> int {
-                return identity(value);
-            }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c186.ko");
 
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -12111,23 +10376,7 @@ seiyaku Counter {
 
     #[test]
     fn call_local_values_avoid_callee_save_and_spill_stack_traffic() {
-        let source = r#"
-        seiyaku CallAwareCodegen {
-            fn swap(bool left, bool right) -> (bool, bool) {
-                return (right, left);
-            }
-
-            fn relay(bool value) -> bool {
-                return value;
-            }
-
-            view fn run() -> bool {
-                let pair = swap(left: false, right: true);
-                let checked = pair.0 && !pair.1;
-                return relay(checked);
-            }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c187.ko");
 
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -12168,21 +10417,7 @@ seiyaku Counter {
 
     #[test]
     fn whole_program_dce_removes_unused_private_code_and_extra_dispatch_wrappers() {
-        let source = r#"
-        seiyaku WholeProgramDce {
-            fn helper(int value) -> int {
-                return value;
-            }
-
-            fn unused() -> int {
-                return 777;
-            }
-
-            view fn exposed(int value) -> int {
-                return helper(value);
-            }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c188.ko");
 
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -12238,47 +10473,7 @@ seiyaku Counter {
 
     #[test]
     fn whole_program_dce_preserves_lifecycle_trigger_helpers_and_cntr_targets() {
-        let source = r#"
-        seiyaku LifecycleReachability {
-            state int Counter;
-
-            fn initialize() {
-                Counter = 0;
-            }
-
-            fn improve() {
-                Counter = Counter + 1;
-            }
-
-            fn handle_trigger() {
-                Counter = Counter + 1;
-            }
-
-            fn orphan() {
-                Counter = 777;
-            }
-
-            hajimari() {
-                initialize();
-            }
-
-            kaizen() {
-                improve();
-            }
-
-            kotoage fn run() authorize("Entry") {
-                handle_trigger();
-            }
-
-            trigger wake -> run {
-                on time pre_commit;
-            }
-
-            view fn inspect() -> int {
-                return Counter;
-            }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c189.ko");
 
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -12370,27 +10565,7 @@ seiyaku Counter {
 
     #[test]
     fn split_spill_cluster_reloads_once_and_reuses_a_real_register() {
-        let source = r#"
-        seiyaku SplitSpillCodegen {
-            state int Counter;
-
-            hajimari() { Counter = 0; }
-
-            view fn reuse(
-                int a0, int a1, int a2, int a3, int a4,
-                int a5, int a6, int a7, int a8, int a9,
-                int a10, int a11, int a12
-            ) -> int {
-                let observed = Counter;
-                let drained = a1 + a2 + a3 + a4 + a5 + a6 + a7
-                    + a8 + a9 + a10 + a11 + a12 + observed;
-                let pair = a0 + a0;
-                let triple = pair + a0;
-                let quad = triple + a0;
-                return drained + quad;
-            }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c190.ko");
 
         let parsed = crate::parser::parse(source).expect("parse split-spill fixture");
         let typed = crate::semantic::analyze(&parsed).expect("analyze split-spill fixture");
@@ -12485,23 +10660,7 @@ seiyaku Counter {
 
     #[test]
     fn structured_branches_use_two_words_and_fuse_signed_comparisons() {
-        let source = r#"
-        seiyaku BranchOptimization {
-            view fn choose(bool flag) -> int {
-                if flag { return 1; } else { return 2; }
-            }
-
-            view fn ordered(int left, int right) -> int {
-                if left < right { return 1; } else { return 0; }
-            }
-
-            view fn copied_length() -> int {
-                let List<int, 4> values = [1, 2, 3];
-                let List<int, 4> copied = [value for value in values];
-                return copied.len();
-            }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c191.ko");
 
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -12683,35 +10842,13 @@ seiyaku Counter {
 
     #[test]
     fn valid_many_diamond_and_bounded_backedge_sources_keep_conditionals_two_words() {
-        let mut source = String::from(
-            r#"
-            seiyaku CompactBranchStress {
-                view fn many_diamonds(bool flag) -> int {
-                    var total = 0;
-            "#,
-        );
+        let mut source = String::from(include_str!("compiler/fixtures/v1/c192.ko"));
         for value in 1..=64 {
             source.push_str(&format!(
                 "if flag {{ total = total + {value}; }} else {{ total = total - {value}; }}\n"
             ));
         }
-        source.push_str(
-            r#"
-                    return total;
-                }
-
-                view fn bounded_backedges(bool flag) -> int {
-                    var total = 0;
-                    for step in range(64) {
-                        if flag && step == 32 { continue; }
-                        if step == 63 { break; }
-                        total = total + step;
-                    }
-                    return total;
-                }
-            }
-            "#,
-        );
+        source.push_str(include_str!("compiler/fixtures/v1/c193.ko"));
 
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(&source)
@@ -12761,15 +10898,7 @@ seiyaku Counter {
 
     #[test]
     fn compile_report_excludes_dead_and_unreachable_instructions() {
-        let source = r#"
-        seiyaku DeadCodeOptimization {
-            view fn answer() -> int {
-                let int unused = 41;
-                return 42;
-                let int unreachable = 43;
-            }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c194.ko");
 
         let (artifact, _manifest, report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -12794,11 +10923,7 @@ seiyaku Counter {
 
     #[test]
     fn compile_report_sidecars_are_hash_bound_and_preserve_locations() {
-        let source = r#"
-        seiyaku SidecarFixture {
-            view fn answer() -> int { return 42; }
-        }
-        "#;
+        let source = include_str!("compiler/fixtures/v1/c195.ko");
         let (_artifact, _manifest, mut report) = Compiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile sidecar fixture");
@@ -12864,12 +10989,7 @@ seiyaku Counter {
 
     #[test]
     fn legacy_source_facade_cannot_bypass_canonical_resolution_audits() {
-        let source = r#"
-                seiyaku NoBypass {
-                    const int limit = 4;
-                    view fn inspect(int limit) -> int { return limit; }
-                }
-                "#;
+        let source = include_str!("compiler/fixtures/v1/c196.ko");
         let compiler = Compiler::new();
         let diagnostics = crate::session::CompilerSession::new(compiler.opts.clone())
             .build(crate::session::CompileRequest {

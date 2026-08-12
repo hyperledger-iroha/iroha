@@ -10,7 +10,7 @@ use axum::{
     response::Response,
 };
 use http_body_util::BodyExt;
-use iroha_core::{kiso::KisoHandle, kura::Kura, query::store::LiveQueryStore, state::State};
+use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId, Registrable,
@@ -24,8 +24,7 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::{AccountId, DomainId, Name},
 };
-use iroha_primitives::{json::Json, time::TimeSource};
-use tower::ServiceExt;
+use iroha_primitives::json::Json;
 
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -51,7 +50,6 @@ fn kaigi_ed25519_fixture_uses_checked_key_generation() {
 
 fn build_app() -> (axum::Router, AccountId, AccountId) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -113,8 +111,6 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
         queue_cfg,
         events_sender,
     ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
 
     let metrics = fixtures::shared_metrics();
     let domain_label = domain_id.to_string();
@@ -131,37 +127,20 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
         .with_label_values(&[domain_label.as_str(), relay_id.to_string().as_str()])
         .set(KaigiRelayHealthStatus::Healthy.metric_value());
 
-    let (_time_handle, time_source) = TimeSource::new_mock(core::time::Duration::from_secs(0));
-    let telemetry_handle = iroha_core::telemetry::start(
-        metrics,
-        state.clone(),
-        kura.clone(),
-        queue.clone(),
-        peers_rx.clone(),
-        local_peer_id,
-        time_source,
-        false,
-    )
-    .0;
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = iroha_torii::Torii::new(
+    let torii = fixtures::ToriiHarness::new(
+        &cfg,
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
+        &kura,
+        &state,
+        &queue,
+        &local_peer_id,
         tokio::sync::broadcast::channel(64).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        da_receipt_signer,
-        iroha_torii::OnlinePeersProvider::new(peers_rx),
-        telemetry_handle,
         true,
+        false,
     );
 
-    (torii.api_router_for_tests(), relay_id, owner_id)
+    (torii.router(), relay_id, owner_id)
 }
 
 async fn get_kaigi(app: &axum::Router, uri: impl Into<String>, accept: Option<&str>) -> Response {
@@ -169,8 +148,7 @@ async fn get_kaigi(app: &axum::Router, uri: impl Into<String>, accept: Option<&s
     if let Some(accept) = accept {
         builder = builder.header("Accept", accept);
     }
-    app.clone()
-        .oneshot(builder.body(Body::empty()).unwrap())
+    fixtures::request(&app, builder.body(Body::empty()).unwrap())
         .await
         .unwrap()
 }
@@ -197,14 +175,7 @@ async fn kaigi_endpoints_report_metadata() {
     let relay_literal = relay_account.to_string();
 
     // Summary endpoint
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/kaigi/relays")
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let resp = fixtures::request_get(&app, "/v1/kaigi/relays")
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -218,16 +189,7 @@ async fn kaigi_endpoints_report_metadata() {
 
     // Detail endpoint
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
-    let detail_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(detail_path)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let detail_resp = fixtures::request_get(&app, detail_path).await.unwrap();
     assert_eq!(detail_resp.status(), StatusCode::OK);
     let detail_bytes = detail_resp.into_body().collect().await.unwrap().to_bytes();
     let detail: norito::json::Value = norito::json::from_slice(&detail_bytes).unwrap();
@@ -241,14 +203,7 @@ async fn kaigi_endpoints_report_metadata() {
     assert_eq!(detail["hpke_public_key_b64"].as_str().unwrap(), "qrvM");
 
     // Health snapshot
-    let health_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/kaigi/relays/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let health_resp = fixtures::request_get(&app, "/v1/kaigi/relays/health")
         .await
         .unwrap();
     assert_eq!(health_resp.status(), StatusCode::OK);
@@ -264,14 +219,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
     let relay_literal = relay_account.to_string();
     let owner_literal = owner_account.to_string();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/kaigi/relays")
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let resp = fixtures::request_get(&app, "/v1/kaigi/relays")
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -283,16 +231,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
     );
 
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
-    let detail_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(detail_path)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let detail_resp = fixtures::request_get(&app, detail_path).await.unwrap();
     assert_eq!(detail_resp.status(), StatusCode::OK);
     let detail_bytes = detail_resp.into_body().collect().await.unwrap().to_bytes();
     let detail: norito::json::Value = norito::json::from_slice(&detail_bytes).unwrap();
@@ -308,17 +247,16 @@ async fn kaigi_endpoints_honor_json_accept_header() {
     let (app, relay_account, _owner_account) = build_app();
     let relay_literal = relay_account.to_string();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/kaigi/relays")
-                .header("Accept", "application/json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &app,
+        Request::builder()
+            .uri("/v1/kaigi/relays")
+            .header("Accept", "application/json")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers().get(CONTENT_TYPE),
@@ -332,17 +270,16 @@ async fn kaigi_endpoints_honor_json_accept_header() {
     );
 
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
-    let detail_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(detail_path)
-                .header("Accept", "application/json")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let detail_resp = fixtures::request(
+        &app,
+        Request::builder()
+            .uri(detail_path)
+            .header("Accept", "application/json")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(detail_resp.status(), StatusCode::OK);
     assert_eq!(
         detail_resp.headers().get(CONTENT_TYPE),
@@ -643,31 +580,23 @@ async fn kaigi_relay_detail_returns_not_found_for_unregistered_relay() {
 async fn kaigi_sse_accepts_i105_relay_filter() {
     let (app, relay_account, _owner_account) = build_app();
     let relay_literal = relay_account.to_string();
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/events?relay={relay_literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &app,
+        fixtures::get_request(&(format!("/v1/kaigi/relays/events?relay={relay_literal}"))),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
 async fn kaigi_sse_rejects_invalid_relay_filter() {
     let (app, _relay_account, _owner_account) = build_app();
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/kaigi/relays/events?relay=sorainvalid@kaigi")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &app,
+        fixtures::get_request(&("/v1/kaigi/relays/events?relay=sorainvalid@kaigi")),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
