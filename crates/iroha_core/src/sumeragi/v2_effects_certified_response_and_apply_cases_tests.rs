@@ -353,13 +353,31 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         capacity_wait.capacity_status(&production_services),
         ProductionIngressCapacityStatus::Pending
     );
+    let capacity_wait = match capacity_wait.retry(&production_services, &fixture.executor) {
+        ProductionIngressCapacityRetry::Pending(wait) => wait,
+        ProductionIngressCapacityRetry::Released(_) => {
+            panic!("the unchanged saturated generation cannot release capacity")
+        }
+        ProductionIngressCapacityRetry::RestartRequired => {
+            panic!("the exact unchanged service/executor owners cannot require restart")
+        }
+    };
     planner_io.release_one_predecessor();
     assert_eq!(
         capacity_wait.capacity_status(&production_services),
         ProductionIngressCapacityStatus::Released
     );
+    let released_selector = match capacity_wait.retry(&production_services, &fixture.executor) {
+        ProductionIngressCapacityRetry::Released(selector) => selector,
+        ProductionIngressCapacityRetry::Pending(_) => {
+            panic!("an advanced service generation must release the retained selector")
+        }
+        ProductionIngressCapacityRetry::RestartRequired => {
+            panic!("an exact generation release cannot require restart")
+        }
+    };
+    drop(released_selector);
     planner_io.release_one_predecessor();
-    drop(capacity_wait);
     assert_eq!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
         before_capacity_wait,

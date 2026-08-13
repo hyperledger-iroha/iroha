@@ -1698,12 +1698,28 @@ pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 
 }
 
 impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    /// Bind recovered local-Proposal ownership before consuming the H/H+1 join.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn initialize_recovered_local_proposal(
+        &mut self,
+        runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+    ) -> Result<
+        (
+            super::super::v2::LocalProposalDirective,
+            super::launch::ProductionLifecyclePreparedLocalProposalStateV1,
+        ),
+        super::launch::ProductionLifecyclePreActivationErrorV1,
+    > {
+        self.launched.initialize_recovered_local_proposal(runner)
+    }
+
     /// Consume the sealed H/H+1 join into one exact live-height activation.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn activate(
         self,
         now: std::time::Instant,
         runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        local_proposal: super::launch::ProductionLifecyclePreparedLocalProposalStateV1,
     ) -> Result<
         super::launch::ActivatedProductionLifecycleV1,
         super::launch::ProductionLifecycleActivationErrorV1,
@@ -1712,7 +1728,7 @@ impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
             launched,
             retirement,
         } = self;
-        launched.activate_recovered_complete_tip(now, runner, retirement)
+        launched.activate_recovered_complete_tip(now, runner, retirement, local_proposal)
     }
 }
 // COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END

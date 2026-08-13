@@ -296,7 +296,26 @@ It exposes neither the adapter nor the replay-effect vector.
 The current runner still constructs its independent service path and has not
 consumed this launched stack, so runner cutover remains intentionally unwired
 instead of creating a dual live owner. Completion-observer and status
-publication are not constructor side effects. A consuming activation type
+publication are not constructor side effects. A verified live successor retains
+the State-owned Kura identity used during construction and can consume itself
+into its exact context, activation, and one rotating-policy lifecycle-storage
+authority. Foreign Kura projection fails closed, and the runner does not consume
+this authority before the atomic switch. Before activation, a private
+move-only runner key permits one bounded callback over only the launched
+executor and services. An armed non-permit fail-stop scope spans exact pre/post
+checks that the two still share one output guard, the joint ingress remains
+closed, the observer permit remains present, and live clocks remain unarmed.
+The scope witnesses open output on both sides but releases its admission permit
+before invoking nested executor/service code, so synchronous fail-stop cannot
+self-deadlock. Callback failure therefore cannot return a retryable partially
+configured stack. The production key mint remains unwired. Interrupted-tip
+`PendingKuraApply` now crosses an opaque Decision-Fetch/WAL/runtime replay
+join: the authenticated wrapper admits only the exact same-block Decision
+Fetch, removes ordinary Fetch authority, and verifies the retained runtime
+sidecar before local dispatch. Ordinary activation rejects both the
+uninstalled replay seal and installed pending evidence. A dedicated no-clock
+lane-recovery/finalization state and its runner branch remain required. A
+consuming activation type
 state spans one fail-stop operation across live-clock arming, status projection,
 the retained one-shot observer, exact joint-ingress opening, and
 runner-authorized status publication. CompleteTip activation additionally
@@ -428,14 +447,56 @@ ordinary, obsolete, foreign-context, or non-winning retransmission is a
 non-mutating pass-through; it cannot cause discovery to skip to a later
 recovered ordinal. The result still cannot mint `SchedulerInputs`.
 
-This queue-owned mint is not yet the unified Ingress transaction.
-Current-height Certified-Serve preparation authenticates reply routes and may
-install a capacity-wait owner before its dequeue predicate returns false; no
-read-only predicate can reproduce that state transition. Runner cutover must
-therefore retain the exact ordinary/pass-through cut and a services-owned Serve
-preparation outcome in one typed driver before choosing recovered Phase A or
-ordinary removal. Releasing and re-probing these owners would not be an atomic
-turn transition.
+The launched lifecycle now owns a unified one-turn driver prerequisite around
+the real borrow-bound Completion and Ingress cursor. Completion first services
+its retained Apply-deferred, guarded Sign, and guarded Decision-Fetch owners,
+then takes at most one physical worker head, and only then classifies the
+complete Ready census. A selected Apply, Sign, Fetch, or full-census Broadcast
+transaction consumes the turn. Unsupported or ordinary work returns the exact
+unchanged cursor. The Sign preview structurally selects exactly one of
+Broadcast, ProposalPrepareWal, VoteBroadcastAndSign, or
+ProposalBroadcastAndSign before the driver calls one consuming settler. A mixed
+Apply/Sign/Fetch Ready census now freezes the worker FIFO and exact-output
+corridor together. Every attested row enters the same scheduler snapshot with
+its physical availability and predecessor debt, and only the ranked row
+receives a typed worker or output/executor reservation. An unavailable row
+remains in the exact Ready census without a sequential class-specific probe.
+
+The closed-ingress preactivation key also owns the future modular runner's
+opaque local-Proposal scheduler state. A WAL-authenticated recovered
+ProposalIntent remains move-only through cold adapter advancement; its sole
+initializer compares the exact reducer directive and mutates that same runner
+state inside the armed setup transaction before privately minting a
+context/directive-bound prepared owner. Ordinary and CompleteTip activation
+consume and retain that owner, so returning or discarding the directive cannot
+acknowledge recovery without suppressing the duplicate local attempt. The
+production runner mint/scheduler replacement remains part of the atomic
+cutover; the current live loop still owns its legacy `LocalProposalState`.
+
+Ingress first consumes and retries any retained recovered capacity wait, then
+freezes exactly one winner with the same queue-owned strict-before-dependency
+selector and pure drain predicate used by ordinary dequeue. The cut retains the
+service episode. Obsolete, context-free, foreign-context, and ordinary winners
+are physically removed by the queue's existing accounting/rotation tail and
+become one opaque move-only handoff; no free-standing ordinal or second
+selection crosses the boundary. A non-response head never enters response
+census. A selected response authenticates only its own signed-request family,
+so an unrelated later malformed family cannot poison the exact ordinary head;
+an exact recovered family winner alone retains its queue witness and enters
+Decision-Fetch Phase A without dequeue.
+
+For a selected current-height Certified-Serve request, the driver arms output
+fail-stop before authentication, durable negative staging, or service
+preparation. Accepted, rejected, and service outcomes move beside the exact
+dequeued carrier into the opaque handoff. Capacity backpressure completes the
+local fail-stop scope but retains both the physical cut and the already
+installed off-queue debt, so the Serve barrier cannot be leapfrogged. Every
+post-preparation error closes output while the service guard is still held, and
+dropping an unconsumed handoff closes output before its admission or carrier is
+released. The activated lifecycle owner and the legacy loop now consume that
+handoff through one production runner tail. The remaining cutover is to mint
+the active runner permit and switch selection to the lifecycle driver atomically
+inside `run_inner`; no second post-dequeue implementation remains.
 
 The queue-only final CAS now exists behind that sealed boundary, but it is not
 exposed from `PreparedLifecycleIngressSelector` and has no production caller.
@@ -1295,9 +1356,11 @@ canonical V1 replay evidence, and one-shot pending/candidate mint authority.
 The runner-owned body store first crosses a move-only fresh-quarantine cut that
 rejects any marker already promoted, rejected, or retired; that cut and the
 adapter-bound execution/storage seal are the sole production factory inputs.
-Queue/archive/event ownership and the local signer additionally require a
-private runner-minted permit; its production mint remains unwired until the
-atomic runner cutover. The signer public key stays comparison-only in the owner,
+Queue/archive/event ownership, the local signer, and the cadence authenticated
+by signed-genesis or snapshot recovery additionally require a private
+runner-minted permit; its production mint remains unwired until the atomic
+runner cutover. The factory never substitutes fresh height one's uncommitted
+State placeholder cadence. The signer public key stays comparison-only in the owner,
 and launch checks the peer key plus any claimed roster position before gate or
 runtime construction.
 After residual-effect, startup-instance, State/Kura/network, root, policy, and

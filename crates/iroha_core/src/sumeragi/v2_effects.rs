@@ -4059,19 +4059,15 @@ fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
-    /// Reserve the sole dedicated recovered Decision Fetch owner position.
+    /// Preflight one dedicated recovered request without retaining an executor borrow.
     ///
-    /// Exact hash, logical request identity, body coordinates, and both ordinary
-    /// and recovered reverse indexes are checked while the executor is
-    /// exclusively borrowed. No map changes until the returned reservation
-    /// consumes the claimed registry carrier.
-    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(
-        &mut self,
-        owner: RecoveredDecisionFetchRequestOwnerV1,
-    ) -> Result<
-        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
-        RecoveredDecisionFetchRequestRegistrationErrorV1,
-    > {
+    /// `Ok(false)` is reserved for the configured request-capacity bound. Every
+    /// identity, index, coordinate, or existing dedicated-owner conflict stays
+    /// a typed error so the scheduler cannot hide corruption as backpressure.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_registration_available(
+        &self,
+        owner: &RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<bool, RecoveredDecisionFetchRequestRegistrationErrorV1> {
         if self.output_guard.restart_required()
             || self.fatal_reason.is_some()
             || !owner.validates_exact_executor_context(&self.context, &self.requester)
@@ -4083,14 +4079,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         }
         let key = owner.dispatch_key();
         let request_hash = owner.request_hash();
-        if self
-            .outstanding_requests
-            .len()
-            .checked_add(self.recovered_decision_fetches.len())
-            .is_none_or(|owned| owned >= self.config.max_certified_requests)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
-        }
         if !self.recovered_decision_fetches.is_empty()
             || self
                 .recovered_decision_fetch_by_request
@@ -4114,6 +4102,33 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 .any(|existing| *existing == key)
         {
             return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
+        }
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Reserve the sole dedicated recovered Decision Fetch owner position.
+    ///
+    /// Exact hash, logical request identity, body coordinates, and both ordinary
+    /// and recovered reverse indexes are checked while the executor is
+    /// exclusively borrowed. No map changes until the returned reservation
+    /// consumes the claimed registry carrier.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(
+        &mut self,
+        owner: RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
+        RecoveredDecisionFetchRequestRegistrationErrorV1,
+    > {
+        if !self.recovered_decision_fetch_registration_available(&owner)? {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
         }
         Ok(PreparedRecoveredDecisionFetchRequestRegistrationV1 {
             executor: self,
@@ -4370,6 +4385,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .reconcile_active_view_producer(tag, retain)
             .map_err(|_| RuntimeClockError::ProducerReservation)?;
         self.runtime.arm_live_clocks(now)
+    }
+
+    /// Prove runner setup has not crossed the one-shot live-clock boundary.
+    pub(in crate::sumeragi) fn lifecycle_live_clocks_are_unarmed(&self) -> bool {
+        !self.runtime.lifecycle_live_clocks_are_armed()
     }
 
     /// Freeze the exact executor/runtime around one lifecycle-owned Apply completion.
@@ -14158,9 +14178,9 @@ mod tests {
         v2_core::Generation,
         v2_lifecycle_coordinator::{
             CertifiedFetchReadyPublicationError, LifecycleDigest, LifecycleIngressIoTargetKind,
-            LifecyclePhase, LifecycleState, ProductionIngressCapacityStatus,
-            ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
-            ProductionRecoveredDecisionFetchPersistenceErrorV1,
+            LifecyclePhase, LifecycleState, ProductionIngressCapacityRetry,
+            ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
+            ProductionIngressTurnPreparation, ProductionRecoveredDecisionFetchPersistenceErrorV1,
             ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},
@@ -24440,6 +24460,11 @@ mod tests {
             authenticated,
         );
         assert!(owner.validates_exact_executor_context(&fixture.context, &requester));
+        assert_eq!(
+            executor.recovered_decision_fetch_registration_available(&owner),
+            Ok(true),
+            "an exact vacant recovered owner reports physical executor capacity"
+        );
         let request_hash = owner.request_hash();
         assert!(
             executor
@@ -24454,6 +24479,16 @@ mod tests {
                 .is_none()
         );
         assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+        assert_eq!(
+            executor.recovered_decision_fetch_registration_available(
+                executor
+                    .recovered_decision_fetches
+                    .get(&key)
+                    .expect("installed recovered owner remains indexed"),
+            ),
+            Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied),
+            "an existing dedicated owner is corruption/ownership, not capacity backpressure"
+        );
 
         let ingress =
             crate::sumeragi::FairV2Ingress::new(32, 1024 * 1024, 512 * 1024, 0, 512 * 1024);

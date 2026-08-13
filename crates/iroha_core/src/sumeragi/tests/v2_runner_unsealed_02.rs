@@ -488,6 +488,25 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         )
     };
     let unlocked = directive(None, None);
+    let recovered =
+        super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(tag, round, subject);
+    assert!(recovered.exactly_matches_directive(unlocked));
+    assert_eq!(
+        LocalProposalState::from_recovered_lifecycle_attempt(true, unlocked).attempted,
+        Some(LocalProposalOwner::from(unlocked))
+    );
+    assert!(
+        LocalProposalState::from_recovered_lifecycle_attempt(false, unlocked)
+            .attempted
+            .is_none()
+    );
+    let mut setup = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    assert!(setup.bind_recovered_local_proposal(unlocked));
+    assert!(
+        !setup.bind_recovered_local_proposal(unlocked),
+        "a second bind must reject the already-owned runner state"
+    );
+    assert!(setup.already_attempted(unlocked));
     assert_eq!(
         LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
         Some(LocalProposalOwner::from(unlocked))
@@ -501,6 +520,7 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
     );
 
     let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+    assert!(!recovered.exactly_matches_directive(foreign_lock));
     assert!(
         LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
             .attempted
@@ -520,6 +540,7 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
     );
 
     let decided = directive(Some(subject), Some(subject));
+    assert!(!recovered.exactly_matches_directive(decided));
     assert!(
         LocalProposalState::from_replayed_proposal(Some(replayed), decided)
             .attempted

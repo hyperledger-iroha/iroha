@@ -2605,6 +2605,196 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
         Ok(Some(prepared))
     }
 
+    /// Decide whether an already selected exact cut is the recovered Fetch owner.
+    ///
+    /// Only the selected response's exact signed-request family is
+    /// authenticated. In particular, the lowest physical occurrence of that
+    /// family wins even when fair source rotation selected a later
+    /// byte-identical duplicate; an unrelated later malformed family cannot
+    /// poison an ordinary selected head. This method is read-only and leaves
+    /// the cut's queue service guard with the caller.
+    pub(super) fn selected_cut_is_recovered_decision_fetch(
+        &self,
+        cut: &FairIngressQueueCut<'_>,
+    ) -> Result<bool, LifecycleIngressSelectorError> {
+        self.validate_lifecycle_ingress_selector_authority()
+            .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
+                ordinal: None,
+                error: Box::new(error),
+            })?;
+        let context = lifecycle_context_from_wire(self.context());
+        if cut.selected_identity().context() != context {
+            return Err(LifecycleIngressSelectorError::ForeignContext);
+        }
+        let selected_ordinal = cut.selected_identity().physical_admission_ordinal();
+        let selected_request_hash = cut
+            .selector_occurrences()
+            .find(|occurrence| occurrence.physical_admission_ordinal() == selected_ordinal)
+            .and_then(|occurrence| match occurrence.inbound().message() {
+                BlockMessage::V2(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+                    ..
+                }) => Some(response.request_hash),
+                _ => None,
+            });
+        let Some(selected_request_hash) = selected_request_hash else {
+            return Ok(false);
+        };
+        let mut response_candidates = BTreeMap::new();
+        for occurrence in cut.selector_occurrences() {
+            if occurrence.queue_gate() == FairV2IngressQueueGateVerdict::Blocked {
+                continue;
+            }
+            let inbound = occurrence.inbound();
+            let BlockMessage::V2(message) = inbound.message() else {
+                continue;
+            };
+            let drainable = occurrence.is_obsolete()
+                || message.validate_version().is_err()
+                || inbound.ingress_ownership().is_some_and(|ownership| {
+                    self.can_admit_network_message_with_ingress_ownership(message, ownership)
+                });
+            if !drainable || message.validate_version().is_err() {
+                continue;
+            }
+            let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = &message.payload
+            else {
+                continue;
+            };
+            if response.request_hash != selected_request_hash {
+                continue;
+            }
+            let Some(responder) = inbound.sender() else {
+                continue;
+            };
+            let candidate = match self.probe_certified_response_priority(response, responder) {
+                Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)) => continue,
+                Ok(CertifiedResponsePriorityProbe::PreflightRequired(candidate)) => {
+                    PreparedCertifiedResponseCandidate::Ordinary(candidate)
+                }
+                Ok(CertifiedResponsePriorityProbe::RecoveredPreflightRequired(candidate)) => {
+                    PreparedCertifiedResponseCandidate::Recovered(candidate)
+                }
+                Err(error) if response_error_is_remote_nonpriority(&error) => continue,
+                Err(error) => {
+                    return Err(LifecycleIngressSelectorError::ExecutorAuthority {
+                        ordinal: Some(occurrence.physical_admission_ordinal()),
+                        error: Box::new(error),
+                    });
+                }
+            };
+            if response_candidates
+                .insert(occurrence.physical_admission_ordinal(), candidate)
+                .is_some()
+            {
+                return Err(LifecycleIngressSelectorError::InvalidOccurrenceIdentity {
+                    ordinal: occurrence.physical_admission_ordinal(),
+                });
+            }
+        }
+
+        let family_winners = lowest_physical_ordinal_per_family(
+            response_candidates
+                .iter()
+                .map(|(ordinal, candidate)| (candidate.request_hash(), *ordinal)),
+        )?;
+        let selected_family = family_winners
+            .values()
+            .any(|ordinal| *ordinal == selected_ordinal);
+        let mut selected_recovered = false;
+        for ordinal in family_winners.into_values() {
+            let candidate = response_candidates
+                .remove(&ordinal)
+                .ok_or(LifecycleIngressSelectorError::InvalidOccurrenceIdentity { ordinal })?;
+            let occurrence = cut
+                .selector_occurrences()
+                .find(|occurrence| occurrence.physical_admission_ordinal() == ordinal)
+                .ok_or(LifecycleIngressSelectorError::InvalidOccurrenceIdentity { ordinal })?;
+            let inbound = occurrence.inbound();
+            let BlockMessage::V2(message) = inbound.message() else {
+                return Err(LifecycleIngressSelectorError::InvalidOccurrenceIdentity { ordinal });
+            };
+            let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = &message.payload
+            else {
+                return Err(LifecycleIngressSelectorError::InvalidOccurrenceIdentity { ordinal });
+            };
+            let responder = inbound
+                .sender()
+                .ok_or(LifecycleIngressSelectorError::InvalidOccurrenceIdentity { ordinal })?;
+            let exact = match &candidate {
+                PreparedCertifiedResponseCandidate::Ordinary(candidate) => self
+                    .revalidate_certified_response_priority_candidate(
+                        candidate, response, responder,
+                    ),
+                PreparedCertifiedResponseCandidate::Recovered(candidate) => self
+                    .revalidate_recovered_decision_fetch_response_candidate(
+                        candidate, response, responder,
+                    ),
+            }
+            .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
+                ordinal: Some(ordinal),
+                error: Box::new(error),
+            })?;
+            if !exact {
+                return Err(LifecycleIngressSelectorError::CandidateRevalidationDrift { ordinal });
+            }
+            if ordinal == selected_ordinal {
+                selected_recovered =
+                    matches!(candidate, PreparedCertifiedResponseCandidate::Recovered(_));
+            }
+        }
+        self.validate_lifecycle_ingress_selector_authority()
+            .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
+                ordinal: None,
+                error: Box::new(error),
+            })?;
+        if !cut.pre_cut_is_intact() {
+            return Err(LifecycleIngressSelectorError::QueueCutChanged);
+        }
+        Ok(selected_family && selected_recovered)
+    }
+
+    /// Convert the selected response family's cut into Phase-A authority.
+    pub(super) fn prepare_recovered_decision_fetch_from_selected_cut(
+        &self,
+        cut: FairIngressQueueCut<'_>,
+    ) -> Result<PreparedLifecycleIngressSelector, LifecycleIngressSelectorError> {
+        let selected_ordinal = cut.selected_identity().physical_admission_ordinal();
+        let selected_request_hash = cut
+            .selector_occurrences()
+            .find(|occurrence| occurrence.physical_admission_ordinal() == selected_ordinal)
+            .and_then(|occurrence| match occurrence.inbound().message() {
+                BlockMessage::V2(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+                    ..
+                }) => Some(response.request_hash),
+                _ => None,
+            })
+            .ok_or(LifecycleIngressSelectorError::InvalidOccurrenceIdentity {
+                ordinal: selected_ordinal,
+            })?;
+        let prepared = self.capture_lifecycle_ingress_selector_for_response_family(
+            cut,
+            Some(selected_request_hash),
+        )?;
+        if prepared.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
+            || !matches!(
+                prepared.io_target,
+                PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence
+            )
+            || prepared
+                .selected_claimed_response_family()
+                .ok()
+                .and_then(|family| family.candidate.recovered())
+                .is_none()
+        {
+            return Err(LifecycleIngressSelectorError::CandidateRevalidationDrift {
+                ordinal: prepared.selected_identity().physical_admission_ordinal(),
+            });
+        }
+        Ok(prepared)
+    }
+
     /// Classify every exact pre-cut fair-ingress occurrence without mutation.
     ///
     /// The queue's service guard remains held while queue state is released for
@@ -2617,6 +2807,14 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     pub(super) fn capture_lifecycle_ingress_selector(
         &self,
         cut: FairIngressQueueCut<'_>,
+    ) -> Result<PreparedLifecycleIngressSelector, LifecycleIngressSelectorError> {
+        self.capture_lifecycle_ingress_selector_for_response_family(cut, None)
+    }
+
+    fn capture_lifecycle_ingress_selector_for_response_family(
+        &self,
+        cut: FairIngressQueueCut<'_>,
+        selected_response_family: Option<HashOf<wire::CertifiedBodyRequest>>,
     ) -> Result<PreparedLifecycleIngressSelector, LifecycleIngressSelectorError> {
         self.validate_lifecycle_ingress_selector_authority()
             .map_err(|error| LifecycleIngressSelectorError::ExecutorAuthority {
@@ -2662,16 +2860,6 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
             if occurrence.queue_gate() != FairV2IngressQueueGateVerdict::Blocked {
                 let inbound = occurrence.inbound();
                 if let BlockMessage::V2(message) = inbound.message() {
-                    let drainable = occurrence.is_obsolete()
-                        || message.validate_version().is_err()
-                        || self.can_admit_network_message_with_ingress_ownership(
-                            message,
-                            inbound.ingress_ownership().ok_or(
-                                LifecycleIngressSelectorError::InvalidOccurrenceIdentity {
-                                    ordinal,
-                                },
-                            )?,
-                        );
                     let physical_completion = matches!(
                         &message.payload,
                         wire::ConsensusMessageV2Payload::PayloadChunk(_)
@@ -2681,6 +2869,25 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                         &message.payload,
                         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
                     );
+                    let selected_response_family_matches =
+                        selected_response_family.is_none_or(|selected_request_hash| {
+                            matches!(
+                                &message.payload,
+                                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)
+                                    if response.request_hash == selected_request_hash
+                            )
+                        });
+                    let drainable = selected_response_family_matches
+                        && (occurrence.is_obsolete()
+                            || message.validate_version().is_err()
+                            || self.can_admit_network_message_with_ingress_ownership(
+                                message,
+                                inbound.ingress_ownership().ok_or(
+                                    LifecycleIngressSelectorError::InvalidOccurrenceIdentity {
+                                        ordinal,
+                                    },
+                                )?,
+                            ));
                     if ordinal == selected_ordinal && drainable {
                         io_target = match &message.payload {
                             wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
@@ -2698,6 +2905,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                         };
                     }
                     let request_fenced_completion = drainable
+                        && selected_response_family_matches
                         && request_fence_active
                         && lifecycle_ingress_resource_is_untrusted(
                             occurrence.source_class(),
@@ -2706,6 +2914,7 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
                         && occurrence.class() == FairV2IngressClass::TransportCompletion
                         && physical_completion;
                     if drainable
+                        && selected_response_family_matches
                         && message.validate_version().is_ok()
                         && let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
                             &message.payload
