@@ -24,6 +24,7 @@ def _copy_workflows(target: Path) -> None:
         *automation.NATIVE_GOVERNANCE_SDK_CONTRACTS,
         *automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS,
         *automation.RELEASE_VERSION_MAP_CONTRACT_MARKERS,
+        automation.SORAFS_CLI_RELEASE_GATE_SCRIPT,
         automation.PACKAGE_RELEASE_SMOKE_SCRIPT,
     ):
         source = REPO_ROOT / relative
@@ -63,6 +64,79 @@ def test_topology_envelope_dependency_triggers_are_mandatory(
         match=r"pull_request\.paths omits topology-envelope dependency trigger",
     ):
         automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS),
+)
+def test_source_file_budget_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits source-file budget contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    (
+        (
+            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
+            "true",
+            "source-file budget command must appear exactly once",
+        ),
+        (
+            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
+            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND} || true",
+            "source-file budget command must appear exactly once",
+        ),
+        (
+            "set -euo pipefail",
+            "set -uo pipefail",
+            "strict shell mode must precede",
+        ),
+        (
+            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
+            "cargo fmt --all -- --check\n"
+            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND}",
+            "source-file budget command must run before every Cargo command",
+        ),
+    ),
+)
+def test_source_file_budget_release_gate_fails_closed_before_cargo(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    drifted = source.replace(old, new, 1)
+    assert drifted != source
+    release_gate.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_release_gate_job_must_invoke_strict_cli_gate() -> None:
+    relative = ".github/workflows/sorafs-cli-release.yml"
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    marker = f"run: bash {automation.SORAFS_CLI_RELEASE_GATE_SCRIPT}"
+    assert source.count(marker) == 1
+    drifted = source.replace(f"        {marker}", "        run: true", 1)
+    drifted += f"\n# {marker}\n"
+
+    errors = automation._validate_workflow_source(relative, drifted)
+    assert any("release-gate job must run" in error for error in errors)
 
 
 @pytest.mark.parametrize(

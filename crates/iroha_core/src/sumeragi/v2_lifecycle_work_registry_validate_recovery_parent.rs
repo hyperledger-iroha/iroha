@@ -58,6 +58,11 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
     let Some(parent) = ledger
         .opened
         .authenticate_recovered_wal_validate_parent(&recovered)
+        .or_else(|| {
+            ledger
+                .opened
+                .authenticate_recovered_wal_validate_parent_for_signed_broadcast(&recovered)
+        })
     else {
         return Err(RecoveredWalParentFactoryError {
             failure: RecoveredWalParentFactoryFailure::LedgerParent {
@@ -104,10 +109,14 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
     };
     let registry_preflight = (|| {
         if !parent.matches_candidate(repair.parent())
-            || ledger
+            || (ledger
                 .opened
                 .stage_authenticated_wal_vote_repair(&repair)
                 .is_err()
+                && ledger
+                    .opened
+                    .recovered_phase_signed_broadcast_ordinals(&repair)
+                    .is_none())
         {
             return None;
         }

@@ -3316,7 +3316,8 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         'pinned_arguments=("$subcommand" -j1)',
         'pinned_arguments+=("$@")',
         'run_cargo requires IROHA_RELEASE_CARGO_BIN',
-        '"$IROHA_RELEASE_CARGO_BIN" "${pinned_arguments[@]}"',
+        '"$IROHA_RELEASE_CARGO_BIN" "$@"',
+        '( _run_cargo_with_scoped_lock "$label" "${pinned_arguments[@]}" )',
         'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then',
         '--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*',
     ):
@@ -3326,8 +3327,10 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
             )
     for token, count in (
         ('lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"', 2),
-        ("lock.rmdir()", 2),
-        ("release_invocation_cargo_lock || return $?", 2),
+        ("lock.rmdir()", 1),
+        ("os.rmdir(lock.name, dir_fd=root_fd)", 1),
+        ("release_invocation_cargo_lock || return $?", 1),
+        ("&& ! release_invocation_cargo_lock; then", 1),
     ):
         if policy.count(token) != count:
             errors.append(

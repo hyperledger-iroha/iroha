@@ -38,8 +38,8 @@ use super::{
         ProductionDurablePredecessorIdentityProjection,
         production_durable_predecessor_identity_kernel,
     },
-    v2_lane_work::durable_lane_completion_matches_finality,
     v2_first_release_recovery::{LifecycleContext, LifecycleDigest},
+    v2_lane_work::durable_lane_completion_matches_finality,
 };
 use crate::{
     kura::{

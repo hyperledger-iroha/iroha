@@ -1,3 +1,4 @@
+
         #[test]
         fn complete_tip_terminal_apply_store_join_rejects_store_drift() {
             let fixture = RecoveryFixture::new("complete-tip-predecessor-drift", 0x49);

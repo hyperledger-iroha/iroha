@@ -22,6 +22,7 @@ pub(crate) mod tests {
             "CertifiedServePayloadStoreV1",
             "AuthenticatedCertifiedServePayloadRecoveryCut",
             "V2BodyStore",
+            "V2ApplyService",
             "ProductionLifecycleAdapterStartupV1",
         ] {
             assert!(declaration.contains(retained), "owner dropped {retained}");

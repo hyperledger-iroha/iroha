@@ -21,8 +21,9 @@ use super::projection::{AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameR
 use super::replay_authority::{
     AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
     AuthenticatedRecoveredDurableCertifiedFetchV1, CertifiedServeTerminalReplayAuthorityPairV1,
-    LifecycleReplayAuthorityV1, authenticate_recovered_durable_certified_fetch,
-    recovered_decision_body_continuation_is_exact, seal_recovered_durable_certified_fetch_census,
+    LifecycleReplayAuthorityV1, RecoveredDecisionApplyCandidateLineageV1,
+    authenticate_recovered_durable_certified_fetch, recovered_decision_body_continuation_is_exact,
+    seal_recovered_durable_certified_fetch_census, signed_broadcast_continuation_is_exact,
 };
 use super::schema::{
     DurableBodyFrameReference, DurableContinuation, DurableContinuationEdge,
@@ -31,6 +32,7 @@ use super::schema::{
 use super::wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedWalVoteLifecycleRepair, DurableAuthenticatedWalVoteLifecycleRepair,
+    RecoveredDecisionFetchStoreProjectionV1, RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
 };
 use super::{
     CandidateAdmission, CausalRoot, DurablePayloadReference, DurableServeNegativeOutcome,
@@ -565,6 +567,10 @@ impl PersistedDurableContinuationV1 {
     const VALIDATE_TO_INVALID_BODY_REPORT: u8 = 5;
     const VALIDATE_TO_SIGN_PREPARE: u8 = 6;
     const VALIDATE_TO_SIGN_COMMIT: u8 = 7;
+    const SIGN_PROPOSAL_TO_BROADCAST: u8 = 8;
+    const SIGN_PREPARE_TO_BROADCAST: u8 = 9;
+    const SIGN_COMMIT_TO_BROADCAST: u8 = 10;
+    const SIGN_TIMEOUT_TO_BROADCAST: u8 = 11;
 
     const fn from_schema(continuation: DurableContinuation) -> Self {
         match continuation {
@@ -588,6 +594,18 @@ impl PersistedDurableContinuationV1 {
                         Self::VALIDATE_TO_SIGN_PREPARE
                     }
                     DurableContinuationEdge::ValidateToSignCommit => Self::VALIDATE_TO_SIGN_COMMIT,
+                    DurableContinuationEdge::SignProposalToBroadcast => {
+                        Self::SIGN_PROPOSAL_TO_BROADCAST
+                    }
+                    DurableContinuationEdge::SignPrepareToBroadcast => {
+                        Self::SIGN_PREPARE_TO_BROADCAST
+                    }
+                    DurableContinuationEdge::SignCommitToBroadcast => {
+                        Self::SIGN_COMMIT_TO_BROADCAST
+                    }
+                    DurableContinuationEdge::SignTimeoutToBroadcast => {
+                        Self::SIGN_TIMEOUT_TO_BROADCAST
+                    }
                 },
                 successor_ordinal: Some(ordinal),
             },
@@ -626,6 +644,30 @@ impl PersistedDurableContinuationV1 {
                 DurableContinuationEdge::ValidateToSignCommit,
                 ordinal,
             )),
+            (Self::SIGN_PROPOSAL_TO_BROADCAST, Some(ordinal)) => {
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::SignProposalToBroadcast,
+                    ordinal,
+                ))
+            }
+            (Self::SIGN_PREPARE_TO_BROADCAST, Some(ordinal)) => {
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::SignPrepareToBroadcast,
+                    ordinal,
+                ))
+            }
+            (Self::SIGN_COMMIT_TO_BROADCAST, Some(ordinal)) => {
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::SignCommitToBroadcast,
+                    ordinal,
+                ))
+            }
+            (Self::SIGN_TIMEOUT_TO_BROADCAST, Some(ordinal)) => {
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::SignTimeoutToBroadcast,
+                    ordinal,
+                ))
+            }
             _ => None,
         }
     }
@@ -826,6 +868,30 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
 }
 
 impl LifecycleLedgerRecordV1 {
+    /// Decode one live signed Broadcast only as an inert recovered-WAL child.
+    ///
+    /// This keeps the replay envelope inside its checksummed LedgerV1 row.
+    /// The returned value is not execution authority: its recovered WAL parent
+    /// must still reconstruct the exact pending binding and the verified height
+    /// must authenticate the signature before cold startup can advance.
+    pub(super) fn project_recovered_signed_broadcast_child(
+        &self,
+        context: LifecycleContext,
+    ) -> Option<super::replay_authority::DurableRecoveredSignedBroadcastChildV1> {
+        super::replay_authority::project_durable_recovered_signed_broadcast_child(
+            context,
+            self.key()?,
+            self.work_class()?,
+            self.stage()?,
+            self.terminal()?,
+            self.reconstruction_source(),
+            self.owner(),
+            self.durable_payload()?,
+            self.continuation()?,
+            &self.replay_authority,
+        )
+    }
+
     /// Authenticate this row's source before opening its exact body-store frame.
     fn authenticate_durable_certified_fetch<F>(
         &self,
@@ -1116,6 +1182,124 @@ impl LifecycleProducerDebtV1 {
     }
 }
 
+/// Closed original-Sign lineage of one durable Broadcast-plus-next-Sign pair.
+///
+/// The phase case retains the exact Validate ordinal which introduced the
+/// historical Prepare Sign. The control case has no body-stage predecessor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) enum RecoveredLifecycleSignedBroadcastAndSignParentV1 {
+    /// A Proposal Sign advanced directly to its signed Proposal Broadcast.
+    ControlProposal,
+    /// A Validate advanced to the Prepare Sign which produced the Broadcast.
+    PhasePrepare {
+        /// Exact durable Validate ordinal in the historical causal owner.
+        validate_ordinal: u128,
+    },
+}
+
+/// Opaque LedgerV1 classification of one committed Broadcast-plus-next-Sign pair.
+///
+/// This projection authenticates the exact durable row shape and retains the
+/// complete ledger-frame identity. Cold owner assembly joins it to the
+/// historical WAL request, current WAL vote, body marker, and verified roster
+/// before either live child enters the registry.
+#[must_use = "a classified durable Broadcast-plus-next-Sign pair must remain frame-bound"]
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
+    ledger_frame_identity: LifecycleDigest,
+    parent: RecoveredLifecycleSignedBroadcastAndSignParentV1,
+    parent_ordinal: u128,
+    broadcast_ordinal: u128,
+    next_sign_ordinal: u128,
+}
+
+/// One-pass indexes used by the durable Broadcast-plus-next-Sign classifier.
+///
+/// Values in `successor_parents` retain the first parent record index and the
+/// complete incoming-edge count. The classifier therefore detects ambiguity
+/// without rescanning the bounded ledger for every eligible Broadcast.
+struct RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1 {
+    successor_parents: BTreeMap<u128, (usize, usize)>,
+    owner_record_counts: BTreeMap<OwnerId, usize>,
+}
+
+impl RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1 {
+    fn new(records: &[LifecycleLedgerRecordV1]) -> Self {
+        let mut successor_parents = BTreeMap::new();
+        let mut owner_record_counts = BTreeMap::new();
+        for (index, record) in records.iter().enumerate() {
+            owner_record_counts
+                .entry(record.owner())
+                .and_modify(|count: &mut usize| *count = count.saturating_add(1))
+                .or_insert(1);
+            if let Some((_, successor_ordinal)) = record
+                .continuation()
+                .and_then(DurableContinuation::successor_parts)
+            {
+                successor_parents
+                    .entry(successor_ordinal)
+                    .and_modify(|(_, count): &mut (usize, usize)| {
+                        *count = count.saturating_add(1);
+                    })
+                    .or_insert((index, 1));
+            }
+        }
+        Self {
+            successor_parents,
+            owner_record_counts,
+        }
+    }
+
+    fn unique_parent_index(&self, successor_ordinal: u128) -> Option<usize> {
+        self.successor_parents
+            .get(&successor_ordinal)
+            .and_then(|&(index, count)| (count == 1).then_some(index))
+    }
+
+    fn has_incoming_edge(&self, ordinal: u128) -> bool {
+        self.successor_parents.contains_key(&ordinal)
+    }
+
+    fn owner_record_count(&self, owner: OwnerId) -> usize {
+        self.owner_record_counts.get(&owner).copied().unwrap_or(0)
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
+    /// Return the closed historical parent classification.
+    pub(in crate::sumeragi) const fn parent(
+        &self,
+    ) -> RecoveredLifecycleSignedBroadcastAndSignParentV1 {
+        self.parent
+    }
+
+    /// Return the original Sign ordinal advanced by the recovered completion.
+    pub(in crate::sumeragi) const fn parent_ordinal(&self) -> u128 {
+        self.parent_ordinal
+    }
+
+    /// Return the signed Broadcast ordinal created by the recovered completion.
+    pub(in crate::sumeragi) const fn broadcast_ordinal(&self) -> u128 {
+        self.broadcast_ordinal
+    }
+
+    /// Return the independently WAL-owned next Sign ordinal.
+    pub(in crate::sumeragi) const fn next_sign_ordinal(&self) -> u128 {
+        self.next_sign_ordinal
+    }
+
+    /// Reauthenticate this projection against one unchanged complete ledger frame.
+    pub(in crate::sumeragi) fn exactly_matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {
+        ledger
+            .project_recovered_lifecycle_signed_broadcast_and_sign_at(self.broadcast_ordinal)
+            .as_ref()
+            == Some(self)
+    }
+}
+
 /// Complete version-one durable lifecycle ledger.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -1312,12 +1496,7 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
         self.authorizes_retained_successor()
             && self.successor_ledger.context().height() == successor.height
             && self.complete_tip.successor_context_id() == successor.height_context_id
-            && self
-                .complete_tip
-                .predecessor()
-                .height()
-                .checked_add(1)
-                == Some(successor.height)
+            && self.complete_tip.predecessor().height().checked_add(1) == Some(successor.height)
             && successor.last_committed_height == self.complete_tip.predecessor().height()
     }
 
@@ -2128,6 +2307,249 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered control LedgerV1 open failed",
                 )
             })?;
+        if let Ok((broadcast, parent_ordinal, child_ordinal)) =
+            opened.authenticate_recovered_control_signed_broadcast(&verified, &projection)
+        {
+            let mut matching_pairs = opened
+                .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+                .map_err(|_error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control Broadcast-and-Sign pair classification failed",
+                    )
+                })?
+                .into_iter()
+                .filter(|pair| {
+                    pair.parent()
+                        == RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+                        && pair.parent_ordinal() == parent_ordinal
+                        && pair.broadcast_ordinal() == child_ordinal
+                });
+            let pair_hint = matching_pairs.next();
+            if matching_pairs.next().is_some() {
+                return Err(ProductionRecoveredWalControlStartupErrorV1::new(
+                    "recovered control Broadcast matched multiple durable successor pairs",
+                ));
+            }
+            if let Some(pair_hint) = pair_hint {
+                let mut cold_preview = projection
+                    .prepare_cold_signed_broadcast_and_sign(&verified, adapter_startup, &broadcast)
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let body = body_store
+                    .authenticate_recovered_lifecycle_next_vote_body(&mut cold_preview)
+                    .map_err(|_error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "recovered control next Vote lost its exact body-store authority",
+                        )
+                    })?;
+                let seal = cold_preview
+                    .seal_recovered_lifecycle_next_wal_vote(body)
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let (cold_startup, mut combined) = projection
+                    .project_authenticated_cold_signed_broadcast_and_sign(&verified, seal)
+                    .ok_or_else(|| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "recovered control cold pair changed its WAL/body authority",
+                        )
+                    })?;
+                let pair = opened
+                    .authenticate_recovered_control_signed_broadcast_and_sign(
+                        &verified,
+                        &projection,
+                        &combined,
+                    )
+                    .map_err(|_error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "recovered control cold pair changed its exact durable rows",
+                        )
+                    })?;
+                if pair != pair_hint {
+                    return Err(ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control cold pair changed after executable projection",
+                    ));
+                }
+                let adapter_authority = combined
+                    .project_cold_adapter_replay_authority(&verified)
+                    .ok_or_else(|| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control cold pair cannot advance the exact adapter",
+                    )
+                })?;
+                let adapter_startup = cold_startup
+                    .advance_recovered_lifecycle_signed_broadcast_and_sign(
+                        &verified,
+                        adapter_authority,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                if !ledger_store.revalidates_recovered_control_signed_broadcast_and_sign(
+                    &verified,
+                    &projection,
+                    &combined,
+                    &pair,
+                ) {
+                    return Err(ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control cold pair changed after adapter advance",
+                    ));
+                }
+                let fetches = opened
+                    .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+                    .map_err(|_error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "recovered control cold pair Ready-Fetch census authentication failed",
+                        )
+                    })?;
+                let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_control_broadcast_and_sign_and_durable_fetch_startup(
+                    opened.clone(),
+                    serve_payloads,
+                    &mut body_store,
+                    &projection,
+                    &pair,
+                    &combined,
+                    fetches,
+                )
+                .map_err(|_error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control cold pair storage census assembly failed",
+                    )
+                })?;
+                let mut registry = LifecycleWorkRegistryHolder::empty();
+                let mut installed = registry
+                    .registry_mut()
+                    .install_recovered_control_signed_broadcast_and_sign(
+                        &verified,
+                        &ledger_store,
+                        &opened,
+                        projection,
+                        combined,
+                        pair,
+                    )
+                    .map_err(|error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                    })?;
+                installed.install_fetches(fetches).map_err(|error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                })?;
+                let authority = authority::production_authority(
+                    &verified,
+                    config,
+                    reply_route_source_capacity,
+                )
+                .ok_or_else(|| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "verified height cannot derive recovered control cold-pair authority",
+                    )
+                })?;
+                let (coordinator, recovery) = installed
+                    .open_with_exact_store_authority(
+                        authority,
+                        ledger_store,
+                        &mut payload_store,
+                        recovery,
+                    )
+                    .map_err(|error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                    })?;
+                return Ok(Self {
+                    verified,
+                    coordinator,
+                    registry,
+                    payload_store,
+                    serve_payloads: recovery.into_serve_payloads(),
+                    body_store: Some(body_store),
+                    body_store_identity: None,
+                    kura_binding: None,
+                    apply_service: None,
+                    adapter_startup: Some(adapter_startup),
+                });
+            }
+            let adapter_authority = projection
+                .project_cold_adapter_authority(&verified, &broadcast)
+                .ok_or_else(|| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control Broadcast cannot replay the exact cold adapter",
+                    )
+                })?;
+            let adapter_startup = adapter_startup
+                .advance_recovered_lifecycle_signed_broadcast(&verified, adapter_authority)
+                .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+            if !ledger_store.revalidates_recovered_control_signed_broadcast(
+                &verified,
+                &projection,
+                &broadcast,
+                parent_ordinal,
+                child_ordinal,
+            ) {
+                return Err(ProductionRecoveredWalControlStartupErrorV1::new(
+                    "recovered control Broadcast changed after cold adapter replay",
+                ));
+            }
+            let fetches = opened
+                .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+                .map_err(|_error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control Broadcast Ready-Fetch census authentication failed",
+                    )
+                })?;
+            let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(
+                opened.clone(),
+                serve_payloads,
+                &mut body_store,
+                &projection,
+                &broadcast,
+                fetches,
+            )
+            .map_err(|_error| {
+                ProductionRecoveredWalControlStartupErrorV1::new(
+                    "recovered control Broadcast storage census assembly failed",
+                )
+            })?;
+            let mut registry = LifecycleWorkRegistryHolder::empty();
+            let mut installed = registry
+                .registry_mut()
+                .install_recovered_control_signed_broadcast(
+                    &verified,
+                    &ledger_store,
+                    &opened,
+                    projection,
+                    broadcast,
+                    parent_ordinal,
+                    child_ordinal,
+                )
+                .map_err(|error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                })?;
+            installed.install_fetches(fetches).map_err(|error| {
+                ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+            })?;
+            let authority =
+                authority::production_authority(&verified, config, reply_route_source_capacity)
+                    .ok_or_else(|| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "verified height cannot derive recovered control Broadcast authority",
+                        )
+                    })?;
+            let (coordinator, recovery) = installed
+                .open_with_exact_store_authority(
+                    authority,
+                    ledger_store,
+                    &mut payload_store,
+                    recovery,
+                )
+                .map_err(|error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
+                })?;
+            return Ok(Self {
+                verified,
+                coordinator,
+                registry,
+                payload_store,
+                serve_payloads: recovery.into_serve_payloads(),
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(adapter_startup),
+            });
+        }
         let (repaired, ordinal, changed) = opened
             .stage_authenticated_wal_control_sign(&projection)
             .map_err(|_error| {
@@ -2248,13 +2670,24 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Fetch LedgerV1 open failed",
                 )
             })?;
-        let (repaired, ordinal, changed) = opened
-            .stage_authenticated_wal_decision_fetch(&projection)
-            .map_err(|_error| {
-                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
-                    "recovered Decision Fetch durable row is absent-or-exact invariant failed",
-                )
-            })?;
+        let (repaired, ordinal, changed) =
+            match opened.stage_authenticated_wal_decision_fetch(&projection) {
+                Ok(staged) => staged,
+                Err(_) => {
+                    return Self::open_recovered_decision_store_startup(
+                        verified,
+                        projection,
+                        ledger_store,
+                        opened,
+                        body_store,
+                        config,
+                        reply_route_source_capacity,
+                        payload_store,
+                        serve_payloads,
+                        adapter_startup,
+                    );
+                }
+            };
         if changed {
             ledger_store
                 .persist_exact_successor(&opened, &repaired)
@@ -2309,6 +2742,113 @@ impl ProductionLifecycleOwnerV1 {
         .ok_or_else(|| {
             ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
                 "verified height cannot derive recovered Decision Fetch lifecycle authority",
+            )
+        })?;
+        let (coordinator, recovery) = installed
+            .open_with_exact_store_authority(authority, ledger_store, &mut payload_store, recovery)
+            .map_err(|error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+            })?;
+        Ok(Self {
+            verified,
+            coordinator,
+            registry,
+            payload_store,
+            serve_payloads: recovery.into_serve_payloads(),
+            body_store: Some(body_store),
+            body_store_identity: None,
+            kura_binding: None,
+            apply_service: None,
+            adapter_startup: Some(adapter_startup),
+        })
+    }
+
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    fn open_recovered_decision_store_startup(
+        verified: VerifiedHeightContext,
+        projection: AuthenticatedRecoveredWalDecisionFetchProjection,
+        ledger_store: LifecycleLedgerStoreV1,
+        opened: LifecycleLedgerV1,
+        mut body_store: V2BodyStore,
+        config: &SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        mut payload_store: CertifiedServePayloadStoreV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        adapter_startup: ProductionLifecycleAdapterStartupV1,
+    ) -> Result<Self, ProductionRecoveredWalDecisionFetchStartupErrorV1> {
+        let body = body_store
+            .recovered_decision_fetch_store_body(&projection)
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Store lost its exact fsynced body frame",
+                )
+            })?;
+        let (adapter_startup, store_projection) = adapter_startup
+            .advance_recovered_decision_fetch_store(&verified, &projection, body)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let (fetch_ordinal, _store_ordinal) = opened
+            .authenticate_recovered_decision_fetch_store(&projection, &store_projection)
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Fetch-to-Store durable prefix is not exact",
+                )
+            })?;
+        if !ledger_store.load().is_ok_and(|loaded| loaded == opened)
+            || !ledger_store.revalidates_recovered_decision_fetch_store(
+                &projection,
+                fetch_ordinal,
+                &store_projection,
+            )
+        {
+            return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                "recovered Decision Store LedgerV1 reopen changed the exact prefix",
+            ));
+        }
+        let fetches = opened
+            .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Store Ready-Fetch census authentication failed",
+                )
+            })?;
+        let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::
+            assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup(
+                opened.clone(),
+                serve_payloads,
+                &mut body_store,
+                &projection,
+                &store_projection,
+                fetches,
+            )
+            .map_err(|_error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision Store storage census assembly failed",
+                )
+            })?;
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        let mut installed = registry
+            .registry_mut()
+            .install_recovered_wal_decision_store(
+                &verified,
+                &ledger_store,
+                &opened,
+                projection,
+                store_projection,
+            )
+            .map_err(|error| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+            })?;
+        installed.install_fetches(fetches).map_err(|error| {
+            ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
+        })?;
+        let authority = authority::production_authority(
+            &verified,
+            config,
+            reply_route_source_capacity,
+        )
+        .ok_or_else(|| {
+            ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                "verified height cannot derive recovered Decision Store lifecycle authority",
             )
         })?;
         let (coordinator, recovery) = installed
@@ -2653,6 +3193,56 @@ trait TerminalRecoveredDecisionApplyProjectionV1 {
     ) -> bool;
 }
 
+/// Narrow comparison surface for staging one live recovered-Decision chain.
+///
+/// Production delegates to the sealed WAL/body projection. The private trait
+/// also lets ledger-local tests exercise crash-prefix and collision behavior
+/// without manufacturing runtime or adapter ownership tokens.
+trait RecoveredDecisionApplyStageProjectionV1 {
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool;
+
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool;
+
+    fn exactly_matches_live_fetch(&self, fetch: &LifecycleLedgerRecordV1) -> bool;
+
+    fn exactly_matches_advanced_fetch(
+        &self,
+        fetch: &LifecycleLedgerRecordV1,
+        store_ordinal: u128,
+    ) -> bool;
+
+    fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1;
+}
+
+impl RecoveredDecisionApplyStageProjectionV1
+    for crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1
+{
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+        self.fetch().belongs_to_context(context)
+    }
+
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch().names_record(record)
+    }
+
+    fn exactly_matches_live_fetch(&self, fetch: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch().exactly_matches_record(fetch)
+    }
+
+    fn exactly_matches_advanced_fetch(
+        &self,
+        fetch: &LifecycleLedgerRecordV1,
+        store_ordinal: u128,
+    ) -> bool {
+        self.fetch()
+            .exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+    }
+
+    fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
+        self.lineage()
+    }
+}
+
 impl TerminalRecoveredDecisionApplyProjectionV1
     for crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1
 {
@@ -2685,1582 +3275,46 @@ impl TerminalRecoveredDecisionApplyProjectionV1
     }
 }
 
-impl LifecycleLedgerV1 {
-    /// Hash the canonical V1 encoding, independent of its store path.
-    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn frame_identity(&self) -> LifecycleDigest {
-        let mut preimage = Vec::from(&b"iroha:sumeragi:v2:lifecycle-ledger-frame:v1"[..]);
-        preimage.extend_from_slice(&self.encode());
-        LifecycleDigest::new(*Hash::new(preimage).as_ref())
-    }
-
-    pub(super) fn from_coordinator(
-        coordinator: &LifecycleCoordinator,
-    ) -> Result<Self, LifecycleLedgerError> {
-        let records = coordinator
-            .records
-            .values()
-            .map(|record| {
-                let metadata = coordinator
-                    .durable_records
-                    .get(&record.ordinal)
-                    .ok_or_else(|| {
-                        LifecycleLedgerError::InvalidLedger(
-                            "logical record has no durable reconstruction metadata".to_owned(),
-                        )
-                    })?;
-                let terminal = match record.state {
-                    LifecycleState::Terminal(outcome) => Some(outcome),
-                    LifecycleState::Waiting(_)
-                    | LifecycleState::Ready
-                    | LifecycleState::Claimed(_) => None,
-                };
-                LifecycleLedgerRecordV1::new(
-                    record.key,
-                    record.owner,
-                    record.ordinal,
-                    record.work_class,
-                    record.stage,
-                    terminal,
-                    metadata.reconstruction_source,
-                    metadata.payload,
-                    metadata.replay_authority.clone(),
-                    metadata.continuation,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Self::new(
-            coordinator.active_context,
-            coordinator.high_water,
-            records,
-            coordinator.producer_debts.clone(),
-        )
-    }
-
-    pub(super) fn recovery_snapshot(
-        &self,
-        mut physical_slot_universes: BTreeMap<u128, BTreeSet<PhysicalSlotId>>,
-    ) -> Result<RecoverySnapshot, LifecycleLedgerError> {
-        if physical_slot_universes.len() != self.records.len()
-            || self
-                .records
-                .iter()
-                .any(|record| !physical_slot_universes.contains_key(&record.ordinal))
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "storage reconciliation does not cover every durable record exactly once"
-                    .to_owned(),
-            ));
+fn recovered_broadcast_and_next_sign_keys_are_exact(
+    broadcast_key: LifecycleKey,
+    broadcast_stage: LifecycleStage,
+    next_sign_key: LifecycleKey,
+    next_sign_stage: LifecycleStage,
+) -> bool {
+    let phase_and_commitment_are_exact = match (
+        broadcast_key.phase(),
+        broadcast_stage.kind(),
+        next_sign_key.phase(),
+        next_sign_stage.kind(),
+    ) {
+        (
+            LifecyclePhase::BroadcastProposal,
+            LifecycleStageKind::BroadcastProposal,
+            LifecyclePhase::Prepare,
+            LifecycleStageKind::SignPrepareVote,
+        ) => {
+            broadcast_key.execution_commitment().is_none()
+                && next_sign_key.execution_commitment().is_some()
         }
-        let records = self
-            .records
-            .iter()
-            .map(|record| {
-                let key = record.key().ok_or_else(|| {
-                    LifecycleLedgerError::InvalidLedger(
-                        "durable record key cannot be decoded".to_owned(),
-                    )
-                })?;
-                Ok(RecoveredLifecycleRecord::new(
-                    key,
-                    record.owner(),
-                    record.ordinal(),
-                    record.work_class().ok_or_else(|| {
-                        LifecycleLedgerError::InvalidLedger(
-                            "durable work class cannot be decoded".to_owned(),
-                        )
-                    })?,
-                    record.stage().ok_or_else(|| {
-                        LifecycleLedgerError::InvalidLedger(
-                            "durable stage cannot be decoded".to_owned(),
-                        )
-                    })?,
-                    record.terminal().ok_or_else(|| {
-                        LifecycleLedgerError::InvalidLedger(
-                            "durable terminal cannot be decoded".to_owned(),
-                        )
-                    })?,
-                    record.reconstruction_source(),
-                    record.durable_payload().ok_or_else(|| {
-                        LifecycleLedgerError::InvalidLedger(
-                            "durable payload cannot be decoded".to_owned(),
-                        )
-                    })?,
-                    record.replay_authority.clone(),
-                    record.continuation().ok_or_else(|| {
-                        LifecycleLedgerError::InvalidLedger(
-                            "durable continuation cannot be decoded".to_owned(),
-                        )
-                    })?,
-                    physical_slot_universes
-                        .remove(&record.ordinal)
-                        .expect("exact coverage checked above"),
-                ))
-            })
-            .collect::<Result<Vec<_>, LifecycleLedgerError>>()?;
-        let producer_debts = self
-            .producer_debts
-            .iter()
-            .map(|debt| (debt.serve_ordinal(), debt.producer_ordinal()))
-            .collect();
-        Ok(RecoverySnapshot::new(
-            self.context(),
-            self.high_water(),
-            records,
-            producer_debts,
-        ))
-    }
-
-    /// Construct and validate a canonical durable ledger.
-    pub(super) fn new(
-        context: LifecycleContext,
-        high_water: u128,
-        mut records: Vec<LifecycleLedgerRecordV1>,
-        producer_debts: BTreeMap<u128, u128>,
-    ) -> Result<Self, LifecycleLedgerError> {
-        records.sort_by_key(LifecycleLedgerRecordV1::ordinal);
-        let producer_debts = producer_debts
-            .into_iter()
-            .map(|(serve, producer)| LifecycleProducerDebtV1::new(serve, producer))
-            .collect();
-        let ledger = Self {
-            format_version: LEDGER_VERSION,
-            context: *context.id().as_bytes(),
-            height: context.height(),
-            high_water,
-            records,
-            producer_debts,
-        };
-        ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        Ok(ledger)
-    }
-
-    /// Construct the empty ledger for a validated height context.
-    pub(super) fn empty(context: LifecycleContext) -> Self {
-        Self {
-            format_version: LEDGER_VERSION,
-            context: *context.id().as_bytes(),
-            height: context.height(),
-            high_water: 0,
-            records: Vec::new(),
-            producer_debts: Vec::new(),
+        (
+            LifecyclePhase::BroadcastPrepareVote,
+            LifecycleStageKind::BroadcastPrepareVote,
+            LifecyclePhase::Commit,
+            LifecycleStageKind::SignCommitVote,
+        ) => {
+            broadcast_key.execution_commitment().is_some()
+                && broadcast_key.execution_commitment() == next_sign_key.execution_commitment()
         }
-    }
-
-    /// Return the typed persisted context.
-    pub(super) const fn context(&self) -> LifecycleContext {
-        LifecycleContext::new(LifecycleDigest::new(self.context), self.height)
-    }
-
-    /// Return the durable ordinal high-water mark.
-    pub(super) const fn high_water(&self) -> u128 {
-        self.high_water
-    }
-
-    /// Borrow the canonical ordinal-ordered records.
-    pub(super) fn records(&self) -> &[LifecycleLedgerRecordV1] {
-        &self.records
-    }
-
-    /// Stage the exact all-row tombstone successor for CompleteTip retirement.
-    ///
-    /// Existing terminal rows remain byte-for-byte unchanged. Every live
-    /// Certified-Serve row must consume one payload-store-authenticated
-    /// terminal update together with its adjacent live ProducerTurn; an
-    /// already-terminal Serve with a live ProducerTurn must consume the
-    /// corresponding no-update coverage proof. Every other live row becomes a
-    /// `Cancelled` tombstone without changing its immutable admission or replay
-    /// material. No durable write occurs in this method.
-    fn stage_complete_tip_all_row_retirement(
-        &self,
-        mut serve_reconciliation: CompleteTipServeRetirementReconciliationV1,
-    ) -> Result<Self, LifecycleLedgerError> {
-        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !serve_reconciliation.authenticates_source(self) {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip Serve retirement belongs to another ledger frame".to_owned(),
-            ));
-        }
-
-        let mut consumed_producers = BTreeSet::new();
-        let mut retired_records = Vec::with_capacity(self.records.len());
-        for record in &self.records {
-            if consumed_producers.remove(&record.ordinal()) {
-                continue;
-            }
-            let work_class = record.work_class().ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
-                )
-            })?;
-            let terminal = record.terminal().ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable terminal state".to_owned(),
-                )
-            })?;
-
-            if work_class == LifecycleWorkClass::CertifiedServe {
-                let producer_ordinal = record.ordinal().checked_add(1).ok_or_else(|| {
-                    LifecycleLedgerError::InvalidLedger(
-                        "CompleteTip Serve producer ordinal exhausted".to_owned(),
-                    )
-                })?;
-                let producer = self
-                    .records
-                    .binary_search_by_key(&producer_ordinal, LifecycleLedgerRecordV1::ordinal)
-                    .ok()
-                    .and_then(|index| self.records.get(index))
-                    .ok_or_else(|| {
-                        LifecycleLedgerError::InvalidLedger(
-                            "CompleteTip Serve lost its adjacent ProducerTurn".to_owned(),
-                        )
-                    })?;
-                if producer.work_class() != Some(LifecycleWorkClass::ProducerTurn)
-                    || producer.owner() != record.owner()
-                    || producer.terminal().is_none()
-                {
-                    return Err(LifecycleLedgerError::InvalidLedger(
-                        "CompleteTip Serve/ProducerTurn pair changed before retirement".to_owned(),
-                    ));
-                }
-
-                match (
-                    terminal,
-                    producer.terminal().expect("producer terminal decoded"),
-                ) {
-                    (None, None) => {
-                        let update = serve_reconciliation
-                            .take_terminal_update_for_exact_pair(record, producer)
-                            .ok_or_else(|| {
-                                LifecycleLedgerError::InvalidLedger(
-                                    "live CompleteTip Serve has no exact terminal payload update"
-                                        .to_owned(),
-                                )
-                            })?;
-                        let (payload, outcome, serve_replay, producer_replay) = update
-                            .consume_for_exact_ledger_pair(record, producer)
-                            .ok_or_else(|| {
-                                LifecycleLedgerError::InvalidLedger(
-                                    "CompleteTip Serve terminal update changed before staging"
-                                        .to_owned(),
-                                )
-                            })?;
-                        retired_records.push(Self::terminalized_record(
-                            record,
-                            outcome,
-                            payload,
-                            serve_replay,
-                        )?);
-                        retired_records.push(Self::terminalized_record(
-                            producer,
-                            TerminalOutcome::Cancelled,
-                            producer.durable_payload().ok_or_else(|| {
-                                LifecycleLedgerError::InvalidLedger(
-                                    "CompleteTip ProducerTurn payload is undecodable".to_owned(),
-                                )
-                            })?,
-                            producer_replay,
-                        )?);
-                        consumed_producers.insert(producer_ordinal);
-                    }
-                    (Some(_), None) => {
-                        if !serve_reconciliation
-                            .take_terminal_serve_live_producer_coverage(record, producer)
-                        {
-                            return Err(LifecycleLedgerError::InvalidLedger(
-                                "terminal CompleteTip Serve has no exact live ProducerTurn coverage"
-                                    .to_owned(),
-                            ));
-                        }
-                        retired_records.push(record.clone());
-                        retired_records.push(Self::cancelled_record(producer)?);
-                        consumed_producers.insert(producer_ordinal);
-                    }
-                    (Some(_), Some(_)) => {
-                        retired_records.push(record.clone());
-                        retired_records.push(producer.clone());
-                        consumed_producers.insert(producer_ordinal);
-                    }
-                    (None, Some(_)) => {
-                        return Err(LifecycleLedgerError::InvalidLedger(
-                            "live CompleteTip Serve has an already-terminal ProducerTurn"
-                                .to_owned(),
-                        ));
-                    }
-                }
-                continue;
-            }
-
-            if work_class == LifecycleWorkClass::ProducerTurn {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip ProducerTurn was not consumed by its exact Serve owner".to_owned(),
-                ));
-            }
-            retired_records.push(if terminal.is_some() {
-                record.clone()
-            } else {
-                Self::cancelled_record(record)?
-            });
-        }
-
-        if !consumed_producers.is_empty() || !serve_reconciliation.is_drained() {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip Serve retirement census was not consumed exactly once".to_owned(),
-            ));
-        }
-        let retired = Self::new(
-            self.context(),
-            self.high_water,
-            retired_records,
-            BTreeMap::new(),
-        )?;
-        if retired.high_water != self.high_water
-            || retired.records.len() != self.records.len()
-            || retired
-                .records
-                .iter()
-                .any(|record| record.terminal() == Some(None))
-            || !retired.producer_debts.is_empty()
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip all-row retirement did not reach the exact quiescent frame".to_owned(),
-            ));
-        }
-        Ok(retired)
-    }
-
-    fn cancelled_record(
-        record: &LifecycleLedgerRecordV1,
-    ) -> Result<LifecycleLedgerRecordV1, LifecycleLedgerError> {
-        let payload = record.durable_payload().ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "CompleteTip retirement encountered an undecodable payload".to_owned(),
-            )
-        })?;
-        Self::terminalized_record(
-            record,
-            TerminalOutcome::Cancelled,
-            payload,
-            record.replay_authority.clone(),
-        )
-    }
-
-    fn terminalized_record(
-        record: &LifecycleLedgerRecordV1,
-        outcome: TerminalOutcome,
-        payload: DurablePayloadReference,
-        replay_authority: LifecycleReplayAuthorityV1,
-    ) -> Result<LifecycleLedgerRecordV1, LifecycleLedgerError> {
-        if record.terminal() != Some(None)
-            || record.continuation() != Some(DurableContinuation::None)
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip retirement can terminalize only one live uncontinued row".to_owned(),
-            ));
-        }
-        LifecycleLedgerRecordV1::new(
-            record.key().ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable key".to_owned(),
-                )
-            })?,
-            record.owner(),
-            record.ordinal(),
-            record.work_class().ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
-                )
-            })?,
-            record.stage().ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable stage".to_owned(),
-                )
-            })?,
-            Some(outcome),
-            record.reconstruction_source(),
-            payload,
-            replay_authority,
-            DurableContinuation::None,
-        )
-    }
-
-    /// Authenticate every live BodyFrame-backed Fetch against this exact frame.
-    ///
-    /// Unlike the consuming storage-cut constructor, this internal phase keeps
-    /// the ledger and body store borrowed. Recovered-WAL startup uses it only
-    /// after the exact Validate-to-Sign repair is fsynced, so the resulting
-    /// census is bound to the final frame which the coordinator will open.
-    pub(super) fn authenticate_durable_certified_fetch_startup(
-        &self,
-        verified: &VerifiedHeightContext,
-        store: &V2BodyStore,
-    ) -> Result<
-        super::replay_authority::PreparedDurableCertifiedFetchStartupV1,
-        DurableCertifiedFetchRecoveryError,
-    > {
-        self.authenticate_durable_certified_fetch_census(verified, store)?
-            .into_startup(self)
-            .ok_or(DurableCertifiedFetchRecoveryError::InvalidStorageCut)
-    }
-
-    fn authenticate_durable_certified_fetch_census(
-        &self,
-        verified: &VerifiedHeightContext,
-        store: &V2BodyStore,
-    ) -> Result<
-        AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
-        DurableCertifiedFetchRecoveryError,
-    > {
-        if self.context() != projection::lifecycle_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidVerifiedContext);
-        }
-        if !store.matches_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidBodyStoreContext);
-        }
-        let mut entries = Vec::new();
-        for record in self.records.iter().filter(|record| {
-            record.work_class() == Some(LifecycleWorkClass::Fetch)
-                && record.terminal() == Some(None)
-                && matches!(
-                    record.durable_payload(),
-                    Some(DurablePayloadReference::BodyFrame(_))
-                )
-        }) {
-            let Some(DurablePayloadReference::BodyFrame(reference)) = record.durable_payload()
-            else {
-                return Err(DurableCertifiedFetchRecoveryError::InvalidLedgerRow);
-            };
-            entries.push(
-                record
-                    .authenticate_durable_certified_fetch(verified, || {
-                        projection::authenticate_durable_body_frame_recovery(
-                            self.context(),
-                            store,
-                            reference,
-                        )
-                    })?
-                    .ok_or(DurableCertifiedFetchRecoveryError::InvalidReplayJoin)?,
-            );
-        }
-        let census = seal_recovered_durable_certified_fetch_census(
-            DurableCertifiedFetchLedgerCensusPermit::new(self),
-            entries,
-        )
-        .ok_or(DurableCertifiedFetchRecoveryError::AmbiguousCensus)?;
-        Ok(census)
-    }
-
-    /// Consume this exact opened ledger and body store into one Ready-Fetch cut.
-    ///
-    /// Authentication censes every live BodyFrame-backed Fetch row before
-    /// either storage owner is moved. Success retains both owners and the
-    /// verified context beside the opaque census, preventing a caller from
-    /// reminting individual rows or swapping a foreign store before the future
-    /// coordinator-open/registry-install transaction consumes the whole cut.
-    /// Every error is startup-fatal for these opened instances and consumes
-    /// both storage owners; callers must abort this process startup rather than
-    /// reopen either path and retry in-process with partially observed state.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn into_durable_certified_fetch_storage_recovery_cut(
-        self,
-        verified: VerifiedHeightContext,
-        ledger_store: LifecycleLedgerStoreV1,
-        store: V2BodyStore,
-    ) -> Result<
-        AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1,
-        DurableCertifiedFetchRecoveryError,
-    > {
-        if self.context() != projection::lifecycle_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidVerifiedContext);
-        }
-        if ledger_store.context != self.context()
-            || !ledger_store.load().is_ok_and(|opened| opened == self)
-        {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidLedgerStore);
-        }
-        if !store.matches_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidBodyStoreContext);
-        }
-        let census = self.authenticate_durable_certified_fetch_census(&verified, &store)?;
-        let cut = AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
-            verified,
-            ledger_store,
-            ledger: self,
-            body_store: store,
-            census,
-        };
-        cut.is_exact()
-            .then_some(cut)
-            .ok_or(DurableCertifiedFetchRecoveryError::InvalidStorageCut)
-    }
-
-    #[cfg(test)]
-    /// Substitute one structurally valid but foreign replay origin generation.
-    pub(super) fn with_foreign_replay_authority_for_test(&self, ordinal: u128) -> Option<Self> {
-        let mut changed = self.clone();
-        let record = changed
-            .records
-            .iter_mut()
-            .find(|record| record.ordinal == ordinal)?;
-        record.replay_authority = record
-            .replay_authority
-            .with_foreign_origin_generation_for_test()?;
-        changed.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).ok()?;
-        Some(changed)
-    }
-
-    /// Borrow the canonical Serve-to-producer debts.
-    pub(super) fn producer_debts(&self) -> &[LifecycleProducerDebtV1] {
-        &self.producer_debts
-    }
-
-    /// Authenticate the unique live or already-repaired Validate parent of one WAL vote.
-    ///
-    /// This read-only projection binds the complete WAL identity to the exact
-    /// LedgerV1 owner and admission ordinal. It accepts only the two crash
-    /// states surrounding the existing fsync seam: a live uncontinued parent,
-    /// or the exact Advanced-parent/live-Sign-child pair.
-    pub(super) fn authenticate_recovered_wal_validate_parent(
-        &self,
-        recovered: &RecoveredWalVoteSign,
-    ) -> Option<AuthenticatedRecoveredWalValidateLedgerParent> {
-        let vote = recovered.vote();
-        let mut context_bytes = [0_u8; 32];
-        context_bytes.copy_from_slice(vote.round.context_id.0.as_ref());
-        let wal_authority_is_exact = match vote.phase {
-            wire::GlobalPhase::Prepare => recovered.prepare_certificate().is_none(),
-            wire::GlobalPhase::Commit => recovered.prepare_certificate().is_some_and(|prepare| {
-                prepare.phase == wire::GlobalPhase::Prepare
-                    && prepare.round == vote.round
-                    && prepare.proposal_round == vote.proposal_round
-                    && prepare.subject == vote.subject
-                    && prepare.execution_commitment == vote.execution_commitment
-            }),
-        };
-        let tag_matches_vote = recovered.tag().height() == vote.round.height
-            && match vote.phase {
-                wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view,
-                wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view,
-            };
-        if !recovered.wal_identity().is_exact()
-            || !recovered.replay_evidence_is_exact()
-            || !wal_authority_is_exact
-            || self.context().id() != LifecycleDigest::new(context_bytes)
-            || self.context().height() != vote.round.height
-            || vote.proposal_round.context_id != vote.round.context_id
-            || vote.proposal_round.height != vote.round.height
-            || !tag_matches_vote
-        {
-            return None;
-        }
-        let subject = projection::block_subject(vote.subject);
-        let commitment = projection::execution_commitment(vote.execution_commitment);
-        let round = LifecycleRound::new(vote.round.height, vote.round.view);
-        let proposal_round =
-            LifecycleRound::new(vote.proposal_round.height, vote.proposal_round.view);
-        let mut parents = self.records.iter().filter(|record| {
-            let Some(key) = record.key() else {
-                return false;
-            };
-            let authority_is_exact = match vote.phase {
-                wire::GlobalPhase::Prepare => key.execution_commitment().is_none(),
-                wire::GlobalPhase::Commit => key
-                    .execution_commitment()
-                    .is_none_or(|candidate| candidate == commitment),
-            };
-            key.context() == self.context().id()
-                && key.round() == round
-                && key.proposal_round() == Some(proposal_round)
-                && key.subject() == Some(subject)
-                && key.phase() == LifecyclePhase::Validate
-                && authority_is_exact
-                && record.work_class() == Some(LifecycleWorkClass::Validate)
-                && record.stage()
-                    == Some(LifecycleStage::new(
-                        LifecycleStageKind::ValidateBody,
-                        PredecessorScope::Independent,
-                    ))
-                && record.reconstruction_source() == record.owner().causal_root().digest()
-                && record
-                    .durable_payload()
-                    .is_some_and(|payload| durable_validate_payload_is_exact(key, payload))
-        });
-        let parent = parents.next()?;
-        if parents.next().is_some() {
-            return None;
-        }
-        let parent_key = parent.key()?;
-        let inherited_prepare_authority = parent_key.execution_commitment().is_some();
-        let edge = match vote.phase {
-            wire::GlobalPhase::Prepare => DurableContinuationEdge::ValidateToSignPrepare,
-            wire::GlobalPhase::Commit => DurableContinuationEdge::ValidateToSignCommit,
-        };
-        let child_phase = match vote.phase {
-            wire::GlobalPhase::Prepare => LifecyclePhase::Prepare,
-            wire::GlobalPhase::Commit => LifecyclePhase::Commit,
-        };
-        let child_stage = match vote.phase {
-            wire::GlobalPhase::Prepare => LifecycleStageKind::SignPrepareVote,
-            wire::GlobalPhase::Commit => LifecycleStageKind::SignCommitVote,
-        };
-        let child_key = LifecycleKey::new(
-            self.context().id(),
-            round,
-            Some(proposal_round),
-            Some(subject),
-            child_phase,
-            Some(commitment),
-        );
-        match (parent.terminal()?, parent.continuation()?) {
-            (None, DurableContinuation::None) => {
-                if self
-                    .records
-                    .iter()
-                    .any(|record| record.key() == Some(child_key))
-                {
-                    return None;
-                }
-            }
-            (Some(TerminalOutcome::Advanced), continuation) => {
-                let (observed_edge, child_ordinal) = continuation.successor_parts()?;
-                let child = self
-                    .records
-                    .iter()
-                    .find(|record| record.ordinal() == child_ordinal)?;
-                if observed_edge != edge
-                    || child.key() != Some(child_key)
-                    || child.owner() != parent.owner()
-                    || child.work_class() != Some(LifecycleWorkClass::SignVote)
-                    || child.stage()
-                        != Some(LifecycleStage::new(
-                            child_stage,
-                            PredecessorScope::Independent,
-                        ))
-                    || child.terminal() != Some(None)
-                    || child.reconstruction_source() != parent.reconstruction_source()
-                    || child.durable_payload() != Some(DurablePayloadReference::None)
-                    || child.continuation() != Some(DurableContinuation::None)
-                {
-                    return None;
-                }
-            }
-            _ => return None,
-        }
-        Some(AuthenticatedRecoveredWalValidateLedgerParent {
-            key: parent_key,
-            owner: parent.owner(),
-            ordinal: parent.ordinal(),
-            payload: parent.durable_payload()?,
-            replay_authority: parent.replay_authority.clone(),
-            inherited_prepare_authority,
-            wal_identity: recovered.wal_identity(),
-            tag: recovered.tag(),
-            vote: vote.clone(),
-        })
-    }
-
-    /// Stage exactly one standalone Proposal/Timeout control Sign row.
-    ///
-    /// An exact existing row stutters without rewriting it. Absence appends
-    /// the deterministic `high_water + 1` successor. A same-key row with any
-    /// changed owner, metadata, payload, stage, replay authority, or terminal
-    /// shape is a hard error and is never repaired in place.
-    pub(super) fn stage_authenticated_wal_control_sign(
-        &self,
-        projection: &AuthenticatedRecoveredWalControlProjection,
-    ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
-        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !projection.belongs_to_context(self.context()) {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered control Sign belongs to another lifecycle context".to_owned(),
-            ));
-        }
-        let mut matching = self
-            .records
-            .iter()
-            .filter(|record| projection.names_record(record));
-        if let Some(record) = matching.next() {
-            if matching.next().is_some() || !projection.exactly_matches_record(record) {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "existing recovered control Sign row changed exact admission metadata"
-                        .to_owned(),
-                ));
-            }
-            return Ok((self.clone(), record.ordinal(), false));
-        }
-
-        let ordinal = self.high_water.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "recovered control Sign ordinal exhausted".to_owned(),
-            )
-        })?;
-        let mut staged = self.clone();
-        staged.records.push(projection.fresh_record(ordinal)?);
-        staged.high_water = ordinal;
-        staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !projection.exactly_matches_ledger_at(&staged, ordinal) {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "staged recovered control Sign successor is not exact".to_owned(),
-            ));
-        }
-        Ok((staged, ordinal, true))
-    }
-
-    /// Stage exactly one standalone recovered Decision Fetch row.
-    ///
-    /// An exact existing row is a read-only stutter. Absence appends only the
-    /// deterministic `high_water + 1` successor. Same-key drift in owner,
-    /// replay source, payload, stage, or terminal state is never repaired.
-    pub(super) fn stage_authenticated_wal_decision_fetch(
-        &self,
-        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
-    ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
-        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !projection.belongs_to_context(self.context()) {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered Decision Fetch belongs to another lifecycle context".to_owned(),
-            ));
-        }
-        let mut matching = self
-            .records
-            .iter()
-            .filter(|record| projection.names_record(record));
-        if let Some(record) = matching.next() {
-            if matching.next().is_some() || !projection.exactly_matches_record(record) {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "existing recovered Decision Fetch row changed exact admission metadata"
-                        .to_owned(),
-                ));
-            }
-            return Ok((self.clone(), record.ordinal(), false));
-        }
-
-        let ordinal = self.high_water.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "recovered Decision Fetch ordinal exhausted".to_owned(),
-            )
-        })?;
-        let mut staged = self.clone();
-        staged.records.push(projection.fresh_record(ordinal)?);
-        staged.high_water = ordinal;
-        staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !projection.exactly_matches_ledger_at(&staged, ordinal) {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "staged recovered Decision Fetch successor is not exact".to_owned(),
-            ));
-        }
-        Ok((staged, ordinal, true))
-    }
-
-    /// Stage or exactly coalesce the first-release recovered Decision body chain.
-    ///
-    /// The payload-free Decision Fetch must already be durable. A live exact
-    /// Fetch advances directly to three adjacent BodyFrame successors in one
-    /// prospective frame. An already complete four-row chain stutters without
-    /// rewriting. Missing Fetch, partial prefixes, foreign same-owner rows, or
-    /// any semantic drift fail closed; history is never synthesized.
-    pub(super) fn stage_recovered_decision_apply(
-        &self,
-        projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
-    ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
-        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        self.reject_terminal_recovered_decision_apply(projection)?;
-        let fetch_projection = projection.fetch();
-        let lineage = projection.lineage();
-        if !fetch_projection.belongs_to_context(self.context()) {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered Decision Apply belongs to another lifecycle context".to_owned(),
-            ));
-        }
-        let matching = self
-            .records
-            .iter()
-            .filter(|record| fetch_projection.names_record(record))
-            .collect::<Vec<_>>();
-        let [fetch] = matching.as_slice() else {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "first-release recovered Decision Apply requires one exact durable Fetch parent"
-                    .to_owned(),
-            ));
-        };
-        let owner = fetch.owner();
-        let owner_records = self
-            .records
-            .iter()
-            .filter(|record| record.owner() == owner)
-            .collect::<Vec<_>>();
-
-        if fetch_projection.exactly_matches_record(fetch) {
-            if owner_records.len() != 1 || fetch.ordinal() != owner.first_admission_ordinal() {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "live Decision Fetch owner already names foreign lifecycle history".to_owned(),
-                ));
-            }
-            let store_ordinal = self.high_water.checked_add(1).ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "recovered Decision Store ordinal exhausted".to_owned(),
-                )
-            })?;
-            let validate_ordinal = store_ordinal.checked_add(1).ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "recovered Decision Validate ordinal exhausted".to_owned(),
-                )
-            })?;
-            let apply_ordinal = validate_ordinal.checked_add(1).ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "recovered Decision Apply ordinal exhausted".to_owned(),
-                )
-            })?;
-            let [store, validate, apply] = lineage
-                .successor_records(owner, store_ordinal, validate_ordinal, apply_ordinal)
-                .ok_or_else(|| {
-                    LifecycleLedgerError::InvalidLedger(
-                        "recovered Decision successors lost exact owner or lineage".to_owned(),
-                    )
-                })?;
-            let mut staged = self.clone();
-            let fetch_index = staged
-                .records
-                .iter()
-                .position(|record| record.ordinal() == fetch.ordinal())
-                .expect("the exact Fetch parent belongs to the cloned ledger");
-            staged.records[fetch_index].terminal =
-                Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
-            staged.records[fetch_index].continuation =
-                PersistedDurableContinuationV1::from_schema(DurableContinuation::successor(
-                    DurableContinuationEdge::FetchToStore,
-                    store_ordinal,
-                ));
-            staged.records.extend([store, validate, apply]);
-            staged.records.sort_by_key(LifecycleLedgerRecordV1::ordinal);
-            staged.high_water = apply_ordinal;
-            staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-            return Ok((staged, apply_ordinal, true));
-        }
-
-        let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
-            .continuation()
-            .and_then(DurableContinuation::successor_parts)
-        else {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered Decision Fetch is neither live nor an exact complete parent".to_owned(),
-            ));
-        };
-        let validate_ordinal = store_ordinal.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "coalesced recovered Decision Validate ordinal exhausted".to_owned(),
-            )
-        })?;
-        let apply_ordinal = validate_ordinal.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "coalesced recovered Decision Apply ordinal exhausted".to_owned(),
-            )
-        })?;
-        let record_at = |ordinal| {
-            self.records
-                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
-                .ok()
-                .and_then(|index| self.records.get(index))
-        };
-        let (Some(store), Some(validate), Some(apply)) = (
-            record_at(store_ordinal),
-            record_at(validate_ordinal),
-            record_at(apply_ordinal),
-        ) else {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered Decision body chain is a partial durable prefix".to_owned(),
-            ));
-        };
-        if owner_records.len() != 4
-            || !fetch_projection.exactly_matches_advanced_apply_parent(fetch, store_ordinal)
-            || !lineage.exactly_matches_successor_records(owner, store, validate, apply)
-            || apply_ordinal > self.high_water
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "coalesced recovered Decision body chain changed exact durable semantics"
-                    .to_owned(),
-            ));
-        }
-        Ok((self.clone(), apply_ordinal, false))
-    }
-
-    /// Authenticate an already terminal recovered Decision body chain.
-    ///
-    /// This oracle never feeds storage-only recovery: a terminal Apply must
-    /// not be reconstructed as Ready. It only seals the exact four-row
-    /// predecessor shape for the CompleteTip retirement transaction, whose
-    /// caller must additionally join the full Kura artifact and receipt.
-    pub(super) fn authenticate_terminal_recovered_decision_apply(
-        &self,
-        projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
-    ) -> Result<u128, LifecycleLedgerError> {
-        self.authenticate_terminal_recovered_decision_apply_projection(projection)
-    }
-
-    fn reject_terminal_recovered_decision_apply(
-        &self,
-        projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
-    ) -> Result<(), LifecycleLedgerError> {
-        if self
-            .authenticate_terminal_recovered_decision_apply(projection)
-            .is_ok()
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision Apply requires CompleteTip retirement, not a live carrier"
-                    .to_owned(),
-            ));
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn reject_terminal_recovered_decision_apply_projection(
-        &self,
-        projection: &impl TerminalRecoveredDecisionApplyProjectionV1,
-    ) -> Result<(), LifecycleLedgerError> {
-        if self
-            .authenticate_terminal_recovered_decision_apply_projection(projection)
-            .is_ok()
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision Apply requires CompleteTip retirement, not a live carrier"
-                    .to_owned(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn authenticate_terminal_recovered_decision_apply_projection(
-        &self,
-        projection: &impl TerminalRecoveredDecisionApplyProjectionV1,
-    ) -> Result<u128, LifecycleLedgerError> {
-        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !projection.belongs_to_context(self.context()) {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision Apply belongs to another lifecycle context".to_owned(),
-            ));
-        }
-        let matching = self
-            .records
-            .iter()
-            .filter(|record| projection.names_fetch_record(record))
-            .collect::<Vec<_>>();
-        let [fetch] = matching.as_slice() else {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision Apply requires one exact Fetch parent".to_owned(),
-            ));
-        };
-        let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
-            .continuation()
-            .and_then(DurableContinuation::successor_parts)
-        else {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision Fetch lost its Store continuation".to_owned(),
-            ));
-        };
-        let validate_ordinal = store_ordinal.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision Validate ordinal exhausted".to_owned(),
-            )
-        })?;
-        let apply_ordinal = validate_ordinal.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision Apply ordinal exhausted".to_owned(),
-            )
-        })?;
-        let record_at = |ordinal| {
-            self.records
-                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
-                .ok()
-                .and_then(|index| self.records.get(index))
-        };
-        let (Some(store), Some(validate), Some(apply)) = (
-            record_at(store_ordinal),
-            record_at(validate_ordinal),
-            record_at(apply_ordinal),
-        ) else {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision body chain is incomplete".to_owned(),
-            ));
-        };
-        let owner = fetch.owner();
-        if self
-            .records
-            .iter()
-            .filter(|record| record.owner() == owner)
-            .count()
-            != 4
-            || !projection.exactly_matches_advanced_apply_parent(fetch, store_ordinal)
-            || !projection.exactly_matches_terminal_successor_records(owner, store, validate, apply)
-            || apply_ordinal > self.high_water
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal recovered Decision body chain changed exact durable semantics".to_owned(),
-            ));
-        }
-        Ok(apply_ordinal)
-    }
-
-    /// Join one terminal recovered-Decision Apply row to the complete
-    /// Kura-authenticated CompleteTip evidence retained for successor startup.
-    ///
-    /// This remains a predecessor-chain oracle, not retirement authority: it
-    /// neither censes nor retires unrelated live rows, leases, waits, debt,
-    /// capacity, Serve payloads, or either durable publication target. The
-    /// consuming retirement transaction proves those independently before it
-    /// mints the activation token.
-    pub(in crate::sumeragi) fn authenticate_complete_tip_terminal_apply(
-        &self,
-        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
-    ) -> Result<u128, LifecycleLedgerError> {
-        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        let predecessor = complete_tip.predecessor();
-        if self.context().height() != predecessor.height() {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal CompleteTip lifecycle ledger belongs to another height".to_owned(),
-            ));
-        }
-        let mut terminal_applies = self.records.iter().filter(|record| {
-            record.work_class() == Some(LifecycleWorkClass::Apply)
-                && record.stage().is_some_and(|stage| {
-                    stage.kind() == LifecycleStageKind::ApplyDecision
-                        && stage.predecessor_scope() == PredecessorScope::Independent
-                })
-                && record.terminal() == Some(Some(TerminalOutcome::Advanced))
-                && record.continuation() == Some(DurableContinuation::None)
-                && complete_tip.authorizes_terminal_apply_replay(&record.replay_authority)
-        });
-        let apply = terminal_applies.next().ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "CompleteTip finality has no exact terminal Decision Apply row".to_owned(),
-            )
-        })?;
-        if terminal_applies.next().is_some() {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip finality names multiple terminal Decision Apply rows".to_owned(),
-            ));
-        }
-        let apply_ordinal = apply.ordinal();
-        let validate_ordinal = apply_ordinal.checked_sub(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal Decision Apply has no Validate predecessor".to_owned(),
-            )
-        })?;
-        let store_ordinal = validate_ordinal.checked_sub(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal Decision Apply has no Store predecessor".to_owned(),
-            )
-        })?;
-        let fetch_ordinal = store_ordinal.checked_sub(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal Decision Apply has no Fetch predecessor".to_owned(),
-            )
-        })?;
-        let record_at = |ordinal| {
-            self.records
-                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
-                .ok()
-                .and_then(|index| self.records.get(index))
-        };
-        let (Some(fetch), Some(store), Some(validate)) = (
-            record_at(fetch_ordinal),
-            record_at(store_ordinal),
-            record_at(validate_ordinal),
-        ) else {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal CompleteTip lifecycle body chain is incomplete".to_owned(),
-            ));
-        };
-        let owner = apply.owner();
-        if fetch.owner() != owner
-            || store.owner() != owner
-            || validate.owner() != owner
-            || owner.first_admission_ordinal() != fetch_ordinal
-            || [fetch, store, validate, apply]
-                .iter()
-                .any(|record| record.reconstruction_source() != owner.causal_root().digest())
-            || self
-                .records
-                .iter()
-                .filter(|record| record.owner() == owner)
-                .count()
-                != 4
-            || fetch.work_class() != Some(LifecycleWorkClass::Fetch)
-            || store.work_class() != Some(LifecycleWorkClass::Store)
-            || validate.work_class() != Some(LifecycleWorkClass::Validate)
-            || fetch.terminal() != Some(Some(TerminalOutcome::Advanced))
-            || store.terminal() != Some(Some(TerminalOutcome::Advanced))
-            || validate.terminal() != Some(Some(TerminalOutcome::Advanced))
-            || fetch.continuation()
-                != Some(DurableContinuation::successor(
-                    DurableContinuationEdge::FetchToStore,
-                    store_ordinal,
-                ))
-            || store.continuation()
-                != Some(DurableContinuation::successor(
-                    DurableContinuationEdge::StoreToValidate,
-                    validate_ordinal,
-                ))
-            || validate.continuation()
-                != Some(DurableContinuation::successor(
-                    DurableContinuationEdge::ValidateToApply,
-                    apply_ordinal,
-                ))
-            || recovered_decision_body_continuation_is_exact(
-                DurableContinuationEdge::FetchToStore,
-                &fetch.replay_authority,
-                fetch
-                    .durable_payload()
-                    .expect("validated ledger Fetch payload"),
-                &store.replay_authority,
-                store
-                    .durable_payload()
-                    .expect("validated ledger Store payload"),
-            ) != Some(true)
-            || recovered_decision_body_continuation_is_exact(
-                DurableContinuationEdge::StoreToValidate,
-                &store.replay_authority,
-                store
-                    .durable_payload()
-                    .expect("validated ledger Store payload"),
-                &validate.replay_authority,
-                validate
-                    .durable_payload()
-                    .expect("validated ledger Validate payload"),
-            ) != Some(true)
-            || recovered_decision_body_continuation_is_exact(
-                DurableContinuationEdge::ValidateToApply,
-                &validate.replay_authority,
-                validate
-                    .durable_payload()
-                    .expect("validated ledger Validate payload"),
-                &apply.replay_authority,
-                apply
-                    .durable_payload()
-                    .expect("validated ledger Apply payload"),
-            ) != Some(true)
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "terminal CompleteTip lifecycle body chain changed exact durable semantics"
-                    .to_owned(),
-            ));
-        }
-        Ok(apply_ordinal)
-    }
-
-    /// Consume the exact opened predecessor store, frame, and CompleteTip proof
-    /// into one non-decomposable authentication cut.
-    ///
-    /// The store is reloaded both before and after the terminal-chain join.
-    /// Every failure consumes all three inputs and requires startup to restart;
-    /// no caller can recover the CompleteTip activation or substitute a
-    /// detached same-byte frame for the retained opened store handle.
-    fn into_complete_tip_terminal_apply_store_join(
-        self,
-        ledger_store: LifecycleLedgerStoreV1,
-        complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
-    ) -> Result<AuthenticatedCompleteTipTerminalApplyStoreJoinV1, LifecycleLedgerError> {
-        if !ledger_store.is_authorized_complete_tip_predecessor_target(&complete_tip)
-            || ledger_store.context != self.context()
-            || ledger_store.load()? != self
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip predecessor store target or frame changed before authentication"
-                    .to_owned(),
-            ));
-        }
-        let apply_ordinal = self.authenticate_complete_tip_terminal_apply(&complete_tip)?;
-        let cut = AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
-            complete_tip,
-            ledger_store,
-            ledger: self,
-            apply_ordinal,
-        };
-        if !cut.is_exact()? {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip predecessor cut changed during authentication".to_owned(),
-            ));
-        }
-        Ok(cut)
-    }
-
-    /// Purely stage one adapter-authenticated WAL-ahead Validate-to-Sign repair.
-    ///
-    /// The only mutable shape is an exact live Validate parent with no child.
-    /// It becomes `Advanced` and names a newly appended, same-owner Sign row at
-    /// `high_water + 1`. An already repaired exact pair stutters. Every other
-    /// parent/child arrangement fails before the unified startup transaction
-    /// can persist the returned ledger.
-    pub(super) fn stage_authenticated_wal_vote_repair(
-        &self,
-        repair: &AuthenticatedWalVoteLifecycleRepair,
-    ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
-        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !repair.concrete_pair_is_exact() {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered WAL repair lost its concrete effect binding".to_owned(),
-            ));
-        }
-        let parent_candidate = repair.parent();
-        let child_candidate = repair.child();
-        let parent_index = self
-            .records
-            .iter()
-            .position(|record| record.key() == Some(parent_candidate.key))
-            .ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "recovered WAL vote has no durable Validate parent".to_owned(),
-                )
-            })?;
-        let parent = &self.records[parent_index];
-        if !record_matches_recovery_candidate(parent, parent_candidate)
-            || parent.work_class() != Some(LifecycleWorkClass::Validate)
-            || parent.stage().is_none_or(|stage| {
-                stage.kind() != LifecycleStageKind::ValidateBody
-                    || stage.predecessor_scope() != PredecessorScope::Independent
-            })
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered WAL vote changed its durable Validate parent".to_owned(),
-            ));
-        }
-
-        let existing_child = self
-            .records
-            .iter()
-            .find(|record| record.key() == Some(child_candidate.key));
-        let continuation = parent.continuation().ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "recovered WAL parent continuation cannot be decoded".to_owned(),
-            )
-        })?;
-        let terminal = parent.terminal().ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "recovered WAL parent terminal cannot be decoded".to_owned(),
-            )
-        })?;
-
-        if let Some((edge, child_ordinal)) = continuation.successor_parts() {
-            let child = existing_child.ok_or_else(|| {
-                LifecycleLedgerError::InvalidLedger(
-                    "recovered WAL continuation lost its Sign child".to_owned(),
-                )
-            })?;
-            if terminal != Some(TerminalOutcome::Advanced)
-                || edge != repair.edge()
-                || child.ordinal() != child_ordinal
-                || child.owner() != parent.owner()
-                || !record_matches_recovery_candidate(child, child_candidate)
-                || child.terminal() != Some(None)
-                || child.continuation() != Some(DurableContinuation::None)
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "recovered WAL continuation conflicts with the durable Sign pair".to_owned(),
-                ));
-            }
-            return Ok((self.clone(), child_ordinal, false));
-        }
-
-        if terminal.is_some()
-            || continuation != DurableContinuation::None
-            || existing_child.is_some()
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "recovered WAL vote does not match a live uncontinued Validate".to_owned(),
-            ));
-        }
-        let child_ordinal = self.high_water.checked_add(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger("recovered WAL Sign ordinal exhausted".to_owned())
-        })?;
-        let mut staged = self.clone();
-        staged.records[parent_index].terminal =
-            Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
-        staged.records[parent_index].continuation = PersistedDurableContinuationV1::from_schema(
-            DurableContinuation::successor(repair.edge(), child_ordinal),
-        );
-        staged.records.push(LifecycleLedgerRecordV1::new(
-            child_candidate.key,
-            parent.owner(),
-            child_ordinal,
-            child_candidate.work_class,
-            child_candidate.stage,
-            None,
-            child_candidate.reconstruction_source,
-            child_candidate.payload,
-            child_candidate.replay_authority.clone(),
-            DurableContinuation::None,
-        )?);
-        staged.high_water = child_ordinal;
-        staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        Ok((staged, child_ordinal, true))
-    }
-
-    fn validate(&self, max_records: usize) -> Result<(), LifecycleLedgerError> {
-        if self.format_version != LEDGER_VERSION || self.records.len() > max_records {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "format version or record bound is invalid".to_owned(),
-            ));
-        }
-        let context = self.context();
-        let mut ordinals = BTreeSet::new();
-        let mut keys = BTreeSet::new();
-        let mut owners = BTreeMap::new();
-        let mut serve_requests = BTreeSet::new();
-        let mut continuation_successors = BTreeSet::new();
-        if self
-            .records
-            .windows(2)
-            .any(|window| window[0].ordinal >= window[1].ordinal)
-            || self
-                .producer_debts
-                .windows(2)
-                .any(|window| window[0].serve_ordinal >= window[1].serve_ordinal)
-        {
-            return Err(LifecycleLedgerError::InvalidLedger(
-                "records or producer debts are not canonically ordered".to_owned(),
-            ));
-        }
-        for record in &self.records {
-            if !record.validate(context, self.high_water)
-                || !ordinals.insert(record.ordinal)
-                || !keys.insert(record.key)
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "record identity, context, or schema is invalid".to_owned(),
-                ));
-            }
-            let owner = record.owner();
-            if owners
-                .insert(owner.causal_root(), owner)
-                .is_some_and(|known| known != owner)
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "one causal root names multiple lifecycle owners".to_owned(),
-                ));
-            }
-            if record.work_class() == Some(LifecycleWorkClass::CertifiedServe)
-                && record
-                    .durable_payload()
-                    .and_then(DurablePayloadReference::request)
-                    .is_none_or(|request| !serve_requests.insert(request))
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "one exact signed Serve request names multiple lifecycle records".to_owned(),
-                ));
-            }
-        }
-        for record in &self.records {
-            let continuation = record
-                .continuation()
-                .expect("records validated before successor edges");
-            if continuation != DurableContinuation::None
-                && record.reconstruction_source() != record.owner().causal_root().digest()
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "durable continuation is not bound to its causal owner".to_owned(),
-                ));
-            }
-            if continuation == DurableContinuation::AdvancedNoSuccessor
-                && !durable_validate_payload_is_exact(
-                    record
-                        .key()
-                        .expect("records validated before continuation payloads"),
-                    record
-                        .durable_payload()
-                        .expect("records validated before continuation payloads"),
-                )
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "advanced Validate without a successor lost its exact body frame".to_owned(),
-                ));
-            }
-            let Some((edge, successor_ordinal)) = continuation.successor_parts() else {
-                continue;
-            };
-            let successor = self
-                .records
-                .binary_search_by_key(&successor_ordinal, |candidate| candidate.ordinal)
-                .ok()
-                .and_then(|index| self.records.get(index));
-            if !continuation_successors.insert(successor_ordinal)
-                || successor.is_none_or(|successor| {
-                    let parent_payload = record
-                        .durable_payload()
-                        .expect("records validated before successor edges");
-                    let successor_payload = successor
-                        .durable_payload()
-                        .expect("records validated before successor edges");
-                    let payload_and_replay_are_exact =
-                        recovered_decision_body_continuation_is_exact(
-                            edge,
-                            &record.replay_authority,
-                            parent_payload,
-                            &successor.replay_authority,
-                            successor_payload,
-                        )
-                        .unwrap_or_else(|| {
-                            durable_continuation_payload_is_exact(
-                                edge,
-                                parent_payload,
-                                successor_payload,
-                            )
-                        });
-                    successor.owner() != record.owner()
-                        || successor.reconstruction_source() != record.reconstruction_source()
-                        || !payload_and_replay_are_exact
-                        || !durable_continuation_successor_is_exact(
-                            edge,
-                            record
-                                .work_class()
-                                .expect("records validated before successor edges"),
-                            record
-                                .key()
-                                .expect("records validated before successor edges"),
-                            record
-                                .stage()
-                                .expect("records validated before successor edges"),
-                            successor
-                                .work_class()
-                                .expect("records validated before successor edges"),
-                            successor
-                                .key()
-                                .expect("records validated before successor edges"),
-                            successor
-                                .stage()
-                                .expect("records validated before successor edges"),
-                        )
-                })
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "advanced body-stage successor is missing, aliased, or semantically foreign"
-                        .to_owned(),
-                ));
-            }
-        }
-        for record in &self.records {
-            let owner = record.owner();
-            if self
-                .records
-                .binary_search_by_key(&owner.first_admission_ordinal(), |candidate| {
-                    candidate.ordinal
-                })
-                .ok()
-                .and_then(|index| self.records.get(index))
-                .is_none_or(|first| first.owner() != owner)
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "owner first ordinal has no matching tombstone or record".to_owned(),
-                ));
-            }
-        }
-        self.validate_debts()
-    }
-
-    fn validate_debts(&self) -> Result<(), LifecycleLedgerError> {
-        let mut serves = BTreeSet::new();
-        let mut producers = BTreeSet::new();
-        for debt in &self.producer_debts {
-            if !serves.insert(debt.serve_ordinal)
-                || !producers.insert(debt.producer_ordinal)
-                || debt.serve_ordinal.checked_add(1) != Some(debt.producer_ordinal)
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "producer debt is non-adjacent or non-bijective".to_owned(),
-                ));
-            }
-            let serve = self
-                .records
-                .binary_search_by_key(&debt.serve_ordinal, |record| record.ordinal)
-                .ok()
-                .and_then(|index| self.records.get(index));
-            let producer = self
-                .records
-                .binary_search_by_key(&debt.producer_ordinal, |record| record.ordinal)
-                .ok()
-                .and_then(|index| self.records.get(index));
-            if serve.and_then(LifecycleLedgerRecordV1::work_class)
-                != Some(LifecycleWorkClass::CertifiedServe)
-                || producer.and_then(LifecycleLedgerRecordV1::work_class)
-                    != Some(LifecycleWorkClass::ProducerTurn)
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "producer debt does not name a Serve/producer pair".to_owned(),
-                ));
-            }
-        }
-        for record in &self.records {
-            let work_class = record.work_class().expect("records validated before debts");
-            let terminal = record.terminal().expect("records validated before debts");
-            match work_class {
-                LifecycleWorkClass::CertifiedServe => {
-                    let Some(producer_ordinal) = record.ordinal.checked_add(1) else {
-                        return Err(LifecycleLedgerError::InvalidLedger(
-                            "Serve ordinal cannot address its producer".to_owned(),
-                        ));
-                    };
-                    let Some(producer) = self
-                        .records
-                        .binary_search_by_key(&producer_ordinal, |candidate| candidate.ordinal)
-                        .ok()
-                        .and_then(|index| self.records.get(index))
-                    else {
-                        return Err(LifecycleLedgerError::InvalidLedger(
-                            "Serve record has no adjacent producer record".to_owned(),
-                        ));
-                    };
-                    if producer.work_class() != Some(LifecycleWorkClass::ProducerTurn)
-                        || producer.owner() != record.owner()
-                        || producer.reconstruction_source() != record.reconstruction_source()
-                        || !producer
-                            .replay_authority
-                            .same_persisted_family(&record.replay_authority)
-                        || !serve_and_producer_keys_match(
-                            record.key().expect("records validated before debts"),
-                            producer.key().expect("records validated before debts"),
-                        )
-                        || (terminal == Some(TerminalOutcome::Cancelled)
-                            && producer.terminal() != Some(Some(TerminalOutcome::Cancelled)))
-                        || (terminal.is_none() && !serves.contains(&record.ordinal))
-                        || serves.contains(&record.ordinal)
-                            != producer
-                                .terminal()
-                                .expect("records validated before debts")
-                                .is_none()
-                    {
-                        return Err(LifecycleLedgerError::InvalidLedger(
-                            "Serve/producer atomic pair is inconsistent".to_owned(),
-                        ));
-                    }
-                }
-                LifecycleWorkClass::ProducerTurn => {
-                    let live = terminal.is_none();
-                    let serve = record.ordinal.checked_sub(1).and_then(|ordinal| {
-                        self.records
-                            .binary_search_by_key(&ordinal, |candidate| candidate.ordinal)
-                            .ok()
-                            .and_then(|index| self.records.get(index))
-                    });
-                    if serve.and_then(LifecycleLedgerRecordV1::work_class)
-                        != Some(LifecycleWorkClass::CertifiedServe)
-                        || serve.is_none_or(|serve| serve.owner() != record.owner())
-                        || serve.is_none_or(|serve| {
-                            !serve_and_producer_keys_match(
-                                serve.key().expect("records validated before debts"),
-                                record.key().expect("records validated before debts"),
-                            )
-                        })
-                        || producers.contains(&record.ordinal) != live
-                    {
-                        return Err(LifecycleLedgerError::InvalidLedger(
-                            "producer debt does not match producer terminality".to_owned(),
-                        ));
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
+        _ => false,
+    };
+    phase_and_commitment_are_exact
+        && broadcast_key.context() == next_sign_key.context()
+        && broadcast_key.round() == next_sign_key.round()
+        && broadcast_key.proposal_round() == next_sign_key.proposal_round()
+        && broadcast_key.subject() == next_sign_key.subject()
 }
+
+include!("v2_lifecycle_ledger_operations.rs");
 
 /// Startup-fatal failure from the consuming LedgerV1/body-store Ready-Fetch join.
 ///
@@ -4407,4 +3461,5 @@ fn record_matches_recovery_candidate(
 }
 
 include!("v2_lifecycle_ledger_store.rs");
+
 include!("v2_lifecycle_ledger_tests.rs");

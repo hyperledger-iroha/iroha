@@ -30,6 +30,10 @@
         OwnerId::new(CausalRoot::new(digest(9)), first)
     }
 
+    fn distinct_owner(marker: u8, first: u128) -> OwnerId {
+        OwnerId::new(CausalRoot::new(digest(marker)), first)
+    }
+
     fn body_key(
         phase: LifecyclePhase,
         _execution_commitment: Option<LifecycleDigest>,
@@ -230,7 +234,12 @@
                 LifecycleWorkClass::SignVote,
                 LifecycleStageKind::SignCommitVote,
             ),
-            DurableContinuationEdge::FetchToStore | DurableContinuationEdge::StoreToValidate => {
+            DurableContinuationEdge::FetchToStore
+            | DurableContinuationEdge::StoreToValidate
+            | DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast => {
                 panic!("Validate fixture requires a Validate continuation edge")
             }
         };
@@ -255,7 +264,12 @@
             DurableContinuationEdge::ValidateToInvalidBodyReport
             | DurableContinuationEdge::ValidateToSignPrepare
             | DurableContinuationEdge::ValidateToSignCommit => DurablePayloadReference::None,
-            DurableContinuationEdge::FetchToStore | DurableContinuationEdge::StoreToValidate => {
+            DurableContinuationEdge::FetchToStore
+            | DurableContinuationEdge::StoreToValidate
+            | DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast => {
                 unreachable!("Validate fixture excludes pre-Validate edges")
             }
         };
@@ -276,6 +290,183 @@
 
     fn validate_apply_pair() -> (LifecycleLedgerRecordV1, LifecycleLedgerRecordV1) {
         validate_successor_pair(DurableContinuationEdge::ValidateToApply)
+    }
+
+    fn sign_broadcast_successor_pair(
+        edge: DurableContinuationEdge,
+    ) -> (LifecycleLedgerRecordV1, LifecycleLedgerRecordV1) {
+        let (parent_class, parent_stage, child_stage) = match edge {
+            DurableContinuationEdge::SignProposalToBroadcast => (
+                LifecycleWorkClass::SignProposal,
+                LifecycleStageKind::SignProposal,
+                LifecycleStageKind::BroadcastProposal,
+            ),
+            DurableContinuationEdge::SignPrepareToBroadcast => (
+                LifecycleWorkClass::SignVote,
+                LifecycleStageKind::SignPrepareVote,
+                LifecycleStageKind::BroadcastPrepareVote,
+            ),
+            DurableContinuationEdge::SignCommitToBroadcast => (
+                LifecycleWorkClass::SignVote,
+                LifecycleStageKind::SignCommitVote,
+                LifecycleStageKind::BroadcastCommitVote,
+            ),
+            DurableContinuationEdge::SignTimeoutToBroadcast => (
+                LifecycleWorkClass::SignTimeout,
+                LifecycleStageKind::SignTimeoutVote,
+                LifecycleStageKind::BroadcastTimeoutVote,
+            ),
+            DurableContinuationEdge::FetchToStore
+            | DurableContinuationEdge::StoreToValidate
+            | DurableContinuationEdge::ValidateToApply
+            | DurableContinuationEdge::ValidateToInvalidBodyReport
+            | DurableContinuationEdge::ValidateToSignPrepare
+            | DurableContinuationEdge::ValidateToSignCommit => {
+                panic!("Sign fixture requires a Sign-to-Broadcast continuation")
+            }
+        };
+        let parent_case =
+            super::super::replay_authority::exact_record_fixture(context(), parent_stage, 3);
+        let child_case =
+            super::super::replay_authority::exact_record_fixture(context(), child_stage, 3);
+        let parent = LifecycleLedgerRecordV1::new(
+            parent_case.key,
+            owner(1),
+            1,
+            parent_class,
+            parent_case.stage,
+            Some(TerminalOutcome::Advanced),
+            digest(9),
+            DurablePayloadReference::None,
+            parent_case.authority,
+            DurableContinuation::successor(edge, 2),
+        )
+        .expect("construct exact advanced Sign row");
+        let child = LifecycleLedgerRecordV1::new(
+            child_case.key,
+            owner(1),
+            2,
+            LifecycleWorkClass::Broadcast,
+            child_case.stage,
+            None,
+            digest(9),
+            DurablePayloadReference::None,
+            child_case.authority,
+            DurableContinuation::None,
+        )
+        .expect("construct exact live Broadcast row");
+        (parent, child)
+    }
+
+    fn exact_lifecycle_record(
+        stage: LifecycleStageKind,
+        seed: u8,
+        owner: OwnerId,
+        ordinal: u128,
+        terminal: Option<TerminalOutcome>,
+        continuation: DurableContinuation,
+    ) -> LifecycleLedgerRecordV1 {
+        let case = super::super::replay_authority::exact_record_fixture(context(), stage, seed);
+        LifecycleLedgerRecordV1::new(
+            case.key,
+            owner,
+            ordinal,
+            case.work_class,
+            case.stage,
+            terminal,
+            owner.causal_root().digest(),
+            case.payload,
+            case.authority,
+            continuation,
+        )
+        .expect("construct exact lifecycle record")
+    }
+
+    fn unrelated_timeout_record(ordinal: u128) -> LifecycleLedgerRecordV1 {
+        exact_lifecycle_record(
+            LifecycleStageKind::SignTimeoutVote,
+            4,
+            distinct_owner(11, ordinal),
+            ordinal,
+            None,
+            DurableContinuation::None,
+        )
+    }
+
+    fn committed_proposal_broadcast_and_sign_ledger() -> LifecycleLedgerV1 {
+        let parent_owner = owner(1);
+        let next_sign_owner = distinct_owner(10, 5);
+        let records = vec![
+            exact_lifecycle_record(
+                LifecycleStageKind::SignProposal,
+                3,
+                parent_owner,
+                1,
+                Some(TerminalOutcome::Advanced),
+                DurableContinuation::successor(DurableContinuationEdge::SignProposalToBroadcast, 4),
+            ),
+            exact_lifecycle_record(
+                LifecycleStageKind::BroadcastProposal,
+                3,
+                parent_owner,
+                4,
+                None,
+                DurableContinuation::None,
+            ),
+            exact_lifecycle_record(
+                LifecycleStageKind::SignPrepareVote,
+                3,
+                next_sign_owner,
+                5,
+                None,
+                DurableContinuation::None,
+            ),
+            unrelated_timeout_record(8),
+        ];
+        LifecycleLedgerV1::new(context(), 8, records, BTreeMap::new())
+            .expect("construct committed Proposal Broadcast-plus-Sign ledger")
+    }
+
+    fn committed_prepare_broadcast_and_sign_ledger() -> LifecycleLedgerV1 {
+        let parent_owner = owner(1);
+        let next_sign_owner = distinct_owner(10, 7);
+        let records = vec![
+            exact_lifecycle_record(
+                LifecycleStageKind::ValidateBody,
+                3,
+                parent_owner,
+                1,
+                Some(TerminalOutcome::Advanced),
+                DurableContinuation::successor(DurableContinuationEdge::ValidateToSignPrepare, 3),
+            ),
+            exact_lifecycle_record(
+                LifecycleStageKind::SignPrepareVote,
+                3,
+                parent_owner,
+                3,
+                Some(TerminalOutcome::Advanced),
+                DurableContinuation::successor(DurableContinuationEdge::SignPrepareToBroadcast, 6),
+            ),
+            exact_lifecycle_record(
+                LifecycleStageKind::BroadcastPrepareVote,
+                3,
+                parent_owner,
+                6,
+                None,
+                DurableContinuation::None,
+            ),
+            exact_lifecycle_record(
+                LifecycleStageKind::SignCommitVote,
+                3,
+                next_sign_owner,
+                7,
+                None,
+                DurableContinuation::None,
+            ),
+            unrelated_timeout_record(8),
+        ];
+        LifecycleLedgerV1::new(context(), 8, records, BTreeMap::new())
+            .expect("construct committed Prepare Broadcast-plus-Sign ledger")
     }
 
     fn complete_body_pipeline_chain() -> Vec<LifecycleLedgerRecordV1> {
@@ -712,6 +903,215 @@
         )
         .expect("the complete ledger rejects a payload-free live Validate row");
         assert_invalid_records(1, vec![payload_free_live]);
+    }
+
+    #[test]
+    fn all_sign_broadcast_continuations_roundtrip_with_canonical_wire_shapes() {
+        for edge in [
+            DurableContinuationEdge::SignProposalToBroadcast,
+            DurableContinuationEdge::SignPrepareToBroadcast,
+            DurableContinuationEdge::SignCommitToBroadcast,
+            DurableContinuationEdge::SignTimeoutToBroadcast,
+        ] {
+            let (parent, child) = sign_broadcast_successor_pair(edge);
+            let ledger = LifecycleLedgerV1::new(context(), 2, vec![parent, child], BTreeMap::new())
+                .expect("typed Sign-to-Broadcast successor edge is valid");
+            let frame = encode_frame(&ledger, 1024 * 1024).expect("encode Sign continuation");
+            let decoded = decode_frame(&frame, 1024 * 1024).expect("decode Sign continuation");
+            assert_eq!(
+                decoded.records()[0].continuation(),
+                Some(DurableContinuation::successor(edge, 2))
+            );
+        }
+    }
+
+    #[test]
+    fn committed_proposal_broadcast_and_next_sign_pair_is_frame_bound() {
+        let ledger = committed_proposal_broadcast_and_sign_ledger();
+        let pairs = ledger
+            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+            .expect("classify committed Proposal pair");
+        let [pair] = pairs.as_slice() else {
+            panic!("one exact Proposal pair must be classified");
+        };
+        assert_eq!(
+            pair.parent(),
+            RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+        );
+        assert_eq!(pair.parent_ordinal(), 1);
+        assert_eq!(pair.broadcast_ordinal(), 4);
+        assert_eq!(pair.next_sign_ordinal(), 5);
+        assert!(pair.exactly_matches_ledger(&ledger));
+        assert!(ledger.high_water() > pair.next_sign_ordinal());
+
+        let mut later_frame = ledger.clone();
+        later_frame.high_water = 9;
+        later_frame
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("a retained later high-water remains a valid frame");
+        assert!(!pair.exactly_matches_ledger(&later_frame));
+        let later_pairs = later_frame
+            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+            .expect("reclassify the changed complete frame");
+        assert_eq!(later_pairs.len(), 1);
+        assert!(later_pairs[0].exactly_matches_ledger(&later_frame));
+    }
+
+    #[test]
+    fn committed_prepare_broadcast_and_next_sign_pair_retains_validate_lineage() {
+        let ledger = committed_prepare_broadcast_and_sign_ledger();
+        let pairs = ledger
+            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+            .expect("classify committed Prepare pair");
+        let [pair] = pairs.as_slice() else {
+            panic!("one exact Prepare pair must be classified");
+        };
+        assert_eq!(
+            pair.parent(),
+            RecoveredLifecycleSignedBroadcastAndSignParentV1::PhasePrepare {
+                validate_ordinal: 1,
+            }
+        );
+        assert_eq!(pair.parent_ordinal(), 3);
+        assert_eq!(pair.broadcast_ordinal(), 6);
+        assert_eq!(pair.next_sign_ordinal(), 7);
+        assert!(pair.exactly_matches_ledger(&ledger));
+        assert!(ledger.high_water() > pair.next_sign_ordinal());
+    }
+
+    #[test]
+    fn combined_pair_classifier_rejects_nonadjacent_or_foreign_next_signs() {
+        let mut nonadjacent = committed_proposal_broadcast_and_sign_ledger();
+        let next_sign = nonadjacent
+            .records
+            .iter_mut()
+            .find(|record| record.ordinal == 5)
+            .expect("Proposal fixture next Sign");
+        next_sign.ordinal = 6;
+        next_sign.owner_first_ordinal = 6;
+        nonadjacent
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("a nonadjacent standalone Sign remains a valid generic ledger shape");
+        assert!(
+            nonadjacent
+                .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+                .expect("classify nonadjacent shape")
+                .is_empty()
+        );
+
+        let mut same_owner = committed_proposal_broadcast_and_sign_ledger();
+        let parent_owner = same_owner.records[0].owner();
+        let next_sign = same_owner
+            .records
+            .iter_mut()
+            .find(|record| record.ordinal == 5)
+            .expect("Proposal fixture next Sign");
+        next_sign.causal_root = *parent_owner.causal_root().digest().as_bytes();
+        next_sign.owner_first_ordinal = parent_owner.first_admission_ordinal();
+        next_sign.reconstruction_source = *parent_owner.causal_root().digest().as_bytes();
+        same_owner
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("a same-owner standalone Sign remains structurally valid outside the pair");
+        assert!(
+            same_owner
+                .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+                .expect("classify same-owner shape")
+                .is_empty()
+        );
+
+        let mut foreign_phase = committed_proposal_broadcast_and_sign_ledger();
+        let next_sign_index = foreign_phase
+            .records
+            .iter()
+            .position(|record| record.ordinal == 5)
+            .expect("Proposal fixture next Sign index");
+        let next_sign_owner = foreign_phase.records[next_sign_index].owner();
+        foreign_phase.records[next_sign_index] = exact_lifecycle_record(
+            LifecycleStageKind::SignCommitVote,
+            3,
+            next_sign_owner,
+            5,
+            None,
+            DurableContinuation::None,
+        );
+        foreign_phase
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("an unrelated adjacent Commit Sign is a valid standalone row");
+        assert!(
+            foreign_phase
+                .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+                .expect("classify foreign next phase")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn combined_pair_classifier_requires_exact_fresh_owner_histories() {
+        let mut reused_next_owner = committed_proposal_broadcast_and_sign_ledger();
+        let next_owner = reused_next_owner
+            .records
+            .iter()
+            .find(|record| record.ordinal == 5)
+            .expect("Proposal fixture next Sign")
+            .owner();
+        let later = reused_next_owner
+            .records
+            .iter_mut()
+            .find(|record| record.ordinal == 8)
+            .expect("Proposal fixture later row");
+        later.causal_root = *next_owner.causal_root().digest().as_bytes();
+        later.owner_first_ordinal = next_owner.first_admission_ordinal();
+        later.reconstruction_source = *next_owner.causal_root().digest().as_bytes();
+        reused_next_owner
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("a reused generic owner remains a valid ledger shape");
+        assert!(
+            reused_next_owner
+                .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+                .expect("classify reused next owner")
+                .is_empty()
+        );
+
+        let mut missing_validate = committed_prepare_broadcast_and_sign_ledger();
+        missing_validate
+            .records
+            .retain(|record| record.ordinal != 1);
+        for record in missing_validate
+            .records
+            .iter_mut()
+            .filter(|record| matches!(record.ordinal, 3 | 6))
+        {
+            record.owner_first_ordinal = 3;
+        }
+        missing_validate
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("a standalone Prepare-to-Broadcast owner remains generically valid");
+        assert!(
+            missing_validate
+                .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+                .expect("classify missing Validate lineage")
+                .is_empty()
+        );
+
+        let mut extra_parent_history = committed_prepare_broadcast_and_sign_ledger();
+        let parent_owner = extra_parent_history.records[0].owner();
+        let later = extra_parent_history
+            .records
+            .iter_mut()
+            .find(|record| record.ordinal == 8)
+            .expect("Prepare fixture later row");
+        later.causal_root = *parent_owner.causal_root().digest().as_bytes();
+        later.owner_first_ordinal = parent_owner.first_admission_ordinal();
+        later.reconstruction_source = *parent_owner.causal_root().digest().as_bytes();
+        extra_parent_history
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("an extra generic owner row remains structurally valid");
+        assert!(
+            extra_parent_history
+                .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+                .expect("classify expanded parent owner")
+                .is_empty()
+        );
     }
 
     #[test]

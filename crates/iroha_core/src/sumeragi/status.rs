@@ -68,11 +68,11 @@ use super::{
         check_production_successor_startup_lifecycle_transition,
     },
     v2_effects::{EffectExecutorStatus, PendingKuraApplyRecoveryStage},
+    v2_first_release_recovery::RetiredRecoveredCompleteTipActivationAuthorityV1,
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         SnapshotSuccessorActivationAuthority, successor_context_refinement_projection,
     },
-    v2_first_release_recovery::RetiredRecoveredCompleteTipActivationAuthorityV1,
     v2_runtime::RuntimeQueueLaneSnapshot,
 };
 #[cfg(test)]

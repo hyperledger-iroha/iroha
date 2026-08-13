@@ -234,6 +234,61 @@ impl LifecycleLedgerStoreV1 {
             && projection.exactly_matches_ledger_at(&loaded, ordinal)
     }
 
+    /// Reopen and authenticate one Advanced control Sign with its live Broadcast.
+    pub(super) fn revalidates_recovered_control_signed_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        control: &AuthenticatedRecoveredWalControlProjection,
+        broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
+        parent_ordinal: u128,
+        child_ordinal: u128,
+    ) -> bool {
+        let Ok(loaded) = self.load() else {
+            return false;
+        };
+        loaded
+            .authenticate_recovered_control_signed_broadcast(verified, control)
+            .is_ok_and(|(recovered, parent, child)| {
+                parent == parent_ordinal
+                    && child == child_ordinal
+                    && recovered.exactly_matches(broadcast)
+            })
+    }
+
+    /// Reload and reauthenticate one control-owned Broadcast-plus-Sign pair.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn revalidates_recovered_control_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        control: &AuthenticatedRecoveredWalControlProjection,
+        combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+        expected: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
+    ) -> bool {
+        self.load().is_ok_and(|loaded| {
+            loaded
+                .authenticate_recovered_control_signed_broadcast_and_sign(
+                    verified, control, combined,
+                )
+                .is_ok_and(|observed| observed == *expected)
+        })
+    }
+
+    /// Reload and reauthenticate one phase-owned Broadcast-plus-Sign pair.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn revalidates_recovered_phase_signed_broadcast_and_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        repair: &DurableAuthenticatedWalVoteLifecycleRepair,
+        combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+        expected: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
+    ) -> bool {
+        self.load().is_ok_and(|loaded| {
+            loaded
+                .authenticate_recovered_phase_signed_broadcast_and_sign(verified, repair, combined)
+                .is_ok_and(|observed| observed == *expected)
+        })
+    }
+
     /// Reopen and compare one already-fsynced Decision Fetch row.
     pub(super) fn revalidates_authenticated_wal_decision_fetch(
         &self,
@@ -252,6 +307,20 @@ impl LifecycleLedgerStoreV1 {
             && observed_ordinal == ordinal
             && staged == loaded
             && projection.exactly_matches_ledger_at(&loaded, ordinal)
+    }
+
+    /// Reopen and compare one already-fsynced advanced Fetch plus live Store cut.
+    pub(super) fn revalidates_recovered_decision_fetch_store(
+        &self,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        fetch_ordinal: u128,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+    ) -> bool {
+        self.load().is_ok_and(|loaded| {
+            loaded
+                .authenticate_recovered_decision_fetch_store(fetch, store)
+                .is_ok_and(|(observed_fetch, _)| observed_fetch == fetch_ordinal)
+        })
     }
 
     /// Atomically replace the ledger after validating all durable invariants.
@@ -384,6 +453,71 @@ impl LifecycleLedgerStoreV1 {
             }
         };
         Ok((staged, durable, changed))
+    }
+
+    /// Bind an already-persisted Validate→Sign repair beneath a live Broadcast.
+    ///
+    /// This is a read-only crash-recovery counterpart to the repair fsync
+    /// method. It mints the same frame-bound durable repair receipt only when
+    /// the current canonical store contains the exact Advanced
+    /// Validate→Advanced Sign→live Broadcast lineage. No ledger bytes are
+    /// rewritten and no volatile dispatch identity is reconstructed.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn authenticate_wal_vote_repair_for_signed_broadcast(
+        &self,
+        ledger: &LifecycleLedgerV1,
+        repair: AuthenticatedWalVoteLifecycleRepair,
+    ) -> Result<
+        DurableAuthenticatedWalVoteLifecycleRepair,
+        (LifecycleLedgerError, AuthenticatedWalVoteLifecycleRepair),
+    > {
+        let loaded = match self.load() {
+            Ok(loaded) => loaded,
+            Err(error) => return Err((error, repair)),
+        };
+        if &loaded != ledger {
+            return Err((
+                LifecycleLedgerError::InvalidLedger(
+                    "signed Broadcast recovery observed a stale ledger snapshot".to_owned(),
+                ),
+                repair,
+            ));
+        }
+        let Some((_parent_ordinal, child_ordinal, _broadcast_ordinal)) =
+            loaded.recovered_phase_signed_broadcast_ordinals(&repair)
+        else {
+            return Err((
+                LifecycleLedgerError::InvalidLedger(
+                    "signed Broadcast recovery lost its exact WAL vote lineage".to_owned(),
+                ),
+                repair,
+            ));
+        };
+        let frame = match encode_frame(&loaded, self.max_frame_bytes) {
+            Ok(frame) => frame,
+            Err(error) => return Err((error, repair)),
+        };
+        let receipt = DurableWalVoteLedgerRepairReceipt {
+            store_path: self.path.clone(),
+            context: self.context,
+            parent_key: repair.parent().key,
+            child_key: repair.child().key,
+            edge: repair.edge(),
+            child_ordinal,
+            ledger_frame_hash: LifecycleDigest::new(Hash::new(frame).into()),
+        };
+        match repair.bind_durable_ledger_receipt(receipt) {
+            Ok(durable) if durable.belongs_to_loaded(self, &loaded) => Ok(durable),
+            Ok(_durable) => unreachable!(
+                "new signed Broadcast repair receipt must bind its unchanged loaded frame"
+            ),
+            Err((repair, _receipt)) => Err((
+                LifecycleLedgerError::InvalidLedger(
+                    "signed Broadcast repair receipt did not bind its WAL authority".to_owned(),
+                ),
+                repair,
+            )),
+        }
     }
 }
 
@@ -957,4 +1091,3 @@ pub(crate) fn append_same_owner_foreign_terminal_for_test(
     ledger.high_water = ordinal;
     ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_ok() && store.persist(&ledger).is_ok()
 }
-

@@ -112,10 +112,9 @@ pub(crate) use refinement::{
     LEADER_WIRE_LIFECYCLE_TERMINAL, LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL,
     MAX_CAUSAL_SUCCESSORS_PER_COMMAND, MAX_EFFECTS_PER_STEP, ProductionApplicationTraceProjection,
     ProductionAppliedSuccessorTraceProjection, ProductionDecisionIdentityProjection,
-    ProductionDigest256Projection,
-    ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
-    ProductionDurablePredecessorIdentityProjection, ProductionEffectToCandidateTraceProjection,
-    ProductionHistoricalBodyPipelineTraceProjection,
+    ProductionDecisionRecoveryTraceProjection, ProductionDigest256Projection,
+    ProductionDurableBodyIdentityProjection, ProductionDurablePredecessorIdentityProjection,
+    ProductionEffectToCandidateTraceProjection, ProductionHistoricalBodyPipelineTraceProjection,
     ProductionHistoricalCertificateTraceProjection,
     ProductionInFlightFirstReleaseCarrierProjection,
     ProductionInFlightFirstReleaseDecisionProjection,
@@ -188,11 +187,11 @@ pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: 
 /// advancing this identity fails the source-bound formal preflight.
 pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256:
     ProductionDigest256Projection = ProductionDigest256Projection {
-        word0: 0x9b9b_abea_9e01_8b44,
-        word1: 0xfb73_9f96_b269_0f17,
-        word2: 0xe1f8_d08a_a23a_38f4,
-        word3: 0x2a16_ecef_1e85_8f7d,
-    };
+    word0: 0x9b9b_abea_9e01_8b44,
+    word1: 0xfb73_9f96_b269_0f17,
+    word2: 0xe1f8_d08a_a23a_38f4,
+    word3: 0x2a16_ecef_1e85_8f7d,
+};
 
 /// Explicit classification accepted by the production trace replay reducer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,10 +204,7 @@ pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {
     RepairPostCarrierEvidenceStutter,
 }
 
-fn append_first_release_identity_v1(
-    bytes: &mut Vec<u8>,
-    identity: CanonicalIdentityProjection,
-) {
+fn append_first_release_identity_v1(bytes: &mut Vec<u8>, identity: CanonicalIdentityProjection) {
     bytes.push(identity.domain);
     bytes.push(identity.kind);
     bytes.extend_from_slice(&identity.word0.to_be_bytes());
@@ -307,9 +303,7 @@ fn production_in_flight_first_release_transition_witness_v1(
         action: projection.action,
         actor: projection.actor,
         target: projection.target,
-        before_state_digest: production_in_flight_first_release_state_digest_v1(
-            projection.before,
-        ),
+        before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before),
         after_state_digest: production_in_flight_first_release_state_digest_v1(projection.after),
         source_identity: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256,
     }

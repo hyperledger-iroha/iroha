@@ -813,6 +813,172 @@
             }
         }
 
+        struct RecoveredDecisionStageProjectionFixture {
+            context: LifecycleContext,
+            live_fetch: LifecycleLedgerRecordV1,
+            lineage: RecoveredDecisionApplyCandidateLineageV1,
+            collision_validate: LifecycleLedgerRecordV1,
+        }
+
+        impl RecoveredDecisionApplyStageProjectionV1 for RecoveredDecisionStageProjectionFixture {
+            fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+                self.context == context
+            }
+
+            fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+                record.key() == self.live_fetch.key()
+            }
+
+            fn exactly_matches_live_fetch(&self, fetch: &LifecycleLedgerRecordV1) -> bool {
+                fetch == &self.live_fetch
+            }
+
+            fn exactly_matches_advanced_fetch(
+                &self,
+                fetch: &LifecycleLedgerRecordV1,
+                store_ordinal: u128,
+            ) -> bool {
+                fetch.key() == self.live_fetch.key()
+                    && fetch.owner() == self.live_fetch.owner()
+                    && fetch.ordinal() == self.live_fetch.ordinal()
+                    && fetch.work_class() == self.live_fetch.work_class()
+                    && fetch.stage() == self.live_fetch.stage()
+                    && fetch.terminal() == Some(Some(TerminalOutcome::Advanced))
+                    && fetch.reconstruction_source() == self.live_fetch.reconstruction_source()
+                    && fetch.durable_payload() == self.live_fetch.durable_payload()
+                    && fetch.continuation()
+                        == Some(DurableContinuation::successor(
+                            DurableContinuationEdge::FetchToStore,
+                            store_ordinal,
+                        ))
+                    && fetch.replay_authority == self.live_fetch.replay_authority
+            }
+
+            fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
+                &self.lineage
+            }
+        }
+
+        fn recovered_decision_store_crash_prefix_fixture(
+            fixture: &RecoveryFixture,
+        ) -> (LifecycleLedgerV1, RecoveredDecisionStageProjectionFixture) {
+            let context = fixture.lifecycle_context();
+            let certified_sources = fixture
+                .verified
+                .context()
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect();
+            let ([fetch_case, store_case, validate_case, apply_case], _, _) =
+                super::super::super::replay_authority::exact_recovered_decision_terminal_family_fixture(
+                    context,
+                    certified_sources,
+                    0xD7,
+                );
+            let causal_root = CausalRoot::new(LifecycleDigest::new(
+                *Hash::new(b"recovered Decision Store crash-prefix owner").as_ref(),
+            ));
+            let owner = OwnerId::new(causal_root, 1);
+            let live_fetch = LifecycleLedgerRecordV1::new(
+                fetch_case.key,
+                owner,
+                1,
+                fetch_case.work_class,
+                fetch_case.stage,
+                None,
+                causal_root.digest(),
+                fetch_case.payload,
+                fetch_case.authority.clone(),
+                DurableContinuation::None,
+            )
+            .expect("construct live recovered Decision Fetch fixture");
+            let advanced_fetch = LifecycleLedgerRecordV1::new(
+                fetch_case.key,
+                owner,
+                1,
+                fetch_case.work_class,
+                fetch_case.stage,
+                Some(TerminalOutcome::Advanced),
+                causal_root.digest(),
+                fetch_case.payload,
+                fetch_case.authority.clone(),
+                DurableContinuation::successor(DurableContinuationEdge::FetchToStore, 2),
+            )
+            .expect("construct advanced recovered Decision Fetch fixture");
+            let live_store = LifecycleLedgerRecordV1::new(
+                store_case.key,
+                owner,
+                2,
+                store_case.work_class,
+                store_case.stage,
+                None,
+                causal_root.digest(),
+                store_case.payload,
+                store_case.authority.clone(),
+                DurableContinuation::None,
+            )
+            .expect("construct recovered Decision Store crash cut");
+            let candidate = |case: &super::super::super::replay_authority::ReplayCase| {
+                CandidateAdmission::new(
+                    case.key,
+                    causal_root,
+                    case.work_class,
+                    case.stage,
+                    InitialLifecycleState::Ready,
+                    causal_root.digest(),
+                    case.payload,
+                    case.authority.clone(),
+                    super::super::super::PhysicalGeometry::new([], []),
+                    None,
+                )
+            };
+            let lineage = RecoveredDecisionApplyCandidateLineageV1::from_candidates_for_test(
+                fetch_case.authority,
+                candidate(&store_case),
+                candidate(&validate_case),
+                candidate(&apply_case),
+            );
+            let collision_root = CausalRoot::new(LifecycleDigest::new(
+                *Hash::new(b"foreign recovered Decision Validate collision owner").as_ref(),
+            ));
+            let collision_owner = OwnerId::new(collision_root, 3);
+            let collision_validate = LifecycleLedgerRecordV1::new(
+                validate_case.key,
+                collision_owner,
+                3,
+                validate_case.work_class,
+                validate_case.stage,
+                None,
+                collision_root.digest(),
+                validate_case.payload,
+                validate_case.authority,
+                DurableContinuation::None,
+            )
+            .expect("construct exact-key recovered Decision Validate collision");
+            let unrelated_root = CausalRoot::new(LifecycleDigest::new(
+                *Hash::new(b"unrelated row after recovered Decision Store").as_ref(),
+            ));
+            let unrelated =
+                unrelated_live_record(context, OwnerId::new(unrelated_root, 3), 3, 0xD8);
+            let ledger = LifecycleLedgerV1::new(
+                context,
+                3,
+                vec![advanced_fetch, live_store, unrelated],
+                BTreeMap::new(),
+            )
+            .expect("construct exact Store crash prefix beside unrelated history");
+            (
+                ledger,
+                RecoveredDecisionStageProjectionFixture {
+                    context,
+                    live_fetch,
+                    lineage,
+                    collision_validate,
+                },
+            )
+        }
+
         fn terminal_decision_chain_fixture(
             fixture: &RecoveryFixture,
         ) -> (LifecycleLedgerV1, TerminalDecisionProjectionFixture) {
@@ -1112,7 +1278,7 @@
                 serve_payloads,
                 body_store: Some(body_store),
                 body_store_identity: None,
-                kura_binding: Some(RecoveredLifecycleOwnerKuraBindingV1::for_test(kura)),
+                kura_binding: Some(RecoveredLifecycleOwnerKuraBindingV1::for_test(kura, None)),
                 apply_service: None,
                 adapter_startup: Some(ProductionLifecycleAdapterStartupV1::fixture_for_test()),
             }
@@ -1155,6 +1321,62 @@
                     .expect("authenticate exact terminal recovered Decision chain"),
                 4
             );
+        }
+
+        #[test]
+        fn recovered_decision_store_crash_prefix_restarts_once_then_stutters() {
+            let fixture = RecoveryFixture::new("decision-store-restart-stutter", 0x33);
+            let (prefix, projection) = recovered_decision_store_crash_prefix_fixture(&fixture);
+
+            let (successor, apply_ordinal, changed) = prefix
+                .stage_recovered_decision_apply_projection(&projection)
+                .expect("advance exact Fetch-to-Store crash prefix");
+            assert!(changed);
+            assert_eq!(apply_ordinal, 5);
+            assert_eq!(successor.high_water(), 5);
+            assert_eq!(successor.records().len(), 5);
+            let store = &successor.records()[1];
+            assert_eq!(store.ordinal(), 2);
+            assert_eq!(
+                store.continuation(),
+                Some(DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    4,
+                ))
+            );
+
+            let (stutter, stutter_apply, stutter_changed) = successor
+                .stage_recovered_decision_apply_projection(&projection)
+                .expect("coalesce the already complete recovered Decision chain");
+            assert!(!stutter_changed);
+            assert_eq!(stutter_apply, apply_ordinal);
+            assert_eq!(stutter, successor);
+        }
+
+        #[test]
+        fn recovered_decision_store_restart_rejects_an_exact_child_key_collision() {
+            let fixture = RecoveryFixture::new("decision-store-key-collision", 0x37);
+            let (prefix, projection) = recovered_decision_store_crash_prefix_fixture(&fixture);
+            let collision = LifecycleLedgerV1::new(
+                prefix.context(),
+                3,
+                vec![
+                    prefix.records()[0].clone(),
+                    prefix.records()[1].clone(),
+                    projection.collision_validate.clone(),
+                ],
+                BTreeMap::new(),
+            )
+            .expect("construct structurally valid foreign Validate-key collision");
+
+            assert!(
+                collision
+                    .stage_recovered_decision_apply_projection(&projection)
+                    .is_err(),
+                "restart must not alias the exact recovered Validate key to another owner"
+            );
+            assert_eq!(collision.high_water(), 3);
+            assert_eq!(collision.records().len(), 3);
         }
 
         #[test]
@@ -1844,4 +2066,3 @@
                 "this prerequisite must not masquerade as exhaustive retirement"
             );
         }
-

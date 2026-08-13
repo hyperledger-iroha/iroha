@@ -541,7 +541,7 @@
 
         async fn probe(
             Extension(_verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
-            crate::utils::extractors::NoritoJson(_body): crate::utils::extractors::NoritoJson<
+            crate::utils::extractors::JsonOnly(_body): crate::utils::extractors::JsonOnly<
                 norito::json::Value,
             >,
         ) -> StatusCode {

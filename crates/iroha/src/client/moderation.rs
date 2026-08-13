@@ -49,48 +49,19 @@ pub(super) fn validate_transaction_route(
     let [instruction] = instructions.as_ref() else {
         return Err(route_mismatch(route));
     };
-    let matches_route = match route {
-        SorafsModerationCommandRoute::SubmitAppeal => instruction
-            .as_any()
-            .downcast_ref::<SubmitSorafsModerationAppeal>()
-            .is_some(),
-        SorafsModerationCommandRoute::RegisterEligibility => instruction
-            .as_any()
-            .downcast_ref::<RegisterSorafsModerationJurorEligibility>()
-            .is_some(),
-        SorafsModerationCommandRoute::FinalizeSortition => instruction
-            .as_any()
-            .downcast_ref::<FinalizeSorafsModerationSortition>()
-            .is_some(),
-        SorafsModerationCommandRoute::AcceptAssignment => instruction
-            .as_any()
-            .downcast_ref::<AcceptSorafsModerationJurorAssignment>()
-            .is_some(),
-        SorafsModerationCommandRoute::ActivateCase => instruction
-            .as_any()
-            .downcast_ref::<ActivateSorafsModerationCase>()
-            .is_some(),
-        SorafsModerationCommandRoute::SubmitCommit => instruction
-            .as_any()
-            .downcast_ref::<SubmitSorafsModerationCommit>()
-            .is_some(),
-        SorafsModerationCommandRoute::RaiseChallenge => instruction
-            .as_any()
-            .downcast_ref::<RaiseSorafsModerationChallenge>()
-            .is_some(),
-        SorafsModerationCommandRoute::ResolveChallenge => instruction
-            .as_any()
-            .downcast_ref::<ResolveSorafsModerationChallenge>()
-            .is_some(),
-        SorafsModerationCommandRoute::SubmitReveal => instruction
-            .as_any()
-            .downcast_ref::<SubmitSorafsModerationReveal>()
-            .is_some(),
-        SorafsModerationCommandRoute::FinalizeCase => instruction
-            .as_any()
-            .downcast_ref::<FinalizeSorafsModerationCase>()
-            .is_some(),
-    };
+    let matches_route = super::repair::instruction_is!(instruction, route, {
+        SorafsModerationCommandRoute::SubmitAppeal => SubmitSorafsModerationAppeal,
+        SorafsModerationCommandRoute::RegisterEligibility => RegisterSorafsModerationJurorEligibility,
+        SorafsModerationCommandRoute::FinalizeSortition => FinalizeSorafsModerationSortition,
+        SorafsModerationCommandRoute::AcceptAssignment => AcceptSorafsModerationJurorAssignment,
+        SorafsModerationCommandRoute::ActivateCase => ActivateSorafsModerationCase,
+        SorafsModerationCommandRoute::SubmitCommit => SubmitSorafsModerationCommit,
+        SorafsModerationCommandRoute::RaiseChallenge => RaiseSorafsModerationChallenge,
+        SorafsModerationCommandRoute::ResolveChallenge => ResolveSorafsModerationChallenge,
+        SorafsModerationCommandRoute::SubmitReveal => SubmitSorafsModerationReveal,
+        SorafsModerationCommandRoute::FinalizeCase => FinalizeSorafsModerationCase,
+        }
+    );
     if !matches_route {
         return Err(route_mismatch(route));
     }
@@ -99,7 +70,7 @@ pub(super) fn validate_transaction_route(
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::num::NonZeroU64;
 
     use iroha_data_model::{
         Level,
@@ -111,15 +82,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::{
-        client::{
-            SORAFS_MODERATION_TRANSACTION_TTL,
-            evidence_http_tests::{
-                SnapshotStore, base_url, client_with_base_url, empty_response, respond_with,
-                with_mock_http,
-            },
-        },
-        http::StatusCode,
+    use crate::client::{
+        SORAFS_MODERATION_TRANSACTION_TTL,
+        evidence_http_tests::{base_url, client_with_base_url},
     };
 
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
@@ -144,25 +109,12 @@ mod tests {
         route: SorafsModerationCommandRoute,
         transaction: &SignedTransaction,
     ) {
-        let snapshots: SnapshotStore = Arc::default();
-        let error = with_mock_http(
-            respond_with(&snapshots, empty_response(StatusCode::ACCEPTED)),
-            || {
-                client
-                    .post_sorafs_moderation_transaction(route, transaction)
-                    .expect_err("invalid moderation route transaction must fail locally")
-            },
-        );
-        assert_eq!(
-            error.to_string(),
+        super::super::repair::route_test_support::assert_rejected_before_http(
             format!(
                 "SoraFS moderation route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
-            )
-        );
-        assert!(
-            snapshots.lock().expect("snapshot lock").is_empty(),
-            "route validation must run before capability lookup or command HTTP"
+            ),
+            || client.post_sorafs_moderation_transaction(route, transaction),
         );
     }
 

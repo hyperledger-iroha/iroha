@@ -117,11 +117,12 @@ use super::{
     v2::{
         AdapterEffect, AdapterError, PreparedRecoveredDecisionApplyAdapterCompletionV1,
         RecoveredDecisionApplyAdapterCompletionAuthorityV1,
-        RecoveredDecisionApplyAdapterFinalityV1, SignRequest,
+        RecoveredDecisionApplyAdapterFinalityV1, RecoveredLifecycleNextVoteBodyAuthorityV1,
+        RecoveredLifecycleNextVoteBodyLookupV1, SignRequest,
     },
     v2_body_store::{
         BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt, V2BodyStore,
-        ValidatedBodyReceipt,
+        V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
     },
     v2_chunks::{V2ChunkError, encode_payload},
     v2_first_release_recovery::{
@@ -149,6 +150,7 @@ use super::{
         CertifiedBodyResponseClaimPreflight, OutstandingCertifiedBodyRequests, V2TransportError,
         authenticate_certified_body_request_with_live_adapter, authenticate_payload_chunk,
     },
+    v2_worker::RecoveredDecisionFetchRequestOwnerV1,
 };
 use crate::kura::KuraV2CommitReceipt;
 
@@ -1788,6 +1790,209 @@ impl From<V2TransportError> for EffectTransportError {
     }
 }
 
+/// Closed failure while reserving a dedicated recovered request owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum RecoveredDecisionFetchRequestRegistrationErrorV1 {
+    /// The executor is closed or belongs to another height/service requester.
+    ForeignExecutor,
+    /// Existing ordinary or recovered request indexes are not one exact census.
+    InvalidExistingCensus,
+    /// Another ordinary or recovered owner has the same exact or logical request.
+    ConflictingOwner,
+    /// The one recovered Decision Fetch owner position is already occupied.
+    Occupied,
+}
+
+/// Exclusive vacant registration retained before the coordinator claim.
+///
+/// Dropping the reservation performs no mutation. Its final commit consumes
+/// the registry's claimed-carrier arming token and installs both dedicated
+/// indexes in one assertion-only tail.
+#[must_use = "dropping a recovered request reservation leaves executor indexes unchanged"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<'executor> {
+    executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+    owner: Option<RecoveredDecisionFetchRequestOwnerV1>,
+}
+
+impl PreparedRecoveredDecisionFetchRequestRegistrationV1<'_> {
+    /// Return the reserved exact lifecycle key.
+    pub(in crate::sumeragi) fn dispatch_key(
+        &self,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        self.owner
+            .as_ref()
+            .expect("prepared recovered request retains its owner")
+            .dispatch_key()
+    }
+
+    /// Arm the closed registry carrier and install the request owner indexes.
+    pub(in crate::sumeragi) fn commit(
+        mut self,
+        prepared_registry: super::v2_lifecycle_coordinator::PreparedRecoveredDecisionFetchDispatchV1<'_>,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        let owner = self
+            .owner
+            .take()
+            .expect("prepared recovered request retains its exact owner");
+        let key = owner.dispatch_key();
+        assert_eq!(prepared_registry.dispatch_key(), key);
+        let request_hash = owner.request_hash();
+        assert!(!self.executor.certified_work.contains_key(&request_hash));
+        assert!(!self.executor.outstanding_requests.contains(request_hash));
+        assert!(!owner.conflicts_with_ordinary_tracker(&self.executor.outstanding_requests));
+        assert!(!self.executor.recovered_decision_fetches.contains_key(&key));
+        assert!(
+            !self
+                .executor
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+        );
+        assert_eq!(prepared_registry.commit_for_executor(), key);
+        let previous_owner = self.executor.recovered_decision_fetches.insert(key, owner);
+        assert!(previous_owner.is_none());
+        let previous_reverse = self
+            .executor
+            .recovered_decision_fetch_by_request
+            .insert(request_hash, key);
+        assert!(previous_reverse.is_none());
+        key
+    }
+}
+
+/// Exact authenticated response candidate owned by one recovered Decision Fetch.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "the recovered response candidate still requires dedicated persistence"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchResponseCandidateV1 {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    authenticated_responder: PeerId,
+    authenticated_response: AuthenticatedCertifiedBodyResponse,
+    fetch_tag: EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    canonical_manifest_hash: HashOf<wire::PayloadManifest>,
+    body_payload_hash: Hash,
+    claim_preflight: CertifiedBodyResponseClaimPreflight,
+}
+
+/// Closed reason a revalidated recovered response could not reserve its exact claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum RecoveredDecisionFetchResponseClaimErrorV1 {
+    /// The dedicated request/reverse indexes no longer form one exact census.
+    InvalidOwnerIndex,
+    /// The request owner or its height context no longer matches the task.
+    ForeignOwner,
+    /// Another physical response acquired the request family first.
+    ConflictingClaim,
+}
+
+/// Exclusive response-family reservation held until the dedicated queue tail.
+#[must_use = "dropping the reservation leaves the recovered response unclaimed"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchResponseClaimV1<'executor> {
+    executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    preflight: CertifiedBodyResponseClaimPreflight,
+}
+
+/// Read-only exact retirement plan for one recovered request/response owner.
+///
+/// It contains only copyable dedicated index identities. The authenticated
+/// request and response remain private in the installed owner until the
+/// post-fsync assertion tail removes both indexes together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "recovered Decision Fetch request owner has not been retired"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchOwnerRetirementV1 {
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+}
+
+impl PreparedRecoveredDecisionFetchResponseClaimV1<'_> {
+    /// Atomically install/coalesce the exact claim and publish its preflighted
+    /// persistence command. The queue commit is assertion-only while its
+    /// mutex and fail-stop operation remain held.
+    pub(in crate::sumeragi) fn commit_with_queue(
+        self,
+        queue: super::v2_worker::LifecycleIoCapacityReservation<'_>,
+        task: super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) {
+        let Self {
+            executor,
+            key,
+            response_hash,
+            preflight,
+        } = self;
+        assert_eq!(task.dispatch_key(), key);
+        assert_eq!(task.response_hash(), response_hash);
+        assert_eq!(task.claim_preflight(), preflight);
+        let owner = executor
+            .recovered_decision_fetches
+            .get_mut(&key)
+            .expect("exclusive recovered response reservation retains its request owner");
+        assert!(owner.matches_response_claim_preflight(response_hash, preflight));
+        assert!(owner.commit_exact_response_claim(response_hash));
+        queue.commit_recovered_decision_fetch_body_persistence(task);
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredDecisionFetchResponseCandidateV1 {
+    /// Return the dedicated lifecycle owner key.
+    pub(in crate::sumeragi) const fn dispatch_key(
+        &self,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        self.key
+    }
+
+    /// Hash of the exact signed request family.
+    pub(in crate::sumeragi) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.request_hash
+    }
+
+    /// Hash of the authenticated physical response.
+    pub(in crate::sumeragi) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        self.response_hash
+    }
+
+    /// Return the recovered Fetch round.
+    pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
+        self.round
+    }
+
+    /// Return the recovered Fetch subject.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Return the exact response-family claim state observed at authentication.
+    pub(in crate::sumeragi) const fn claim_preflight(&self) -> CertifiedBodyResponseClaimPreflight {
+        self.claim_preflight
+    }
+
+    /// Recheck the physical response and authenticated outer responder.
+    pub(in crate::sumeragi) fn matches_authenticated_response(
+        &self,
+        response: &wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+    ) -> bool {
+        self.response_hash == HashOf::new(response)
+            && self.authenticated_responder == *authenticated_responder
+            && self.authenticated_response.response() == response
+    }
+
+    /// Consume the unique authenticated response into dedicated persistence.
+    pub(in crate::sumeragi) fn into_authenticated_response(
+        self: Box<Self>,
+    ) -> AuthenticatedCertifiedBodyResponse {
+        self.authenticated_response
+    }
+}
+
 /// A certified response which cannot own claimed-response selector priority.
 #[derive(Debug, PartialEq, Eq)]
 #[must_use]
@@ -1942,6 +2147,8 @@ pub(crate) enum CertifiedResponsePriorityProbe {
     DefinitelyNonPriority(CertifiedResponsePriorityNonPriority),
     /// Exact authentication succeeded; transactional admission is still required.
     PreflightRequired(Box<CertifiedResponsePriorityCandidate>),
+    /// A recovered Decision Fetch owns this family outside ordinary indexes.
+    RecoveredPreflightRequired(Box<RecoveredDecisionFetchResponseCandidateV1>),
 }
 
 #[derive(Clone, Debug)]
@@ -3587,9 +3794,15 @@ impl EffectRuntime for SerializedV2Runtime {
 }
 
 /// One-owner executor which binds runtime effects to production adapters.
+///
+/// The body-store instance marker is captured before the exact store moves to
+/// the production worker. It is comparison-only and lets lifecycle services
+/// prove that a body lookup is resolved by the same launched store instance,
+/// rather than another open of the same path or context.
 pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     runtime: R,
     output_guard: Arc<ConsensusOutputGuard>,
+    lifecycle_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
     recovered_bodies: BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
         (wire::PayloadManifest, DurableBodyReceipt),
@@ -3618,6 +3831,17 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     body_pipeline_owners: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), BodyPipelineOwner>,
     certified_work: BTreeMap<HashOf<wire::CertifiedBodyRequest>, EffectWorkId>,
     outstanding_requests: OutstandingCertifiedBodyRequests,
+    /// Lifecycle-owned recovered Decision Fetch requests never enter ordinary
+    /// effect work or tracker indexes.
+    recovered_decision_fetches: BTreeMap<
+        super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        RecoveredDecisionFetchRequestOwnerV1,
+    >,
+    /// Exact signed-request reverse edge for the dedicated recovered owner.
+    recovered_decision_fetch_by_request: BTreeMap<
+        HashOf<wire::CertifiedBodyRequest>,
+        super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    >,
     retained_certified_body_response: Option<RetainedCertifiedBodyResponse>,
     ready_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ReadyBody>,
     /// Last reducer incarnation whose executor-side view transition completed.
@@ -3642,7 +3866,162 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     fatal_reason: Option<String>,
 }
 
+/// Executor-private one-shot permit for minting an exact next-Vote body owner.
+///
+/// The opaque adapter authority accepts this permit only after the executor
+/// has rejoined its exact launched body-store marker and all three retained
+/// body catalogs. Sibling modules can name but cannot construct the permit.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyAuthorityMintPermitLinearityV1,
+        }
+    }
+}
+
+/// Executor-private one-shot permit for binding one preview to its store owner.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyPreviewBindPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1,
+}
+
+struct RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyPreviewBindPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyPreviewBindPermitLinearityV1,
+        }
+    }
+}
+
+fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
+    lookup: RecoveredLifecycleNextVoteBodyLookupV1,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+    recovered_bodies: &BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        (wire::PayloadManifest, DurableBodyReceipt),
+    >,
+    durable_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
+    validated_bodies: &BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+) -> Result<RecoveredLifecycleNextVoteBodyAuthorityV1, EffectExecutorError> {
+    let mut exact = validated_bodies
+        .values()
+        .filter(|validated| lookup.matches_validated_body(validated));
+    let validated = exact.next().cloned().ok_or_else(|| {
+        EffectExecutorError::BodyStore(
+            "recovered next-Vote body lookup has no exact validated receipt".to_owned(),
+        )
+    })?;
+    if exact.next().is_some() {
+        return Err(EffectExecutorError::BodyStore(
+            "recovered next-Vote body lookup matched multiple validated receipts".to_owned(),
+        ));
+    }
+    let durable = validated.durable();
+    let key = (durable.round(), durable.subject());
+    let recovered = recovered_bodies.get(&key);
+    if validated_bodies.get(&key) != Some(&validated)
+        || durable_bodies.get(&key) != Some(durable)
+        || recovered.is_none_or(|(manifest, recovered_durable)| {
+            recovered_durable != durable
+                || HashOf::new(manifest) != durable.manifest_hash()
+                || !lookup.matches_recovered_body(manifest, recovered_durable)
+        })
+    {
+        return Err(EffectExecutorError::BodyStore(
+            "recovered next-Vote body lookup changed its exact body catalogs".to_owned(),
+        ));
+    }
+    RecoveredLifecycleNextVoteBodyAuthorityV1::from_exact_executor(
+        RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new(),
+        lookup,
+        validated,
+        body_store_identity,
+    )
+    .ok_or_else(|| {
+        EffectExecutorError::Contract(
+            "recovered next-Vote body authority failed its final exact join".to_owned(),
+        )
+    })
+}
+
 impl V2EffectExecutor<SerializedV2Runtime> {
+    /// Reserve the sole dedicated recovered Decision Fetch owner position.
+    ///
+    /// Exact hash, logical request identity, body coordinates, and both ordinary
+    /// and recovered reverse indexes are checked while the executor is
+    /// exclusively borrowed. No map changes until the returned reservation
+    /// consumes the claimed registry carrier.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(
+        &mut self,
+        owner: RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
+        RecoveredDecisionFetchRequestRegistrationErrorV1,
+    > {
+        if self.output_guard.restart_required()
+            || self.fatal_reason.is_some()
+            || !owner.validates_exact_executor_context(&self.context, &self.requester)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ForeignExecutor);
+        }
+        if self.validated_certified_request_presence().is_err() {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::InvalidExistingCensus);
+        }
+        let key = owner.dispatch_key();
+        let request_hash = owner.request_hash();
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
+        }
+        if !self.recovered_decision_fetches.is_empty()
+            || self
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
+        }
+        if self.certified_work.contains_key(&request_hash)
+            || self.outstanding_requests.contains(request_hash)
+            || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
+            || self.pending_fetches.values().any(|pending| {
+                owner.matches_body_coordinates(pending.task.round, pending.task.subject)
+            })
+            || self.recovered_decision_fetches.values().any(|existing| {
+                let projection = owner.candidate_projection();
+                existing.matches_body_coordinates(projection.round, projection.subject)
+            })
+            || self
+                .recovered_decision_fetch_by_request
+                .values()
+                .any(|existing| *existing == key)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
+        }
+        Ok(PreparedRecoveredDecisionFetchRequestRegistrationV1 {
+            executor: self,
+            owner: Some(owner),
+        })
+    }
+
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -3659,6 +4038,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         config: EffectQueueConfig,
     ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
         let executor_output_guard = Arc::clone(&output_guard);
+        let lifecycle_body_store_identity = body_store.instance_identity();
         let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
             EffectExecutorError::FailClosed(
                 "process restart is required after a fatal consensus failure".to_owned(),
@@ -3700,9 +4080,154 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             executor_output_guard,
             config,
         )?;
+        executor.lifecycle_body_store_identity = Some(lifecycle_body_store_identity);
         executor.install_recovered_validation_catalog(recovered_validations)?;
         construction.complete();
         Ok((executor, body_store))
+    }
+
+    /// Preview one recovered signature and authenticate its next body in one borrow.
+    ///
+    /// The runtime borrow retained by the adapter preview is disjoint from the
+    /// body catalogs below. This single executor method therefore avoids a
+    /// second preview and never requires a caller to reborrow the whole
+    /// executor while the first preview is live.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body(
+        &mut self,
+        service: super::v2_worker::RecoveredLifecycleNextVoteBodyExecutorPermitV1,
+        completion: super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<
+        (
+            super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>,
+            RecoveredLifecycleNextVoteBodyAuthorityV1,
+        ),
+        EffectExecutorError,
+    > {
+        let Self {
+            runtime,
+            output_guard,
+            lifecycle_body_store_identity,
+            recovered_bodies,
+            context,
+            requester,
+            durable_bodies,
+            validated_bodies,
+            fatal_reason,
+            ..
+        } = self;
+        if output_guard.restart_required() || fatal_reason.is_some() {
+            return Err(EffectExecutorError::Contract(
+                "recovered next-Vote body lookup belongs to a closed executor".to_owned(),
+            ));
+        }
+        let executor_body_store_identity =
+            lifecycle_body_store_identity.as_ref().ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "recovered next-Vote body lookup has no launched body-store owner".to_owned(),
+                )
+            })?;
+        let body_store_identity = service
+            .consume_for_executor(
+                context,
+                requester,
+                output_guard,
+                executor_body_store_identity,
+            )
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "recovered next-Vote body service permit changed its executor owner".to_owned(),
+                )
+            })?;
+        let mut preview = runtime
+            .prepare_recovered_lifecycle_sign_completion(completion)
+            .map_err(|error| EffectExecutorError::Runtime(error.to_string()))?;
+        let lookup = match preview.shape() {
+            super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign => preview
+                .project_broadcast_and_sign_body_lookup(
+                    RecoveredLifecycleNextVoteBodyPreviewBindPermitV1::new(),
+                    body_store_identity.clone(),
+                    Arc::clone(output_guard),
+                ),
+            super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal => preview
+                .prepare_proposal_prepare_wal_body_lookup(
+                    RecoveredLifecycleNextVoteBodyPreviewBindPermitV1::new(),
+                    body_store_identity.clone(),
+                    Arc::clone(output_guard),
+                ),
+            super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast => {
+                Err(super::v2::AdapterError::RecoveredLifecycleSignCompletionMismatch)
+            }
+        }
+        .map_err(|error| EffectExecutorError::Runtime(error.to_string()))?;
+        if !lookup.matches_height_context(context) {
+            return Err(EffectExecutorError::Contract(
+                "recovered next-Vote body lookup changed its height context".to_owned(),
+            ));
+        }
+        let body = authenticate_recovered_lifecycle_next_vote_body_catalogs(
+            lookup,
+            body_store_identity,
+            recovered_bodies,
+            durable_bodies,
+            validated_bodies,
+        )?;
+        Ok((preview, body))
+    }
+
+    /// Reserve exclusive mutation of the exact recovered response-family claim.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_response_claim(
+        &mut self,
+        task: &super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchResponseClaimV1<'_>,
+        RecoveredDecisionFetchResponseClaimErrorV1,
+    > {
+        let key = task.dispatch_key();
+        let response_hash = task.response_hash();
+        let preflight = task.claim_preflight();
+        if !self.recovered_decision_fetch_request_index_is_exact() {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::InvalidOwnerIndex);
+        }
+        let Some(owner) = self.recovered_decision_fetches.get(&key) else {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::ForeignOwner);
+        };
+        if !key.matches_height_context(&self.context)
+            || !owner.validates_exact_executor_context(&self.context, &self.requester)
+        {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::ForeignOwner);
+        }
+        if !owner.matches_response_claim_preflight(response_hash, preflight) {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::ConflictingClaim);
+        }
+        Ok(PreparedRecoveredDecisionFetchResponseClaimV1 {
+            executor: self,
+            key,
+            response_hash,
+            preflight,
+        })
+    }
+
+    /// Preview the recovered Store reducer transition through the dedicated runtime seam.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_store_adapter(
+        &mut self,
+        authority: super::v2_lifecycle_coordinator::RecoveredDecisionFetchStoreAdapterAuthorityV1,
+    ) -> Result<super::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime
+            .prepare_recovered_decision_fetch_store(authority)
+    }
+
+    /// Preview one exact lifecycle-owned signature on the serialized adapter.
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
+        &mut self,
+        authority: super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<
+        super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>,
+        super::v2::AdapterError,
+    > {
+        self.runtime
+            .prepare_recovered_lifecycle_sign_completion(authority)
     }
 
     /// Publish executor-retained owners and compare the retained-response
@@ -3755,6 +4280,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     ) -> Result<PreparedRecoveredDecisionApplyAdapterCompletionV1<'_>, EffectExecutorError> {
         self.ensure_open()?;
         if self.pending_work() != 0
+            || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
             || self.retained_effect_batch.is_some()
             || self.parked_effect_batch.is_some()
             || self.retained_certified_body_response.is_some()
@@ -3781,6 +4307,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         assert!(
             self.finality_completion.is_none()
                 && self.pending_work() == 0
+                && self.recovered_decision_fetch_request_index_is_exact_and_empty()
                 && dispatch_key.matches_height_context(&self.context)
                 && artifact.height_context == self.context
                 && artifact.subject == receipt.subject()
@@ -4088,6 +4615,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
             && self.retained_certified_body_response.is_none()
+            && self.recovered_decision_fetch_request_index_is_exact_and_empty()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
     }
@@ -4118,6 +4646,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Borrow the immutable context governing this executor height.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
+    }
+
+    /// Rejoin one launched service to this executor's exact body-store owner.
+    ///
+    /// Context/root equality is insufficient: a reopened store at the same
+    /// path receives a different instance marker. The service must also share
+    /// this executor's requester identity and canonical fail-stop output gate.
+    pub(in crate::sumeragi) fn matches_recovered_lifecycle_body_service(
+        &self,
+        context: &wire::HeightContext,
+        requester: &PeerId,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> bool {
+        self.context == *context
+            && self.requester == *requester
+            && Arc::ptr_eq(&self.output_guard, output_guard)
+            && self
+                .lifecycle_body_store_identity
+                .as_ref()
+                .is_some_and(|executor_identity| {
+                    executor_identity.same_instance(body_store_identity)
+                })
     }
 
     /// Validate that this executor can mint one ordinary ingress selector cut.
@@ -4152,6 +4703,48 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(EffectTransportError::FailClosed(
                 "certified request tracker indexes are not an exact bounded cut".to_owned(),
             ));
+        }
+        if self.recovered_decision_fetches.len() != self.recovered_decision_fetch_by_request.len()
+            || self.recovered_decision_fetches.len() > 1
+            || self
+                .outstanding_requests
+                .len()
+                .checked_add(self.recovered_decision_fetches.len())
+                .is_none_or(|owned| owned > self.config.max_certified_requests)
+        {
+            return Err(EffectTransportError::FailClosed(
+                "recovered Decision Fetch indexes are not one exact bounded cut".to_owned(),
+            ));
+        }
+        let mut recovered_hashes = BTreeSet::new();
+        for (key, owner) in &self.recovered_decision_fetches {
+            let request_hash = owner.request_hash();
+            if owner.dispatch_key() != *key
+                || !owner.validates_exact_executor_context(&self.context, &self.requester)
+                || self.recovered_decision_fetch_by_request.get(&request_hash) != Some(key)
+                || !recovered_hashes.insert(request_hash)
+                || self.certified_work.contains_key(&request_hash)
+                || self.outstanding_requests.contains(request_hash)
+                || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
+                || self.pending_fetches.values().any(|pending| {
+                    owner.matches_body_coordinates(pending.task.round, pending.task.subject)
+                })
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(request_hash),
+                ));
+            }
+        }
+        for (request_hash, key) in &self.recovered_decision_fetch_by_request {
+            if self
+                .recovered_decision_fetches
+                .get(key)
+                .is_none_or(|owner| owner.request_hash() != *request_hash)
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(*request_hash),
+                ));
+            }
         }
         let mut pending_hashes = BTreeSet::new();
         for (work_id, pending) in &self.pending_fetches {
@@ -4219,7 +4812,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "certified request indexes have different exact owner counts".to_owned(),
             ));
         }
-        Ok(!pending_hashes.is_empty())
+        Ok(!pending_hashes.is_empty() || !recovered_hashes.is_empty())
     }
 
     /// Freeze the receiver-local physical predecessor cut used by any producer
@@ -4426,6 +5019,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(Self {
             runtime,
             output_guard,
+            lifecycle_body_store_identity: None,
             recovered_bodies,
             context,
             requester,
@@ -4445,6 +5039,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             body_pipeline_owners: BTreeMap::new(),
             certified_work: BTreeMap::new(),
             outstanding_requests,
+            recovered_decision_fetches: BTreeMap::new(),
+            recovered_decision_fetch_by_request: BTreeMap::new(),
             retained_certified_body_response: None,
             ready_bodies: BTreeMap::new(),
             reconciled_tag,
@@ -8211,6 +8807,87 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.validate_lifecycle_ingress_selector_authority()?;
 
         let request_hash = response.request_hash;
+        if let Some(key) = self
+            .recovered_decision_fetch_by_request
+            .get(&request_hash)
+            .copied()
+        {
+            if self.certified_work.contains_key(&request_hash)
+                || self.outstanding_requests.contains(request_hash)
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(request_hash),
+                ));
+            }
+            let owner = self.recovered_decision_fetches.get(&key).ok_or(
+                EffectTransportError::Authentication(V2TransportError::InconsistentRequestIndex(
+                    request_hash,
+                )),
+            )?;
+            if owner.request_hash() != request_hash
+                || !owner.validates_exact_executor_context(&self.context, &self.requester)
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(request_hash),
+                ));
+            }
+            let authenticated = owner
+                .authenticate_response(&self.context, response.clone(), authenticated_responder)
+                .map_err(EffectTransportError::Authentication)?;
+            let authenticated_response = authenticated.response();
+            let projection = owner.candidate_projection();
+            let ready_body = ReadyBody::derive(
+                &self.context,
+                projection.round,
+                projection.subject,
+                authenticated_response.body.as_slice(),
+            )
+            .map_err(|_| {
+                EffectTransportError::BodyMismatch(
+                    "recovered certified body cannot reproduce its canonical chunk manifest",
+                )
+            })?;
+            if ready_body.manifest != authenticated_response.manifest {
+                return Err(EffectTransportError::BodyMismatch(
+                    "recovered certified response manifest is not canonical for its body",
+                ));
+            }
+            let response_hash = HashOf::new(authenticated_response);
+            let canonical_manifest_hash = HashOf::new(&ready_body.manifest);
+            let body_payload_hash = Hash::new(&authenticated_response.body);
+            let claim_preflight = match projection.response_claim {
+                None => CertifiedBodyResponseClaimPreflight::Vacant,
+                Some(claimed) if claimed == response_hash => {
+                    CertifiedBodyResponseClaimPreflight::ExactRetransmission
+                }
+                Some(claimed) => {
+                    return Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(
+                        CertifiedResponsePriorityNonPriority::ConflictingFamilyClaim {
+                            request_hash,
+                            claimed_response_hash: claimed,
+                            incoming_response_hash: response_hash,
+                        },
+                    ));
+                }
+            };
+            return Ok(CertifiedResponsePriorityProbe::RecoveredPreflightRequired(
+                Box::new(RecoveredDecisionFetchResponseCandidateV1 {
+                    context_id: self.context.id(),
+                    height: self.context.height,
+                    key,
+                    request_hash,
+                    response_hash,
+                    authenticated_responder: authenticated_responder.clone(),
+                    authenticated_response: authenticated,
+                    fetch_tag: projection.tag,
+                    round: projection.round,
+                    subject: projection.subject,
+                    canonical_manifest_hash,
+                    body_payload_hash,
+                    claim_preflight,
+                }),
+            ));
+        }
         let Some(work_id) = self.certified_work.get(&request_hash).copied() else {
             let reverse_pending_owner = self.pending_fetches.values().any(|pending| {
                 pending.request_hash == Some(request_hash)
@@ -8334,7 +9011,74 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             CertifiedResponsePriorityProbe::PreflightRequired(actual) => {
                 Ok(actual.as_ref() == expected)
             }
+            CertifiedResponsePriorityProbe::RecoveredPreflightRequired(_) => Ok(false),
         }
+    }
+
+    /// Re-probe one dedicated recovered response candidate and require exact equality.
+    pub(in crate::sumeragi) fn revalidate_recovered_decision_fetch_response_candidate(
+        &self,
+        expected: &RecoveredDecisionFetchResponseCandidateV1,
+        response: &wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+    ) -> Result<bool, EffectTransportError> {
+        match self.probe_certified_response_priority(response, authenticated_responder)? {
+            CertifiedResponsePriorityProbe::RecoveredPreflightRequired(actual) => {
+                Ok(actual.as_ref() == expected)
+            }
+            CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)
+            | CertifiedResponsePriorityProbe::PreflightRequired(_) => Ok(false),
+        }
+    }
+
+    /// Preflight exact recovered request-owner retirement without mutation.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_owner_retirement(
+        &self,
+        key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) -> Result<PreparedRecoveredDecisionFetchOwnerRetirementV1, EffectTransportError> {
+        self.validate_lifecycle_ingress_selector_authority()?;
+        if !self.recovered_decision_fetch_request_index_is_exact() {
+            return Err(EffectTransportError::FailClosed(
+                "recovered Decision Fetch request indexes are not exact".to_owned(),
+            ));
+        }
+        let owner = self.recovered_decision_fetches.get(&key).ok_or_else(|| {
+            EffectTransportError::FailClosed(
+                "recovered Decision Fetch lost its dedicated request owner".to_owned(),
+            )
+        })?;
+        let request_hash = owner.request_hash();
+        if self.recovered_decision_fetch_by_request.get(&request_hash) != Some(&key)
+            || !owner.matches_settlement(key, response_hash)
+        {
+            return Err(EffectTransportError::FailClosed(
+                "recovered Decision Fetch changed its exact claimed response".to_owned(),
+            ));
+        }
+        Ok(PreparedRecoveredDecisionFetchOwnerRetirementV1 {
+            key,
+            request_hash,
+            response_hash,
+        })
+    }
+
+    /// Infallibly remove the exact dedicated request indexes after publication.
+    pub(in crate::sumeragi) fn commit_recovered_decision_fetch_owner_retirement(
+        &mut self,
+        prepared: PreparedRecoveredDecisionFetchOwnerRetirementV1,
+    ) {
+        let owner = self
+            .recovered_decision_fetches
+            .remove(&prepared.key)
+            .expect("published recovered Decision Store retains its request owner");
+        assert_eq!(owner.request_hash(), prepared.request_hash);
+        assert!(owner.matches_settlement(prepared.key, prepared.response_hash));
+        let reverse = self
+            .recovered_decision_fetch_by_request
+            .remove(&prepared.request_hash)
+            .expect("published recovered Decision Store retains its request reverse index");
+        assert_eq!(reverse, prepared.key);
     }
 
     /// Prepare retirement of the exact executor and request owners which move
@@ -8875,6 +9619,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             || !valid_receipt
             || !valid_recovery_stage
             || self.finality_completion.is_some()
+            || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
         {
             return Err(self.close(EffectExecutorError::InvalidApplyCompletion, services));
         }
@@ -9726,6 +10471,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
 
+        if self
+            .recovered_decision_fetches
+            .values()
+            .any(|owner| owner.matches_body_coordinates(round, subject))
+        {
+            return Err(EffectExecutorError::Contract(
+                "body-fetch coordinates already have a recovered Decision Fetch owner".to_owned(),
+            ));
+        }
+
         let key = (round, subject);
         let existing_id = self.pending_fetches.iter().find_map(|(id, pending)| {
             (pending.task.round == round && pending.task.subject == subject).then_some(*id)
@@ -10244,7 +10999,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         certificate: wire::QuorumCertificate,
         services: &mut S,
     ) -> Result<CertifiedFetchRequestPlan, EffectExecutorError> {
-        if self.outstanding_requests.len() >= self.config.max_certified_requests {
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
             return Err(EffectExecutorError::CertifiedRequestCapacity {
                 capacity: self.config.max_certified_requests,
             });
@@ -10264,9 +11024,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .authenticate_certified_body_request(&self.context, request.clone(), &self.requester)
             .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
         let request_hash = authenticated.request_hash();
-        if self.certified_work.contains_key(&request_hash) {
+        if self.certified_work.contains_key(&request_hash)
+            || self
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+            || self
+                .recovered_decision_fetches
+                .values()
+                .any(|owner| owner.has_same_logical_identity(authenticated.request()))
+        {
             return Err(EffectExecutorError::Contract(
-                "certified body request hash already has a work owner".to_owned(),
+                "certified body request already has an ordinary or recovered owner".to_owned(),
             ));
         }
         let registration = self
@@ -11839,9 +12607,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             Some(_) if !drain_decision_body || self.decision_body_drained => return Ok(()),
             _ => {}
         }
-        if drain_decision_body && !self.pending_applications.is_empty() {
+        if drain_decision_body
+            && (!self.pending_applications.is_empty()
+                || !self.recovered_decision_fetch_request_index_is_exact_and_empty())
+        {
             return Err(EffectExecutorError::Contract(
-                "terminal body cleanup began after application ownership was installed".to_owned(),
+                "terminal body cleanup began while an application or recovered Fetch owner remained"
+                    .to_owned(),
             ));
         }
         let first_install = self.protected_decision.is_none();
@@ -12121,7 +12893,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
         if drain_decision_body
-            && (!self.certified_work.is_empty() || !self.outstanding_requests.is_empty())
+            && (!self.certified_work.is_empty()
+                || !self.outstanding_requests.is_empty()
+                || !self.recovered_decision_fetch_request_index_is_exact_and_empty())
         {
             return Err(EffectExecutorError::Contract(
                 "terminal cleanup left an unowned certified-body request".to_owned(),
@@ -12903,6 +13677,35 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .unwrap_or(usize::MAX)
     }
 
+    /// Validate the dedicated recovered-Fetch owner/reverse index and require
+    /// it to be empty at a height-finalization boundary. These owners are not
+    /// ordinary `EffectWorkId` capacity and therefore deliberately stay out of
+    /// [`Self::pending_work`].
+    fn recovered_decision_fetch_request_index_is_exact_and_empty(&self) -> bool {
+        self.recovered_decision_fetch_request_index_is_exact()
+            && self.recovered_decision_fetches.is_empty()
+            && self.recovered_decision_fetch_by_request.is_empty()
+    }
+
+    fn recovered_decision_fetch_request_index_is_exact(&self) -> bool {
+        self.recovered_decision_fetches.len() == self.recovered_decision_fetch_by_request.len()
+            && self.recovered_decision_fetches.iter().all(|(key, owner)| {
+                owner.dispatch_key() == *key
+                    && self
+                        .recovered_decision_fetch_by_request
+                        .get(&owner.request_hash())
+                        == Some(key)
+            })
+            && self
+                .recovered_decision_fetch_by_request
+                .iter()
+                .all(|(request_hash, key)| {
+                    self.recovered_decision_fetches
+                        .get(key)
+                        .is_some_and(|owner| owner.request_hash() == *request_hash)
+                })
+    }
+
     fn ensure_open(&self) -> Result<(), EffectExecutorError> {
         if self.output_guard.restart_required() {
             return Err(EffectExecutorError::FailClosed(
@@ -13262,7 +14065,8 @@ mod tests {
         v2_lifecycle_coordinator::{
             CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
             ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
-            ProductionIngressTurnPreparation, WaitSource,
+            ProductionIngressTurnPreparation, ProductionRecoveredDecisionFetchPersistenceErrorV1,
+            ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},
     };
@@ -23363,6 +24167,9 @@ mod tests {
             CertifiedResponsePriorityProbe::DefinitelyNonPriority(reason) => {
                 panic!("exact outstanding response was classified non-priority: {reason:?}")
             }
+            CertifiedResponsePriorityProbe::RecoveredPreflightRequired(_) => {
+                panic!("ordinary outstanding response was classified as recovered")
+            }
         };
         assert_eq!(candidate.context_id(), fixture.context.id());
         assert_eq!(candidate.height(), fixture.context.height);
@@ -23485,1005 +24292,58 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() {
-        let mut fixture = ProductionTransportFixture::new();
-        fixture.executor.recovered_bodies.clear();
-        let mut services = FakeServices {
-            requester_key: Some(fixture.requester_key.clone()),
-            ..FakeServices::default()
-        };
-        let prepare =
-            fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
-        let effects = vec![AdapterEffect::FetchBody {
-            tag: tag(0),
+    fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let requester = PeerId::new(fixture.requester_key.public_key().clone());
+        let certificate = fixture.qc(wire::GlobalPhase::Commit);
+        let sources = certified_sources(&fixture, &certificate);
+        let mut request = wire::CertifiedBodyRequest {
             round: fixture.manifest.round,
             subject: fixture.manifest.subject,
-            manifest: Some(fixture.manifest.clone()),
-            certified_sources: fixture.certified_sources(&prepare),
-            certificate: Some(prepare),
-        }];
-        fixture
-            .executor
+            certificate: certificate.clone(),
+            requester: requester.clone(),
+            signature: Vec::new(),
+        };
+        request.signature = Signature::new(
+            fixture.requester_key.private_key(),
+            &request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let authenticated = executor
             .runtime
-            .retain_retransmit_effect_ownership_for_test(&effects)
-            .expect("bind production Fetch ownership for selector capture");
-        fixture
-            .executor
-            .consume_effects(effects, &mut services)
-            .expect("hybrid fetch establishes one exact response family");
-        let task = services.fetch_tasks[0].clone();
-        let response = |responder: wire::ValidatorIndex| {
-            let mut response = wire::CertifiedBodyResponse {
-                request_hash: HashOf::new(
-                    task.certified_request()
-                        .expect("selector Fetch owns its signed request"),
-                ),
-                manifest: fixture.manifest.clone(),
-                body: fixture.body.clone(),
-                responder,
-                signature: Vec::new(),
-            };
-            response.signature = Signature::new(
-                fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
-                    .private_key(),
-                &response.signature_preimage(),
-            )
-            .payload()
-            .to_vec();
-            response
-        };
-        let first_response = response(0);
-        let second_response = response(1);
-        assert_eq!(first_response.request_hash, second_response.request_hash);
-        assert_ne!(HashOf::new(&first_response), HashOf::new(&second_response));
-
-        let ingress =
-            crate::sumeragi::FairV2Ingress::new(32, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
-        ingress
-            .configure_roster(
-                fixture
-                    .context
-                    .roster
-                    .iter()
-                    .map(|power| power.validator.clone()),
-            )
-            .expect("fixture roster fits the selector ingress");
-        ingress.state.lock().leader_wire_context =
-            Some((fixture.context.id(), fixture.context.height));
-        ingress.open().expect("open selector ingress");
-
-        let first_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(first_response.clone()),
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                first_message,
-                Some(fixture.context.roster[0].validator.clone()),
-            )),
-            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let first_ordinal = ingress.state.lock().last_admission_ordinal;
-        let second_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(second_response),
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                second_message,
-                Some(fixture.context.roster[1].validator.clone()),
-            )),
-            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
-        ));
-        let second_ordinal = ingress.state.lock().last_admission_ordinal;
-        assert!(first_ordinal < second_ordinal);
-
-        let prepared = fixture
-            .executor
-            .prepare_lifecycle_ingress_selector(&ingress, second_ordinal)
-            .expect("complete selector preparation authenticates both occurrences");
-        let (
-            context,
-            positions,
-            selected_ordinal,
-            physical_cut,
-            selected_is_embedded,
-            request_fence_active,
-        ) = prepared.selected_cut_for_test();
-        assert_eq!(context.height(), fixture.context.height);
-        assert_eq!(selected_ordinal, second_ordinal);
-        assert!(positions.into_iter().all(|position| position > 0));
-        assert!(physical_cut > u128::from(second_ordinal));
-        assert!(selected_is_embedded);
-        assert!(request_fence_active);
-        assert_eq!(prepared.verdict_count_for_test(), 2);
-        assert_eq!(
-            prepared.priority_owners_for_test(),
-            &BTreeSet::from([first_ordinal, second_ordinal]),
-            "both untrusted physical completions own the request fence",
+            .authenticate_certified_body_request(&executor.context, request, &requester)
+            .expect("authenticate the recovered request fixture");
+        let key = crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(
+            &fixture.context,
+            41,
+            0xD1,
         );
-        assert_eq!(
-            prepared.selector_debt_for_test(),
-            2,
-            "the claimed-family winner must not double-count its fence owner",
+        let owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
+            key,
+            tag(0),
+            sources.clone(),
+            authenticated,
         );
-        assert_eq!(
-            prepared.claimed_family_winners_for_test(),
-            BTreeMap::from([(first_response.request_hash, first_ordinal)]),
-            "the lowest exact physical response wins the request family",
-        );
-        assert_eq!(
-            prepared.certified_fetch_ready_authority_for_test(),
-            Err(CertifiedFetchReadyPublicationError::SelectedOccurrenceNotClaimedResponse),
-            "a selected request-fenced retransmission cannot borrow the other occurrence's family authority",
-        );
-
-        let winning_prepared = fixture
-            .executor
-            .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-            .expect("the exact family winner remains an authenticated prepared target");
-        let (
-            wake_context,
-            wake_ordinal,
-            wake_physical_digest,
-            wake_request_hash,
-            wake_key,
-            _causal_root,
-            wake_source,
-        ) = winning_prepared
-            .certified_fetch_ready_authority_for_test()
-            .expect("the selected family winner derives one sealed Fetch wake authority");
-        let signed_request = task
-            .certified_request()
-            .expect("the selected family retains its exact signed request");
-        assert_eq!(wake_context, context);
-        assert_eq!(wake_ordinal, first_ordinal);
-        assert_ne!(wake_physical_digest, LifecycleDigest::new([0; 32]));
-        assert_eq!(wake_request_hash, first_response.request_hash);
-        assert_eq!(wake_key.phase(), LifecyclePhase::Fetch);
-        assert_eq!(
-            wake_key.round().height(),
-            signed_request.certificate.round.height
-        );
-        assert_eq!(
-            wake_key.round().view(),
-            signed_request.certificate.round.view
-        );
-        assert_eq!(
-            wake_key
-                .proposal_round()
-                .map(|round| (round.height(), round.view())),
-            Some((signed_request.round.height, signed_request.round.view))
-        );
-        assert!(matches!(wake_source, WaitSource::External(_)));
-        let incumbent_effect = task.adapter_effect();
-        let incumbent_pending = task
-            .ownership()
-            .pending_adapter_effect_binding(&incumbent_effect)
-            .expect("the real Fetch task mints its exact ordinal-free registry binding");
-        let queue_depth_before = ingress.len();
-        let next_physical_ordinal_before = ingress.next_physical_admission_ordinal();
-        let (incumbent_digest, replacement_digest) = winning_prepared
-            .certified_fetch_registry_preflight_for_test(incumbent_effect, incumbent_pending)
-            .expect("the real selector winner crosses the sealed registry preflight");
-        assert_ne!(incumbent_digest, replacement_digest);
-        assert_eq!(replacement_digest, wake_physical_digest);
-        assert_eq!(ingress.len(), queue_depth_before);
-        assert_eq!(
-            ingress.next_physical_admission_ordinal(),
-            next_physical_ordinal_before,
-            "registry preflight cannot dequeue, append, or renumber ingress",
-        );
-        let reprobed_winner = fixture
-            .executor
-            .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-            .expect("the exact queued winner remains selectable after registry preflight");
-        assert_eq!(
-            reprobed_winner.selected_cut_for_test(),
-            winning_prepared.selected_cut_for_test(),
-            "registry preflight leaves the complete queue-minted cut unchanged",
-        );
-        assert_eq!(
-            winning_prepared.selected_cut_for_test().2,
-            first_ordinal,
-            "deriving readiness borrows and preserves the complete prepared token",
-        );
-
-        let owner_effect = task.adapter_effect();
-        let owner_pending = task
-            .ownership()
-            .pending_adapter_effect_binding(&owner_effect)
-            .expect("mint the exact Fetch registry carrier for owner admission");
-        let proofs = fixture
-            .validator_keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("validator proof of possession")
-            })
-            .collect::<Vec<_>>();
-        let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
-            .expect("verified owner context");
-        let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
-        let (mut owner, lifecycle_ordinal, lifecycle_source) =
-            crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
-                verified,
-                &winning_prepared,
-                owner_effect,
-                owner_pending,
-                &fixture.validator_keys[0],
-                owner_directory.path(),
-            );
-        let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
-        let before_unbound =
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-        let unbound_result = owner.plan_ingress_turn(
-            &production_services,
-            &fixture.executor,
-            fixture.executor.lifecycle_mode_rank_snapshot(),
-            winning_prepared,
-            crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
-        );
-        assert!(matches!(
-            unbound_result,
-            Err(ProductionIngressSchedulerInputsError::BodyStoreNotBound)
-        ));
-        assert_eq!(
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-            before_unbound,
-            "an owner retaining its startup store cannot plan against an independent service",
-        );
-
-        let foreign_output_guard = ConsensusOutputGuard::isolated();
-        let planner_io = owner.bind_body_store_to_planner_io_for_test(
-            &mut production_services,
-            Arc::clone(&foreign_output_guard),
-            1,
-        );
-        let guard_mismatch_prepared = fixture
-            .executor
-            .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-            .expect("the exact winner remains selectable for the guard mismatch");
-        let before_guard_mismatch =
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-        let guard_mismatch = owner.plan_ingress_turn(
-            &production_services,
-            &fixture.executor,
-            fixture.executor.lifecycle_mode_rank_snapshot(),
-            guard_mismatch_prepared,
-            crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
-        );
-        assert!(matches!(
-            guard_mismatch,
-            Err(ProductionIngressSchedulerInputsError::ForeignOutputGuard)
-        ));
-        assert_eq!(
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-            before_guard_mismatch,
-            "a foreign service guard cannot advance the coordinator or claim a lease",
-        );
-        assert!(
-            !fixture.executor.output_guard.restart_required(),
-            "guard mismatch rejection leaves the executor's canonical output open",
-        );
-        assert!(
-            !foreign_output_guard.restart_required(),
-            "pre-capture mismatch rejection leaves the foreign service guard open",
-        );
-        planner_io.install_output_guard_for_test(
-            &mut production_services,
-            Arc::clone(&fixture.executor.output_guard),
-        );
-        planner_io.saturate_consensus_prefix(&production_services);
-        let waiting_prepared = fixture
-            .executor
-            .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-            .expect("the exact winner remains selectable for a capacity wait");
-        let before_capacity_wait =
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-        let capacity_result = owner.plan_ingress_turn(
-            &production_services,
-            &fixture.executor,
-            fixture.executor.lifecycle_mode_rank_snapshot(),
-            waiting_prepared,
-            crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
-        );
-        let capacity_wait = match capacity_result {
-            Ok(ProductionIngressTurnPreparation::CapacityWait(wait)) => wait,
-            Ok(ProductionIngressTurnPreparation::Queued(_)) => {
-                panic!("a saturated Consensus prefix cannot admit Fetch persistence")
-            }
-            Err(_) => panic!("saturation must return the opaque capacity wait"),
-        };
-        assert_eq!(
-            capacity_wait.capacity_status(&production_services),
-            ProductionIngressCapacityStatus::Pending
-        );
-        planner_io.release_one_predecessor();
-        assert_eq!(
-            capacity_wait.capacity_status(&production_services),
-            ProductionIngressCapacityStatus::Released
-        );
-        planner_io.release_one_predecessor();
-        drop(capacity_wait);
-        assert_eq!(
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-            before_capacity_wait,
-            "capacity waiting cannot advance the Fetch generation or claim a lease",
-        );
-
-        let winning_prepared = fixture
-            .executor
-            .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-            .expect("the exact winner remains selectable after capacity release");
-        let mode = fixture.executor.lifecycle_mode_rank_snapshot();
-        let runner =
-            crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context);
-        let planned = owner.plan_ingress_turn(
-            &production_services,
-            &fixture.executor,
-            mode,
-            winning_prepared,
-            runner,
-        );
-        let queued = match planned {
-            Ok(ProductionIngressTurnPreparation::Queued(queued)) => queued,
-            Ok(ProductionIngressTurnPreparation::CapacityWait(_)) => {
-                panic!("available exact capacity must not produce a capacity wait")
-            }
-            Err(_) => panic!("the exact locked Fetch transaction must publish its command"),
-        };
-        assert_eq!(queued.ordinal(), lifecycle_ordinal);
-        assert!(matches!(
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-            (
-                Some(LifecycleState::Waiting(wait)),
-                Some(1),
-                None,
-                false,
-            ) if wait.source() == lifecycle_source && wait.observed_generation() == 1
-        ));
-        assert_eq!(planner_io.queued_certified_fetch_count(), 1);
-
-        let repeated = fixture
-            .executor
-            .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
-            .expect("the queued physical winner remains selectable before Phase B");
-        let before_repeat =
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-        let repeated_result = owner.plan_ingress_turn(
-            &production_services,
-            &fixture.executor,
-            fixture.executor.lifecycle_mode_rank_snapshot(),
-            repeated,
-            crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context),
-        );
-        assert!(matches!(
-            repeated_result,
-            Err(ProductionIngressSchedulerInputsError::InFlightSelectedWork(
-                _
-            ))
-        ));
-        assert_eq!(
-            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-            before_repeat,
-            "an in-flight exact command must reject before advancing Fetch generation",
-        );
-        assert_eq!(planner_io.queued_certified_fetch_count(), 1);
-        assert!(!fixture.executor.output_guard.restart_required());
-        planner_io.detach(&mut production_services);
-    }
-
-    #[test]
-    fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: fixture.manifest.round,
-                    subject: fixture.manifest.subject,
-                    manifest: Some(fixture.manifest.clone()),
-                    certified_sources: certified_sources(&fixture, &prepare),
-                    certificate: Some(prepare),
-                }],
-                &mut services,
-            )
-            .expect("hybrid fetch");
-        let task = services.fetch_tasks[0].clone();
-        let claimed = signed_certified_response(
-            &fixture,
-            &task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            0,
-        );
-        let claimed_responder = fixture.context.roster[0].validator.clone();
-        let authenticated = executor
-            .outstanding_requests
-            .authenticate_response(&fixture.context, claimed.clone(), &claimed_responder)
-            .expect("authenticate setup claim");
-        assert_eq!(
-            executor
-                .outstanding_requests
-                .claim_authenticated_response(&authenticated)
-                .expect("install setup claim"),
-            CertifiedBodyResponseClaimDisposition::Acquired
-        );
-        let ownership_before = executor.body_ownership_projection();
-        let claims_before = executor.outstanding_requests.response_claim_count();
-        let claim_hash_before = executor
-            .outstanding_requests
-            .response_claim_hash(claimed.request_hash);
-
-        let exact = executor
-            .probe_certified_response_priority(&claimed, &claimed_responder)
-            .expect("exact retransmission remains a preflight candidate");
-        let CertifiedResponsePriorityProbe::PreflightRequired(exact) = exact else {
-            panic!("the exact claimed response must remain retryable")
-        };
-        assert_eq!(
-            exact.claim_preflight(),
-            &CertifiedBodyResponseClaimPreflight::ExactRetransmission
-        );
-        assert_eq!(executor.body_ownership_projection(), ownership_before);
-        assert_eq!(
-            executor.outstanding_requests.response_claim_count(),
-            claims_before
-        );
-        assert_eq!(
-            executor
-                .outstanding_requests
-                .response_claim_hash(claimed.request_hash),
-            claim_hash_before
-        );
-
-        let competing = signed_certified_response(
-            &fixture,
-            &task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            1,
-        );
-        let competing_responder = fixture.context.roster[1].validator.clone();
-        assert!(matches!(
-            executor
-                .probe_certified_response_priority(&competing, &competing_responder)
-                .expect("a family conflict is a typed non-priority result"),
-            CertifiedResponsePriorityProbe::DefinitelyNonPriority(
-                CertifiedResponsePriorityNonPriority::ConflictingFamilyClaim {
-                    request_hash,
-                    claimed_response_hash,
-                    incoming_response_hash,
-                }
-            ) if request_hash == claimed.request_hash
-                && claimed_response_hash == HashOf::new(&claimed)
-                && incoming_response_hash == HashOf::new(&competing)
-        ));
-        assert_eq!(executor.body_ownership_projection(), ownership_before);
-        assert_eq!(
-            executor.outstanding_requests.response_claim_count(),
-            claims_before
-        );
-        assert_eq!(
-            executor
-                .outstanding_requests
-                .response_claim_hash(claimed.request_hash),
-            claim_hash_before
-        );
-        assert!(services.completed_certified_fetches.is_empty());
-        assert!(executor.runtime.completions.is_empty());
-        assert!(!executor.status().fail_closed);
-
+        assert!(owner.validates_exact_executor_context(&fixture.context, &requester));
+        let request_hash = owner.request_hash();
         assert!(
             executor
-                .certified_work
-                .remove(&claimed.request_hash)
-                .is_some()
-        );
-        assert!(executor.outstanding_requests.cancel(claimed.request_hash));
-        assert!(matches!(
-            executor.validated_certified_request_presence(),
-            Err(EffectTransportError::Authentication(
-                V2TransportError::InconsistentRequestIndex(request_hash)
-            )) if request_hash == claimed.request_hash
-        ));
-        assert!(matches!(
-            executor.probe_certified_response_priority(&claimed, &claimed_responder),
-            Err(EffectTransportError::Authentication(
-                V2TransportError::InconsistentRequestIndex(request_hash)
-            )) if request_hash == claimed.request_hash
-        ));
-    }
-
-    #[test]
-    fn certified_request_presence_rejects_retained_response_with_different_family_claim() {
-        let fixture = Fixture::new();
-        assert!(fixture.body.len() > 1);
-        let mut executor = fixture.executor(EffectQueueConfig::new(8, 1, 1, 4));
-        let mut services = fixture.services();
-        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: fixture.manifest.round,
-                    subject: fixture.manifest.subject,
-                    manifest: Some(fixture.manifest.clone()),
-                    certified_sources: certified_sources(&fixture, &prepare),
-                    certificate: Some(prepare),
-                }],
-                &mut services,
-            )
-            .expect("hybrid fetch");
-        let task = services.fetch_tasks[0].clone();
-        let retained = signed_certified_response(
-            &fixture,
-            &task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            0,
-        );
-        let retained_responder = fixture.context.roster[0].validator.clone();
-        let (_directory, _ingress, _gate, ingress_ownership) =
-            certified_response_runtime_ingress_ownership(
-                &fixture,
-                &retained,
-                retained_responder.clone(),
-            );
-        assert!(matches!(
-            executor.accept_certified_body_response_with_ingress_ownership(
-                retained.clone(),
-                &retained_responder,
-                &ingress_ownership,
-                &mut services,
-            ),
-            Err(EffectTransportError::Backpressure)
-        ));
-        assert!(executor.has_retained_certified_body_response());
-        assert_eq!(executor.outstanding_requests.response_claim_count(), 0);
-        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
-
-        let competing = signed_certified_response(
-            &fixture,
-            &task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            1,
-        );
-        let competing_responder = fixture.context.roster[1].validator.clone();
-        assert_ne!(HashOf::new(&retained), HashOf::new(&competing));
-        let authenticated = executor
-            .outstanding_requests
-            .authenticate_response(&fixture.context, competing, &competing_responder)
-            .expect("authenticate a deliberately different response occurrence");
-        assert_eq!(
-            executor
-                .outstanding_requests
-                .claim_authenticated_response(&authenticated)
-                .expect("install the conflicting family claim"),
-            CertifiedBodyResponseClaimDisposition::Acquired
-        );
-        assert!(matches!(
-            executor.validated_certified_request_presence(),
-            Err(EffectTransportError::Authentication(
-                V2TransportError::InconsistentRequestIndex(request_hash)
-            )) if request_hash == retained.request_hash
-        ));
-    }
-
-    #[test]
-    fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owner() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: fixture.manifest.round,
-                    subject: fixture.manifest.subject,
-                    manifest: Some(fixture.manifest.clone()),
-                    certified_sources: certified_sources(&fixture, &prepare),
-                    certificate: Some(prepare),
-                }],
-                &mut services,
-            )
-            .expect("hybrid fetch");
-        let task = services.fetch_tasks[0].clone();
-        let exact_response = signed_certified_response(
-            &fixture,
-            &task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            0,
-        );
-        let exact_responder = fixture.context.roster[0].validator.clone();
-        let service_owners_before = services.fetch_tasks.clone();
-        let ownership_before = executor.body_ownership_projection();
-        services.retry_certified_fetch_once = true;
-
-        assert_eq!(
-            executor.accept_certified_body_response(
-                exact_response.clone(),
-                &exact_responder,
-                &mut services,
-            ),
-            Err(EffectTransportError::Backpressure),
-            "only the typed retryable service disposition reopens the handoff",
-        );
-        assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
-        assert_eq!(executor.outstanding_requests.len(), 1);
-        assert_eq!(executor.pending_fetches.len(), 1);
-        assert_eq!(services.fetch_tasks, service_owners_before);
-        assert!(services.completed_certified_fetches.is_empty());
-        assert!(services.closed.is_empty());
-        assert!(!executor.status().fail_closed);
-        let ownership_after_retryable = executor.body_ownership_projection();
-        let retained = ownership_after_retryable
-            .runtime_body_reservation
-            .as_ref()
-            .expect("retryable service handoff retains the exact runtime token");
-        assert_eq!(retained.tag(), tag(0));
-        assert_eq!(retained.manifest(), &fixture.manifest);
-        let mut without_token = ownership_after_retryable.clone();
-        without_token.runtime_body_reservation = None;
-        assert_eq!(
-            without_token, ownership_before,
-            "the typed retryable boundary changes only the explicit unpublished token",
-        );
-
-        let competing_response = signed_certified_response(
-            &fixture,
-            &task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            1,
-        );
-        let competing_responder = fixture.context.roster[1].validator.clone();
-        assert!(matches!(
-            executor.accept_certified_body_response(
-                competing_response,
-                &competing_responder,
-                &mut services,
-            ),
-            Err(EffectTransportError::Authentication(
-                V2TransportError::ConflictingCertifiedBodyResponseClaim { .. }
-            ))
-        ));
-        assert_eq!(
-            executor.body_ownership_projection(),
-            ownership_after_retryable,
-            "a losing authenticated occurrence cannot transfer any exact owner",
-        );
-        assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
-        assert_eq!(services.fetch_tasks, service_owners_before);
-        assert!(services.completed_certified_fetches.is_empty());
-        assert!(!executor.status().fail_closed);
-
-        assert_eq!(
-            executor
-                .accept_certified_body_response(
-                    exact_response.clone(),
-                    &exact_responder,
-                    &mut services,
-                )
-                .expect("the identical claimed response resumes the same handoff"),
-            CompletionDisposition::Accepted,
-        );
-        assert_eq!(services.completed_certified_fetches, vec![task.id()]);
-        assert!(executor.pending_fetches.is_empty());
-        assert!(executor.certified_work.is_empty());
-        assert!(executor.outstanding_requests.is_empty());
-        assert_eq!(executor.outstanding_requests.response_claim_count(), 0);
-        assert!(
-            executor
-                .body_ownership_projection()
-                .runtime_body_reservation
+                .recovered_decision_fetches
+                .insert(key, owner)
                 .is_none()
         );
-        let later_duplicate = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(exact_response.clone()),
-        );
         assert!(
-            executor.retained_dispatch_allows_network_ingress(&later_duplicate.payload),
-            "a later physical duplicate remains ordinarily drainable after owner retirement",
-        );
-        assert!(matches!(
             executor
-                .probe_certified_response_priority(&exact_response, &exact_responder)
-                .expect("a retired response family has a closed non-priority classification"),
-            CertifiedResponsePriorityProbe::DefinitelyNonPriority(
-                CertifiedResponsePriorityNonPriority::Unsolicited { request_hash }
-            ) if request_hash == exact_response.request_hash
-        ));
-        assert!(!executor.status().fail_closed);
-    }
+                .recovered_decision_fetch_by_request
+                .insert(request_hash, key)
+                .is_none()
+        );
+        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
 
-    #[test]
-    fn retained_response_certificate_escape_is_charged_only_once() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: fixture.manifest.round,
-                    subject: fixture.manifest.subject,
-                    manifest: Some(fixture.manifest.clone()),
-                    certified_sources: certified_sources(&fixture, &prepare),
-                    certificate: Some(prepare),
-                }],
-                &mut services,
-            )
-            .expect("hybrid fetch");
-        let task = services.fetch_tasks[0].clone();
-        let response = signed_certified_response(
-            &fixture,
-            &task,
-            fixture.manifest.clone(),
-            fixture.body.clone(),
-            0,
-        );
-        let responder = fixture.context.roster[0].validator.clone();
-        let (_directory, _ingress, _gate, ingress_ownership) =
-            certified_response_runtime_ingress_ownership(&fixture, &response, responder.clone());
-        services.retry_certified_fetch_once = true;
-        assert_eq!(
-            executor.accept_certified_body_response_with_ingress_ownership(
-                response,
-                &responder,
-                &ingress_ownership,
-                &mut services,
-            ),
-            Err(EffectTransportError::Backpressure)
-        );
-        assert!(executor.retained_response_may_admit_certified_fence_escape());
-
-        executor.runtime.certified_fence_escape_credit = true;
-        executor.reconcile_retained_response_certified_fence_escape_phase();
-        assert_eq!(
-            executor
-                .retained_certified_body_response
-                .as_ref()
-                .map(|carrier| carrier.certified_fence_escape_phase),
-            Some(RetainedCertifiedFenceEscapePhase::Charged)
-        );
-        assert!(!executor.retained_response_may_admit_certified_fence_escape());
-
-        while executor.runtime.remaining_completion_capacity() > 0 {
-            executor
-                .runtime
-                .completions
-                .push(RuntimeCompletion::Signature(tag(0), vec![0xA5]));
-        }
-        executor.runtime.certified_fence_escape_credit = false;
-        executor.reconcile_retained_response_certified_fence_escape_phase();
-        assert_eq!(
-            executor
-                .retained_certified_body_response
-                .as_ref()
-                .map(|carrier| carrier.certified_fence_escape_phase),
-            Some(RetainedCertifiedFenceEscapePhase::Spent)
-        );
-
-        executor.runtime.certified_fence_escape_credit = true;
-        executor.reconcile_retained_response_certified_fence_escape_phase();
-        assert!(
-            !executor.retained_response_may_admit_certified_fence_escape(),
-            "a later visible certificate cannot replenish this response's spent ingress escape"
-        );
-        assert_eq!(
-            executor
-                .retained_certified_body_response
-                .as_ref()
-                .map(|carrier| carrier.certified_fence_escape_phase),
-            Some(RetainedCertifiedFenceEscapePhase::Spent)
-        );
-        assert!(!executor.status().fail_closed);
-    }
-
-    #[test]
-    fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacity() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 2));
-        let mut services = fixture.services();
-        let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = canonical_payload_manifest(
-            &fixture.context,
-            fixture.manifest.round,
-            losing_subject,
-            &losing_body,
-        );
-        let losing_lock = (losing_manifest.round, losing_manifest.subject);
-        let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        losing_prepare.subject = losing_manifest.subject;
-        let losing_certified_sources = certified_sources(&fixture, &losing_prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: losing_manifest.round,
-                    subject: losing_manifest.subject,
-                    manifest: Some(losing_manifest),
-                    certified_sources: losing_certified_sources,
-                    certificate: Some(losing_prepare),
-                }],
-                &mut services,
-            )
-            .expect("fill the only pending-work slot with a losing fetch");
-        let losing_id = services.fetch_tasks[0].id();
-        executor.protected_lock = Some(losing_lock);
-
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let commit_certified_sources = certified_sources(&fixture, &commit);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: commit.round,
-                    subject: commit.subject,
-                    manifest: None,
-                    certified_sources: commit_certified_sources,
-                    certificate: Some(commit.clone()),
-                }],
-                &mut services,
-            )
-            .expect("Decision cleanup frees capacity before decided-body recovery");
-
-        assert_eq!(
-            executor.protected_decision,
-            Some((
-                commit.round,
-                commit.proposal_round,
-                commit.subject,
-                commit.execution_commitment,
-            ))
-        );
-        assert_eq!(
-            executor.protected_lock,
-            Some((commit.proposal_round, commit.subject))
-        );
-        assert_eq!(executor.pending_fetches.len(), 1);
-        assert!(executor.pending_fetches.values().all(|pending| {
-            pending.task.round == commit.round && pending.task.subject == commit.subject
-        }));
-        assert_eq!(services.cancelled_fetches, vec![losing_id]);
-        assert_eq!(services.retired_all_outbound, 1);
-        assert_eq!(services.retired_candidate_work, 1);
-        assert_eq!(services.durable_serve_decision, Some(commit.subject));
-        assert!(!services.decision_serve_reconciliation_pending);
-        assert!(!executor.status().fail_closed);
-        assert!(services.closed.is_empty());
-    }
-
-    #[test]
-    fn decision_installed_by_same_runtime_step_retires_stale_terminal_effects() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decision_on_next_step = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        executor
-            .runtime
-            .steps
-            .push_back(Ok(RuntimeStep::Advanced(vec![
-                AdapterEffect::Broadcast(proposal(&fixture)),
-                AdapterEffect::Sign {
-                    tag: tag(0),
-                    request: SignRequest::Vote(vote(&fixture)),
-                },
-            ])));
-        services.fail_on = Some("broadcast");
-
-        assert_eq!(
-            executor
-                .step(Instant::now(), &mut services)
-                .expect("durable Decision retires stale in-flight effects"),
-            EffectExecutorStep::Advanced { effects: 0 }
-        );
-        assert_eq!(services.fail_on, Some("broadcast"));
-        assert!(services.broadcasts.is_empty());
-        assert!(services.sign_tasks.is_empty());
-        assert_eq!(services.retired_all_outbound, 1);
-        assert_eq!(services.retired_candidate_work, 1);
-        assert_eq!(services.durable_serve_decision, Some(commit.subject));
-        assert!(!services.decision_serve_reconciliation_pending);
-        assert!(!executor.status().fail_closed);
-        assert!(services.closed.is_empty());
-    }
-
-    #[test]
-    fn decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        let decision = (
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        );
-        let exact_commit_message = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(commit.clone()),
-        );
-        let (losing_subject, _) = distinct_body(&fixture);
-        let mut losing_commit = commit.clone();
-        losing_commit.subject = losing_subject;
-        let losing_commit_message = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(losing_commit),
-        );
-        let certified_sources = certified_sources(&fixture, &commit);
-        executor.runtime.decision_on_next_step = Some(decision);
-        executor
-            .runtime
-            .steps
-            .push_back(Ok(RuntimeStep::Advanced(vec![
-                AdapterEffect::Broadcast(proposal(&fixture)),
-                AdapterEffect::Broadcast(losing_commit_message),
-                AdapterEffect::Broadcast(exact_commit_message.clone()),
-                AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: commit.round,
-                    subject: losing_subject,
-                    manifest: None,
-                    certified_sources: Vec::new(),
-                    certificate: None,
-                },
-                AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: commit.round,
-                    subject: commit.subject,
-                    manifest: None,
-                    certified_sources,
-                    certificate: Some(commit.clone()),
-                },
-                AdapterEffect::Sign {
-                    tag: tag(0),
-                    request: SignRequest::Vote(vote(&fixture)),
-                },
-            ])));
-
-        assert_eq!(
-            executor
-                .step(Instant::now(), &mut services)
-                .expect("dispatch only exact post-Decision effects"),
-            EffectExecutorStep::Advanced { effects: 2 }
-        );
-        assert_eq!(services.broadcasts, vec![exact_commit_message]);
-        assert!(services.sign_tasks.is_empty());
-        assert_eq!(services.fetch_tasks.len(), 1);
-        assert_eq!(services.fetch_tasks[0].round, commit.round);
-        assert_eq!(services.fetch_tasks[0].subject, commit.subject);
-        assert_eq!(services.retired_all_outbound, 1);
-        assert_eq!(services.retired_candidate_work, 1);
-        assert!(!executor.status().fail_closed);
-        assert!(services.closed.is_empty());
-    }
-
-    #[test]
-    fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let ordinary = AdapterEffect::FetchBody {
+        let uncertified_effect = AdapterEffect::FetchBody {
             tag: tag(0),
             round: fixture.manifest.round,
             subject: fixture.manifest.subject,
@@ -24491,1416 +24351,83 @@ mod tests {
             certified_sources: Vec::new(),
             certificate: None,
         };
-        let ordinary_ownership = executor
-            .runtime
-            .take_effect_ownership(std::slice::from_ref(&ordinary))
-            .expect("bind ordinary parked Fetch");
-        let parked_owner = ordinary_ownership[0].clone();
-        executor
-            .retain_effect_batch(vec![ordinary], ordinary_ownership)
-            .expect("retain ordinary Fetch suffix");
-        executor
-            .park_retained_effect_batch()
-            .expect("park ordinary Fetch behind certified progress");
-
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let commit_fetch = AdapterEffect::FetchBody {
-            tag: tag(0),
-            round: commit.proposal_round,
-            subject: commit.subject,
-            manifest: Some(fixture.manifest.clone()),
-            certified_sources: certified_sources(&fixture, &commit),
-            certificate: Some(commit),
-        };
-        assert_eq!(
-            executor
-                .consume_effects(vec![commit_fetch], &mut services)
-                .expect("Commit-certified Fetch replaces its parked physical lineage"),
-            1
-        );
-
-        assert_eq!(services.fetch_tasks.len(), 1);
-        assert_eq!(services.fetch_tasks[0].ownership(), &parked_owner);
-        assert_eq!(executor.pending_fetches.len(), 1);
-        assert!(executor.parked_effect_batch.is_none());
-        assert!(executor.retained_effect_batch.is_none());
-        assert_eq!(executor.pending_work(), 1);
-        assert!(!executor.status().fail_closed);
-        assert!(services.closed.is_empty());
-    }
-
-    #[test]
-    fn failed_decision_cleanup_keeps_losing_owner_and_requires_restart() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = canonical_payload_manifest(
-            &fixture.context,
-            fixture.manifest.round,
-            losing_subject,
-            &losing_body,
-        );
-        let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = certified_sources(&fixture, &losing_prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: losing_manifest.round,
-                    subject: losing_manifest.subject,
-                    manifest: Some(losing_manifest),
-                    certified_sources,
-                    certificate: Some(losing_prepare),
-                }],
-                &mut services,
-            )
-            .expect("admit losing body recovery");
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        let durable_decision = (
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        );
-        executor.runtime.decided_body = Some(durable_decision);
-        let before = executor.body_ownership_projection();
-        services.fail_on = Some("cancel-fetch");
-
-        assert!(matches!(
-            executor.consume_effects(Vec::new(), &mut services),
-            Err(EffectExecutorError::Service(reason)) if reason.contains("cancel-fetch failed")
-        ));
-        assert_eq!(executor.body_ownership_projection(), before);
-        assert_eq!(executor.runtime.decided_body, Some(durable_decision));
-        assert_eq!(executor.protected_decision, None);
-        assert!(executor.output_guard.restart_required());
-        assert!(executor.status().fail_closed);
-        assert_eq!(services.closed.len(), 1);
-        assert!(matches!(
-            executor.consume_effects(Vec::new(), &mut services),
-            Err(EffectExecutorError::FailClosed(_))
-        ));
-        assert_eq!(executor.body_ownership_projection(), before);
-        assert_eq!(services.closed.len(), 1);
-    }
-
-    #[test]
-    fn decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("start exact decided local store");
-        let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = canonical_payload_manifest(
-            &fixture.context,
-            fixture.manifest.round,
-            losing_subject,
-            &losing_body,
-        );
-        let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = certified_sources(&fixture, &losing_prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: losing_manifest.round,
-                    subject: losing_manifest.subject,
-                    manifest: Some(losing_manifest),
-                    certified_sources,
-                    certificate: Some(losing_prepare),
-                }],
-                &mut services,
-            )
-            .expect("admit losing certified recovery beside decided local work");
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let before = executor.body_ownership_projection();
-        services.fail_on = Some("cancel-fetch");
-
-        assert!(matches!(
-            executor.consume_effects(Vec::new(), &mut services),
-            Err(EffectExecutorError::Service(reason)) if reason.contains("cancel-fetch failed")
-        ));
-        assert_eq!(executor.body_ownership_projection(), before);
-        assert_eq!(executor.pending_stores.len(), 1);
-        assert!(matches!(
-            executor
-                .pending_stores
-                .values()
-                .next()
-                .and_then(|pending| pending.consumer.as_ref()),
-            Some(StoreConsumer::LocalProposal { .. })
-        ));
-        assert!(executor.output_guard.restart_required());
-        assert_eq!(services.closed.len(), 1);
-    }
-
-    #[test]
-    fn decision_cleanup_rejects_inconsistent_certified_request_before_mutation() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = canonical_payload_manifest(
-            &fixture.context,
-            fixture.manifest.round,
-            losing_subject,
-            &losing_body,
-        );
-        let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = certified_sources(&fixture, &losing_prepare);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: losing_manifest.round,
-                    subject: losing_manifest.subject,
-                    manifest: Some(losing_manifest),
-                    certified_sources,
-                    certificate: Some(losing_prepare),
-                }],
-                &mut services,
-            )
-            .expect("admit losing certified recovery");
-        let request_hash = *executor
-            .certified_work
-            .keys()
-            .next()
-            .expect("certified request index");
-        assert!(executor.outstanding_requests.cancel(request_hash));
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        let durable_decision = (
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        );
-        executor.runtime.decided_body = Some(durable_decision);
-        let before = executor.body_ownership_projection();
-
-        assert!(matches!(
-            executor.consume_effects(Vec::new(), &mut services),
-            Err(EffectExecutorError::Contract(_))
-        ));
-        assert_eq!(executor.body_ownership_projection(), before);
-        assert_eq!(executor.runtime.decided_body, Some(durable_decision));
-        assert_eq!(executor.protected_decision, None);
-        assert!(services.cancelled_fetches.is_empty());
-        assert_eq!(services.retired_all_outbound, 0);
-        assert_eq!(services.retired_candidate_work, 0);
-        assert!(executor.output_guard.restart_required());
-        assert_eq!(services.closed.len(), 1);
-    }
-
-    #[test]
-    fn decision_preserves_current_tag_local_proposal_for_direct_apply() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("start exact local proposal");
-        complete_local_proposal_chain(&mut executor, &mut services);
-        assert!(matches!(
-            executor.runtime.completions.as_slice(),
-            [RuntimeCompletion::LocalProposal(_, manifest, ..)]
-                if manifest == &fixture.manifest
-        ));
-
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let certified_sources = certified_sources(&fixture, &commit);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: commit.round,
-                    subject: commit.subject,
-                    manifest: None,
-                    certified_sources,
-                    certificate: Some(commit),
-                }],
-                &mut services,
-            )
-            .expect("preserve the exact local completion across Decision cleanup");
-
-        assert!(matches!(
-            executor.runtime.completions.as_slice(),
-            [RuntimeCompletion::LocalProposal(completion_tag, manifest, ..)]
-                if *completion_tag == tag(0) && manifest == &fixture.manifest
-        ));
-        assert_eq!(executor.body_pipeline_owners.len(), 1);
-        assert!(services.fetch_tasks.is_empty());
-        assert_eq!(services.retired_all_outbound, 1);
-        assert_eq!(services.retired_candidate_work, 1);
-
-        executor
-            .consume_effects(Vec::new(), &mut services)
-            .expect("Decision reconciliation is idempotent");
-        assert_eq!(services.retired_all_outbound, 1);
-        assert_eq!(services.retired_candidate_work, 1);
-        assert!(!executor.status().fail_closed);
-    }
-
-    #[test]
-    fn decision_commitment_mismatch_fails_closed_before_apply() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("start exact local proposal");
-        complete_local_proposal_chain(&mut executor, &mut services);
-        let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"Decision conflict parent state"),
-            Hash::new(b"Decision conflict post state"),
-            Hash::new(b"Decision conflict ordinary writes"),
-            1,
-            Hash::new(b"Decision conflict executed block"),
-        );
-        assert_ne!(conflicting_commitment, fixture_execution_commitment());
-        executor.runtime.decided_body = Some((
-            fixture.manifest.round,
-            fixture.manifest.round,
-            fixture.manifest.subject,
-            conflicting_commitment,
-        ));
-
-        assert!(matches!(
-            executor.consume_effects(Vec::new(), &mut services),
-            Err(EffectExecutorError::Runtime(reason))
-                if reason.contains("conflicts with the durable Decision")
-        ));
-        assert!(executor.status().fail_closed);
-        assert!(services.apply_tasks.is_empty());
-        assert!(services.fetch_tasks.is_empty());
-        assert!(matches!(
-            executor.runtime.completions.as_slice(),
-            [RuntimeCompletion::LocalProposal(completion_tag, manifest, ..)]
-                if *completion_tag == tag(0) && manifest == &fixture.manifest
-        ));
-    }
-
-    #[test]
-    fn reconciled_decision_rejects_same_round_subject_commitment_drift() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let first = (
-            fixture.manifest.round,
-            fixture.manifest.round,
-            fixture.manifest.subject,
-            fixture_execution_commitment(),
-        );
-        executor.runtime.decided_body = Some(first);
-        executor
-            .consume_effects(Vec::new(), &mut services)
-            .expect("install the first full durable Decision identity");
-        assert_eq!(executor.protected_decision, Some(first));
-        let retired_outbound = services.retired_all_outbound;
-        let retired_candidate = services.retired_candidate_work;
-
-        let drifted_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"drifted Decision parent state"),
-            Hash::new(b"drifted Decision post state"),
-            Hash::new(b"drifted Decision ordinary writes"),
-            1,
-            Hash::new(b"drifted Decision executed block"),
-        );
-        assert_ne!(drifted_commitment, first.3);
-        executor.runtime.decided_body = Some((first.0, first.1, first.2, drifted_commitment));
-
-        assert!(matches!(
-            executor.consume_effects(Vec::new(), &mut services),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("two different durable Decision identities")
-        ));
-        assert_eq!(executor.protected_decision, Some(first));
-        assert_eq!(services.retired_all_outbound, retired_outbound);
-        assert_eq!(services.retired_candidate_work, retired_candidate);
-        assert!(executor.output_guard.restart_required());
-        assert!(executor.status().fail_closed);
-        assert_eq!(services.closed.len(), 1);
-    }
-
-    #[test]
-    fn stale_generation_local_completion_uses_durable_recovery() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("start old-generation local proposal");
-        complete_local_proposal_chain(&mut executor, &mut services);
-        let current_tag = EventTag::new(1, 1, Generation::new(8));
-        executor.runtime.round_tag = Some(current_tag);
-        executor.reconciled_tag = Some(current_tag);
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let certified_sources = certified_sources(&fixture, &commit);
-
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: current_tag,
-                    round: commit.round,
-                    subject: commit.subject,
-                    manifest: None,
-                    certified_sources,
-                    certificate: Some(commit),
-                }],
-                &mut services,
-            )
-            .expect("stale completion falls back to durable body reconstruction");
-
-        assert!(matches!(
-            executor.runtime.completions.as_slice(),
-            [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
-                if *completion_tag == current_tag && manifest == &fixture.manifest
-        ));
-        assert!(services.apply_tasks.is_empty());
-        assert!(services.fetch_tasks.is_empty());
-        assert_eq!(executor.body_pipeline_owners.len(), 1);
-        assert!(!executor.status().fail_closed);
-    }
-
-    #[test]
-    fn decision_body_stage_adoption_promotes_matching_prepare_authority() {
-        let fixture = Fixture::new();
-        let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        assert_eq!(prepare.execution_commitment, commit.execution_commitment);
-        let prepare_fetch = AdapterEffect::FetchBody {
-            tag: tag(0),
-            round: prepare.proposal_round,
-            subject: prepare.subject,
-            manifest: Some(fixture.manifest.clone()),
-            certified_sources: certified_sources(&fixture, &prepare),
-            certificate: Some(prepare),
-        };
-        let validate = AdapterEffect::ValidateBody {
+        let uncertified_ownership = executor.runtime.test_effect_ownership(&uncertified_effect);
+        let certified_effect = AdapterEffect::FetchBody {
             tag: tag(0),
             round: fixture.manifest.round,
             subject: fixture.manifest.subject,
-        };
-        let incumbent = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&prepare_fetch),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 9_010)],
-        )
-        .expect("bind Prepare-authorized FetchBody")
-        .pop()
-        .expect("one Prepare FetchBody owner")
-        .rebind_as_inherited_adapter_effect(&validate)
-        .expect("carry Prepare authority into ValidateBody");
-        let commit_fetch = AdapterEffect::FetchBody {
-            tag: tag(0),
-            round: commit.proposal_round,
-            subject: commit.subject,
-            manifest: Some(fixture.manifest.clone()),
-            certified_sources: certified_sources(&fixture, &commit),
-            certificate: Some(commit.clone()),
-        };
-        let incoming = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&commit_fetch),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 9_011)],
-        )
-        .expect("bind Commit-authorized FetchBody")
-        .pop()
-        .expect("one Commit FetchBody owner")
-        .rebind_as_inherited_adapter_effect(&validate)
-        .expect("carry Commit authority into ValidateBody");
-        assert_ne!(incumbent, incoming);
-
-        let adopted = incumbent
-            .adopt_incumbent_body_stage_for_durable_decision(
-                &incoming,
-                &validate,
-                commit.round,
-                commit.proposal_round,
-                commit.subject,
-                commit.execution_commitment,
-            )
-            .expect("matching Commit authority adopts the incumbent validation root");
-        assert_eq!(adopted, incumbent);
-    }
-
-    #[test]
-    fn decision_body_stage_adoption_rejects_commitment_drift() {
-        let fixture = Fixture::new();
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        let store = AdapterEffect::StoreBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        };
-        let incumbent = RuntimeEffectOwnership::fresh_for_test(tag(0), 9_020)
-            .rebind_same_adapter_effect(&store)
-            .expect("bind ordinary incumbent StoreBody");
-        let mut conflicting = commit.clone();
-        conflicting.execution_commitment =
-            wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"conflicting Decision parent state"),
-                Hash::new(b"conflicting Decision post state"),
-                Hash::new(b"conflicting Decision ordinary writes"),
-                1,
-                Hash::new(b"conflicting Decision executed block"),
-            );
-        assert_ne!(
-            conflicting.execution_commitment,
-            commit.execution_commitment
-        );
-        let conflicting_fetch = AdapterEffect::FetchBody {
-            tag: tag(0),
-            round: conflicting.proposal_round,
-            subject: conflicting.subject,
-            manifest: Some(fixture.manifest.clone()),
-            certified_sources: certified_sources(&fixture, &conflicting),
-            certificate: Some(conflicting),
-        };
-        let incoming = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&conflicting_fetch),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 9_021)],
-        )
-        .expect("bind conflicting Commit-authorized FetchBody")
-        .pop()
-        .expect("one conflicting Commit FetchBody owner")
-        .rebind_as_inherited_adapter_effect(&store)
-        .expect("carry conflicting Commit authority into StoreBody");
-
-        assert!(
-            incumbent
-                .adopt_incumbent_body_stage_for_durable_decision(
-                    &incoming,
-                    &store,
-                    commit.round,
-                    commit.proposal_round,
-                    commit.subject,
-                    commit.execution_commitment,
-                )
-                .expect_err("commitment drift must not adopt the incumbent task")
-                .contains("proposal or quorum authority")
-        );
-    }
-
-    #[test]
-    fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation() {
-        let fixture = Fixture::new();
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        let decision = (
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        );
-
-        let mut store_executor = fixture.executor(EffectQueueConfig::default());
-        let mut store_services = fixture.services();
-        store_executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut store_services,
-            )
-            .expect("start ordinary local StoreBody");
-        let store_id = store_services.store_tasks[0].id();
-        store_executor
-            .pending_stores
-            .get_mut(&store_id)
-            .expect("pending local store")
-            .consumer = None;
-        store_executor.protected_decision = Some(decision);
-        let store_effect = AdapterEffect::StoreBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        };
-        let ordinary_store_retry = store_executor.pending_stores[&store_id]
-            .task
-            .ownership()
-            .rebind_same_adapter_effect(&store_effect)
-            .expect("rebind same-root ordinary StoreBody retry");
-        assert_eq!(
-            &ordinary_store_retry,
-            store_executor.pending_stores[&store_id].task.ownership(),
-            "ownership equality deliberately ignores the stale authority binding"
-        );
-        let store_before = store_executor.body_ownership_projection();
-        let store_service_count = store_services.store_tasks.len();
-        assert!(matches!(
-            store_executor.begin_store_with_plans(
-                tag(0),
-                fixture.manifest.clone(),
-                Arc::from(fixture.body.clone()),
-                StorePurpose::Reducer,
-                None,
-                None,
-                ordinary_store_retry,
-                &mut store_services,
-            ),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("proposal or quorum authority")
-        ));
-        assert_eq!(store_executor.body_ownership_projection(), store_before);
-        assert_eq!(store_services.store_tasks.len(), store_service_count);
-
-        let mut validation_executor = fixture.executor(EffectQueueConfig::default());
-        let mut validation_services = fixture.services();
-        validation_executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut validation_services,
-            )
-            .expect("start ordinary local proposal");
-        let local_store_id = validation_services.store_tasks[0].id();
-        let stored = validation_services.execute_store(local_store_id);
-        validation_executor
-            .complete_body_store(stored, &mut validation_services)
-            .expect("advance ordinary body to ValidateBody");
-        let validation_id = validation_services.validation_tasks[0].id();
-        validation_executor
-            .pending_validations
-            .get_mut(&validation_id)
-            .expect("pending local validation")
-            .consumer = None;
-        validation_executor.protected_decision = Some(decision);
-        let validation_effect = AdapterEffect::ValidateBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        };
-        let ordinary_validation_retry = validation_executor.pending_validations[&validation_id]
-            .task
-            .ownership()
-            .rebind_same_adapter_effect(&validation_effect)
-            .expect("rebind same-root ordinary ValidateBody retry");
-        assert_eq!(
-            &ordinary_validation_retry,
-            validation_executor.pending_validations[&validation_id]
-                .task
-                .ownership(),
-            "ownership equality deliberately ignores the stale authority binding"
-        );
-        let durable = validation_executor.pending_validations[&validation_id]
-            .task
-            .durable_receipt()
-            .clone();
-        let validation_before = validation_executor.body_ownership_projection();
-        let validation_service_count = validation_services.validation_tasks.len();
-        assert!(matches!(
-            validation_executor.plan_begin_validation(
-                fixture.manifest.round,
-                fixture.manifest.subject,
-                durable,
-                ValidationConsumer::Reducer {
-                    tag: tag(0),
-                    ownership: ordinary_validation_retry,
-                },
-                None,
-                None,
-                None,
-            ),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("proposal or quorum authority")
-        ));
-        assert_eq!(
-            validation_executor.body_ownership_projection(),
-            validation_before
-        );
-        assert_eq!(
-            validation_services.validation_tasks.len(),
-            validation_service_count
-        );
-    }
-
-    #[test]
-    fn decision_rebinds_exact_local_validation_to_reducer_progress() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("start exact local proposal");
-        let store_id = services.store_tasks[0].id();
-        let stored = services.execute_store(store_id);
-        executor
-            .complete_body_store(stored, &mut services)
-            .expect("advance exact local proposal to validation");
-        let validation_id = services.validation_tasks[0].id();
-        let incumbent_ownership = executor.pending_validations[&validation_id]
-            .task
-            .ownership()
-            .clone();
-        assert!(matches!(
-            &executor.pending_validations[&validation_id].consumer,
-            Some(ValidationConsumer::LocalProposal { .. })
-        ));
-
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let certified_sources = certified_sources(&fixture, &commit);
-        let fetch_effect = AdapterEffect::FetchBody {
-            tag: tag(0),
-            round: commit.proposal_round,
-            subject: commit.subject,
             manifest: None,
-            certified_sources,
-            certificate: Some(commit.clone()),
+            certified_sources: sources.clone(),
+            certificate: Some(certificate.clone()),
         };
-        let decision_fetch_ownership = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&fetch_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 9_001)],
-        )
-        .expect("bind the distinct Commit-authorized Decision root")
-        .pop()
-        .expect("one Decision FetchBody owner");
-        let store_effect = AdapterEffect::StoreBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        };
-        let decision_store_ownership = decision_fetch_ownership
-            .rebind_as_inherited_adapter_effect(&store_effect)
-            .expect("carry Commit authority into Decision StoreBody");
-        let validation_effect = AdapterEffect::ValidateBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        };
-        let decision_validation_ownership = decision_store_ownership
-            .rebind_as_inherited_adapter_effect(&validation_effect)
-            .expect("carry Commit authority into Decision ValidateBody");
-        assert_ne!(decision_validation_ownership, incumbent_ownership);
-        executor
-            .consume_effects(vec![fetch_effect], &mut services)
-            .expect("Decision detaches the exact local validation consumer");
-        assert!(
-            executor.pending_validations[&validation_id]
-                .consumer
-                .is_none()
-        );
-        assert!(
-            executor.local_validate_replay.is_empty(),
-            "Decision detach consumes local replay authority"
-        );
-        assert!(matches!(
-            executor.runtime.completions.as_slice(),
-            [RuntimeCompletion::BodyAvailable(_, manifest)] if manifest == &fixture.manifest
-        ));
+        let certified_ownership = executor.runtime.test_effect_ownership(&certified_effect);
+        let ownership_before = executor.body_ownership_projection();
+        let service_fetches_before = services.fetch_tasks.clone();
 
-        executor.runtime.completions.clear();
-        executor
-            .retain_effect_batch(vec![store_effect], vec![decision_store_ownership])
-            .expect("retain the Commit-authorized StoreBody effect");
-        executor
-            .drain_retained_effect_batch(&mut services, true)
-            .expect("decided reducer adopts the exact durable body");
-        executor.runtime.completions.clear();
-        executor
-            .retain_effect_batch(vec![validation_effect], vec![decision_validation_ownership])
-            .expect("retain the Commit-authorized ValidateBody effect");
-        executor
-            .drain_retained_effect_batch(&mut services, true)
-            .expect("decided reducer reattaches exact validation work");
-        assert!(matches!(
-            &executor.pending_validations[&validation_id].consumer,
-            Some(ValidationConsumer::Reducer {
-                tag: consumer,
-                ownership,
-            }) if *consumer == tag(0)
-                && ownership == &incumbent_ownership
-                && ownership.binds_durable_decision_authority(
-                    commit.round,
-                    commit.proposal_round,
-                    commit.subject,
-                    commit.execution_commitment,
-                )
-        ));
-        assert_eq!(
-            executor.pending_validations[&validation_id]
-                .task
-                .ownership(),
-            &incumbent_ownership,
-            "the physical validation keeps its original lifecycle root"
-        );
-        assert_eq!(
-            services.validation_tasks.last().map(BodyValidationTask::id),
-            Some(validation_id)
-        );
-        let completed = services.execute_validation(validation_id);
-        assert_eq!(
-            executor
-                .complete_body_validation(completed, &mut services)
-                .expect("route the incumbent validation completion under Commit authority"),
-            CompletionDisposition::Accepted,
-        );
-        let completion_ownership = executor
-            .runtime
-            .validation_completion_ownerships
-            .last()
-            .expect("owned validation completion retains its reducer authority");
-        assert_eq!(completion_ownership.owner(), incumbent_ownership.owner());
-        assert!(completion_ownership.binds_durable_decision_authority(
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        assert!(!executor.status().fail_closed);
-    }
-
-    #[test]
-    fn decision_rebinds_exact_local_store_under_incumbent_owner() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("start exact local body store");
-        let store_id = services.store_tasks[0].id();
-        let incumbent_ownership = executor.pending_stores[&store_id].task.ownership().clone();
-
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let certified_sources = certified_sources(&fixture, &commit);
-        let fetch_effect = AdapterEffect::FetchBody {
-            tag: tag(0),
-            round: commit.proposal_round,
-            subject: commit.subject,
-            manifest: Some(fixture.manifest.clone()),
-            certified_sources,
-            certificate: Some(commit.clone()),
-        };
-        let decision_fetch_ownership = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&fetch_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 9_002)],
-        )
-        .expect("bind the distinct Commit-authorized Decision root")
-        .pop()
-        .expect("one Decision FetchBody owner");
-        let store_effect = AdapterEffect::StoreBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        };
-        let decision_store_ownership = decision_fetch_ownership
-            .rebind_as_inherited_adapter_effect(&store_effect)
-            .expect("carry Commit authority into Decision StoreBody");
-        assert_ne!(decision_store_ownership, incumbent_ownership);
-        executor
-            .consume_effects(vec![fetch_effect], &mut services)
-            .expect("Decision recovery detaches the exact local store");
-        assert!(executor.pending_stores[&store_id].consumer.is_none());
-        assert!(
-            executor.local_store_replay.is_empty(),
-            "Decision detach consumes local replay authority"
-        );
-        assert!(matches!(
-            executor.runtime.completions.last(),
-            Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
-                if *completion_tag == tag(0) && manifest == &fixture.manifest
-        ));
-
-        executor.runtime.completions.clear();
-        executor
-            .retain_effect_batch(vec![store_effect], vec![decision_store_ownership])
-            .expect("retain the Commit-authorized StoreBody effect");
-        executor
-            .drain_retained_effect_batch(&mut services, true)
-            .expect("Decision reducer adopts the immutable store task");
-        assert_eq!(services.store_tasks.len(), 1, "store I/O is not duplicated");
-        assert_eq!(
-            executor.pending_stores[&store_id].task.ownership(),
-            &incumbent_ownership
-        );
-        assert!(matches!(
-            &executor.pending_stores[&store_id].consumer,
-            Some(StoreConsumer::Reducer { ownership, .. })
-                if ownership == &incumbent_ownership
-                    && ownership.binds_durable_decision_authority(
-                        commit.round,
-                        commit.proposal_round,
-                        commit.subject,
-                        commit.execution_commitment,
-                    )
-        ));
-
-        let completion = services.execute_store(store_id);
-        assert_eq!(
-            executor
-                .complete_body_store(completion, &mut services)
-                .expect("route the incumbent store completion to Decision recovery"),
-            CompletionDisposition::Accepted
-        );
-        assert!(matches!(
-            executor.runtime.completions.last(),
-            Some(RuntimeCompletion::BodyStored(
-                completion_tag,
-                completion_round,
-                completion_subject,
-                _
-            )) if *completion_tag == tag(0)
-                && *completion_round == fixture.manifest.round
-                && *completion_subject == fixture.manifest.subject
-        ));
-        assert!(!executor.status().fail_closed);
-        assert!(services.closed.is_empty());
-    }
-
-    #[test]
-    fn apply_requires_validated_body_and_typed_exact_kura_completion() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let initial_mode = executor.lifecycle_mode_rank_snapshot();
-        assert_eq!(initial_mode.context_id(), fixture.context.id());
-        assert_eq!(initial_mode.height(), fixture.context.height);
-        assert_eq!(initial_mode.debt(), 1);
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("local proposal");
-        complete_local_proposal_chain(&mut executor, &mut services);
-        assert!(matches!(
-            executor.runtime.completions.last(),
-            Some(RuntimeCompletion::LocalProposal(completion_tag, manifest, durable, validated))
-                if *completion_tag == tag(0)
-                    && manifest == &fixture.manifest
-                    && durable.subject() == fixture.manifest.subject
-                    && validated.durable() == durable
-        ));
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::Apply {
-                    tag: tag(0),
-                    subject: fixture.manifest.subject,
-                    certificate: commit.clone(),
-                }],
-                &mut services,
-            )
-            .expect("begin application");
-        let task = &services.apply_tasks[0];
-        assert_eq!(task.tag(), tag(0));
-        assert_eq!(task.subject(), fixture.manifest.subject);
-        assert_eq!(task.certificate(), &commit);
-        assert_eq!(
-            task.validated_receipt().durable().subject(),
-            fixture.manifest.subject
-        );
-        let work_id = task.id();
-        let artifact = wire::finality::V2FinalityArtifact::new(
-            fixture.context.clone(),
+        let uncertified = executor.begin_fetch(
+            tag(0),
+            fixture.manifest.round,
             fixture.manifest.subject,
-            commit,
-            vec![vec![0x5C]; fixture.context.roster.len()],
-        );
-        let receipt = KuraV2CommitReceipt::for_test(&artifact);
-        assert_eq!(
-            executor
-                .complete_application(
-                    DurableApplyCompletion::new(work_id, receipt, artifact.clone()),
-                    &mut services,
-                )
-                .expect("durable application"),
-            CompletionDisposition::Accepted
+            Some(fixture.manifest.clone()),
+            Vec::new(),
+            None,
+            uncertified_ownership.clone(),
+            &mut services,
         );
         assert!(matches!(
-            executor.runtime.completions.last(),
-            Some(RuntimeCompletion::Application(completion_tag, subject))
-                if *completion_tag == tag(0) && *subject == fixture.manifest.subject
-        ));
-        assert_eq!(
-            executor.durable_finality().expect("durable finality").1,
-            &artifact
-        );
-        let applied_mode = executor.lifecycle_mode_rank_snapshot();
-        assert_eq!(applied_mode.context_id(), fixture.context.id());
-        assert_eq!(applied_mode.height(), fixture.context.height);
-        assert_eq!(applied_mode.debt(), 0);
-    }
-
-    #[test]
-    fn apply_completion_rejects_detached_owner_fields_before_settlement() {
-        for field in ["authorized owner tag", "lifecycle ordinal"] {
-            let fixture = Fixture::new();
-            let mut executor = fixture.executor(EffectQueueConfig::default());
-            let mut services = fixture.services();
-            executor
-                .admit_local_proposal(
-                    tag(0),
-                    fixture.manifest.clone(),
-                    fixture.body.clone(),
-                    &mut services,
-                )
-                .expect("local proposal");
-            complete_local_proposal_chain(&mut executor, &mut services);
-            let commit = fixture.qc(wire::GlobalPhase::Commit);
-            executor
-                .consume_effects(
-                    vec![AdapterEffect::Apply {
-                        tag: tag(0),
-                        subject: fixture.manifest.subject,
-                        certificate: commit.clone(),
-                    }],
-                    &mut services,
-                )
-                .expect("begin application");
-            let task = services.apply_tasks[0].clone();
-            let work_id = task.id();
-            let pending = executor
-                .pending_applications
-                .get_mut(&work_id)
-                .expect("ordinary Apply retains its exact runtime owner");
-            match field {
-                "authorized owner tag" => pending.task.authorized_owner_tag = tag(1),
-                "lifecycle ordinal" => {
-                    pending.task.lifecycle_ordinal =
-                        pending.task.lifecycle_ordinal.saturating_add(1)
-                }
-                _ => unreachable!("the fixed owner-field matrix is exhaustive"),
-            }
-            let artifact = wire::finality::V2FinalityArtifact::new(
-                fixture.context.clone(),
-                fixture.manifest.subject,
-                commit,
-                vec![vec![0x5C]; fixture.context.roster.len()],
-            );
-            let receipt = KuraV2CommitReceipt::for_test(&artifact);
-
-            assert!(matches!(
-                executor.complete_application(
-                    DurableApplyCompletion::new(work_id, receipt, artifact),
-                    &mut services,
-                ),
-                Err(EffectExecutorError::Contract(reason))
-                    if reason.contains("exact decided-body owner")
-            ));
-            assert!(executor.pending_applications.contains_key(&work_id));
-            assert!(
-                executor.status().fail_closed,
-                "corrupt {field} must fail closed"
-            );
-            assert!(!services.closed.is_empty());
-            assert!(
-                !matches!(
-                    executor.runtime.completions.last(),
-                    Some(RuntimeCompletion::Application(_, _))
-                ),
-                "corrupt {field} cannot settle ApplicationCompleted"
-            );
-        }
-    }
-
-    #[test]
-    fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        let mut commit = fixture.qc(wire::GlobalPhase::Commit);
-        commit.round.view = fixture
-            .manifest
-            .round
-            .view
-            .checked_add(2)
-            .expect("fixture reproposal view increment");
-        commit.proposal_round = commit.round;
-        let reproposal_manifest = canonical_payload_manifest(
-            &fixture.context,
-            commit.round,
-            fixture.manifest.subject,
-            &fixture.body,
-        );
-        assert!(executor.protected_lock.is_none());
-        executor.runtime.decided_body = Some((
-            commit.round,
-            commit.proposal_round,
-            commit.subject,
-            commit.execution_commitment,
-        ));
-        let certified_sources = certified_sources(&fixture, &commit);
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: commit.proposal_round,
-                    subject: fixture.manifest.subject,
-                    manifest: None,
-                    certified_sources,
-                    certificate: Some(commit.clone()),
-                }],
-                &mut services,
-            )
-            .expect("lockless follower fetches the authenticated reproposal body");
-        let fetch = services
-            .fetch_tasks
-            .last()
-            .expect("certified fetch task")
-            .clone();
-        assert_eq!(fetch.round, commit.proposal_round);
-        executor
-            .complete_body_reconstruction(
-                &fetch,
-                reproposal_manifest,
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("reproposal body arrives");
-        executor
-            .consume_effects(
-                vec![AdapterEffect::StoreBody {
-                    tag: tag(0),
-                    round: commit.proposal_round,
-                    subject: commit.subject,
-                }],
-                &mut services,
-            )
-            .expect("store the authenticated reproposal body");
-        let store_id = services.store_tasks.last().expect("store task").id();
-        let stored = services.execute_store(store_id);
-        executor
-            .complete_body_store(stored, &mut services)
-            .expect("durable reproposal body");
-        executor
-            .consume_effects(
-                vec![AdapterEffect::ValidateBody {
-                    tag: tag(0),
-                    round: commit.proposal_round,
-                    subject: commit.subject,
-                }],
-                &mut services,
-            )
-            .expect("validate the authenticated reproposal body");
-        let validation_id = services
-            .validation_tasks
-            .last()
-            .expect("validation task")
-            .id();
-        let validated = services.execute_validation(validation_id);
-        executor
-            .complete_body_validation(validated, &mut services)
-            .expect("reproposal validation completes");
-        executor
-            .consume_effects(
-                vec![AdapterEffect::Apply {
-                    tag: tag(0),
-                    subject: commit.subject,
-                    certificate: commit.clone(),
-                }],
-                &mut services,
-            )
-            .expect("reproposal CommitQC applies after its exact body arrives");
-
-        let task = services.apply_tasks.last().expect("application task");
-        assert_eq!(task.tag(), tag(0));
-        assert_eq!(task.authorized_owner_tag(), tag(0));
-        assert_eq!(task.certificate(), &commit);
-        assert_eq!(
-            task.validated_receipt().durable().round(),
-            commit.proposal_round
-        );
-        assert_eq!(task.validated_receipt().durable().round(), commit.round);
-        assert!(!executor.status().fail_closed);
-    }
-
-    #[test]
-    fn apply_worker_request_has_no_runtime_ownership_sidecar() {
-        let source = include_str!("v2_effects.rs");
-        let task = source
-            .split_once("pub(crate) struct ApplyTask {")
-            .expect("ApplyTask has one declaration")
-            .1
-            .split_once("impl ApplyTask {")
-            .expect("ApplyTask implementation follows its declaration")
-            .0;
-        for required in ["authorized_owner_tag: EventTag", "lifecycle_ordinal: u128"] {
-            assert!(task.contains(required), "ApplyTask omitted {required}");
-        }
-        assert!(!task.contains("RuntimeEffectOwnership"));
-
-        let pending = source
-            .split_once("struct PendingApply {")
-            .expect("ordinary Apply pending state has one declaration")
-            .1
-            .split_once("struct ReadyBody {")
-            .expect("ReadyBody follows ordinary Apply pending state")
-            .0;
-        assert!(pending.contains("ownership: RuntimeEffectOwnership"));
-        let preflight = source
-            .split_once("fn preflight_pending_application_owner(")
-            .expect("ordinary Apply owner has one exact preflight")
-            .1
-            .split_once("fn preflight_deferred_work_owner(")
-            .expect("deferred work preflight follows Apply preflight")
-            .0;
-        assert!(
-            preflight.contains(
-                "task.lifecycle_ordinal() != pending.ownership.owner().lifecycle_ordinal()"
-            )
-        );
-        let completion = source
-            .split_once("pub(crate) fn complete_application")
-            .expect("Apply completion has one production entrypoint")
-            .1
-            .split_once("/// Current bounded operational status.")
-            .expect("status follows Apply completion")
-            .0;
-        let owner_preflight = completion
-            .find("preflight_pending_application_owner(completion.work_id, pending)")
-            .expect("Apply completion revalidates the retained runtime owner");
-        let task_borrow = completion
-            .find("let task = &pending.task;")
-            .expect("Apply completion borrows the task after owner validation");
-        assert!(owner_preflight < task_borrow);
-    }
-
-    #[test]
-    fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("local proposal");
-        complete_local_proposal_chain(&mut executor, &mut services);
-
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        assert!(matches!(
-            executor.begin_apply(
-                EventTag::new(2, 3, Generation::new(7)),
-                fixture.manifest.subject,
-                commit.clone(),
-                RuntimeEffectOwnership::fresh_for_test(tag(3), 30),
-                &mut services,
-            ),
-            Err(EffectExecutorError::Contract(_))
-        ));
-        assert!(executor.pending_applications.is_empty());
-        assert!(services.apply_tasks.is_empty());
-
-        executor.runtime.round_tag = Some(tag(3));
-        assert!(matches!(
-            executor.begin_apply(
-                tag(2),
-                fixture.manifest.subject,
-                commit.clone(),
-                RuntimeEffectOwnership::fresh_for_test(tag(2), 31),
-                &mut services,
-            ),
-            Err(EffectExecutorError::Contract(_))
-        ));
-        executor
-            .begin_apply(
-                tag(3),
-                fixture.manifest.subject,
-                commit.clone(),
-                RuntimeEffectOwnership::fresh_for_test(tag(3), 32),
-                &mut services,
-            )
-            .expect("a delayed decided CommitQC remains actionable");
-        assert_eq!(executor.pending_applications.len(), 1);
-        assert_eq!(services.apply_tasks.len(), 1);
-        assert_eq!(services.apply_tasks[0].tag(), tag(3));
-        assert_eq!(services.apply_tasks[0].authorized_owner_tag(), tag(3));
-        assert_eq!(services.apply_tasks[0].certificate(), &commit);
-    }
-
-    #[test]
-    fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work() {
-        let fixture = Fixture::new();
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        let mut services = fixture.services();
-        executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut services,
-            )
-            .expect("local proposal");
-        complete_local_proposal_chain(&mut executor, &mut services);
-
-        let mut foreign_context = fixture.context.clone();
-        foreign_context.network_id =
-            crate::sumeragi::synthetic_network_id("foreign-v2-effect-executor-test");
-        let mut foreign_commit = fixture.qc(wire::GlobalPhase::Commit);
-        foreign_commit.round.context_id = foreign_context.id();
-        foreign_commit.proposal_round.context_id = foreign_context.id();
-        assert_eq!(foreign_commit.round.height, fixture.manifest.round.height);
-        assert_eq!(foreign_commit.round.view, fixture.manifest.round.view);
-        assert_eq!(foreign_commit.subject, fixture.manifest.subject);
-        assert!(
-            foreign_commit.validate(&foreign_context).is_ok(),
-            "the adversarial certificate must be internally valid for its foreign context"
-        );
-
-        assert!(matches!(
-            executor.begin_apply(
-                tag(0),
-                fixture.manifest.subject,
-                foreign_commit,
-                RuntimeEffectOwnership::fresh_for_test(tag(0), 33),
-                &mut services,
-            ),
+            uncertified,
             Err(EffectExecutorError::Contract(reason))
-                if reason.contains("frozen height's exact CommitQC")
+                if reason == "body-fetch coordinates already have a recovered Decision Fetch owner"
         ));
-        assert!(executor.pending_applications.is_empty());
-        assert!(services.apply_tasks.is_empty());
-    }
+        assert_eq!(executor.body_ownership_projection(), ownership_before);
+        assert_eq!(services.fetch_tasks, service_fetches_before);
+        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
 
-    #[test]
-    fn recovered_validation_catalog_hydrates_direct_apply_durability() {
-        let fixture = Fixture::new();
-        let directory = TempDir::new().expect("body-store directory");
-        let mut store = V2BodyStore::open_with_policy(
-            directory.path(),
-            fixture.context.clone(),
-            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-        )
-        .expect("open body store");
-        let durable = store
-            .store(fixture.manifest.clone(), fixture.body.clone())
-            .expect("persist exact body");
-        let validated = store
-            .validate(&durable, |_| {
-                Ok::<_, &'static str>(fixture_execution_commitment())
-            })
-            .expect("persist exact validation marker");
-        drop(store);
+        let certified = executor.begin_fetch(
+            tag(0),
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            None,
+            sources,
+            Some(certificate),
+            certified_ownership,
+            &mut services,
+        );
+        assert!(matches!(
+            certified,
+            Err(EffectExecutorError::Contract(reason))
+                if reason == "body-fetch coordinates already have a recovered Decision Fetch owner"
+        ));
+        assert_eq!(executor.body_ownership_projection(), ownership_before);
+        assert_eq!(services.fetch_tasks, service_fetches_before);
+        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
 
-        let mut reopened = V2BodyStore::open_with_policy(
-            directory.path(),
-            fixture.context.clone(),
-            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-        )
-        .expect("reopen exact body store");
-        reopened
-            .revalidate_recovered_markers(|_| Ok::<_, String>(fixture_execution_commitment()))
-            .expect("semantically replay recovered validation marker");
-        let recovered_bodies = reopened.recovery_catalog().expect("recovery catalog");
-        let recovered_validations = reopened.validated_recovery_catalog();
-        let key = (fixture.manifest.round, fixture.manifest.subject);
-
-        let mut executor = V2EffectExecutor::with_runtime(
-            FakeRuntime {
-                round_tag: Some(tag(0)),
-                ..FakeRuntime::default()
+        let collision_id = EffectWorkId::for_test(73);
+        executor.pending_fetches.insert(
+            collision_id,
+            PendingFetch {
+                task: BodyFetchTask {
+                    id: collision_id,
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    sources: Vec::new(),
+                    certified_request: None,
+                    ownership: uncertified_ownership,
+                },
+                request_hash: None,
             },
-            recovered_bodies,
-            fixture.context.clone(),
-            PeerId::new(fixture.requester_key.public_key().clone()),
-            Some(0),
-            EffectQueueConfig::default(),
-        )
-        .expect("reopened effect executor");
-        executor
-            .runtime
-            .bind_validated_body(&fixture.manifest, &validated)
-            .expect("restore runtime validation authority");
-        executor
-            .install_recovered_validation_catalog(recovered_validations)
-            .expect("restore executor validation authority");
-
-        assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
-        assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
-
-        let commit = fixture.qc(wire::GlobalPhase::Commit);
-        let mut services = fixture.services();
-        executor
-            .begin_apply(
-                tag(0),
-                fixture.manifest.subject,
-                commit.clone(),
-                RuntimeEffectOwnership::fresh_for_test(tag(0), 34),
-                &mut services,
-            )
-            .expect("replayed CommitQC applies without body-stage replay");
-
-        assert_eq!(services.apply_tasks.len(), 1);
-        assert_eq!(services.apply_tasks[0].certificate(), &commit);
-        assert_eq!(services.apply_tasks[0].validated_receipt(), &validated);
-        assert!(services.closed.is_empty());
-        assert!(!executor.status().fail_closed);
+        );
+        assert!(matches!(
+            executor.validated_certified_request_presence(),
+            Err(EffectTransportError::Authentication(
+                V2TransportError::InconsistentRequestIndex(hash)
+            )) if hash == request_hash
+        ));
     }
+
+    include!("v2_effects_certified_response_and_apply_cases_tests.rs");
 
     include!("tests/v2_effects_kura_tip_replay.rs");
     include!("tests/v2_effects_01_view_churn_and_runtime_steps.rs");

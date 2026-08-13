@@ -657,9 +657,9 @@ pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
 // TODO: Remove this allowance only in the separate complete scheduler switch;
 // the generic coordinator remains staged and unwired.
+pub(crate) mod v2_first_release_recovery;
 #[allow(dead_code)]
 pub(crate) mod v2_lifecycle_coordinator;
-pub(crate) mod v2_first_release_recovery;
 pub(crate) mod v2_lifecycle_recovery;
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;

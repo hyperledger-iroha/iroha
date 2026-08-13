@@ -1221,7 +1221,11 @@ pub(super) fn recovered_decision_body_continuation_is_exact(
         }
         super::schema::DurableContinuationEdge::ValidateToInvalidBodyReport
         | super::schema::DurableContinuationEdge::ValidateToSignPrepare
-        | super::schema::DurableContinuationEdge::ValidateToSignCommit => false,
+        | super::schema::DurableContinuationEdge::ValidateToSignCommit
+        | super::schema::DurableContinuationEdge::SignProposalToBroadcast
+        | super::schema::DurableContinuationEdge::SignPrepareToBroadcast
+        | super::schema::DurableContinuationEdge::SignCommitToBroadcast
+        | super::schema::DurableContinuationEdge::SignTimeoutToBroadcast => false,
     })
 }
 

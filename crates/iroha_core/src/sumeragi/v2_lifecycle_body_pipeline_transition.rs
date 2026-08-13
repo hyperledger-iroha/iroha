@@ -1,16 +1,20 @@
-//! Inert coordinator staging for adjacent direct body-pipeline successors.
+//! Sealed coordinator staging and publication for adjacent body-pipeline successors.
 
 use super::{
     AdapterEffectAdmissionError, AdmissionDecision, AdmissionRequest, CandidateAdmission,
     CapacityClass, CoordinatorFault, InitialLifecycleState, LifecycleCoordinator, LifecyclePhase,
     LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId, PhysicalSlotId,
-    PredecessorScope, TerminalOutcome, TurnLease,
+    PredecessorScope, TerminalOutcome, TurnLease, WaitSource, WaitToken,
     schema::{DurableContinuation, DurableContinuationEdge, DurablePayloadReference},
     work_registry::{
+        BoundRecoveredLifecycleSignBroadcastAndSignSuccessor,
         LiveValidateSignRegistryPublicationError, PreparedCertifiedFetchStoreSuccessor,
         PreparedDurableStoreValidateSuccessor, PreparedInvalidBodyReportReplayPreAdmission,
         PreparedLiveValidateSignRegistryPublication, PreparedReadyDurableValidateAdapterPreview,
-        PreparedReadyDurableValidatePersistedSignPreAdmission, SealedBodySuccessorProjectionError,
+        PreparedReadyDurableValidatePersistedSignPreAdmission,
+        PreparedRecoveredDecisionFetchStoreSuccessor,
+        PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor,
+        PreparedRecoveredLifecycleSignBroadcastSuccessor, SealedBodySuccessorProjectionError,
         SealedValidateTerminalProjectionError,
     },
 };
@@ -48,6 +52,26 @@ impl DurableContinuationEdge {
                 LifecyclePhase::Validate,
                 LifecycleStageKind::ValidateBody,
             ),
+            Self::SignProposalToBroadcast => (
+                LifecycleWorkClass::SignProposal,
+                LifecyclePhase::Proposal,
+                LifecycleStageKind::SignProposal,
+            ),
+            Self::SignPrepareToBroadcast => (
+                LifecycleWorkClass::SignVote,
+                LifecyclePhase::Prepare,
+                LifecycleStageKind::SignPrepareVote,
+            ),
+            Self::SignCommitToBroadcast => (
+                LifecycleWorkClass::SignVote,
+                LifecyclePhase::Commit,
+                LifecycleStageKind::SignCommitVote,
+            ),
+            Self::SignTimeoutToBroadcast => (
+                LifecycleWorkClass::SignTimeout,
+                LifecyclePhase::Timeout,
+                LifecycleStageKind::SignTimeoutVote,
+            ),
         }
     }
 
@@ -83,6 +107,26 @@ impl DurableContinuationEdge {
                 LifecyclePhase::Commit,
                 LifecycleStageKind::SignCommitVote,
             ),
+            Self::SignProposalToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastProposal,
+                LifecycleStageKind::BroadcastProposal,
+            ),
+            Self::SignPrepareToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastPrepareVote,
+                LifecycleStageKind::BroadcastPrepareVote,
+            ),
+            Self::SignCommitToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastCommitVote,
+                LifecycleStageKind::BroadcastCommitVote,
+            ),
+            Self::SignTimeoutToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastTimeoutVote,
+                LifecycleStageKind::BroadcastTimeoutVote,
+            ),
         }
     }
 
@@ -107,6 +151,12 @@ impl DurableContinuationEdge {
                         .execution_commitment()
                         .is_none_or(|commitment| child.execution_commitment() == Some(commitment))
             }
+            Self::SignProposalToBroadcast
+            | Self::SignPrepareToBroadcast
+            | Self::SignCommitToBroadcast
+            | Self::SignTimeoutToBroadcast => {
+                child.execution_commitment() == parent.execution_commitment()
+            }
         }
     }
 }
@@ -125,8 +175,21 @@ pub(super) fn durable_continuation_successor_is_exact(
     child_key: super::LifecycleKey,
     child_stage: super::LifecycleStage,
 ) -> bool {
-    parent_key.proposal_round().is_some()
-        && parent_key.subject().is_some()
+    let required_lineage_is_present = match edge {
+        DurableContinuationEdge::SignTimeoutToBroadcast => true,
+        DurableContinuationEdge::FetchToStore
+        | DurableContinuationEdge::StoreToValidate
+        | DurableContinuationEdge::ValidateToApply
+        | DurableContinuationEdge::ValidateToInvalidBodyReport
+        | DurableContinuationEdge::ValidateToSignPrepare
+        | DurableContinuationEdge::ValidateToSignCommit
+        | DurableContinuationEdge::SignProposalToBroadcast
+        | DurableContinuationEdge::SignPrepareToBroadcast
+        | DurableContinuationEdge::SignCommitToBroadcast => {
+            parent_key.proposal_round().is_some() && parent_key.subject().is_some()
+        }
+    };
+    required_lineage_is_present
         && parent_stage.predecessor_scope() == PredecessorScope::Independent
         && child_stage.predecessor_scope() == PredecessorScope::Independent
         && {
@@ -169,6 +232,12 @@ pub(super) fn durable_continuation_payload_is_exact(
         | DurableContinuationEdge::ValidateToSignCommit => {
             matches!(parent, DurablePayloadReference::BodyFrame(_))
                 && child == DurablePayloadReference::None
+        }
+        DurableContinuationEdge::SignProposalToBroadcast
+        | DurableContinuationEdge::SignPrepareToBroadcast
+        | DurableContinuationEdge::SignCommitToBroadcast
+        | DurableContinuationEdge::SignTimeoutToBroadcast => {
+            parent == DurablePayloadReference::None && child == DurablePayloadReference::None
         }
     }
 }
@@ -232,6 +301,25 @@ struct StagedBodyStageTransition {
     owner: OwnerId,
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
+}
+
+/// Fully checked staged state for one recovered Sign with two reducer children.
+///
+/// The Broadcast remains the typed continuation of the claimed Sign. The
+/// follow-on Vote Sign is a separate WAL-owned Ready row, admitted in the same
+/// invisible coordinator copy at the immediately following ordinal.
+#[cfg_attr(not(test), allow(dead_code))]
+struct StagedRecoveredLifecycleSignBroadcastAndSignTransition {
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    broadcast_ordinal: u128,
+    next_sign_ordinal: u128,
+    broadcast_owner: OwnerId,
+    next_sign_owner: OwnerId,
+    broadcast_slot: PhysicalSlotId,
+    broadcast_digest: super::LifecycleDigest,
+    next_sign_slot: PhysicalSlotId,
+    next_sign_digest: super::LifecycleDigest,
 }
 
 /// Fully checked staged state for one consumed Validate with no successor.
@@ -307,6 +395,33 @@ impl SealedValidateSignProjectionPermit {
     fn new() -> Self {
         Self {
             _linearity: SealedValidateSignProjectionLinearity,
+        }
+    }
+}
+
+/// One-shot authority for reading the two admissions of a combined Sign result.
+///
+/// WAL recovery retains both executable children in one opaque projection.
+/// Only this transition module can mint the permit which clones their inert
+/// admissions into an unpublished coordinator copy; registry ownership stays
+/// inseparable until the later post-fsync commit.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1 {
+    _linearity: RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+struct RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1;
+
+impl Drop for RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleBroadcastAndSignTransitionProjectionLinearityV1,
         }
     }
 }
@@ -606,12 +721,273 @@ fn stage_validate_no_successor_transition(
 /// the lease overlay, then terminalizes the parent, so the staged cut converts
 /// reserved occupancy into durable occupancy without changing its generation.
 #[allow(clippy::too_many_lines)]
+#[derive(Clone, Copy)]
+enum BodyStagePayloadRelationV1 {
+    OrdinaryBodyFrame,
+    RecoveredDecisionFetch,
+    RecoveredLifecycleSign,
+}
+
 fn stage_body_stage_transition(
     coordinator: &LifecycleCoordinator,
     lease: &TurnLease,
     candidate: CandidateAdmission,
     parent_payload: DurablePayloadReference,
     edge: DurableContinuationEdge,
+) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
+    stage_body_stage_transition_with_payload_relation(
+        coordinator,
+        lease,
+        candidate,
+        parent_payload,
+        edge,
+        BodyStagePayloadRelationV1::OrdinaryBodyFrame,
+    )
+}
+
+fn stage_recovered_decision_fetch_store_transition(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    candidate: CandidateAdmission,
+) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
+    stage_body_stage_transition_with_payload_relation(
+        coordinator,
+        lease,
+        candidate,
+        DurablePayloadReference::None,
+        DurableContinuationEdge::FetchToStore,
+        BodyStagePayloadRelationV1::RecoveredDecisionFetch,
+    )
+}
+
+fn stage_recovered_lifecycle_sign_broadcast_transition(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    candidate: CandidateAdmission,
+) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
+    let edge = match (
+        lease.work_class(),
+        lease.key().phase(),
+        lease.stage().kind(),
+    ) {
+        (
+            LifecycleWorkClass::SignProposal,
+            LifecyclePhase::Proposal,
+            LifecycleStageKind::SignProposal,
+        ) => DurableContinuationEdge::SignProposalToBroadcast,
+        (
+            LifecycleWorkClass::SignVote,
+            LifecyclePhase::Prepare,
+            LifecycleStageKind::SignPrepareVote,
+        ) => DurableContinuationEdge::SignPrepareToBroadcast,
+        (
+            LifecycleWorkClass::SignVote,
+            LifecyclePhase::Commit,
+            LifecycleStageKind::SignCommitVote,
+        ) => DurableContinuationEdge::SignCommitToBroadcast,
+        (
+            LifecycleWorkClass::SignTimeout,
+            LifecyclePhase::Timeout,
+            LifecycleStageKind::SignTimeoutVote,
+        ) => DurableContinuationEdge::SignTimeoutToBroadcast,
+        _ => return Err(BodyStageTransitionError::WrongParentShape),
+    };
+    stage_body_stage_transition_with_payload_relation(
+        coordinator,
+        lease,
+        candidate,
+        DurablePayloadReference::None,
+        edge,
+        BodyStagePayloadRelationV1::RecoveredLifecycleSign,
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn recovered_broadcast_and_next_sign_are_exact(
+    broadcast: &CandidateAdmission,
+    next_sign: &CandidateAdmission,
+) -> bool {
+    let exact_stages = matches!(
+        (
+            broadcast.key.phase(),
+            broadcast.stage.kind(),
+            next_sign.key.phase(),
+            next_sign.stage.kind(),
+        ),
+        (
+            LifecyclePhase::BroadcastProposal,
+            LifecycleStageKind::BroadcastProposal,
+            LifecyclePhase::Prepare,
+            LifecycleStageKind::SignPrepareVote,
+        ) | (
+            LifecyclePhase::BroadcastPrepareVote,
+            LifecycleStageKind::BroadcastPrepareVote,
+            LifecyclePhase::Commit,
+            LifecycleStageKind::SignCommitVote,
+        )
+    );
+    let commitment_is_exact = match broadcast.key.phase() {
+        LifecyclePhase::BroadcastProposal => {
+            broadcast.key.execution_commitment().is_none()
+                && next_sign.key.execution_commitment().is_some()
+        }
+        LifecyclePhase::BroadcastPrepareVote => {
+            broadcast.key.execution_commitment() == next_sign.key.execution_commitment()
+        }
+        _ => false,
+    };
+    exact_stages
+        && commitment_is_exact
+        && broadcast.key.context() == next_sign.key.context()
+        && broadcast.key.round() == next_sign.key.round()
+        && broadcast.key.proposal_round() == next_sign.key.proposal_round()
+        && broadcast.key.subject() == next_sign.key.subject()
+}
+
+/// Stage one recovered `Signed` reducer result containing Broadcast plus Sign.
+///
+/// The first child uses the ordinary typed Sign-to-Broadcast continuation and
+/// consumes the claimed parent's Consensus overlay. The independently
+/// WAL-owned follow-on Sign is then admitted at the next ordinal in the same
+/// unpublished coordinator copy. No live coordinator state changes here.
+#[cfg_attr(not(test), allow(dead_code))]
+fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    broadcast: CandidateAdmission,
+    next_sign: CandidateAdmission,
+) -> Result<StagedRecoveredLifecycleSignBroadcastAndSignTransition, BodyStageTransitionError> {
+    let next_sign_candidate = next_sign.clone();
+    let next_sign_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+    let Ok((next_slots, next_universe, next_consumed)) = next_sign.physical_geometry.normalized()
+    else {
+        return Err(BodyStageTransitionError::InvalidChildProjection);
+    };
+    let Some(&next_sign_digest) = next_slots.get(&next_sign_slot) else {
+        return Err(BodyStageTransitionError::InvalidChildProjection);
+    };
+    if !recovered_broadcast_and_next_sign_are_exact(&broadcast, &next_sign)
+        || next_sign.work_class != LifecycleWorkClass::SignVote
+        || next_sign.stage.predecessor_scope() != PredecessorScope::Independent
+        || next_sign.initial_state != InitialLifecycleState::Ready
+        || next_sign.payload != DurablePayloadReference::None
+        || next_sign.producer_turn.is_some()
+        || next_sign.causal_root == lease.owner().causal_root()
+        || coordinator.owner_index.contains_key(&next_sign.causal_root)
+        || next_sign.reconstruction_source != next_sign.causal_root.digest()
+        || !next_sign.replay_authority_is_exact(coordinator.active_context)
+        || next_slots.len() != 1
+        || next_universe.len() != 1
+        || next_consumed != next_universe
+        || !next_universe.contains(&next_sign_slot)
+    {
+        return Err(BodyStageTransitionError::InvalidChildProjection);
+    }
+
+    let capacity_used_before = coordinator.capacity_used.clone();
+    let capacity_generation_before = coordinator.capacity_generation.clone();
+    let records_before = coordinator.records.len();
+    let durable_records_before = coordinator.durable_records.len();
+    let first = stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast)?;
+    let expected_next_sign_ordinal = first
+        .child_ordinal
+        .checked_add(1)
+        .ok_or(BodyStageTransitionError::OrdinalExhausted)?;
+    let StagedBodyStageTransition {
+        mut staged,
+        parent_ordinal,
+        child_ordinal: broadcast_ordinal,
+        owner: broadcast_owner,
+        child_slot: broadcast_slot,
+        child_digest: broadcast_digest,
+    } = first;
+    let decision = staged.reduce_admit(AdmissionRequest::Candidate(next_sign));
+    let AdmissionDecision::Admitted {
+        owner: next_sign_owner,
+        ordinal: next_sign_ordinal,
+        producer_turn_ordinal: None,
+    } = decision
+    else {
+        return Err(BodyStageTransitionError::ChildAdmission(Box::new(decision)));
+    };
+    if next_sign_ordinal != expected_next_sign_ordinal
+        || next_sign_owner.causal_root() != next_sign_candidate.causal_root
+        || next_sign_owner == broadcast_owner
+    {
+        return Err(BodyStageTransitionError::InvalidChildOwner);
+    }
+
+    let next_record_is_exact = staged
+        .records
+        .get(&next_sign_ordinal)
+        .is_some_and(|record| {
+            record.owner == next_sign_owner
+                && record.ordinal == next_sign_ordinal
+                && record.key == next_sign_candidate.key
+                && record.work_class == LifecycleWorkClass::SignVote
+                && record.stage == next_sign_candidate.stage
+                && record.state == LifecycleState::Ready
+                && record.physical_slots == next_slots
+                && record.episode.slot_universe == next_universe
+                && record.episode.consumed_slots == next_consumed
+        });
+    if !next_record_is_exact
+        || staged.active_lease.is_some()
+        || staged.high_water != next_sign_ordinal
+        || staged.records.len() != records_before.saturating_add(2)
+        || staged.durable_records.len() != durable_records_before.saturating_add(2)
+        || staged.key_index.get(&next_sign_candidate.key) != Some(&next_sign_ordinal)
+        || staged.owner_index.get(&next_sign_candidate.causal_root) != Some(&next_sign_owner)
+        || !staged.ready_index.contains(&broadcast_ordinal)
+        || !staged.ready_index.contains(&next_sign_ordinal)
+        || staged
+            .durable_records
+            .get(&next_sign_ordinal)
+            .is_none_or(|metadata| {
+                !metadata.matches_admission(&next_sign_candidate)
+                    || metadata.continuation != DurableContinuation::None
+            })
+        || staged.capacity_used[&CapacityClass::Effect]
+            != capacity_used_before[&CapacityClass::Effect]
+        || staged.capacity_generation[&CapacityClass::Effect]
+            != capacity_generation_before[&CapacityClass::Effect].saturating_add(1)
+        || staged.capacity_used[&CapacityClass::Consensus]
+            != capacity_used_before[&CapacityClass::Consensus].saturating_add(1)
+        || staged.capacity_generation[&CapacityClass::Consensus]
+            != capacity_generation_before[&CapacityClass::Consensus]
+        || CapacityClass::ALL
+            .into_iter()
+            .filter(|class| !matches!(class, CapacityClass::Effect | CapacityClass::Consensus))
+            .any(|class| {
+                staged.capacity_used[&class] != capacity_used_before[&class]
+                    || staged.capacity_generation[&class] != capacity_generation_before[&class]
+            })
+    {
+        return Err(BodyStageTransitionError::InvalidStagedRecords);
+    }
+
+    Ok(StagedRecoveredLifecycleSignBroadcastAndSignTransition {
+        staged,
+        parent_ordinal,
+        broadcast_ordinal,
+        next_sign_ordinal,
+        broadcast_owner,
+        next_sign_owner,
+        broadcast_slot,
+        broadcast_digest,
+        next_sign_slot,
+        next_sign_digest,
+    })
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn stage_body_stage_transition_with_payload_relation(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    candidate: CandidateAdmission,
+    parent_payload: DurablePayloadReference,
+    edge: DurableContinuationEdge,
+    payload_relation: BodyStagePayloadRelationV1,
 ) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
     let (parent_work_class, parent_phase, parent_stage) = edge.parent();
     let (child_work_class, child_phase, child_stage) = edge.child();
@@ -721,7 +1097,39 @@ fn stage_body_stage_transition(
     {
         return Err(BodyStageTransitionError::InvalidBodyFrameReference);
     }
-    if !durable_continuation_payload_is_exact(edge, parent_payload, child_payload) {
+    let payload_is_exact = match payload_relation {
+        BodyStagePayloadRelationV1::OrdinaryBodyFrame => {
+            durable_continuation_payload_is_exact(edge, parent_payload, child_payload)
+        }
+        BodyStagePayloadRelationV1::RecoveredDecisionFetch => {
+            edge == DurableContinuationEdge::FetchToStore
+                && parent_payload == DurablePayloadReference::None
+                && super::replay_authority::recovered_decision_body_continuation_is_exact(
+                    edge,
+                    &parent_metadata.replay_authority,
+                    parent_payload,
+                    &candidate.replay_authority,
+                    child_payload,
+                ) == Some(true)
+        }
+        BodyStagePayloadRelationV1::RecoveredLifecycleSign => {
+            matches!(
+                edge,
+                DurableContinuationEdge::SignProposalToBroadcast
+                    | DurableContinuationEdge::SignPrepareToBroadcast
+                    | DurableContinuationEdge::SignCommitToBroadcast
+                    | DurableContinuationEdge::SignTimeoutToBroadcast
+            ) && parent_payload == DurablePayloadReference::None
+                && super::replay_authority::signed_broadcast_continuation_is_exact(
+                    edge,
+                    &parent_metadata.replay_authority,
+                    parent_payload,
+                    &candidate.replay_authority,
+                    child_payload,
+                ) == Some(true)
+        }
+    };
+    if !payload_is_exact {
         return Err(BodyStageTransitionError::InvalidBodyFrameReference);
     }
     if candidate.causal_root != lease.owner().causal_root() {
@@ -953,6 +1361,226 @@ pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
     child_digest: super::LifecycleDigest,
 }
 
+/// Fully staged recovered WAL Fetch-to-Store publication.
+///
+/// The Fetch parent remains payload-free; only the Store child owns the exact
+/// BodyFrame. Registry and adapter borrows are retained beside the cloned
+/// coordinator until one LedgerV1 fsync succeeds.
+#[must_use = "recovered Decision Fetch-to-Store transition has not been published"]
+pub(super) struct PreparedRecoveredDecisionFetchStoreTransition<'coordinator, 'registry, 'adapter> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    child_ordinal: u128,
+    child_slot: PhysicalSlotId,
+    child_digest: super::LifecycleDigest,
+}
+
+impl PreparedRecoveredDecisionFetchStoreTransition<'_, '_, '_> {
+    /// Fsync the exact staged LedgerV1 successor while all volatile owners remain borrowed.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+
+    /// Publish the already-fsynced coordinator, registry, and adapter tail.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            parent_ordinal,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(staged.records.get(&child_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Ready
+                && record.physical_slots.get(&child_slot) == Some(&child_digest)
+        }));
+        let adapter = successor.commit_after_publication();
+        *coordinator = staged;
+        adapter.commit_after_durable_settlement();
+    }
+}
+
+/// Fully staged recovered Sign-to-Broadcast publication.
+///
+/// The original Sign, adapter preview, and signed Broadcast projection remain
+/// borrowed beside a cloned coordinator until the exact LedgerV1 successor is
+/// fsynced. Dropping this value is a pure pre-publication abort.
+#[must_use = "recovered Sign-to-Broadcast transition has not been published"]
+pub(super) struct PreparedRecoveredLifecycleSignBroadcastTransition<
+    'coordinator,
+    'registry,
+    'adapter,
+> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    child_ordinal: u128,
+    child_slot: PhysicalSlotId,
+    child_digest: super::LifecycleDigest,
+}
+
+/// Fully staged recovered Proposal Broadcast-and-next-Sign publication.
+///
+/// Both concrete child addresses have rejoined the opaque registry successor,
+/// and, for Proposal, the exact output reservation remains held outside this
+/// token until the LedgerV1 successor is fsynced. Proposal publication parks
+/// its Broadcast behind that owner; Vote publication leaves Broadcast Ready
+/// for typed refanout. The independently WAL-owned next Sign remains Ready and
+/// a crash reconstructs the Broadcast output debt from LedgerV1.
+#[must_use = "combined recovered Sign transition has not been published"]
+pub(super) struct PreparedRecoveredLifecycleSignBroadcastAndSignTransition<
+    'coordinator,
+    'registry,
+    'adapter,
+> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    broadcast_ordinal: u128,
+    next_sign_ordinal: u128,
+    broadcast_owner: OwnerId,
+    next_sign_owner: OwnerId,
+    broadcast_slot: PhysicalSlotId,
+    broadcast_digest: super::LifecycleDigest,
+    next_sign_slot: PhysicalSlotId,
+    next_sign_digest: super::LifecycleDigest,
+    broadcast_wait: WaitToken,
+    publication_is_vote: bool,
+}
+
+impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
+    /// Fsync the exact staged LedgerV1 successor while all volatile owners remain borrowed.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+
+    /// Publish the already-fsynced coordinator, registry, and adapter tail.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            parent_ordinal,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(staged.records.get(&child_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Ready
+                && record.physical_slots.get(&child_slot) == Some(&child_digest)
+        }));
+        let adapter = successor.commit_after_publication();
+        *coordinator = staged;
+        adapter.commit_after_durable_broadcast();
+    }
+}
+
+impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
+    /// Fsync the exact two-child LedgerV1 successor while all owners stay borrowed.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+
+    /// Publish both children under the preauthenticated output mode.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            parent_ordinal,
+            broadcast_ordinal,
+            next_sign_ordinal,
+            broadcast_owner,
+            next_sign_owner,
+            broadcast_slot,
+            broadcast_digest,
+            next_sign_slot,
+            next_sign_digest,
+            broadcast_wait,
+            publication_is_vote,
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(
+            staged
+                .records
+                .get(&broadcast_ordinal)
+                .is_some_and(|record| {
+                    record.owner == broadcast_owner
+                        && record.state == LifecycleState::Ready
+                        && record.physical_slots.get(&broadcast_slot) == Some(&broadcast_digest)
+                })
+        );
+        assert!(
+            staged
+                .records
+                .get(&next_sign_ordinal)
+                .is_some_and(|record| {
+                    record.owner == next_sign_owner
+                        && record.state == LifecycleState::Ready
+                        && record.physical_slots.get(&next_sign_slot) == Some(&next_sign_digest)
+                })
+        );
+        assert!(staged.active_lease.is_none());
+
+        let adapter = successor.commit_after_publication();
+        *coordinator = staged;
+        if publication_is_vote {
+            assert!(coordinator.ready_index.contains(&broadcast_ordinal));
+            assert!(
+                coordinator
+                    .records
+                    .get(&broadcast_ordinal)
+                    .is_some_and(|record| { record.state == LifecycleState::Ready })
+            );
+        } else {
+            assert!(coordinator.ready_index.remove(&broadcast_ordinal));
+            coordinator
+                .records
+                .get_mut(&broadcast_ordinal)
+                .expect("published combined Broadcast retains its staged row")
+                .state = LifecycleState::Waiting(broadcast_wait);
+            assert!(
+                coordinator
+                    .observed_generation
+                    .insert(
+                        broadcast_wait.source(),
+                        broadcast_wait.observed_generation()
+                    )
+                    .is_none_or(|known| known == broadcast_wait.observed_generation())
+            );
+        }
+        assert!(coordinator.ready_index.contains(&next_sign_ordinal));
+        if publication_is_vote {
+            adapter.commit_after_durable_vote_broadcast_and_sign();
+        } else {
+            adapter.commit_after_durable_broadcast_and_sign();
+        }
+    }
+}
+
 fn map_sealed_successor_projection_error(
     error: SealedBodySuccessorProjectionError,
 ) -> BodyStageTransitionError {
@@ -1091,6 +1719,135 @@ pub(super) struct SealedValidateReportTransitionError<'registry, 'adapter> {
 }
 
 impl LifecycleCoordinator {
+    /// Stage the recovered payload-free Fetch and body-backed Store successor.
+    pub(super) fn prepare_recovered_decision_fetch_store_transition<
+        'coordinator,
+        'registry,
+        'adapter,
+    >(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        verified: &VerifiedHeightContext,
+        successor: PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchStoreTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        let candidate = successor
+            .project_for_body_transition(lease, verified)
+            .map_err(map_sealed_successor_projection_error)?;
+        let transition = stage_recovered_decision_fetch_store_transition(self, lease, candidate)?;
+        Ok(PreparedRecoveredDecisionFetchStoreTransition {
+            coordinator: self,
+            successor,
+            staged: transition.staged,
+            parent_ordinal: transition.parent_ordinal,
+            child_ordinal: transition.child_ordinal,
+            child_slot: transition.child_slot,
+            child_digest: transition.child_digest,
+        })
+    }
+
+    /// Stage one recovered Sign and its adapter-authenticated Broadcast child.
+    pub(super) fn prepare_recovered_lifecycle_sign_broadcast_transition<
+        'coordinator,
+        'registry,
+        'adapter,
+    >(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        verified: &VerifiedHeightContext,
+        successor: PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedRecoveredLifecycleSignBroadcastTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        let candidate = successor
+            .project_for_transition(lease, verified)
+            .map_err(map_sealed_successor_projection_error)?;
+        let transition =
+            stage_recovered_lifecycle_sign_broadcast_transition(self, lease, candidate)?;
+        Ok(PreparedRecoveredLifecycleSignBroadcastTransition {
+            coordinator: self,
+            successor,
+            staged: transition.staged,
+            parent_ordinal: transition.parent_ordinal,
+            child_ordinal: transition.child_ordinal,
+            child_slot: transition.child_slot,
+            child_digest: transition.child_digest,
+        })
+    }
+
+    /// Stage the exact two-child result of one recovered `Signed` event.
+    ///
+    /// Both opaque admissions fit one coordinator snapshot, and the registry
+    /// binds the same fresh addresses without splitting executable authority.
+    /// The returned value retains every owner through the one allowed fsync.
+    pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_transition<
+        'coordinator,
+        'registry,
+        'adapter,
+    >(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        successor: PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        let publication_is_vote = successor
+            .publication_is_vote()
+            .ok_or(BodyStageTransitionError::InvalidChildProjection)?;
+        let (broadcast, next_sign) = successor.project_transition_candidates(
+            RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1::new(),
+        );
+        let transition = stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
+            self, lease, broadcast, next_sign,
+        )?;
+        let successor = successor
+            .bind_staged_children(
+                &transition.staged,
+                transition.broadcast_ordinal,
+                transition.next_sign_ordinal,
+            )
+            .map_err(|_| BodyStageTransitionError::InvalidChildProjection)?;
+        let broadcast_wait_source = WaitSource::Recovery(transition.broadcast_digest);
+        let broadcast_wait_generation = transition
+            .staged
+            .observed_generation
+            .get(&broadcast_wait_source)
+            .copied()
+            .unwrap_or(0);
+        if broadcast_wait_generation == u64::MAX {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        Ok(PreparedRecoveredLifecycleSignBroadcastAndSignTransition {
+            coordinator: self,
+            successor,
+            staged: transition.staged,
+            parent_ordinal: transition.parent_ordinal,
+            broadcast_ordinal: transition.broadcast_ordinal,
+            next_sign_ordinal: transition.next_sign_ordinal,
+            broadcast_owner: transition.broadcast_owner,
+            next_sign_owner: transition.next_sign_owner,
+            broadcast_slot: transition.broadcast_slot,
+            broadcast_digest: transition.broadcast_digest,
+            next_sign_slot: transition.next_sign_slot,
+            next_sign_digest: transition.next_sign_digest,
+            broadcast_wait: WaitToken::new(broadcast_wait_source, broadcast_wait_generation),
+            publication_is_vote,
+        })
+    }
+
     /// Stage the sole live post-WAL Validate-to-Sign transaction.
     ///
     /// A first-release node must have an attached LedgerV1 store. The child is
@@ -1419,2863 +2176,6 @@ impl<'coordinator, 'registry, 'adapter>
     }
 }
 
-#[cfg(test)]
-fn digest_from_hash(hash: &iroha_crypto::Hash) -> super::LifecycleDigest {
-    let mut bytes = [0_u8; 32];
-    bytes.copy_from_slice(hash.as_ref());
-    super::LifecycleDigest::new(bytes)
-}
+include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 
-#[cfg(test)]
-mod static_tests {
-    use super::super::{LifecycleDigest, LifecycleKey, LifecycleRound, LifecycleStage};
-    use super::*;
-    use crate::sumeragi::v2_lifecycle_coordinator::{
-        reviewed_lifecycle_ledger_source_for_test,
-        reviewed_lifecycle_work_registry_source_for_test,
-    };
-
-    fn key(
-        phase: LifecyclePhase,
-        proposal_round: bool,
-        subject: bool,
-        commitment: Option<LifecycleDigest>,
-    ) -> LifecycleKey {
-        LifecycleKey::new(
-            LifecycleDigest::new([1; 32]),
-            LifecycleRound::new(7, 3),
-            proposal_round.then_some(LifecycleRound::new(7, 3)),
-            subject.then_some(LifecycleDigest::new([2; 32])),
-            phase,
-            commitment,
-        )
-    }
-
-    fn stage(kind: LifecycleStageKind, scope: PredecessorScope) -> LifecycleStage {
-        LifecycleStage::new(kind, scope)
-    }
-
-    #[test]
-    fn durable_successor_relation_covers_all_six_exact_continuation_edges() {
-        let commitment = LifecycleDigest::new([3; 32]);
-        let exact = [
-            (
-                DurableContinuationEdge::FetchToStore,
-                LifecycleWorkClass::Fetch,
-                key(LifecyclePhase::Fetch, true, true, Some(commitment)),
-                LifecycleStageKind::FetchBody,
-                LifecycleWorkClass::Store,
-                key(LifecyclePhase::Store, true, true, Some(commitment)),
-                LifecycleStageKind::StoreBody,
-            ),
-            (
-                DurableContinuationEdge::StoreToValidate,
-                LifecycleWorkClass::Store,
-                key(LifecyclePhase::Store, true, true, Some(commitment)),
-                LifecycleStageKind::StoreBody,
-                LifecycleWorkClass::Validate,
-                key(LifecyclePhase::Validate, true, true, Some(commitment)),
-                LifecycleStageKind::ValidateBody,
-            ),
-            (
-                DurableContinuationEdge::ValidateToApply,
-                LifecycleWorkClass::Validate,
-                key(LifecyclePhase::Validate, true, true, None),
-                LifecycleStageKind::ValidateBody,
-                LifecycleWorkClass::Apply,
-                key(LifecyclePhase::Apply, true, true, Some(commitment)),
-                LifecycleStageKind::ApplyDecision,
-            ),
-            (
-                DurableContinuationEdge::ValidateToInvalidBodyReport,
-                LifecycleWorkClass::Validate,
-                key(LifecyclePhase::Validate, true, true, None),
-                LifecycleStageKind::ValidateBody,
-                LifecycleWorkClass::InvalidBodyReport,
-                key(
-                    LifecyclePhase::DiagnosticInvalidBody,
-                    true,
-                    true,
-                    Some(commitment),
-                ),
-                LifecycleStageKind::ReportInvalidBody,
-            ),
-            (
-                DurableContinuationEdge::ValidateToSignPrepare,
-                LifecycleWorkClass::Validate,
-                key(LifecyclePhase::Validate, true, true, None),
-                LifecycleStageKind::ValidateBody,
-                LifecycleWorkClass::SignVote,
-                key(LifecyclePhase::Prepare, true, true, Some(commitment)),
-                LifecycleStageKind::SignPrepareVote,
-            ),
-            (
-                DurableContinuationEdge::ValidateToSignCommit,
-                LifecycleWorkClass::Validate,
-                key(LifecyclePhase::Validate, true, true, None),
-                LifecycleStageKind::ValidateBody,
-                LifecycleWorkClass::SignVote,
-                key(LifecyclePhase::Commit, true, true, Some(commitment)),
-                LifecycleStageKind::SignCommitVote,
-            ),
-        ];
-        for (edge, parent_class, parent_key, parent_kind, child_class, child_key, child_kind) in
-            exact
-        {
-            assert!(durable_continuation_successor_is_exact(
-                edge,
-                parent_class,
-                parent_key,
-                stage(parent_kind, PredecessorScope::Independent),
-                child_class,
-                child_key,
-                stage(child_kind, PredecessorScope::Independent),
-            ));
-        }
-
-        assert!(!durable_continuation_successor_is_exact(
-            DurableContinuationEdge::ValidateToApply,
-            LifecycleWorkClass::Validate,
-            key(LifecyclePhase::Validate, false, true, None),
-            stage(
-                LifecycleStageKind::ValidateBody,
-                PredecessorScope::Independent,
-            ),
-            LifecycleWorkClass::Apply,
-            key(LifecyclePhase::Apply, false, true, Some(commitment)),
-            stage(
-                LifecycleStageKind::ApplyDecision,
-                PredecessorScope::Independent,
-            ),
-        ));
-        assert!(!durable_continuation_successor_is_exact(
-            DurableContinuationEdge::ValidateToApply,
-            LifecycleWorkClass::Validate,
-            key(LifecyclePhase::Validate, true, false, None),
-            stage(
-                LifecycleStageKind::ValidateBody,
-                PredecessorScope::Independent,
-            ),
-            LifecycleWorkClass::Apply,
-            key(LifecyclePhase::Apply, true, false, Some(commitment)),
-            stage(
-                LifecycleStageKind::ApplyDecision,
-                PredecessorScope::Independent,
-            ),
-        ));
-        assert!(!durable_continuation_successor_is_exact(
-            DurableContinuationEdge::StoreToValidate,
-            LifecycleWorkClass::Store,
-            key(LifecyclePhase::Store, true, true, Some(commitment)),
-            stage(LifecycleStageKind::StoreBody, PredecessorScope::Independent,),
-            LifecycleWorkClass::Validate,
-            key(LifecyclePhase::Validate, true, true, Some(commitment)),
-            stage(
-                LifecycleStageKind::ValidateBody,
-                PredecessorScope::ReadyOrdinalPrefix,
-            ),
-        ));
-        assert!(!durable_continuation_successor_is_exact(
-            DurableContinuationEdge::FetchToStore,
-            LifecycleWorkClass::Fetch,
-            key(LifecyclePhase::Fetch, true, true, Some(commitment)),
-            stage(LifecycleStageKind::FetchBody, PredecessorScope::Independent,),
-            LifecycleWorkClass::Store,
-            key(
-                LifecyclePhase::Store,
-                true,
-                true,
-                Some(LifecycleDigest::new([4; 32])),
-            ),
-            stage(LifecycleStageKind::StoreBody, PredecessorScope::Independent,),
-        ));
-    }
-
-    #[test]
-    fn durable_successor_payload_relation_rejects_body_frame_substitution() {
-        let round = LifecycleRound::new(7, 3);
-        let frame = DurablePayloadReference::BodyFrame(
-            super::super::schema::DurableBodyFrameReference::new(
-                LifecycleDigest::new([1; 32]),
-                round,
-                LifecycleDigest::new([2; 32]),
-                LifecycleDigest::new([3; 32]),
-                LifecycleDigest::new([4; 32]),
-            ),
-        );
-        let foreign = DurablePayloadReference::BodyFrame(
-            super::super::schema::DurableBodyFrameReference::new(
-                LifecycleDigest::new([1; 32]),
-                round,
-                LifecycleDigest::new([2; 32]),
-                LifecycleDigest::new([3; 32]),
-                LifecycleDigest::new([5; 32]),
-            ),
-        );
-        assert!(durable_continuation_payload_is_exact(
-            DurableContinuationEdge::FetchToStore,
-            frame,
-            frame,
-        ));
-        assert!(!durable_continuation_payload_is_exact(
-            DurableContinuationEdge::FetchToStore,
-            DurablePayloadReference::None,
-            frame,
-        ));
-        for edge in [
-            DurableContinuationEdge::StoreToValidate,
-            DurableContinuationEdge::ValidateToApply,
-        ] {
-            assert!(durable_continuation_payload_is_exact(edge, frame, frame));
-            assert!(!durable_continuation_payload_is_exact(
-                edge,
-                DurablePayloadReference::None,
-                DurablePayloadReference::None,
-            ));
-            assert!(!durable_continuation_payload_is_exact(edge, frame, foreign,));
-            assert!(!durable_continuation_payload_is_exact(
-                edge,
-                frame,
-                DurablePayloadReference::None,
-            ));
-            assert!(!durable_continuation_payload_is_exact(
-                edge,
-                DurablePayloadReference::None,
-                frame,
-            ));
-        }
-        assert!(durable_continuation_payload_is_exact(
-            DurableContinuationEdge::ValidateToSignPrepare,
-            frame,
-            DurablePayloadReference::None,
-        ));
-        assert!(!durable_continuation_payload_is_exact(
-            DurableContinuationEdge::ValidateToSignPrepare,
-            frame,
-            frame,
-        ));
-        assert!(!durable_continuation_payload_is_exact(
-            DurableContinuationEdge::FetchToStore,
-            DurablePayloadReference::None,
-            DurablePayloadReference::None,
-        ));
-        assert!(!durable_continuation_payload_is_exact(
-            DurableContinuationEdge::ValidateToSignPrepare,
-            DurablePayloadReference::None,
-            DurablePayloadReference::None,
-        ));
-    }
-
-    #[test]
-    fn transition_surface_is_ordered_borrow_bound_and_inert() {
-        let source = include_str!("v2_lifecycle_body_pipeline_transition.rs");
-        let production = source
-            .split_once("\n#[cfg(test)]\nmod static_tests {")
-            .map(|(production, _)| production)
-            .expect("transition source has one production prefix");
-        let authorized_core = production
-            .split("fn stage_body_stage_transition")
-            .nth(1)
-            .and_then(|suffix| suffix.split("/// Fully reduced coordinator copy").next())
-            .expect("body-stage reducer has one bounded production body");
-        let staging = authorized_core
-            .find("stage_durable_transaction")
-            .expect("staged transition clones coordinator state");
-        let settlement = authorized_core
-            .find("reduce_settle_body_parent_for_continuation")
-            .expect("staged transition settles its parent");
-        let admission = authorized_core
-            .find("reduce_admit")
-            .expect("staged transition admits its child");
-        assert!(
-            settlement < admission,
-            "the same-class Effect branch must release capacity before child admission"
-        );
-        for required in [
-            "candidate.replay_authority_is_exact(coordinator.active_context)",
-            ".physical_geometry",
-            ".normalized()",
-            "let Some(&child_digest) = projected_slots.get(&child_slot)",
-            "durable_continuation_payload_is_exact",
-        ] {
-            assert!(
-                authorized_core.contains(required),
-                "authorized transition core omitted {required}"
-            );
-        }
-        for forbidden in [
-            "projection::admission_request",
-            "projection::durable_body_frame_reference",
-            "candidate.payload =",
-            "PendingRuntimeEffectBinding",
-            "AdapterEffect",
-        ] {
-            assert!(
-                !authorized_core.contains(forbidden),
-                "authorized transition core reopened raw authority through {forbidden}"
-            );
-        }
-        let sealed_fetch = production
-            .split("pub(super) fn prepare_sealed_fetch_store_transition")
-            .nth(1)
-            .and_then(|suffix| {
-                suffix
-                    .split("/// Stage one sealed Store retirement and exact Validate admission")
-                    .next()
-            })
-            .expect("sealed Fetch-to-Store entrypoint has one bounded body");
-        let sealed_store = production
-            .split("pub(super) fn prepare_sealed_store_validate_transition")
-            .nth(1)
-            .and_then(|suffix| {
-                suffix
-                    .split("/// Consume one exact invalid-body replay seal")
-                    .next()
-            })
-            .expect("sealed Store-to-Validate entrypoint has one bounded body");
-        let sealed_no_successor = production
-            .split("pub(super) fn prepare_sealed_validate_no_successor_transition")
-            .nth(1)
-            .and_then(|suffix| {
-                suffix
-                    .split("/// Stage one sealed certified-Fetch retirement")
-                    .next()
-            })
-            .expect("sealed Validate no-successor entrypoint has one bounded body");
-        let sealed_report = production
-            .split("pub(super) fn prepare_sealed_validate_report_transition")
-            .nth(1)
-            .and_then(|suffix| suffix.split("#[cfg(test)]\nfn digest_from_hash").next())
-            .expect("sealed Validate report entrypoint has one bounded body");
-        let sealed_sign = production
-            .split("pub(super) fn prepare_sealed_validate_sign_transition")
-            .nth(1)
-            .and_then(|suffix| {
-                suffix
-                    .split("/// Consume one sealed inactive or no-effect Validate preview")
-                    .next()
-            })
-            .expect("sealed Validate-to-Sign entrypoint has one bounded body");
-        assert!(sealed_fetch.contains("PreparedCertifiedFetchStoreSuccessor<'registry>"));
-        assert!(sealed_store.contains("PreparedDurableStoreValidateSuccessor<'registry>"));
-        for sealed in [sealed_fetch, sealed_store] {
-            assert!(sealed.contains("project_for_body_transition(lease, verified)"));
-            assert!(sealed.contains("PreparedSealedBodyStageTransition"));
-            for forbidden in [
-                "&AdapterEffect",
-                "&PendingRuntimeEffectBinding",
-                "&DurableBodyReceipt",
-                "CandidateAdmission",
-                "candidate.payload =",
-                "projection::admission_request",
-            ] {
-                assert!(
-                    !sealed.contains(forbidden),
-                    "sealed transition entrypoint accepts or forges {forbidden}"
-                );
-            }
-        }
-        assert!(
-            sealed_no_successor.contains(
-                "preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>"
-            )
-        );
-        assert!(sealed_no_successor.contains("project_no_successor_for_body_transition("));
-        assert!(sealed_no_successor.contains("SealedValidateNoSuccessorProjectionPermit::new()"));
-        assert!(sealed_no_successor.contains("_preview: preview"));
-        assert!(
-            sealed_report.contains(
-                "report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>"
-            )
-        );
-        assert!(sealed_report.contains("SealedInvalidBodyReportProjectionPermit::new()"));
-        assert!(sealed_report.contains("_report: report"));
-        for required in [
-            "self.ledger_store.is_none()",
-            "publication.project_for_body_transition(",
-            "SealedValidateSignProjectionPermit::new()",
-            "DurableContinuationEdge::ValidateToSignPrepare",
-            "DurableContinuationEdge::ValidateToSignCommit",
-            "stage_body_stage_transition(",
-            "PreparedSealedValidateSignTransition",
-        ] {
-            assert!(
-                sealed_sign.contains(required),
-                "sealed Validate-to-Sign entrypoint omitted {required}"
-            );
-        }
-        for forbidden in [
-            "&AdapterEffect",
-            "&PendingRuntimeEffectBinding",
-            "&DurableBodyReceipt",
-            "projection::admission_request",
-            "persist_durable_projection",
-        ] {
-            assert!(
-                !sealed_sign.contains(forbidden),
-                "sealed Validate-to-Sign entrypoint exposes {forbidden}"
-            );
-        }
-        for sealed in [sealed_no_successor, sealed_report] {
-            for forbidden in [
-                "&DurableBodyReceipt",
-                "&AdapterEffect",
-                "&PendingRuntimeEffectBinding",
-                "projection::admission_request",
-                "candidate.payload =",
-                "fn commit(",
-                "fn staged(",
-            ] {
-                assert!(
-                    !sealed.contains(forbidden),
-                    "sealed terminal Validate entrypoint exposes {forbidden}"
-                );
-            }
-        }
-        assert!(!production.contains("prepare_fetch_store_transition"));
-        assert!(!production.contains("prepare_store_validate_transition"));
-        assert!(!production.contains("prepare_validate_report_transition"));
-        assert!(!production.contains("prepare_validate_no_successor_transition"));
-        assert!(!production.contains("stage_raw_body_stage_transition"));
-        assert!(!production.contains("prepare_ready_validate_apply_transition"));
-        assert!(!production.contains("prepare_validate_sign_transition"));
-        assert!(!production.contains("fn prepare_body_stage_transition"));
-        assert!(!production.contains("projection::admission_request"));
-        let bls_tests = source
-            .split_once("\n#[cfg(all(test, feature = \"bls\"))]\nmod tests {")
-            .map(|(_, tests)| tests)
-            .expect("BLS transition tests have one bounded suffix");
-        for forbidden in [
-            "projection::admission_request",
-            "prepare_fetch_store_transition",
-            "prepare_store_validate_transition",
-            "prepare_validate_apply_transition(",
-            ".prepare_body_stage_transition(",
-        ] {
-            assert!(
-                !bls_tests.contains(forbidden),
-                "BLS transition fixture reopened raw authority through {forbidden}"
-            );
-        }
-        assert!(bls_tests.contains("prepare_authorized_body_transition("));
-        assert!(bls_tests.contains("exact_live_wal_body_successor_candidate_for_test("));
-        assert!(production.contains("PreparedSealedBodyStageTransition<'coordinator, 'registry>"));
-        assert!(production.contains("_successor: SealedBodyStageSuccessor<'registry>"));
-        assert!(production.contains("&'a mut LifecycleCoordinator"));
-        assert!(production.contains("DurableContinuationEdge::FetchToStore"));
-        assert!(production.contains("DurableContinuationEdge::StoreToValidate"));
-        assert!(production.contains("DurableContinuationEdge::ValidateToApply"));
-        assert!(production.contains("DurableContinuationEdge::ValidateToSignPrepare"));
-        assert!(production.contains("DurableContinuationEdge::ValidateToSignCommit"));
-        assert!(production.contains("DurableContinuationEdge::ValidateToInvalidBodyReport"));
-        assert!(production.contains("DurableContinuation::AdvancedNoSuccessor"));
-        assert!(production.contains("PreparedReadyDurableValidateAdapterPreview"));
-        assert!(production.contains("PreparedInvalidBodyReportReplayPreAdmission"));
-        assert!(production.contains("PreparedSealedValidateNoSuccessorTransition"));
-        assert!(production.contains("PreparedSealedValidateReportTransition"));
-        for (permit, linearity, mint) in [
-            (
-                "pub(super) struct SealedValidateNoSuccessorProjectionPermit",
-                "impl Drop for SealedValidateNoSuccessorProjectionLinearity",
-                "SealedValidateNoSuccessorProjectionPermit::new()",
-            ),
-            (
-                "pub(in crate::sumeragi) struct SealedInvalidBodyReportProjectionPermit",
-                "impl Drop for SealedInvalidBodyReportProjectionLinearity",
-                "SealedInvalidBodyReportProjectionPermit::new()",
-            ),
-            (
-                "pub(in crate::sumeragi) struct SealedValidateSignProjectionPermit",
-                "impl Drop for SealedValidateSignProjectionLinearity",
-                "SealedValidateSignProjectionPermit::new()",
-            ),
-        ] {
-            assert!(production.contains(permit));
-            assert!(production.contains(linearity));
-            assert_eq!(production.matches(mint).count(), 1);
-            assert!(!production.contains(&format!("#[derive(Clone)]\n{permit}")));
-            assert!(!production.contains(&format!("#[derive(Copy)]\n{permit}")));
-            assert!(!production.contains(&format!("#[derive(Clone, Copy)]\n{permit}")));
-        }
-        assert!(!production.contains("enum BodyStageTransitionEdge"));
-        assert!(!production.contains("pub(super) fn stage_body_stage_transition"));
-        for forbidden in [
-            "persist_durable_projection",
-            "fn commit(",
-            "fn staged(",
-            "ConcreteLifecycleWorkRegistry",
-            "RuntimeEffectOwnership",
-            "legacy_ordinal",
-        ] {
-            assert!(
-                !production.contains(forbidden),
-                "inert transition acquired forbidden authority: {forbidden}"
-            );
-        }
-        for caller_source in [
-            include_str!("v2.rs"),
-            include_str!("v2_effects.rs"),
-            include_str!("v2_runner.rs"),
-            include_str!("v2_worker.rs"),
-            include_str!("v2_runtime.rs"),
-            include_str!("v2_lifecycle_coordinator.rs"),
-        ] {
-            for unwired in [
-                "prepare_sealed_fetch_store_transition",
-                "prepare_sealed_store_validate_transition",
-                "prepare_sealed_validate_no_successor_transition",
-                "prepare_sealed_validate_report_transition",
-            ] {
-                assert!(
-                    !caller_source.contains(unwired),
-                    "body-frame transition became production-wired through {unwired}"
-                );
-            }
-        }
-
-        let publication = production
-            .split("pub(super) fn persist_and_publish(")
-            .nth(1)
-            .and_then(|suffix| suffix.split("\n}\n\n#[cfg(test)]").next())
-            .expect("live Validate-to-Sign publication has one bounded body");
-        let registry_preflight = publication
-            .find("prepare_registry_publication(")
-            .expect("registry reservation precedes fsync");
-        let ledger_fsync = publication
-            .find("persist_exact_staged_successor(&staged)")
-            .expect("exact LedgerV1 fsync is mandatory");
-        let coordinator_swap = publication
-            .find("*coordinator = staged")
-            .expect("coordinator swap follows fsync");
-        let adapter_swap = publication
-            .find("registry.publish_after_ledger_fsync()")
-            .expect("registry and adapter publication follows coordinator swap");
-        assert!(registry_preflight < ledger_fsync);
-        assert!(ledger_fsync < coordinator_swap && coordinator_swap < adapter_swap);
-        let post_fsync = &publication[coordinator_swap..];
-        for forbidden in [
-            "?",
-            "return Err",
-            "publish_status",
-            "persist_durable_projection",
-            "persist_exact_staged_successor",
-        ] {
-            assert!(
-                !post_fsync.contains(forbidden),
-                "post-fsync publication acquired fallible work through {forbidden}"
-            );
-        }
-
-        let exact_fsync_callers = production
-            .matches(".persist_exact_staged_successor(")
-            .count()
-            + [
-                include_str!("v2.rs"),
-                include_str!("v2_effects.rs"),
-                include_str!("v2_runner.rs"),
-                include_str!("v2_worker.rs"),
-                include_str!("v2_runtime.rs"),
-                include_str!("v2_lifecycle_concrete_admission.rs"),
-                reviewed_lifecycle_work_registry_source_for_test(),
-            ]
-            .iter()
-            .map(|source| {
-                source
-                    .split("\n#[cfg(test)]\nmod tests {")
-                    .next()
-                    .expect("caller source has a production prefix")
-                    .matches(".persist_exact_staged_successor(")
-                    .count()
-            })
-            .sum::<usize>();
-        assert_eq!(
-            exact_fsync_callers, 1,
-            "the sealed live Validate-to-Sign transaction must be the sole exact-fsync caller"
-        );
-        let ledger_production = reviewed_lifecycle_ledger_source_for_test()
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("ledger source has one production prefix");
-        assert_eq!(
-            ledger_production
-                .matches(".persist_exact_successor(")
-                .count(),
-            1,
-            "the same staged transaction helper must be the sole exact-store successor caller"
-        );
-    }
-}
-
-#[cfg(all(test, feature = "bls"))]
-mod tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-
-    use super::super::projection;
-    use super::*;
-    use crate::sumeragi::{
-        v2_core::{EventTag, Generation},
-        v2_lifecycle_coordinator::replay_authority::{
-            CertifiedFetchReplayEvidenceV1, CertifiedStoreReplayEvidenceV1,
-            DurableValidateReplayEvidenceV1,
-        },
-        v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
-    };
-
-    struct FetchStoreFixture {
-        coordinator: LifecycleCoordinator,
-        lease: TurnLease,
-        verified: VerifiedHeightContext,
-        durable_receipt: DurableBodyReceipt,
-        store_effect: AdapterEffect,
-        store_pending: PendingRuntimeEffectBinding,
-        store_candidate: CandidateAdmission,
-        store_replay: CertifiedStoreReplayEvidenceV1,
-    }
-
-    struct StoreValidateFixture {
-        coordinator: LifecycleCoordinator,
-        lease: TurnLease,
-        verified: VerifiedHeightContext,
-        durable_receipt: DurableBodyReceipt,
-        store_effect: AdapterEffect,
-        store_pending: PendingRuntimeEffectBinding,
-        validate_effect: AdapterEffect,
-        validate_pending: PendingRuntimeEffectBinding,
-        validate_candidate: CandidateAdmission,
-        validate_replay: DurableValidateReplayEvidenceV1,
-    }
-
-    struct ValidateApplyFixture {
-        coordinator: LifecycleCoordinator,
-        lease: TurnLease,
-        verified: VerifiedHeightContext,
-        validate_effect: AdapterEffect,
-        validate_pending: PendingRuntimeEffectBinding,
-        validate_candidate: CandidateAdmission,
-        validate_replay: DurableValidateReplayEvidenceV1,
-        validated_receipt: ValidatedBodyReceipt,
-        apply_effect: AdapterEffect,
-        apply_candidate: CandidateAdmission,
-    }
-
-    fn capacity_geometry(effect_limit: usize) -> super::super::schema::CapacityGeometry {
-        super::super::schema::CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| {
-            (
-                class,
-                if class == CapacityClass::Effect {
-                    effect_limit
-                } else {
-                    1
-                },
-            )
-        }))
-    }
-
-    fn lifecycle_context(context: &wire::HeightContext) -> super::super::LifecycleContext {
-        let mut id = [0_u8; 32];
-        id.copy_from_slice(context.id().0.as_ref());
-        super::super::LifecycleContext::new(super::super::LifecycleDigest::new(id), context.height)
-    }
-
-    fn verified_context() -> (VerifiedHeightContext, wire::HeightContext) {
-        let mut keys = (1_u8..=4)
-            .map(|seed| {
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("deterministic Fetch-to-Store BLS key")
-            })
-            .collect::<Vec<_>>();
-        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let proofs = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("Fetch-to-Store proof of possession")
-            })
-            .collect::<Vec<_>>();
-        let roster = keys
-            .iter()
-            .map(|key| wire::ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("fetch-store-transition-test"),
-            protocol_version: wire::PROTOCOL_VERSION,
-            height: 1,
-            epoch: 1,
-            epoch_end_height: 100,
-            next_epoch_snapshot: None,
-            mode: wire::ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
-            roster,
-            nexus_amx_context_hash: Hash::new(b"fetch-store nexus context"),
-            execution_policy_hash: Hash::new(b"fetch-store execution policy"),
-            da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 512 * 1024,
-                max_chunk_count: 1024,
-            },
-            leader_seed: [0x51; 32],
-        };
-        let verified = VerifiedHeightContext::genesis(context.clone(), proofs)
-            .expect("verified Fetch-to-Store height context");
-        (verified, context)
-    }
-
-    fn fixture_execution_commitment() -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"fetch-store state root"),
-            Hash::new(b"fetch-store events root"),
-            Hash::new(b"fetch-store trace root"),
-            1,
-            Hash::new(b"fetch-store fee summary"),
-        )
-    }
-
-    fn body_manifest(
-        verified: &VerifiedHeightContext,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-    ) -> wire::PayloadManifest {
-        wire::PayloadManifest {
-            round,
-            subject,
-            payload_size_bytes: 1,
-            layout: verified.context().da_layout,
-            chunk_hashes: vec![Hash::new(b"body-pipeline chunk")],
-            chunk_root: Hash::new(b"body-pipeline chunk root"),
-        }
-    }
-
-    fn durable_body_receipt(
-        verified: &VerifiedHeightContext,
-        manifest: &wire::PayloadManifest,
-    ) -> DurableBodyReceipt {
-        DurableBodyReceipt::for_test(
-            verified.context().id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(manifest),
-        )
-    }
-
-    fn prepare_authorized_body_transition<'a>(
-        coordinator: &'a mut LifecycleCoordinator,
-        lease: &TurnLease,
-        candidate: CandidateAdmission,
-        parent_payload: DurablePayloadReference,
-        edge: DurableContinuationEdge,
-    ) -> Result<PreparedBodyStageTransition<'a>, BodyStageTransitionError> {
-        let transition =
-            stage_body_stage_transition(coordinator, lease, candidate, parent_payload, edge)?;
-        Ok(PreparedBodyStageTransition {
-            _coordinator: coordinator,
-            staged: transition.staged,
-            edge,
-            parent_ordinal: transition.parent_ordinal,
-            child_ordinal: transition.child_ordinal,
-            owner: transition.owner,
-            child_slot: transition.child_slot,
-            child_digest: transition.child_digest,
-        })
-    }
-
-    fn prepare_authorized_validate_apply_transition<'a>(
-        coordinator: &'a mut LifecycleCoordinator,
-        lease: &TurnLease,
-        validated_receipt: &ValidatedBodyReceipt,
-        apply_effect: &AdapterEffect,
-        apply_candidate: CandidateAdmission,
-    ) -> Result<PreparedBodyStageTransition<'a>, BodyStageTransitionError> {
-        let AdapterEffect::Apply {
-            subject,
-            certificate,
-            ..
-        } = apply_effect
-        else {
-            return Err(BodyStageTransitionError::InvalidValidationReceipt);
-        };
-        let durable = validated_receipt.durable();
-        if durable.context_id() != certificate.round.context_id
-            || durable.round() != certificate.proposal_round
-            || durable.subject() != *subject
-            || validated_receipt.execution_commitment() != certificate.execution_commitment
-        {
-            return Err(BodyStageTransitionError::InvalidValidationReceipt);
-        }
-        let parent_payload = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(coordinator.active_context, durable)
-                .ok_or(BodyStageTransitionError::InvalidBodyFrameReference)?,
-        );
-        prepare_authorized_body_transition(
-            coordinator,
-            lease,
-            apply_candidate,
-            parent_payload,
-            DurableContinuationEdge::ValidateToApply,
-        )
-    }
-
-    fn fetch_store_fixture(effect_limit: usize) -> FetchStoreFixture {
-        fetch_store_fixture_with_authority(effect_limit, wire::GlobalPhase::Prepare)
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn fetch_store_fixture_with_authority(
-        effect_limit: usize,
-        authority_phase: wire::GlobalPhase,
-    ) -> FetchStoreFixture {
-        let (verified, context) = verified_context();
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let tag = EventTag::new(context.height, round.view, Generation::new(1));
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"fetch-store block")),
-            payload_hash: Hash::new(b"fetch-store payload"),
-        };
-        let execution_commitment = fixture_execution_commitment();
-        let certificate = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: authority_phase,
-            subject,
-            execution_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x51],
-        };
-        let manifest = body_manifest(&verified, round, subject);
-        let certified_sources = context
-            .roster
-            .iter()
-            .map(|validator| validator.validator.clone())
-            .collect::<Vec<_>>();
-        let fetch_effect = AdapterEffect::FetchBody {
-            tag,
-            round,
-            subject,
-            manifest: Some(manifest.clone()),
-            certified_sources: certified_sources.clone(),
-            certificate: Some(certificate.clone()),
-        };
-        let store_effect = AdapterEffect::StoreBody {
-            tag,
-            round,
-            subject,
-        };
-        let durable_receipt = durable_body_receipt(&verified, &manifest);
-        let response = wire::CertifiedBodyResponse {
-            request_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"body-transition certified request",
-            )),
-            manifest: manifest.clone(),
-            body: vec![0x51],
-            responder: 0,
-            signature: vec![0x52],
-        };
-        let fetch_owner = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(&fetch_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag, 1)],
-        )
-        .expect("bind certified Fetch fixture")
-        .pop()
-        .expect("one certified Fetch owner");
-        let fetch_pending = fetch_owner
-            .pending_adapter_effect_binding(&fetch_effect)
-            .expect("mint sealed certified Fetch binding");
-        let fetch_digest = digest_from_hash(fetch_pending.exact_effect_identity());
-        let store_pending = fetch_pending
-            .project_certified_fetch_store_successor(&fetch_effect, &store_effect)
-            .expect("project exact ordinal-free Store successor");
-        let fetch_replay = CertifiedFetchReplayEvidenceV1::from_signed_response_for_test(
-            &fetch_effect,
-            &response,
-            &durable_receipt,
-        )
-        .expect("certified response projects exact Fetch replay evidence");
-        let store_replay = fetch_replay
-            .project_store_for_test(&store_effect, &durable_receipt)
-            .expect("certified Fetch evidence projects exact Store replay evidence");
-        let store_candidate = store_replay
-            .project_candidate_for_test(&verified, &store_effect, &durable_receipt, &store_pending)
-            .expect("canonical V1 evidence projects the Store candidate fixture");
-        let replay = super::super::replay_authority::exact_durable_certified_fetch_record_fixture(
-            lifecycle_context(&context),
-            tag,
-            certificate,
-            manifest,
-            certified_sources,
-            &durable_receipt,
-        );
-        let fetch_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
-        let parent = super::super::CandidateAdmission::new(
-            replay.key,
-            store_candidate.causal_root,
-            replay.work_class,
-            replay.stage,
-            InitialLifecycleState::Ready,
-            store_candidate.reconstruction_source,
-            replay.payload,
-            replay.authority,
-            super::super::PhysicalGeometry::new(
-                [super::super::PhysicalSlot::new(fetch_slot, fetch_digest)],
-                [fetch_slot],
-            ),
-            None,
-        );
-        let mut coordinator = LifecycleCoordinator::new(
-            lifecycle_context(&context),
-            0,
-            capacity_geometry(effect_limit),
-        );
-        let AdmissionDecision::Admitted {
-            ordinal,
-            producer_turn_ordinal: None,
-            ..
-        } = coordinator.admit(AdmissionRequest::Candidate(parent))
-        else {
-            panic!("admit Fetch parent fixture")
-        };
-        let record = &coordinator.records[&ordinal];
-        let ready = super::super::SchedulerReadyInputs::new(record, None, [0; 6]);
-        let inputs = super::super::SchedulerInputs::new([], [(ordinal, ready)])
-            .expect("unique Fetch scheduler census");
-        let super::super::TurnPlan::Execute(lease) = coordinator.plan_turn(inputs) else {
-            panic!("claim Fetch fixture")
-        };
-        FetchStoreFixture {
-            coordinator,
-            lease,
-            verified,
-            durable_receipt,
-            store_effect,
-            store_pending,
-            store_candidate,
-            store_replay,
-        }
-    }
-
-    fn store_validate_fixture(
-        effect_limit: usize,
-        inherited_commitment: bool,
-    ) -> StoreValidateFixture {
-        store_validate_fixture_with_authority(
-            effect_limit,
-            inherited_commitment.then_some(wire::GlobalPhase::Prepare),
-        )
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn store_validate_fixture_with_authority(
-        effect_limit: usize,
-        inherited_authority: Option<wire::GlobalPhase>,
-    ) -> StoreValidateFixture {
-        let FetchStoreFixture {
-            verified,
-            durable_receipt,
-            store_effect,
-            store_pending: certified_store_pending,
-            store_candidate: certified_store_candidate,
-            store_replay: certified_store_replay,
-            ..
-        } = fetch_store_fixture_with_authority(
-            effect_limit,
-            inherited_authority.unwrap_or(wire::GlobalPhase::Prepare),
-        );
-        let AdapterEffect::StoreBody {
-            tag,
-            round,
-            subject,
-        } = store_effect
-        else {
-            unreachable!("Fetch successor fixture is one Store effect")
-        };
-        let store_effect = AdapterEffect::StoreBody {
-            tag,
-            round,
-            subject,
-        };
-        let validate_effect = AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        };
-        let (store_pending, store_candidate, validate_pending, validate_replay) =
-            if inherited_authority.is_some() {
-                let validate_pending = certified_store_pending
-                    .project_store_validate_successor(&store_effect, &validate_effect)
-                    .expect("project exact certified Validate successor");
-                let validate_replay = DurableValidateReplayEvidenceV1::certified(
-                    certified_store_replay
-                        .project_validate(
-                            &store_effect,
-                            &durable_receipt,
-                            &validate_effect,
-                            &validate_pending,
-                        )
-                        .expect("certified Store evidence projects exact Validate evidence"),
-                );
-                (
-                    certified_store_pending,
-                    certified_store_candidate,
-                    validate_pending,
-                    validate_replay,
-                )
-            } else {
-                let manifest = body_manifest(&verified, round, subject);
-                let proposal = wire::Proposal {
-                    round,
-                    proposer: 0,
-                    subject,
-                    manifest: manifest.clone(),
-                    justification: wire::ProposalJustification::ParentCommit(
-                        wire::ParentCommitJustification { certificate: None },
-                    ),
-                    signature: vec![0x61],
-                };
-                let fetch_effect = AdapterEffect::FetchBody {
-                    tag,
-                    round,
-                    subject,
-                    manifest: Some(manifest),
-                    certified_sources: Vec::new(),
-                    certificate: None,
-                };
-                let mut fetch_owner = bind_adapter_effect_batch_ownership(
-                    core::slice::from_ref(&fetch_effect),
-                    vec![RuntimeEffectOwnership::fresh_for_test(tag, 2)],
-                )
-                .expect("bind remote-Proposal Fetch fixture")
-                .pop()
-                .expect("one remote-Proposal Fetch owner");
-                assert!(
-                    fetch_owner.bind_authenticated_remote_proposal_replay_for_test(
-                        proposal,
-                        &fetch_effect
-                    )
-                );
-                let fetch_pending = fetch_owner
-                    .pending_adapter_effect_binding(&fetch_effect)
-                    .expect("mint sealed remote-Proposal Fetch binding");
-                let fetch_replay = fetch_owner
-                    .exact_remote_proposal_fetch_replay(&fetch_effect)
-                    .expect("retain authenticated remote-Proposal replay evidence");
-                let store_pending = fetch_pending
-                    .project_proposal_fetch_store_successor(&fetch_effect, &store_effect)
-                    .expect("project exact remote-Proposal Store successor");
-                let stored_replay = fetch_replay
-                    .project_exact_store(&store_effect, &store_pending)
-                    .expect("project remote-Proposal Store replay evidence")
-                    .bind_durable_body(&store_effect, &durable_receipt)
-                    .expect("bind remote-Proposal Store to its body frame");
-                let store_candidate = stored_replay
-                    .project_candidate_for_test(
-                        &verified,
-                        &store_effect,
-                        &durable_receipt,
-                        &store_pending,
-                    )
-                    .expect("canonical Proposal evidence projects Store candidate");
-                let validate_pending = store_pending
-                    .project_store_validate_successor(&store_effect, &validate_effect)
-                    .expect("project exact remote-Proposal Validate successor");
-                let validate_replay = DurableValidateReplayEvidenceV1::remote_proposal(
-                    stored_replay
-                        .project_exact_validate(
-                            &store_effect,
-                            &durable_receipt,
-                            &validate_effect,
-                            &validate_pending,
-                        )
-                        .expect("project remote-Proposal Validate replay evidence"),
-                );
-                (
-                    store_pending,
-                    store_candidate,
-                    validate_pending,
-                    validate_replay,
-                )
-            };
-        let validate_candidate = validate_replay
-            .project_candidate_for_test(
-                &verified,
-                &validate_effect,
-                &durable_receipt,
-                &validate_pending,
-            )
-            .expect("canonical V1 evidence projects the Validate candidate fixture");
-        let mut coordinator = LifecycleCoordinator::new(
-            lifecycle_context(verified.context()),
-            0,
-            capacity_geometry(effect_limit),
-        );
-        let AdmissionDecision::Admitted {
-            ordinal,
-            producer_turn_ordinal: None,
-            ..
-        } = coordinator.admit(AdmissionRequest::Candidate(store_candidate))
-        else {
-            panic!("admit Store parent fixture")
-        };
-        let record = &coordinator.records[&ordinal];
-        let ready = super::super::SchedulerReadyInputs::new(record, None, [0; 6]);
-        let inputs = super::super::SchedulerInputs::new([], [(ordinal, ready)])
-            .expect("unique Store scheduler census");
-        let super::super::TurnPlan::Execute(lease) = coordinator.plan_turn(inputs) else {
-            panic!("claim Store fixture")
-        };
-        StoreValidateFixture {
-            coordinator,
-            lease,
-            verified,
-            durable_receipt,
-            store_effect,
-            store_pending,
-            validate_effect,
-            validate_pending,
-            validate_candidate,
-            validate_replay,
-        }
-    }
-
-    fn validate_apply_fixture(
-        effect_limit: usize,
-        inherited_commitment: bool,
-    ) -> ValidateApplyFixture {
-        validate_apply_fixture_with_authority(
-            effect_limit,
-            inherited_commitment.then_some(wire::GlobalPhase::Prepare),
-        )
-    }
-
-    fn validate_apply_fixture_with_authority(
-        effect_limit: usize,
-        inherited_authority: Option<wire::GlobalPhase>,
-    ) -> ValidateApplyFixture {
-        let StoreValidateFixture {
-            verified,
-            durable_receipt,
-            validate_effect,
-            validate_pending,
-            validate_candidate,
-            validate_replay,
-            ..
-        } = store_validate_fixture_with_authority(effect_limit, inherited_authority);
-        let AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        } = validate_effect
-        else {
-            unreachable!("Store successor fixture is one Validate effect")
-        };
-        let validate_effect = AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        };
-        let apply_effect = AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate: wire::QuorumCertificate {
-                round,
-                proposal_round: round,
-                phase: wire::GlobalPhase::Commit,
-                subject,
-                execution_commitment: fixture_execution_commitment(),
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xA5],
-            },
-        };
-        let apply_pending = validate_pending
-            .project_validate_apply_successor(&validate_effect, &apply_effect)
-            .expect("project exact ordinal-free Apply successor");
-        let validated_receipt = ValidatedBodyReceipt::for_test_with_commitment(
-            durable_receipt.clone(),
-            fixture_execution_commitment(),
-        );
-        let apply_candidate =
-            super::super::replay_authority::exact_live_wal_body_successor_candidate_for_test(
-                &verified,
-                &validate_effect,
-                &validate_pending,
-                &apply_effect,
-                &apply_pending,
-                Some(&durable_receipt),
-            )
-            .expect("canonical live-WAL evidence projects the Apply candidate fixture");
-        let mut coordinator = LifecycleCoordinator::new(
-            lifecycle_context(verified.context()),
-            0,
-            capacity_geometry(effect_limit),
-        );
-        let AdmissionDecision::Admitted {
-            ordinal,
-            producer_turn_ordinal: None,
-            ..
-        } = coordinator.admit(AdmissionRequest::Candidate(validate_candidate.clone()))
-        else {
-            panic!("admit Validate parent fixture")
-        };
-        let record = &coordinator.records[&ordinal];
-        let ready = super::super::SchedulerReadyInputs::new(record, Some(false), [0; 6]);
-        let inputs = super::super::SchedulerInputs::new([], [(ordinal, ready)])
-            .expect("unique Validate scheduler census");
-        let super::super::TurnPlan::Execute(lease) = coordinator.plan_turn(inputs) else {
-            panic!("claim Validate fixture")
-        };
-        ValidateApplyFixture {
-            coordinator,
-            lease,
-            verified,
-            validate_effect,
-            validate_pending,
-            validate_candidate,
-            validate_replay,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-        }
-    }
-
-    #[test]
-    fn full_effect_capacity_stages_net_zero_success_and_drop_is_inert() {
-        let FetchStoreFixture {
-            mut coordinator,
-            lease,
-            verified,
-            durable_receipt,
-            store_candidate,
-            ..
-        } = fetch_store_fixture(1);
-        assert_eq!(coordinator.capacity_used[&CapacityClass::Effect], 1);
-        let before = format!("{coordinator:#?}");
-        let expected_frame = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(
-                lifecycle_context(verified.context()),
-                &durable_receipt,
-            )
-            .expect("durable Fetch completion projects one body frame"),
-        );
-        let prepared = prepare_authorized_body_transition(
-            &mut coordinator,
-            &lease,
-            store_candidate,
-            expected_frame,
-            DurableContinuationEdge::FetchToStore,
-        )
-        .expect("Fetch release makes room for exact Store at full capacity");
-        assert!(matches!(
-            prepared.edge,
-            DurableContinuationEdge::FetchToStore
-        ));
-        assert_eq!(prepared.parent_ordinal, lease.ordinal());
-        assert_eq!(prepared.child_ordinal, lease.ordinal() + 1);
-        assert_eq!(prepared.owner, lease.owner());
-        assert_eq!(
-            prepared.child_slot.capacity_class(),
-            Some(CapacityClass::Effect)
-        );
-        assert_eq!(
-            prepared.staged.capacity_used[&CapacityClass::Effect],
-            1,
-            "Fetch retirement and Store admission are net-zero"
-        );
-        assert_eq!(
-            prepared.staged.records[&lease.ordinal()].state,
-            LifecycleState::Terminal(TerminalOutcome::Advanced)
-        );
-        assert_eq!(
-            prepared.staged.records[&prepared.child_ordinal].state,
-            LifecycleState::Ready
-        );
-        assert_eq!(
-            prepared.staged.records[&prepared.child_ordinal]
-                .physical_slots
-                .get(&prepared.child_slot),
-            Some(&prepared.child_digest)
-        );
-        assert_eq!(
-            prepared.staged.records[&prepared.child_ordinal]
-                .episode
-                .slot_universe,
-            std::collections::BTreeSet::from([prepared.child_slot])
-        );
-        assert_eq!(
-            prepared.staged.records[&prepared.child_ordinal]
-                .episode
-                .consumed_slots,
-            std::collections::BTreeSet::from([prepared.child_slot])
-        );
-        assert_eq!(
-            prepared.staged.durable_records[&prepared.parent_ordinal].payload,
-            expected_frame
-        );
-        assert_eq!(
-            prepared.staged.durable_records[&prepared.child_ordinal].payload,
-            expected_frame
-        );
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn wrong_and_stale_fetch_leases_reject_without_coordinator_mutation() {
-        let FetchStoreFixture {
-            mut coordinator,
-            lease,
-            store_candidate,
-            ..
-        } = fetch_store_fixture(1);
-        let before = format!("{coordinator:#?}");
-        let mut wrong = lease.clone();
-        wrong.work_class = LifecycleWorkClass::Store;
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &wrong,
-                store_candidate.clone(),
-                store_candidate.payload,
-                DurableContinuationEdge::FetchToStore,
-            ),
-            Err(BodyStageTransitionError::WrongParentShape)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-
-        let mut stale = lease.clone();
-        stale.id = super::super::LeaseId(lease.id().0 + 1);
-        let parent_payload = store_candidate.payload;
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &stale,
-                store_candidate,
-                parent_payload,
-                DurableContinuationEdge::FetchToStore,
-            ),
-            Err(BodyStageTransitionError::StaleLease)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn foreign_store_projection_rejects_without_coordinator_mutation() {
-        let FetchStoreFixture {
-            coordinator,
-            verified,
-            durable_receipt,
-            store_effect,
-            store_pending,
-            store_replay,
-            ..
-        } = fetch_store_fixture(1);
-        let before = format!("{coordinator:#?}");
-        let AdapterEffect::StoreBody {
-            tag,
-            round,
-            mut subject,
-        } = store_effect
-        else {
-            unreachable!("fixture Store effect")
-        };
-        subject.payload_hash = Hash::new(b"foreign Store body");
-        let foreign = AdapterEffect::StoreBody {
-            tag,
-            round,
-            subject,
-        };
-        assert!(matches!(
-            store_replay.project_candidate_for_test(
-                &verified,
-                &foreign,
-                &durable_receipt,
-                &store_pending,
-            ),
-            Err(AdapterEffectAdmissionError::InvalidCarrier)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn fetch_store_rejects_a_foreign_body_receipt_without_mutation() {
-        let FetchStoreFixture {
-            coordinator,
-            verified,
-            durable_receipt,
-            store_effect,
-            store_pending,
-            store_replay,
-            ..
-        } = fetch_store_fixture(1);
-        let AdapterEffect::StoreBody { round, subject, .. } = &store_effect else {
-            unreachable!("fixture retains one Store effect")
-        };
-        let foreign_round = wire::ConsensusRound {
-            view: round.view + 1,
-            ..*round
-        };
-        let foreign_receipt = DurableBodyReceipt::for_test(
-            verified.context().id(),
-            foreign_round,
-            *subject,
-            durable_receipt.manifest_hash(),
-        );
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            store_replay.project_candidate_for_test(
-                &verified,
-                &store_effect,
-                &foreign_receipt,
-                &store_pending,
-            ),
-            Err(AdapterEffectAdmissionError::InvalidCarrier)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn fetch_store_rejects_a_payload_free_parent_after_body_completion() {
-        let FetchStoreFixture {
-            mut coordinator,
-            lease,
-            store_candidate,
-            ..
-        } = fetch_store_fixture(1);
-        coordinator
-            .durable_records
-            .get_mut(&lease.ordinal())
-            .expect("claimed Fetch retains durable metadata")
-            .payload = DurablePayloadReference::None;
-        let before = format!("{coordinator:#?}");
-        let parent_payload = store_candidate.payload;
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                store_candidate,
-                parent_payload,
-                DurableContinuationEdge::FetchToStore,
-            ),
-            Err(BodyStageTransitionError::InvalidBodyFrameReference)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn staged_capacity_wait_leaves_fetch_parent_claimed() {
-        let FetchStoreFixture {
-            mut coordinator,
-            lease,
-            store_candidate,
-            ..
-        } = fetch_store_fixture(1);
-        coordinator
-            .capacity_geometry
-            .limits
-            .insert(CapacityClass::Effect, 0);
-        let before_capacity = format!("{coordinator:#?}");
-        let parent_payload = store_candidate.payload;
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                store_candidate,
-                parent_payload,
-                DurableContinuationEdge::FetchToStore,
-            ),
-            Err(BodyStageTransitionError::ChildAdmission(decision))
-                if matches!(*decision, AdmissionDecision::WaitForCapacity(_))
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before_capacity);
-        assert_eq!(coordinator.active_lease, Some(lease));
-    }
-
-    #[test]
-    fn fetch_store_rejects_max_high_water_without_mutation() {
-        let FetchStoreFixture {
-            mut coordinator,
-            lease,
-            store_candidate,
-            ..
-        } = fetch_store_fixture(1);
-        coordinator.high_water = u128::MAX;
-        let before_ordinal = format!("{coordinator:#?}");
-        let parent_payload = store_candidate.payload;
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                store_candidate,
-                parent_payload,
-                DurableContinuationEdge::FetchToStore,
-            ),
-            Err(BodyStageTransitionError::OrdinalExhausted)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before_ordinal);
-        assert_eq!(coordinator.active_lease, Some(lease));
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn full_effect_capacity_stages_exact_store_validate_cut_and_drop_is_inert() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            validate_pending,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, true);
-        let expected_frame = validate_candidate.payload;
-        let capacity_used_before = coordinator.capacity_used.clone();
-        let capacity_generation_before = coordinator.capacity_generation.clone();
-        let before = format!("{coordinator:#?}");
-        let prepared = prepare_authorized_body_transition(
-            &mut coordinator,
-            &lease,
-            validate_candidate.clone(),
-            expected_frame,
-            DurableContinuationEdge::StoreToValidate,
-        )
-        .expect("Store release makes room for exact Validate at full capacity");
-
-        assert!(matches!(
-            prepared.edge,
-            DurableContinuationEdge::StoreToValidate
-        ));
-        assert_eq!(prepared.parent_ordinal, lease.ordinal());
-        assert_eq!(prepared.child_ordinal, lease.ordinal() + 1);
-        assert_eq!(prepared.owner, lease.owner());
-        assert_eq!(prepared.staged.high_water, prepared.child_ordinal);
-        assert!(prepared.staged.active_lease.is_none());
-        assert_eq!(
-            prepared.child_slot,
-            PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
-        );
-        assert_eq!(
-            prepared.child_digest,
-            digest_from_hash(validate_pending.exact_effect_identity())
-        );
-
-        let parent = &prepared.staged.records[&prepared.parent_ordinal];
-        assert_eq!(parent.ordinal, prepared.parent_ordinal);
-        assert_eq!(parent.owner, lease.owner());
-        assert_eq!(parent.key, lease.key());
-        assert_eq!(parent.work_class, LifecycleWorkClass::Store);
-        assert_eq!(parent.stage.kind(), LifecycleStageKind::StoreBody);
-        assert_eq!(
-            parent.state,
-            LifecycleState::Terminal(TerminalOutcome::Advanced)
-        );
-        assert_eq!(parent.physical_slots, *lease.physical_slots());
-        let parent_slots = lease
-            .physical_slots()
-            .keys()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(parent.episode.slot_universe, parent_slots);
-        assert_eq!(parent.episode.consumed_slots, parent_slots);
-        assert!(!prepared.staged.ready_index.contains(&parent.ordinal));
-        assert_eq!(
-            prepared.staged.key_index.get(&parent.key),
-            Some(&parent.ordinal)
-        );
-        let parent_metadata = &prepared.staged.durable_records[&parent.ordinal];
-        assert_eq!(
-            parent_metadata.reconstruction_source,
-            parent.owner.causal_root().digest()
-        );
-        assert_eq!(parent_metadata.payload, expected_frame);
-
-        let child = &prepared.staged.records[&prepared.child_ordinal];
-        assert_eq!(child.ordinal, prepared.child_ordinal);
-        assert_eq!(child.owner, lease.owner());
-        assert_eq!(child.key, validate_candidate.key);
-        assert_eq!(child.work_class, LifecycleWorkClass::Validate);
-        assert_eq!(child.stage.kind(), LifecycleStageKind::ValidateBody);
-        assert_eq!(child.state, LifecycleState::Ready);
-        assert_eq!(
-            child.physical_slots,
-            std::collections::BTreeMap::from([(prepared.child_slot, prepared.child_digest)])
-        );
-        assert_eq!(
-            child.episode.slot_universe,
-            std::collections::BTreeSet::from([prepared.child_slot])
-        );
-        assert_eq!(
-            child.episode.consumed_slots,
-            std::collections::BTreeSet::from([prepared.child_slot])
-        );
-        assert!(prepared.staged.ready_index.contains(&child.ordinal));
-        assert_eq!(
-            prepared.staged.key_index.get(&child.key),
-            Some(&child.ordinal)
-        );
-        assert_eq!(
-            prepared.staged.owner_index.get(&child.owner.causal_root()),
-            Some(&child.owner)
-        );
-        assert!(
-            prepared.staged.durable_records[&child.ordinal].matches_admission(&validate_candidate)
-        );
-        assert_eq!(
-            prepared.staged.durable_records[&child.ordinal].payload, parent_metadata.payload,
-            "Store and Validate retain one byte-identical body frame"
-        );
-        assert_eq!(child.key.context(), parent.key.context());
-        assert_eq!(child.key.round(), parent.key.round());
-        assert_eq!(child.key.proposal_round(), parent.key.proposal_round());
-        assert_eq!(child.key.subject(), parent.key.subject());
-        assert_eq!(
-            child.key.execution_commitment(),
-            parent.key.execution_commitment()
-        );
-        assert_eq!(parent.key.phase(), LifecyclePhase::Store);
-        assert_eq!(child.key.phase(), LifecyclePhase::Validate);
-
-        assert_eq!(
-            prepared.staged.capacity_used[&CapacityClass::Effect],
-            capacity_used_before[&CapacityClass::Effect]
-        );
-        assert_eq!(
-            prepared.staged.capacity_generation[&CapacityClass::Effect],
-            capacity_generation_before[&CapacityClass::Effect] + 1
-        );
-        for class in CapacityClass::ALL
-            .into_iter()
-            .filter(|class| *class != CapacityClass::Effect)
-        {
-            assert_eq!(
-                prepared.staged.capacity_used[&class],
-                capacity_used_before[&class]
-            );
-            assert_eq!(
-                prepared.staged.capacity_generation[&class],
-                capacity_generation_before[&class]
-            );
-        }
-
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn store_validate_accepts_exact_no_commitment_lineage() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, false);
-        assert_eq!(lease.key().execution_commitment(), None);
-        let before = format!("{coordinator:#?}");
-        let parent_payload = validate_candidate.payload;
-        let prepared = prepare_authorized_body_transition(
-            &mut coordinator,
-            &lease,
-            validate_candidate,
-            parent_payload,
-            DurableContinuationEdge::StoreToValidate,
-        )
-        .expect("ordinary body statement retains its exact absent commitment");
-        assert_eq!(
-            prepared.staged.records[&prepared.child_ordinal]
-                .key
-                .execution_commitment(),
-            None
-        );
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn store_validate_rejects_a_substituted_frame_without_mutation() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            durable_receipt,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, true);
-        let substituted = DurableBodyReceipt::for_test(
-            durable_receipt.context_id(),
-            durable_receipt.round(),
-            durable_receipt.subject(),
-            HashOf::from_untyped_unchecked(Hash::new(b"substituted body manifest")),
-        );
-        let substituted_payload = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(coordinator.active_context, &substituted)
-                .expect("substituted receipt still projects a structurally valid frame"),
-        );
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                validate_candidate,
-                substituted_payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::InvalidBodyFrameReference)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn wrong_and_stale_store_leases_reject_without_coordinator_mutation() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, true);
-        let before = format!("{coordinator:#?}");
-        let mut wrong = lease.clone();
-        wrong.work_class = LifecycleWorkClass::Validate;
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &wrong,
-                validate_candidate.clone(),
-                validate_candidate.payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::WrongParentShape)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-
-        let mut stale = lease.clone();
-        stale.id = super::super::LeaseId(lease.id().0 + 1);
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &stale,
-                validate_candidate.clone(),
-                validate_candidate.payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::StaleLease)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn wrong_validate_effect_binding_and_owner_reject_without_mutation() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            verified,
-            durable_receipt,
-            store_effect,
-            store_pending,
-            validate_effect,
-            validate_pending,
-            validate_candidate,
-            validate_replay,
-        } = store_validate_fixture(1, true);
-        let before = format!("{coordinator:#?}");
-        let (tag, round, mut wrong_subject) = match &validate_effect {
-            AdapterEffect::ValidateBody {
-                tag,
-                round,
-                subject,
-            } => (*tag, *round, *subject),
-            _ => unreachable!("fixture Validate effect"),
-        };
-        wrong_subject.payload_hash = Hash::new(b"foreign Validate body");
-        let wrong_effect = AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject: wrong_subject,
-        };
-        assert!(matches!(
-            validate_replay.project_candidate_for_test(
-                &verified,
-                &wrong_effect,
-                &durable_receipt,
-                &validate_pending,
-            ),
-            Err(AdapterEffectAdmissionError::InvalidCarrier)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-        assert!(matches!(
-            validate_replay.project_candidate_for_test(
-                &verified,
-                &validate_effect,
-                &durable_receipt,
-                &store_pending,
-            ),
-            Err(AdapterEffectAdmissionError::InvalidCarrier)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-
-        let foreign_owner_tag = EventTag::new(
-            tag.height(),
-            tag.view(),
-            Generation::new(
-                tag.generation()
-                    .get()
-                    .checked_add(1)
-                    .expect("fixture generation remains bounded"),
-            ),
-        );
-        let foreign_store_owner = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(&store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(
-                foreign_owner_tag,
-                99,
-            )],
-        )
-        .expect("bind foreign Store owner")
-        .pop()
-        .expect("one foreign Store owner");
-        let foreign_store_pending = foreign_store_owner
-            .pending_adapter_effect_binding(&store_effect)
-            .expect("mint foreign Store pending binding");
-        let foreign_validate_pending = foreign_store_pending
-            .project_store_validate_successor(&store_effect, &validate_effect)
-            .expect("project foreign Validate pending binding");
-        assert_ne!(
-            foreign_validate_pending.causal_lifecycle_key(),
-            validate_pending.causal_lifecycle_key()
-        );
-        let parent_payload = validate_candidate.payload;
-        let mut foreign_candidate = validate_candidate;
-        foreign_candidate.causal_root = super::super::CausalRoot::new(digest_from_hash(
-            foreign_validate_pending.causal_lifecycle_key(),
-        ));
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                foreign_candidate,
-                parent_payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::ForeignSuccessorOwner)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn foreign_store_lineage_rejects_without_mutation() {
-        let StoreValidateFixture {
-            mut coordinator,
-            mut lease,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, true);
-        let incumbent_key = lease.key();
-        let foreign_key = super::super::LifecycleKey::new(
-            incumbent_key.context(),
-            incumbent_key.round(),
-            incumbent_key.proposal_round(),
-            Some(super::super::LifecycleDigest::new([0xF1; 32])),
-            LifecyclePhase::Store,
-            incumbent_key.execution_commitment(),
-        );
-        lease.key = foreign_key;
-        coordinator.active_lease = Some(lease.clone());
-        assert_eq!(
-            coordinator.key_index.remove(&incumbent_key),
-            Some(lease.ordinal())
-        );
-        assert_eq!(
-            coordinator.key_index.insert(foreign_key, lease.ordinal()),
-            None
-        );
-        coordinator
-            .records
-            .get_mut(&lease.ordinal())
-            .expect("claimed Store record")
-            .key = foreign_key;
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                validate_candidate.clone(),
-                validate_candidate.payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::ForeignSuccessorLineage)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn store_validate_rejects_max_high_water_without_mutation() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, true);
-        coordinator.high_water = u128::MAX;
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                validate_candidate.clone(),
-                validate_candidate.payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::OrdinalExhausted)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-        assert_eq!(coordinator.active_lease, Some(lease));
-    }
-
-    #[test]
-    fn store_validate_rejects_capacity_generation_overflow_without_mutation() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, true);
-        coordinator
-            .capacity_generation
-            .insert(CapacityClass::Effect, u64::MAX);
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                validate_candidate.clone(),
-                validate_candidate.payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::InvalidCapacityTransition)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-        assert_eq!(coordinator.active_lease, Some(lease));
-    }
-
-    #[test]
-    fn corrupt_store_reconstruction_source_rejects_without_mutation() {
-        let StoreValidateFixture {
-            mut coordinator,
-            lease,
-            validate_candidate,
-            ..
-        } = store_validate_fixture(1, true);
-        let corrupt = super::super::LifecycleDigest::new([0xD3; 32]);
-        assert_ne!(corrupt, lease.owner().causal_root().digest());
-        coordinator
-            .durable_records
-            .get_mut(&lease.ordinal())
-            .expect("Store durable metadata")
-            .reconstruction_source = corrupt;
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            prepare_authorized_body_transition(
-                &mut coordinator,
-                &lease,
-                validate_candidate.clone(),
-                validate_candidate.payload,
-                DurableContinuationEdge::StoreToValidate,
-            ),
-            Err(BodyStageTransitionError::StaleLease)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-        assert_eq!(coordinator.active_lease, Some(lease));
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn full_effect_capacity_stages_exact_validate_apply_cut_and_drop_is_inert() {
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-            ..
-        } = validate_apply_fixture(1, true);
-        let expected_frame = apply_candidate.payload;
-        let capacity_used_before = coordinator.capacity_used.clone();
-        let capacity_generation_before = coordinator.capacity_generation.clone();
-        let before = format!("{coordinator:#?}");
-        let prepared = prepare_authorized_validate_apply_transition(
-            &mut coordinator,
-            &lease,
-            &validated_receipt,
-            &apply_effect,
-            apply_candidate.clone(),
-        )
-        .expect("Validate release makes room for exact Apply at full capacity");
-
-        assert!(matches!(
-            prepared.edge,
-            DurableContinuationEdge::ValidateToApply
-        ));
-        assert_eq!(prepared.parent_ordinal, lease.ordinal());
-        assert_eq!(prepared.child_ordinal, lease.ordinal() + 1);
-        assert_eq!(prepared.owner, lease.owner());
-        let parent = &prepared.staged.records[&prepared.parent_ordinal];
-        let child = &prepared.staged.records[&prepared.child_ordinal];
-        assert_eq!(parent.work_class, LifecycleWorkClass::Validate);
-        assert_eq!(parent.stage.kind(), LifecycleStageKind::ValidateBody);
-        assert_eq!(
-            parent.state,
-            LifecycleState::Terminal(TerminalOutcome::Advanced)
-        );
-        assert_eq!(child.owner, lease.owner());
-        assert_eq!(child.key, apply_candidate.key);
-        assert_eq!(child.work_class, LifecycleWorkClass::Apply);
-        assert_eq!(child.stage.kind(), LifecycleStageKind::ApplyDecision);
-        assert_eq!(child.state, LifecycleState::Ready);
-        assert_eq!(child.key.context(), parent.key.context());
-        assert_eq!(child.key.round(), parent.key.round());
-        assert_eq!(child.key.proposal_round(), parent.key.proposal_round());
-        assert_eq!(child.key.subject(), parent.key.subject());
-        assert_eq!(
-            child.key.execution_commitment(),
-            parent.key.execution_commitment()
-        );
-        assert!(child.key.execution_commitment().is_some());
-        assert_eq!(
-            child.physical_slots,
-            std::collections::BTreeMap::from([(prepared.child_slot, prepared.child_digest)])
-        );
-        assert!(prepared.staged.ready_index.contains(&child.ordinal));
-        assert!(
-            prepared.staged.durable_records[&child.ordinal].matches_admission(&apply_candidate)
-        );
-        assert_eq!(
-            prepared.staged.durable_records[&parent.ordinal].payload,
-            expected_frame
-        );
-        assert_eq!(
-            prepared.staged.durable_records[&child.ordinal].payload, expected_frame,
-            "Validate and Apply retain one byte-identical body frame"
-        );
-        assert_eq!(
-            prepared.staged.durable_records[&parent.ordinal].continuation,
-            DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, child.ordinal,)
-        );
-        assert_eq!(
-            prepared.staged.capacity_used[&CapacityClass::Effect],
-            capacity_used_before[&CapacityClass::Effect]
-        );
-        assert_eq!(
-            prepared.staged.capacity_generation[&CapacityClass::Effect],
-            capacity_generation_before[&CapacityClass::Effect] + 1
-        );
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn assert_validate_sign_transition_is_exact(phase: wire::GlobalPhase) {
-        let inherited = match phase {
-            wire::GlobalPhase::Prepare => None,
-            wire::GlobalPhase::Commit => Some(wire::GlobalPhase::Prepare),
-        };
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            verified,
-            validate_effect,
-            validate_pending,
-            validated_receipt,
-            ..
-        } = validate_apply_fixture_with_authority(1, inherited);
-        let AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        } = &validate_effect
-        else {
-            unreachable!("fixture retains one Validate effect")
-        };
-        let (tag, round, subject) = (*tag, *round, *subject);
-        let sign_effect = AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Vote(wire::Vote {
-                round,
-                proposal_round: round,
-                phase,
-                subject,
-                execution_commitment: validated_receipt.execution_commitment(),
-                signer: 0,
-                signature: Vec::new(),
-            }),
-        };
-        let sign_pending = match phase {
-            wire::GlobalPhase::Prepare => validate_pending
-                .project_validate_sign_prepare_successor(&validate_effect, &sign_effect),
-            wire::GlobalPhase::Commit => validate_pending
-                .project_validate_sign_commit_successor(&validate_effect, &sign_effect),
-        }
-        .expect("sealed Validate authority projects its exact Sign successor");
-        let expected_edge = match phase {
-            wire::GlobalPhase::Prepare => DurableContinuationEdge::ValidateToSignPrepare,
-            wire::GlobalPhase::Commit => DurableContinuationEdge::ValidateToSignCommit,
-        };
-        let expected_stage = match phase {
-            wire::GlobalPhase::Prepare => LifecycleStageKind::SignPrepareVote,
-            wire::GlobalPhase::Commit => LifecycleStageKind::SignCommitVote,
-        };
-        let before = format!("{coordinator:#?}");
-        let effect_used_before = coordinator.capacity_used[&CapacityClass::Effect];
-        let effect_generation_before = coordinator.capacity_generation[&CapacityClass::Effect];
-        let sign_candidate =
-            super::super::replay_authority::exact_live_wal_body_successor_candidate_for_test(
-                &verified,
-                &validate_effect,
-                &validate_pending,
-                &sign_effect,
-                &sign_pending,
-                None,
-            )
-            .expect("canonical live-WAL evidence projects the Sign candidate");
-        let parent_payload = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(
-                coordinator.active_context,
-                validated_receipt.durable(),
-            )
-            .expect("Validate fixture retains one exact body frame"),
-        );
-        let prepared = prepare_authorized_body_transition(
-            &mut coordinator,
-            &lease,
-            sign_candidate,
-            parent_payload,
-            expected_edge,
-        )
-        .expect("stage exact Validate-to-Sign durable cut");
-        assert_eq!(prepared.edge, expected_edge);
-        assert_eq!(prepared.parent_ordinal, lease.ordinal());
-        assert_eq!(prepared.child_ordinal, lease.ordinal() + 1);
-        assert_eq!(prepared.owner, lease.owner());
-        assert_eq!(
-            prepared.staged.records[&lease.ordinal()].state,
-            LifecycleState::Terminal(TerminalOutcome::Advanced)
-        );
-        let child = &prepared.staged.records[&prepared.child_ordinal];
-        assert_eq!(child.owner, lease.owner());
-        assert_eq!(child.work_class, LifecycleWorkClass::SignVote);
-        assert_eq!(child.stage.kind(), expected_stage);
-        assert_eq!(child.state, LifecycleState::Ready);
-        assert_eq!(
-            prepared.staged.durable_records[&lease.ordinal()].continuation,
-            DurableContinuation::successor(expected_edge, child.ordinal)
-        );
-        assert!(matches!(
-            prepared.staged.durable_records[&lease.ordinal()].payload,
-            DurablePayloadReference::BodyFrame(_)
-        ));
-        assert_eq!(
-            prepared.staged.durable_records[&child.ordinal].payload,
-            DurablePayloadReference::None
-        );
-        assert_eq!(
-            prepared.staged.capacity_used[&CapacityClass::Effect],
-            effect_used_before
-        );
-        assert_eq!(
-            prepared.staged.capacity_generation[&CapacityClass::Effect],
-            effect_generation_before + 1
-        );
-        super::super::ledger::LifecycleLedgerV1::from_coordinator(&prepared.staged)
-            .expect("typed Validate-to-Sign edge projects into LedgerV1");
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn validate_sign_prepare_and_commit_stage_exact_net_zero_cuts() {
-        assert_validate_sign_transition_is_exact(wire::GlobalPhase::Prepare);
-        assert_validate_sign_transition_is_exact(wire::GlobalPhase::Commit);
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn rejected_validate_reservation_converts_into_exact_report_capacity() {
-        // The complete sealed report wrapper spans private adapter and registry
-        // fixture state owned by their respective modules. Adding a test-only
-        // constructor here would reopen the boundary this tranche closes.
-        // Adapter tests cover exact registered-Prepare report preview/drop,
-        // registry tests cover exact Ready carrier and foreign-height rejection,
-        // and this test joins canonical report evidence to the shared staging
-        // core while proving raw report admission is rejected and drop is inert.
-        let ValidateApplyFixture {
-            mut coordinator,
-            mut lease,
-            verified,
-            validate_effect,
-            validate_pending,
-            validate_replay,
-            validated_receipt,
-            ..
-        } = validate_apply_fixture_with_authority(1, Some(wire::GlobalPhase::Prepare));
-        let AdapterEffect::ValidateBody {
-            tag: _,
-            round,
-            subject,
-        } = &validate_effect
-        else {
-            unreachable!("fixture retains one Validate effect")
-        };
-        let report_effect = AdapterEffect::ReportInvalidCertifiedBody {
-            subject: *subject,
-            certificate: wire::QuorumCertificate {
-                round: *round,
-                proposal_round: *round,
-                phase: wire::GlobalPhase::Prepare,
-                subject: *subject,
-                execution_commitment: validated_receipt.execution_commitment(),
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0x51],
-            },
-        };
-        let report_pending = validate_pending
-            .project_validate_report_invalid_certified_body_successor(
-                &validate_effect,
-                &report_effect,
-            )
-            .expect("Prepare-authorized Validate projects its exact report");
-        lease.output_reservation = Some(super::super::schema::LeaseCapacityReservation::new(
-            CapacityClass::Consensus,
-            coordinator.capacity_generation[&CapacityClass::Consensus],
-        ));
-        coordinator.active_lease = Some(lease.clone());
-        let effect_used_before = coordinator.capacity_used[&CapacityClass::Effect];
-        let effect_generation_before = coordinator.capacity_generation[&CapacityClass::Effect];
-        let consensus_used_before = coordinator.capacity_used[&CapacityClass::Consensus];
-        let consensus_generation_before =
-            coordinator.capacity_generation[&CapacityClass::Consensus];
-        let before = format!("{coordinator:#?}");
-        let report_candidate =
-            super::super::replay_authority::exact_invalid_body_report_candidate_for_test(
-                &verified,
-                &validate_replay,
-                &validate_effect,
-                &validate_pending,
-                validated_receipt.durable(),
-                &report_effect,
-                &report_pending,
-            )
-            .expect("canonical rejection evidence projects the report candidate");
-        let parent_payload = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(
-                coordinator.active_context,
-                validated_receipt.durable(),
-            )
-            .expect("rejected Validate fixture retains one exact body frame"),
-        );
-        let prepared = prepare_authorized_body_transition(
-            &mut coordinator,
-            &lease,
-            report_candidate,
-            parent_payload,
-            DurableContinuationEdge::ValidateToInvalidBodyReport,
-        )
-        .expect("convert the reserved rejected Validate into one report child");
-        let child = &prepared.staged.records[&prepared.child_ordinal];
-        assert_eq!(child.work_class, LifecycleWorkClass::InvalidBodyReport);
-        assert_eq!(child.stage.kind(), LifecycleStageKind::ReportInvalidBody);
-        assert_eq!(child.state, LifecycleState::Ready);
-        assert_eq!(child.owner, lease.owner());
-        assert_eq!(
-            prepared.child_slot.capacity_class(),
-            Some(CapacityClass::Consensus)
-        );
-        assert_eq!(
-            prepared.staged.durable_records[&lease.ordinal()].continuation,
-            DurableContinuation::successor(
-                DurableContinuationEdge::ValidateToInvalidBodyReport,
-                child.ordinal,
-            )
-        );
-        assert!(matches!(
-            prepared.staged.durable_records[&lease.ordinal()].payload,
-            DurablePayloadReference::BodyFrame(_)
-        ));
-        assert_eq!(
-            prepared.staged.durable_records[&child.ordinal].payload,
-            DurablePayloadReference::None
-        );
-        assert_eq!(
-            prepared.staged.capacity_used[&CapacityClass::Effect],
-            effect_used_before - 1
-        );
-        assert_eq!(
-            prepared.staged.capacity_generation[&CapacityClass::Effect],
-            effect_generation_before + 1
-        );
-        assert_eq!(
-            prepared.staged.capacity_used[&CapacityClass::Consensus],
-            consensus_used_before + 1
-        );
-        assert_eq!(
-            prepared.staged.capacity_generation[&CapacityClass::Consensus],
-            consensus_generation_before
-        );
-        super::super::ledger::LifecycleLedgerV1::from_coordinator(&prepared.staged)
-            .expect("typed Validate-to-report edge projects into LedgerV1");
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    fn assert_validate_no_successor_cut_is_exact(rejected: bool) {
-        let ValidateApplyFixture {
-            mut coordinator,
-            mut lease,
-            validated_receipt,
-            ..
-        } = validate_apply_fixture(1, false);
-        if rejected {
-            lease.output_reservation = Some(super::super::schema::LeaseCapacityReservation::new(
-                CapacityClass::Consensus,
-                coordinator.capacity_generation[&CapacityClass::Consensus],
-            ));
-            coordinator.active_lease = Some(lease.clone());
-        }
-        let effect_used_before = coordinator.capacity_used[&CapacityClass::Effect];
-        let effect_generation_before = coordinator.capacity_generation[&CapacityClass::Effect];
-        let consensus_used_before = coordinator.capacity_used[&CapacityClass::Consensus];
-        let consensus_generation_before =
-            coordinator.capacity_generation[&CapacityClass::Consensus];
-        let high_water_before = coordinator.high_water;
-        let before = format!("{coordinator:#?}");
-        let parent_payload = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(
-                coordinator.active_context,
-                validated_receipt.durable(),
-            )
-            .expect("terminal Validate fixture retains its exact body frame"),
-        );
-        let transition =
-            stage_validate_no_successor_transition(&coordinator, &lease, parent_payload, rejected)
-                .expect("stage exact terminal Validate with no successor");
-        assert_eq!(transition.parent_ordinal, lease.ordinal());
-        assert_eq!(transition.released_consensus_reservation, rejected);
-        assert_eq!(transition.staged.high_water, high_water_before);
-        assert_eq!(
-            transition.staged.records[&lease.ordinal()].state,
-            LifecycleState::Terminal(TerminalOutcome::Advanced)
-        );
-        assert_eq!(
-            transition.staged.durable_records[&lease.ordinal()].continuation,
-            DurableContinuation::AdvancedNoSuccessor
-        );
-        assert_eq!(
-            transition.staged.durable_records[&lease.ordinal()].payload,
-            DurablePayloadReference::BodyFrame(
-                projection::durable_body_frame_reference(
-                    coordinator.active_context,
-                    validated_receipt.durable(),
-                )
-                .expect("terminal Validate retains its exact body frame"),
-            )
-        );
-        assert_eq!(
-            transition.staged.capacity_used[&CapacityClass::Effect],
-            effect_used_before - 1
-        );
-        assert_eq!(
-            transition.staged.capacity_generation[&CapacityClass::Effect],
-            effect_generation_before + 1
-        );
-        assert_eq!(
-            transition.staged.capacity_used[&CapacityClass::Consensus],
-            consensus_used_before
-        );
-        assert_eq!(
-            transition.staged.capacity_generation[&CapacityClass::Consensus],
-            consensus_generation_before + u64::from(rejected)
-        );
-        super::super::ledger::LifecycleLedgerV1::from_coordinator(&transition.staged)
-            .expect("typed Validate no-successor tombstone projects into LedgerV1");
-        drop(transition);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn validated_and_rejected_no_effect_cuts_release_exact_capacity() {
-        // The registry test pins all four accepted preview discriminators and
-        // rejects every Busy/Apply/Persist/Report branch. This lower-level cut
-        // then proves the permit-bound projection's only two capacity outcomes
-        // without adding a test constructor for the private dual-borrow preview.
-        assert_validate_no_successor_cut_is_exact(false);
-        assert_validate_no_successor_cut_is_exact(true);
-
-        let ValidateApplyFixture {
-            coordinator,
-            lease,
-            validated_receipt,
-            ..
-        } = validate_apply_fixture(1, false);
-        let parent_payload = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(
-                coordinator.active_context,
-                validated_receipt.durable(),
-            )
-            .expect("terminal Validate fixture retains its exact body frame"),
-        );
-        assert!(matches!(
-            stage_validate_no_successor_transition(&coordinator, &lease, parent_payload, true,),
-            Err(BodyStageTransitionError::InvalidOutputReservation)
-        ));
-    }
-
-    #[test]
-    fn validate_apply_acquires_commit_authority_for_ordinary_validation() {
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-            ..
-        } = validate_apply_fixture(1, false);
-        assert_eq!(lease.key().execution_commitment(), None);
-        let before = format!("{coordinator:#?}");
-        let prepared = prepare_authorized_validate_apply_transition(
-            &mut coordinator,
-            &lease,
-            &validated_receipt,
-            &apply_effect,
-            apply_candidate,
-        )
-        .expect("ordinary Validate may acquire exact Commit authority");
-        assert!(
-            prepared.staged.records[&prepared.child_ordinal]
-                .key
-                .execution_commitment()
-                .is_some()
-        );
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn advanced_validate_link_stutters_and_recovers_its_exact_apply() {
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            validate_candidate,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-            ..
-        } = validate_apply_fixture(1, true);
-        let retry = AdmissionRequest::Candidate(validate_candidate);
-        let mut prepared = prepare_authorized_validate_apply_transition(
-            &mut coordinator,
-            &lease,
-            &validated_receipt,
-            &apply_effect,
-            apply_candidate,
-        )
-        .expect("stage exact durable Validate-to-Apply link");
-        assert!(matches!(
-            prepared.staged.admit(retry),
-            AdmissionDecision::StutterTerminal { owner } if owner == lease.owner()
-        ));
-
-        let ledger = super::super::ledger::LifecycleLedgerV1::from_coordinator(&prepared.staged)
-            .expect("project linked body rows into LedgerV1");
-        let physical_universes = prepared
-            .staged
-            .records
-            .iter()
-            .map(|(ordinal, record)| (*ordinal, record.episode.slot_universe.clone()))
-            .collect();
-        let snapshot = ledger
-            .recovery_snapshot(physical_universes)
-            .expect("decode an authenticated linked recovery snapshot");
-        let authority = prepared.staged.episode_authority.clone();
-        let mut recovered =
-            LifecycleCoordinator::new_with_authority(authority.clone(), snapshot.high_water);
-        recovered.reconcile_restart(snapshot.clone());
-        assert_eq!(recovered.fault(), None);
-        assert_eq!(
-            recovered.durable_records[&lease.ordinal()].continuation,
-            DurableContinuation::successor(
-                DurableContinuationEdge::ValidateToApply,
-                lease.ordinal() + 1,
-            )
-        );
-
-        let mut missing_link = snapshot;
-        missing_link
-            .records
-            .iter_mut()
-            .find(|record| record.ordinal == lease.ordinal())
-            .expect("recovery contains terminal Validate parent")
-            .continuation = DurableContinuation::None;
-        let mut rejected =
-            LifecycleCoordinator::new_with_authority(authority, missing_link.high_water);
-        rejected.reconcile_restart(missing_link);
-        assert_eq!(rejected.fault(), Some(CoordinatorFault::RecoveryRejected));
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn durable_open_joins_terminal_validate_to_authenticated_apply() {
-        let temporary = tempfile::tempdir().expect("temporary lifecycle roots");
-        let ledger_root = temporary.path().join("ledger");
-        let body_root = temporary.path().join("bodies");
-        let missing_payload_root = temporary.path().join("missing-payloads");
-        let exact_payload_root = temporary.path().join("exact-payloads");
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            verified,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-            ..
-        } = validate_apply_fixture(1, true);
-        let prepared = prepare_authorized_validate_apply_transition(
-            &mut coordinator,
-            &lease,
-            &validated_receipt,
-            &apply_effect,
-            apply_candidate.clone(),
-        )
-        .expect("stage exact durable Validate-to-Apply link");
-        let authority = prepared.staged.episode_authority.clone();
-        let ledger = super::super::ledger::LifecycleLedgerV1::from_coordinator(&prepared.staged)
-            .expect("project exact linked ledger");
-        let (ledger_store, empty) = super::super::ledger::LifecycleLedgerStoreV1::open(
-            &ledger_root,
-            lifecycle_context(verified.context()),
-        )
-        .expect("open durable lifecycle ledger");
-        assert!(empty.records().is_empty());
-        ledger_store
-            .persist(&ledger)
-            .expect("persist linked Validate-to-Apply ledger");
-        drop(ledger_store);
-
-        let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
-            &body_root,
-            verified.context().clone(),
-        )
-        .expect("open exact-context body store");
-        let signer = KeyPair::try_from_seed(vec![250; 32], Algorithm::BlsNormal)
-            .expect("deterministic empty-cut signer");
-        let (mut missing_payload_store, missing_payloads) =
-            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                &missing_payload_root,
-                verified.context(),
-            )
-            .expect("open empty missing-candidate payload store");
-        let missing_payloads = missing_payloads
-            .authenticate(&verified, &signer, &body_store)
-            .expect("authenticate empty Serve payload cut");
-        let missing_cut =
-            super::super::AuthenticatedLifecycleRecoveryCut::from_authenticated_parts(
-                ledger.clone(),
-                [],
-                [],
-                missing_payloads,
-            )
-            .expect("assemble missing Apply recovery cut");
-        assert!(
-            LifecycleCoordinator::open_with_authority(
-                authority.clone(),
-                &ledger_root,
-                &mut missing_payload_store,
-                missing_cut,
-            )
-            .is_err(),
-            "a live Apply successor requires exact authenticated recovery coverage"
-        );
-
-        let (mut exact_payload_store, exact_payloads) =
-            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                &exact_payload_root,
-                verified.context(),
-            )
-            .expect("open empty exact-candidate payload store");
-        let exact_payloads = exact_payloads
-            .authenticate(&verified, &signer, &body_store)
-            .expect("authenticate second empty Serve payload cut");
-        let exact_cut = super::super::AuthenticatedLifecycleRecoveryCut::from_authenticated_parts(
-            ledger,
-            [apply_candidate],
-            [],
-            exact_payloads,
-        )
-        .expect("assemble exact Apply recovery cut");
-        let restarted = LifecycleCoordinator::open_with_authority(
-            authority,
-            &ledger_root,
-            &mut exact_payload_store,
-            exact_cut,
-        )
-        .expect("linked terminal Validate and authenticated live Apply reopen exactly");
-        assert_eq!(restarted.fault(), None);
-        assert_eq!(
-            restarted.records[&lease.ordinal()].state,
-            LifecycleState::Terminal(TerminalOutcome::Advanced)
-        );
-        assert_eq!(
-            restarted.durable_records[&lease.ordinal()].continuation,
-            DurableContinuation::successor(
-                DurableContinuationEdge::ValidateToApply,
-                lease.ordinal() + 1,
-            )
-        );
-        assert_eq!(
-            restarted.records[&(lease.ordinal() + 1)].state,
-            LifecycleState::Ready
-        );
-    }
-
-    #[test]
-    fn validate_apply_rejects_wrong_binding_and_foreign_commitment_without_mutation() {
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            verified,
-            validate_effect,
-            validate_pending,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-            ..
-        } = validate_apply_fixture(1, true);
-        let before = format!("{coordinator:#?}");
-        assert!(
-            super::super::replay_authority::exact_live_wal_body_successor_candidate_for_test(
-                &verified,
-                &validate_effect,
-                &validate_pending,
-                &apply_effect,
-                &validate_pending,
-                Some(validated_receipt.durable()),
-            )
-            .is_none()
-        );
-        assert_eq!(format!("{coordinator:#?}"), before);
-
-        let AdapterEffect::Apply {
-            tag,
-            subject,
-            mut certificate,
-        } = apply_effect
-        else {
-            unreachable!("fixture Apply effect")
-        };
-        certificate.execution_commitment =
-            wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"foreign Validate-Apply state root"),
-                Hash::new(b"foreign Validate-Apply events root"),
-                Hash::new(b"foreign Validate-Apply trace root"),
-                2,
-                Hash::new(b"foreign Validate-Apply fee summary"),
-            );
-        let foreign_apply = AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate,
-        };
-        assert!(
-            validate_pending
-                .project_validate_apply_successor(&validate_effect, &foreign_apply)
-                .is_none(),
-            "Prepare-authorized Validate must reject a different Commit result"
-        );
-        assert!(matches!(
-            prepare_authorized_validate_apply_transition(
-                &mut coordinator,
-                &lease,
-                &validated_receipt,
-                &foreign_apply,
-                apply_candidate,
-            ),
-            Err(BodyStageTransitionError::InvalidValidationReceipt)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn ordinary_validate_receipt_rejects_self_consistent_foreign_apply_binding() {
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            verified,
-            validate_effect,
-            validate_pending,
-            validated_receipt,
-            apply_effect,
-            ..
-        } = validate_apply_fixture(1, false);
-        let AdapterEffect::Apply {
-            tag,
-            subject,
-            mut certificate,
-        } = apply_effect
-        else {
-            unreachable!("fixture Apply effect")
-        };
-        certificate.execution_commitment =
-            wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"ordinary forged state root"),
-                Hash::new(b"ordinary forged events root"),
-                Hash::new(b"ordinary forged trace root"),
-                3,
-                Hash::new(b"ordinary forged fee summary"),
-            );
-        let foreign_apply = AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate,
-        };
-        let foreign_pending = validate_pending
-            .project_validate_apply_successor(&validate_effect, &foreign_apply)
-            .expect("ordinary lineage alone permits one internally exact Commit binding");
-        let foreign_candidate =
-            super::super::replay_authority::exact_live_wal_body_successor_candidate_for_test(
-                &verified,
-                &validate_effect,
-                &validate_pending,
-                &foreign_apply,
-                &foreign_pending,
-                Some(validated_receipt.durable()),
-            )
-            .expect("self-consistent foreign Apply has exact test WAL evidence");
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            prepare_authorized_validate_apply_transition(
-                &mut coordinator,
-                &lease,
-                &validated_receipt,
-                &foreign_apply,
-                foreign_candidate,
-            ),
-            Err(BodyStageTransitionError::InvalidValidationReceipt)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn commit_authorized_validate_retains_only_the_exact_commit_result() {
-        let ValidateApplyFixture {
-            mut coordinator,
-            lease,
-            validate_effect,
-            validate_pending,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-            ..
-        } = validate_apply_fixture_with_authority(1, Some(wire::GlobalPhase::Commit));
-        assert!(lease.key().execution_commitment().is_some());
-        let before = format!("{coordinator:#?}");
-        let prepared = prepare_authorized_validate_apply_transition(
-            &mut coordinator,
-            &lease,
-            &validated_receipt,
-            &apply_effect,
-            apply_candidate,
-        )
-        .expect("exact Commit-authorized Validate retains its Apply authority");
-        assert_eq!(
-            prepared.staged.records[&prepared.child_ordinal]
-                .key
-                .execution_commitment(),
-            lease.key().execution_commitment()
-        );
-        drop(prepared);
-        assert_eq!(format!("{coordinator:#?}"), before);
-
-        let AdapterEffect::Apply {
-            tag,
-            subject,
-            mut certificate,
-        } = apply_effect
-        else {
-            unreachable!("fixture Apply effect")
-        };
-        certificate.execution_commitment =
-            wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"changed retained Commit state root"),
-                Hash::new(b"changed retained Commit events root"),
-                Hash::new(b"changed retained Commit trace root"),
-                4,
-                Hash::new(b"changed retained Commit fee summary"),
-            );
-        let changed_apply = AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate,
-        };
-        assert!(
-            validate_pending
-                .project_validate_apply_successor(&validate_effect, &changed_apply)
-                .is_none(),
-            "Commit authority may retain only its exact statement"
-        );
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-
-    #[test]
-    fn validate_apply_rejects_corrupt_parent_commitment_lineage_without_mutation() {
-        let ValidateApplyFixture {
-            mut coordinator,
-            mut lease,
-            validated_receipt,
-            apply_effect,
-            apply_candidate,
-            ..
-        } = validate_apply_fixture(1, true);
-        let incumbent_key = lease.key();
-        let foreign_key = super::super::LifecycleKey::new(
-            incumbent_key.context(),
-            incumbent_key.round(),
-            incumbent_key.proposal_round(),
-            incumbent_key.subject(),
-            LifecyclePhase::Validate,
-            Some(super::super::LifecycleDigest::new([0xE1; 32])),
-        );
-        assert_ne!(
-            foreign_key.execution_commitment(),
-            incumbent_key.execution_commitment()
-        );
-        lease.key = foreign_key;
-        coordinator.active_lease = Some(lease.clone());
-        assert_eq!(
-            coordinator.key_index.remove(&incumbent_key),
-            Some(lease.ordinal())
-        );
-        assert_eq!(
-            coordinator.key_index.insert(foreign_key, lease.ordinal()),
-            None
-        );
-        coordinator
-            .records
-            .get_mut(&lease.ordinal())
-            .expect("claimed Validate record")
-            .key = foreign_key;
-        let before = format!("{coordinator:#?}");
-        assert!(matches!(
-            prepare_authorized_validate_apply_transition(
-                &mut coordinator,
-                &lease,
-                &validated_receipt,
-                &apply_effect,
-                apply_candidate,
-            ),
-            Err(BodyStageTransitionError::ForeignSuccessorLineage)
-        ));
-        assert_eq!(format!("{coordinator:#?}"), before);
-    }
-}
+include!("v2_lifecycle_body_pipeline_transition_tests.rs");

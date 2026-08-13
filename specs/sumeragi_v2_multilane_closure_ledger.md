@@ -45,11 +45,12 @@ No user-visible release gate in this ledger is currently **Evidenced**.
 Existing unit tests and historical status reports are useful leads, not
 multilane release evidence.
 
-All counts and static pass statements in this document describe the mutable
-development checkout. They are inventories and source-consistency observations,
-not immutable-candidate execution or release receipts.
+Unless explicitly labelled as a private-index audit, all counts and static pass
+statements in this document describe the mutable development checkout. They are
+inventories and source-consistency observations, not immutable-candidate
+execution or release receipts.
 
-## 2026-08-11 mutable-development closure snapshot
+## 2026-08-13 mutable-development closure snapshot
 
 - The bound inventory contains exactly 854 production tests across 40 modules,
   including 436 source-sealed ownership/regression names, plus 525 G-UNIT
@@ -78,11 +79,14 @@ not immutable-candidate execution or release receipts.
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
   distribution source and Kotlin/Java Native model dependencies, are present in
-  the development tree. Every reviewed SDK closure input is tracked, both
-  mutable source-closure checks pass, and the browser JavaScript source and
-  distribution trees match. The five checked-in OpenAPI artifacts and
-  immutable-candidate execution evidence remain Open, so SDK and wire closure
-  is not claimed.
+  the development tree. A temporary private-index audit that represented the
+  intended `javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts` input as
+  tracked produced the exact 1,351-record grouped and 1,350-record diagnostics
+  closures, and the browser JavaScript source and distribution trees match. The
+  real index still leaves that declaration file untracked, so both live resolver
+  checks correctly fail closed. The five checked-in OpenAPI artifacts and
+  immutable-candidate execution evidence remain Open, so SDK and wire closure is
+  not claimed.
 
 Every Evidence field and every `G-*` execution or release gate therefore
 remains Open. These source-consistency documentation updates do not promote the
@@ -1613,12 +1617,18 @@ name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
-and Kotlin/Java Native model dependencies. Every declared candidate is tracked,
-the two specialized static Python modules are canonically runner-bound, and the
-browser distribution matches its source. Both mutable resolver checks pass.
-These are development-tree consistency observations only; stale OpenAPI
-manifests and missing immutable-candidate source-seal and execution evidence
-keep the suite digest and `G-SDK` release claim ineligible.
+and Kotlin/Java Native model dependencies. A temporary private-index audit that
+represented `javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts` as tracked
+produced grouped digest
+`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+and diagnostics digest
+`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
+The two specialized static Python modules are canonically runner-bound and the
+browser distribution matches its source, but the real index still leaves that
+declaration file untracked, so both live resolver checks fail closed. These are
+private-index consistency observations only; stale OpenAPI manifests and
+missing immutable-candidate source-seal and execution evidence keep the suite
+digest and `G-SDK` release claim ineligible.
 
 **Differential release invariant and negative control.**
 `MLApiAuthoritySeparation` states that no diagnostics-only field can satisfy an

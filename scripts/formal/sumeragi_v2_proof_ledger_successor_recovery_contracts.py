@@ -744,7 +744,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             status_source,
             (
                 "fn complete_tip_retirement_and_successor_owner_bind_are_release_bound()",
-                "crate::sumeragi::v2_lifecycle_coordinator::run_complete_tip_retirement_release_regressions()",
+                "crate::sumeragi::v2_first_release_recovery::run_complete_tip_retirement_release_regressions()",
             ),
         )
 
@@ -1194,7 +1194,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 adapter_path,
                 adapter_source,
                 "canonical Kura-bound lifecycle-owner factory",
-                "pub(crate) fn open_production_lifecycle_owner_v1(",
+                "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
                 "fn open_production_lifecycle_owner_v1_at_authenticated_roots(",
             )
             require_order(
@@ -1203,7 +1203,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 canonical_owner_factory,
                 (
                     "factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1",
-                    "let RecoveredLifecycleOwnerFactoryInputsV1 { adapter_owner, storage, state, queue, kura, provider_ingest_finalized_archive, reputation_finalized_archive, block_cadence, events_sender, } = factory_inputs",
+                    "body_store: super::v2_body_store::QuarantinedV2BodyStore",
+                    "if !self.effects.is_empty()",
+                    "let RecoveredLifecycleOwnerFactoryInputsV1 { adapter_owner, storage, state, queue, kura, provider_ingest_finalized_archive, reputation_finalized_archive, block_cadence, events_sender, local_signer, } = factory_inputs",
                     "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
                     "storage.context_id != context.id() || storage.height != context.height",
                     "body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
@@ -1211,16 +1213,11 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "let apply_service = super::v2_apply::V2ApplyService::new(",
                     "storage.genesis_account.clone()",
                     "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
-                    "apply_service.recovered_finality_subject(&context)",
-                    "retain_recovered_markers_for_subject(subject)",
-                    "retain_recovered_markers_for_authority(validation_authority)",
-                    "revalidate_recovered_markers(|body|",
-                    "apply_service.revalidate_recovered_candidate(&context, body)",
-                    "body_store.into_revalidated_startup()",
+                    "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
                     "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, chunk_root, lifecycle_root, .. } = storage",
                     "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
-                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, chunk_root, }",
-                    "owner.with_recovered_kura_binding_and_apply_service( kura_binding, apply_service )",
+                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, chunk_root, local_signer: Some(local_signer.public_key().clone()), }",
+                    "owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service)",
                 ),
             )
             reject_tokens(
@@ -1233,6 +1230,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "serve_payload_root: &std::path::Path",
                     "body_root: &std::path::Path",
                     "body_signature_policy:",
+                    "body_store: super::v2_body_store::V2BodyStore",
+                    "body_store: super::v2_body_store::RevalidatedV2BodyStore",
                 ),
             )
             require_tokens(
@@ -1248,6 +1247,15 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "struct RecoveredLifecycleOwnerKuraBindingV1 {",
                     "fn matches_identity(&self, identity: &KuraInstanceIdentity) -> bool",
                     "fn storage_paths_for_launch(",
+                    "struct RecoveredLifecycleOwnerFactoryInputsV1",
+                    "adapter_owner: Arc<AuthenticatedRecoveredAdapterFactoryOwnerV1>",
+                    "fn bind_production_lifecycle_owner_factory_inputs_v1(",
+                    "permit: super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                    "storage.kura_identity.matches(kura.as_ref())",
+                    "state.matches_kura_instance(&kura)",
+                    "state.network_id_ref() != &self.adapter.wire_context.network_id",
+                    "let block_cadence = state.sumeragi_block_cadence()",
+                    "let local_signer = permit.into_local_signer()",
                     "fn mint_from_recovered_height(",
                     "permit: super::v2_recovery::RecoveredLifecycleStorageMintPermitV1",
                     "assert!(permit.authorizes(kura, verified, signature_policy, genesis_account))",
@@ -1257,19 +1265,100 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "chunk_root: storage_root.join(\"chunks\")",
                     "lifecycle_root: storage_root .join(\"lifecycle-v1\") .join(hex::encode(context.id().0.as_ref()))",
                     "body_store_root: storage_root.join(\"bodies\")",
-                    "storage.genesis_account.clone()",
-                    "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
+                    "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
+                    "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
+                    "fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup()",
+                    "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
                     "fn recovered_wal_sign_status_publication_is_exact_last_and_unwired()",
                     "assert!(context_binding < body_root)",
                     "assert!(body_root < wal_path)",
                     "assert!(wal_path < apply_service)",
-                    "assert!(apply_service < finality)",
-                    "assert!(replay < seal)",
-                    "assert!(seal < sealed_parts)",
                     "assert!(authenticated_roots < kura_binding)",
                 ),
             )
+            for literal in (
+                '"a caller-promoted marker cannot enter production quarantine"',
+                '"pre-promoted marker rejection must precede lifecycle-store creation"',
+                '"a body store outside the Kura layout must fail closed"',
+                '"a wrong body signature policy must fail closed"',
+            ):
+                require_literal_count(
+                    adapter_path,
+                    "recovery-minted lifecycle storage authority regressions",
+                    adapter_source,
+                    literal,
+                    1,
+                )
+            reject_tokens(
+                adapter_path,
+                "sealed recovered lifecycle factory inputs",
+                adapter_source,
+                (
+                    "fn genesis_account_for_launch(",
+                    "impl Clone for RecoveredLifecycleOwnerFactoryInputsV1",
+                    "impl Clone for AuthenticatedRecoveredAdapterStartup",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "factory-retained local signer identity",
+                canonical_owner_factory,
+                (
+                    "local_signer",
+                    "&local_signer",
+                    "local_signer: Some(local_signer.public_key().clone())",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "factory-retained local signer identity",
+                canonical_owner_factory,
+                ("local_signer: &KeyPair",),
+            )
         if body_store_source:
+            require_tokens(
+                body_store_path,
+                "fresh quarantined recovered body-store cut",
+                body_store_source,
+                (
+                    "struct QuarantinedV2BodyStore(V2BodyStore)",
+                    "fn into_quarantined_recovered_startup(",
+                    "!self.validated.is_empty() || !self.rejected.is_empty() || !self.retired_revalidation.is_empty()",
+                    "V2BodyStoreError::RecoveredMarkersAlreadyPromoted",
+                ),
+            )
+            quarantine = region(
+                body_store_path,
+                body_store_source,
+                "fixed quarantined recovered marker replay",
+                "impl QuarantinedV2BodyStore {",
+                "impl RevalidatedV2BodyStore {",
+            )
+            require_order(
+                body_store_path,
+                "fixed quarantined recovered marker replay",
+                quarantine,
+                (
+                    "fn into_revalidated_lifecycle_startup(",
+                    "apply_service.recovered_finality_subject(context)",
+                    "self.0.retain_recovered_markers_for_subject(subject)",
+                    "self.0.retain_recovered_markers_for_authority(validation_authority)",
+                    "self.0.revalidate_recovered_markers(|body|",
+                    "apply_service.revalidate_recovered_candidate(context, body)",
+                    "self.0.into_revalidated_startup()",
+                ),
+            )
+            reject_tokens(
+                body_store_path,
+                "fixed quarantined recovered marker replay",
+                quarantine,
+                (
+                    "pub(in crate::sumeragi) fn retain_recovered_markers_for_subject(",
+                    "pub(in crate::sumeragi) fn retain_recovered_markers_for_authority(",
+                    "pub(in crate::sumeragi) fn revalidate_recovered_markers<",
+                    "pub(in crate::sumeragi) fn into_revalidated_startup(",
+                ),
+            )
             require_tokens(
                 body_store_path,
                 "revalidated body-store canonical-root oracle",
@@ -1318,7 +1407,69 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         owner_path, owner_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
         )
-        if launch_source and kura_source and owner_source:
+        worker_path, worker_source = load(
+            "crates/iroha_core/src/sumeragi/v2_worker.rs"
+        )
+        scheduler_path, scheduler_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"
+        )
+        registry_path, registry_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"
+        )
+        registry_validate_path, registry_validate_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs"
+        )
+        wal_recovery_path, wal_recovery_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs"
+        )
+        selector_path, selector_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
+        )
+        body_pipeline_path, body_pipeline_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs"
+        )
+        replay_authority_path, replay_authority_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"
+        )
+        runtime_path, runtime_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+        )
+        effects_path, effects_source = load(
+            "crates/iroha_core/src/sumeragi/v2_effects.rs"
+        )
+        transport_path, transport_source = load(
+            "crates/iroha_core/src/sumeragi/v2_transport.rs"
+        )
+        lifecycle_open_path, lifecycle_open_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs"
+        )
+        runner_dependency_path, runner_dependency_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runner.rs"
+        )
+        state_path, state_source = load("crates/iroha_core/src/state.rs")
+        apply_path, apply_source = load(
+            "crates/iroha_core/src/sumeragi/v2_apply.rs"
+        )
+        if (
+            launch_source
+            and kura_source
+            and owner_source
+            and worker_source
+            and scheduler_source
+            and registry_source
+            and registry_validate_source
+            and wal_recovery_source
+            and selector_source
+            and body_pipeline_source
+            and replay_authority_source
+            and runtime_source
+            and effects_source
+            and transport_source
+            and lifecycle_open_source
+            and runner_dependency_source
+            and state_source
+            and apply_source
+        ):
             lifecycle_launch = region(
                 launch_path,
                 launch_source,
@@ -1332,7 +1483,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 lifecycle_launch,
                 (
                     "begin_fail_stop_operation()",
-                    "binding.matches_kura(inputs.kura.as_ref())",
+                    "Self::launch_local_identity_matches( &context.roster, &inputs.local_peer, inputs.local_validator, &inputs.key_pair, )",
+                    "binding.matches_launch_identity(inputs.kura.as_ref(), &inputs.key_pair)",
                     "service.matches_lifecycle_launch( &inputs.state, &inputs.kura, &context, &validator_set_pops, )",
                     "binding.storage_paths_for_launch(inputs.kura.as_ref())",
                     "prepare_leader_wire_launch(launch_storage.wal_path())",
@@ -1350,6 +1502,50 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "ProductionV2Services::start_with_apply_service(",
                     "ProductionLifecycleApplyServiceLaunchPermitV1",
                     "apply_service,",
+                ),
+            )
+            runner_dependency_permit = region(
+                runner_dependency_path,
+                runner_dependency_source,
+                "runner-sealed recovered lifecycle factory dependency permit",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                "/// Cadence-derived process-local deadline",
+            )
+            require_tokens(
+                runner_dependency_path,
+                "runner-sealed recovered lifecycle factory dependencies",
+                runner_dependency_permit,
+                (
+                    "struct RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                    "_seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1",
+                    "local_signer: KeyPair",
+                    "fn mint_for_recovered_runner(local_signer: KeyPair) -> Self",
+                    "#[cfg(test)] pub(in crate::sumeragi) fn for_test(local_signer: KeyPair) -> Self",
+                    "fn into_local_signer(self) -> KeyPair",
+                    "impl Drop for RecoveredLifecycleOwnerFactoryDependencyPermitSealV1",
+                ),
+            )
+            reject_tokens(
+                runner_dependency_path,
+                "runner-sealed recovered lifecycle factory dependencies",
+                runner_dependency_permit,
+                (
+                    "pub(in crate::sumeragi) fn mint_for_recovered_runner(",
+                    "pub(crate) fn mint_for_recovered_runner(",
+                    "pub fn mint_for_recovered_runner(",
+                    "impl Clone for RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                    "fn into_parts(",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "local launch identity preflight",
+                launch_source,
+                (
+                    "fn launch_local_identity_matches(",
+                    "local_peer.public_key() != key_pair.public_key()",
+                    "local_validator.is_none_or(|observed| roster_position == Some(observed))",
+                    "fn launch_local_identity_requires_the_bound_key_and_exact_roster_position()",
                 ),
             )
             require_tokens(
@@ -1398,6 +1594,79 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "lifecycle_ordinals: RuntimeLifecycleOrdinalSource",
                     "durable_bodies:",
                     "recovered_body_receipts:",
+                    "queue: Arc<Queue>",
+                    "provider_ingest_finalized_archive:",
+                    "reputation_finalized_archive:",
+                    "block_cadence: Duration",
+                    "events_sender: EventsSender",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "sealed replay-service worker transfer",
+                worker_source,
+                (
+                    "fn start_with_apply_service(",
+                    "_permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1",
+                    "apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)",
+                    "Self::start_inner(",
+                ),
+            )
+            legacy_worker_start = region(
+                worker_path,
+                worker_source,
+                "legacy worker Apply-service construction",
+                "pub(crate) fn start(",
+                "/// Start with the exact application service used for recovered marker replay.",
+            )
+            require_order(
+                worker_path,
+                "legacy worker Apply-service construction",
+                legacy_worker_start,
+                (
+                    "let apply_service = V2ApplyService::new(",
+                    "Self::start_inner(",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "legacy worker Apply-service construction",
+                legacy_worker_start,
+                ("Self::start_with_apply_service(",),
+            )
+            require_token_count(
+                worker_path,
+                "sealed replay-service worker transfer",
+                worker_source,
+                "ProductionLifecycleApplyServiceLaunchPermitV1",
+                1,
+            )
+            require_token_count(
+                launch_path,
+                "sealed replay-service permit mint",
+                launch_source,
+                "ProductionLifecycleApplyServiceLaunchPermitV1 {",
+                1,
+            )
+            require_tokens(
+                state_path,
+                "fixed State/Kura identity oracle",
+                state_source,
+                (
+                    "fn matches_kura_instance(&self, kura: &Arc<Kura>) -> bool",
+                    "Arc::ptr_eq(&self.kura, kura)",
+                ),
+            )
+            require_tokens(
+                apply_path,
+                "fixed recovered Apply-service identity oracle",
+                apply_source,
+                (
+                    "fn matches_lifecycle_launch(",
+                    "Arc::ptr_eq(&self.state, state)",
+                    "Arc::ptr_eq(&self.kura, kura)",
+                    "self.network_id == context.network_id",
+                    "self.validator_set_pops == validator_set_pops",
                 ),
             )
             require_tokens(
@@ -1545,6 +1814,2009 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "assert!(self.apply_service.is_none())",
                     "self.kura_binding = Some(binding)",
                     "self.apply_service = Some(apply_service)",
+                    "struct ProductionLifecycleApplyServiceLaunchPermitV1",
+                    "impl Drop for ProductionLifecycleApplyServiceLaunchPermitSealV1",
+                ),
+            )
+            recovered_sign_dispatch = region(
+                scheduler_path,
+                scheduler_source,
+                "lifecycle-owned recovered Sign dispatch",
+                "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
+                "/// Refanout one durable recovered signed Broadcast at the live Completion cursor.",
+            )
+            require_order(
+                scheduler_path,
+                "lifecycle-owned recovered Sign dispatch",
+                recovered_sign_dispatch,
+                (
+                    "let Some(body_store_identity) = self.body_store_identity.as_ref()",
+                    "services.matches_lifecycle_body_store(body_store_identity)",
+                    "services.matches_lifecycle_executor_output_guard(executor)",
+                    "attest_ready_recovered_lifecycle_sign",
+                    "capture_recovered_lifecycle_sign_capacity(dispatch_key)",
+                    "self.coordinator.plan_turn(inputs)",
+                    "reservation.class() == CapacityClass::Consensus",
+                    "prepare_recovered_lifecycle_sign_dispatch",
+                    "reservation.preflight(&prepared)",
+                    "reservation.commit(prepared)",
+                ),
+            )
+            require_token_count(
+                scheduler_path,
+                "recovered Sign post-claim rollback",
+                recovered_sign_dispatch,
+                "self.coordinator.rollback_unpublished_turn(&lease)",
+                1,
+            )
+            require_token_count(
+                scheduler_path,
+                "recovered Sign reserved post-claim rollback",
+                recovered_sign_dispatch,
+                "rollback_unpublished_reserved_turn(&lease",
+                3,
+            )
+            require_token_count(
+                scheduler_path,
+                "recovered Sign reservation release",
+                recovered_sign_dispatch,
+                "reservation.cancel_uncommitted()",
+                6,
+            )
+            reject_tokens(
+                scheduler_path,
+                "sealed recovered Sign dispatch",
+                recovered_sign_dispatch,
+                (
+                    "AdapterEffect",
+                    "PendingRuntimeEffectBinding",
+                    "RuntimeEffectOwnership",
+                    "EffectWorkId",
+                    "into_parts",
+                ),
+            )
+            recovered_phase_sign = region(
+                registry_path,
+                registry_source,
+                "current-parent-bound recovered PhaseVote carrier",
+                "impl DurableRecoveredWalSignWork {",
+                "/// Whether one concrete registry row is still an executable adapter effect",
+            )
+            require_token_count(
+                registry_path,
+                "current-parent-bound recovered PhaseVote carrier",
+                recovered_phase_sign,
+                "self.matches_current_terminal_parent(coordinator)",
+                2,
+            )
+            require_token_count(
+                registry_path,
+                "standalone recovered PhaseVote child",
+                recovered_phase_sign,
+                "metadata.continuation == super::schema::DurableContinuation::None",
+                2,
+            )
+            require_tokens(
+                registry_path,
+                "current terminal Validate parent rejoin",
+                recovered_phase_sign,
+                (
+                    "record.state == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)",
+                    "metadata.matches_admission(parent)",
+                    "super::schema::DurableContinuation::successor(",
+                    "coordinator.key_index.get(&parent.key)",
+                    "coordinator.owner_index.get(&parent.causal_root)",
+                ),
+            )
+            recovered_sign_identity = region(
+                registry_path,
+                registry_source,
+                "complete recovered Sign effect identity",
+                "impl RecoveredLifecycleSignDispatchIdentityV1 {",
+                "/// Read-only coordinates of one exact Waiting Fetch incumbent.",
+            )
+            require_tokens(
+                registry_path,
+                "complete recovered Sign effect identity",
+                recovered_sign_identity,
+                (
+                    "&AdapterEffect::Sign {",
+                    "request: request.clone()",
+                    "adapter_effect_matches_lifecycle_digest(",
+                ),
+            )
+            reject_tokens(
+                registry_path,
+                "historical recovered Commit identity",
+                recovered_sign_identity,
+                ("tag.view() ==", "vote.round.view"),
+            )
+            recovered_sign_task = region(
+                worker_path,
+                worker_source,
+                "opaque recovered Sign worker task/result",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleSignTaskV1 {",
+                "enum V2IoCommand {",
+            )
+            require_tokens(
+                worker_path,
+                "opaque recovered Sign worker task/result",
+                recovered_sign_task,
+                (
+                    "identity: RecoveredLifecycleSignDispatchIdentityV1",
+                    "prepared_candidate: Option<PreparedCandidateBody>",
+                    "self.task.prepared_candidate == expected_prepared",
+                    "outbound_payload: Option<EncodedV2Payload>",
+                    "authorizes_request(self.task.tag, &self.task.request)",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "opaque recovered Sign worker task/result",
+                recovered_sign_task,
+                (
+                    "pub tag:",
+                    "pub request:",
+                    "pub signature:",
+                    "pub outbound_payload:",
+                    "fn into_parts(",
+                    "fn into_result(",
+                    "fn into_task(",
+                    "fn request(",
+                    "fn prepared_candidate(",
+                    "fn result(",
+                    "fn acknowledgement(",
+                    "fn acknowledge(",
+                    "fn signature(",
+                    "fn outbound_payload(",
+                ),
+            )
+            parked_sign_completion = region(
+                worker_path,
+                worker_source,
+                "parked recovered Sign completion",
+                "pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {",
+                "/// Result of atomically returning one guarded missing-sidecar Apply",
+            )
+            reject_tokens(
+                worker_path,
+                "parked recovered Sign completion",
+                parked_sign_completion,
+                (
+                    "fn into_parts(",
+                    "fn into_result(",
+                    "fn into_task(",
+                    "fn request(",
+                    "fn prepared_candidate(",
+                    "fn result(",
+                    "fn acknowledgement(",
+                    "fn acknowledge(",
+                    "fn signature(",
+                    "fn outbound_payload(",
+                    "fn settle(",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "adapter-private recovered Sign completion projection",
+                parked_sign_completion,
+                (
+                    "fn project_adapter_completion_authority(",
+                    "result.is_exact()",
+                    "RecoveredLifecycleSignAdapterCompletionAuthorityV1 {",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "post-publication recovered Sign completion acknowledgement",
+                parked_sign_completion,
+                (
+                    "fn acknowledge_after_publication(self)",
+                    "self.queue.acknowledge_recovered_lifecycle_sign(key)",
+                    "self.guarded.acknowledge_after_publication()",
+                ),
+            )
+            recovered_sign_preview = region(
+                adapter_path,
+                adapter_source,
+                "drop-inert recovered Sign adapter preview",
+                "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
+                "/// Acknowledge successful application of the exact tagged decision.",
+            )
+            require_order(
+                adapter_path,
+                "drop-inert recovered Sign adapter preview",
+                recovered_sign_preview,
+                (
+                    "authority.consume_for_adapter(RecoveredLifecycleSignAdapterCompletionPermitV1::new())",
+                    "verify_individual_signature(",
+                    "let mut next_reducer = self.reducer.clone()",
+                    "next_reducer.step(event.clone())",
+                    "if converted.first() != Some(&expected_broadcast)",
+                    "Ok(PreparedRecoveredLifecycleSignAdapterCompletionV1 {",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "closed recovered Sign adapter successor shapes",
+                recovered_sign_preview,
+                (
+                    "SignRequest::Proposal(_), Some((persist_tag, entry)), None",
+                    "SignRequest::Proposal(_), None, Some(AdapterEffect::Sign { request: SignRequest::Vote(vote), .. })",
+                    "vote.phase == wire::GlobalPhase::Prepare",
+                    "SignRequest::Vote(_) | SignRequest::TimeoutVote(_), None, possible_next_sign",
+                    "next_reducer.pending_persistence_record().is_none()",
+                    "next_reducer.awaiting_signature()",
+                    "RecoveredLifecycleSignCompletionMismatch",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "drop-inert recovered Sign adapter preview",
+                recovered_sign_preview,
+                (
+                    "self.wal.append(",
+                    "self.reducer =",
+                    "self.registry =",
+                    "publish_effect",
+                    "send(",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "recovered Sign adapter preview behavior regression",
+                adapter_source,
+                (
+                    "fn recovered_timeout_signature_preview_is_exact_and_drop_inert()",
+                    "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
+                ),
+            )
+            next_vote_service_join = region(
+                worker_path,
+                worker_source,
+                "single-preview recovered next-Vote body service join",
+                "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
+                "/// Publish the live completion owner",
+            )
+            require_order(
+                worker_path,
+                "single-preview recovered next-Vote body service join",
+                next_vote_service_join,
+                (
+                    "self.recovered_lifecycle_next_vote_body_executor_permit(executor)?",
+                    "executor.prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "single-preview recovered next-Vote body service join",
+                next_vote_service_join,
+                (
+                    "ValidatedBodyReceipt",
+                    "V2BodyStore",
+                    "prepare_recovered_lifecycle_sign_completion(completion)",
+                    "into_parts",
+                ),
+            )
+            next_vote_executor_join = region(
+                effects_path,
+                effects_source,
+                "single-preview recovered next-Vote body executor join",
+                "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body(",
+                "/// Publish executor-retained owners",
+            )
+            require_order(
+                effects_path,
+                "single-preview recovered next-Vote body executor join",
+                next_vote_executor_join,
+                (
+                    "service.consume_for_executor(",
+                    "runtime.prepare_recovered_lifecycle_sign_completion(completion)",
+                    "preview.project_broadcast_and_sign_body_lookup(",
+                    "authenticate_recovered_lifecycle_next_vote_body_catalogs(",
+                    "Ok((preview, body))",
+                ),
+            )
+            next_vote_catalog_join = region(
+                effects_path,
+                effects_source,
+                "exact recovered next-Vote body catalog join",
+                "fn authenticate_recovered_lifecycle_next_vote_body_catalogs(",
+                "impl V2EffectExecutor<SerializedV2Runtime>",
+            )
+            require_tokens(
+                effects_path,
+                "exact recovered next-Vote body catalog join",
+                next_vote_catalog_join,
+                (
+                    "validated_bodies.get(&key) != Some(&validated)",
+                    "durable_bodies.get(&key) != Some(durable)",
+                    "recovered_bodies.get(&key)",
+                    "HashOf::new(manifest) != durable.manifest_hash()",
+                    "lookup.matches_recovered_body(manifest, recovered_durable)",
+                    "RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new()",
+                ),
+            )
+            next_vote_body_authority = region(
+                adapter_path,
+                adapter_source,
+                "opaque recovered next-Vote body authority",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyAuthorityV1 {",
+                "/// Closed reducer successor shape produced by one exact recovered signature.",
+            )
+            require_tokens(
+                adapter_path,
+                "opaque recovered next-Vote body authority",
+                next_vote_body_authority,
+                (
+                    "body_store_identity.same_instance(expected_body_store_identity)",
+                    "lookup.matches_adapter_successor(next_sign, expected_proposal_manifest_hash)",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "opaque recovered next-Vote body authority",
+                next_vote_body_authority,
+                (
+                    "impl Clone for RecoveredLifecycleNextVoteBodyAuthorityV1",
+                    "fn into_parts(",
+                    "fn validated(",
+                    "fn body_store_identity(",
+                    "fn lookup(",
+                ),
+            )
+            combined_adapter_projection = region(
+                adapter_path,
+                adapter_source,
+                "affine recovered Broadcast-and-next-Sign adapter projection",
+                "pub(in crate::sumeragi) fn project_broadcast_and_sign_authority(",
+                "/// Exercise fail-closed next-Sign substitution",
+            )
+            require_order(
+                adapter_path,
+                "affine recovered Broadcast-and-next-Sign adapter projection",
+                combined_adapter_projection,
+                (
+                    "self.combined_authority_minted",
+                    "body_authority.consume_for_adapter(",
+                    "self.adapter.authenticate_recovered_lifecycle_next_vote(",
+                    "self.combined_authority_minted = true",
+                    "RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {",
+                ),
+            )
+            proposal_output_authority = region(
+                adapter_path,
+                adapter_source,
+                "opaque recovered Proposal exact-output authority",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputAuthorityV1 {",
+                "/// Adapter-authenticated combined successor of one recovered signature.",
+            )
+            require_tokens(
+                adapter_path,
+                "opaque recovered Proposal exact-output authority",
+                proposal_output_authority,
+                (
+                    "body_store_identity: V2BodyStoreInstanceIdentity",
+                    "output_guard: Arc<super::output_guard::ConsensusOutputGuard>",
+                    "fn consume_for_service(",
+                    "fn from_service_retry(",
+                    "Self::validated(",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "opaque recovered Proposal exact-output authority",
+                proposal_output_authority,
+                (
+                    "impl Clone for RecoveredLifecycleProposalExactOutputAuthorityV1",
+                    "fn into_parts(",
+                    "fn proposal(",
+                    "fn payload(",
+                    "fn body_store_identity(",
+                    "fn output_guard(",
+                ),
+            )
+            proposal_output_projection = region(
+                adapter_path,
+                adapter_source,
+                "affine recovered Proposal exact-output projection",
+                "pub(in crate::sumeragi) fn project_proposal_exact_output_authority(",
+                "fn broadcast_proposal_manifest_hash(",
+            )
+            require_order(
+                adapter_path,
+                "affine recovered Proposal exact-output projection",
+                proposal_output_projection,
+                (
+                    "let shape = self.shape()",
+                    "self.proposal_output_authority_minted",
+                    "!matches!( shape, RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign | RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal )",
+                    "shape == RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
+                    "self.prepared_prepare_wal.is_none()",
+                    "payload.manifest() == &signed.manifest",
+                    "self.next_vote_body_store_identity.as_ref()",
+                    "self.next_vote_output_guard.as_ref()",
+                    "self.proposal_output_authority_minted = true",
+                    "RecoveredLifecycleProposalExactOutputAuthorityV1 {",
+                ),
+            )
+            proposal_batch_preflight = region(
+                worker_path,
+                worker_source,
+                "mutation-free atomic Proposal fanout preflight",
+                "fn prepare_atomic_fanout_batch(",
+                "/// Commit a batch prepared while this exact mutex guard remained held.",
+            )
+            require_order(
+                worker_path,
+                "mutation-free atomic Proposal fanout preflight",
+                proposal_batch_preflight,
+                (
+                    "let mut additions = BTreeMap",
+                    "aggregate.checked_add(count)",
+                    "self.ownership_capacity_available(&additions)?",
+                    "self.ownership_state_after_additions(&additions)?",
+                    "let project_ids = |first: ExactFanoutFifoId|",
+                    "self.source_fifo_owners.clone()",
+                    "Some(existing_ids)",
+                    "source_fifo_owners.entry(source).or_default().insert(fifo_id)",
+                    "PendingExactOutputBatchPlan {",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "mutation-free atomic Proposal fanout preflight",
+                proposal_batch_preflight,
+                (
+                    "self.fanouts.extend(",
+                    "self.source_fifo_owners =",
+                    "self.reservation_owner_counts =",
+                    "self.ownership_units =",
+                    "rebase_source_fifo(",
+                    "allocate_fanout_fifo_id(",
+                    ".enqueue(",
+                    "next_fanout_index =",
+                ),
+            )
+            proposal_batch_commit = region(
+                worker_path,
+                worker_source,
+                "assertion-only atomic Proposal fanout commit",
+                "fn commit_atomic_fanout_batch(&mut self, plan: PendingExactOutputBatchPlan)",
+                "fn is_pending(&self)",
+            )
+            require_order(
+                worker_path,
+                "assertion-only atomic Proposal fanout commit",
+                proposal_batch_commit,
+                (
+                    "assert_eq!(self.fanouts.len(), existing_fanout_count",
+                    "if let Some(rebased) = rebased_existing_fifo_ids",
+                    "fanout.fifo_id = Some(fifo_id)",
+                    "self.fanouts.extend(fanouts)",
+                    "self.source_fifo_owners = source_fifo_owners",
+                    "self.reservation_owner_counts = reservation_owner_counts",
+                    "self.ownership_units = ownership_units",
+                    "self.shared_ownership_units = shared_ownership_units",
+                    "self.next_fanout_fifo_id = next_fanout_fifo_id",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "assertion-only atomic Proposal fanout commit",
+                proposal_batch_commit,
+                ("?", "drive_pending_exact_output", ".enqueue("),
+            )
+            proposal_reservation_fields = region(
+                worker_path,
+                worker_source,
+                "fail-stop-first recovered Proposal reservation ownership",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV1<'service> {",
+                "#[cfg_attr(not(test), allow(dead_code))]\nimpl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
+            )
+            require_order(
+                worker_path,
+                "fail-stop-first recovered Proposal reservation ownership",
+                proposal_reservation_fields,
+                (
+                    "operation: Option<ConsensusFailStopOperation<'service>>",
+                    "pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>",
+                    "batch: Option<PendingExactOutputBatchPlan>",
+                    "authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>",
+                ),
+            )
+            proposal_reservation_impl = region(
+                worker_path,
+                worker_source,
+                "sealed recovered Proposal reservation methods",
+                "impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
+                "/// Result of reserving exact output for one recovered Decision Fetch request.",
+            )
+            proposal_reservation_abort = region(
+                worker_path,
+                proposal_reservation_impl,
+                "retry-safe recovered Proposal reservation abort",
+                "pub(in crate::sumeragi) fn abort_before_publication(",
+                "/// Install both preflighted fanouts in one assertion-only publication tail.",
+            )
+            require_order(
+                worker_path,
+                "retry-safe recovered Proposal reservation abort",
+                proposal_reservation_abort,
+                (
+                    "drop(self.pending.take())",
+                    "drop(self.batch.take())",
+                    ".complete()",
+                    "self.authority.take()",
+                ),
+            )
+            proposal_reservation_commit = proposal_reservation_impl.split(
+                "/// Install both preflighted fanouts in one assertion-only publication tail.",
+                1,
+            )[-1]
+            require_order(
+                worker_path,
+                "assertion-only recovered Proposal reservation commit",
+                proposal_reservation_commit,
+                (
+                    "let mut pending = self.pending.take()",
+                    "let operation = self.operation.take()",
+                    "let batch = self.batch.take()",
+                    "let authority = self.authority.take()",
+                    "pending.commit_atomic_fanout_batch(batch)",
+                    "drop(pending)",
+                    "drop(authority)",
+                    "operation.complete()",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "sealed recovered Proposal reservation methods",
+                proposal_reservation_abort + proposal_reservation_commit,
+                ("drive_pending_exact_output", ".enqueue("),
+            )
+            proposal_output_capture = region(
+                worker_path,
+                worker_source,
+                "retry-safe recovered Proposal exact-output capture",
+                "pub(in crate::sumeragi) fn capture_recovered_lifecycle_proposal_exact_output(",
+                "/// Consume one carrier-derived recovered Fetch through this exact service key.",
+            )
+            require_order(
+                worker_path,
+                "retry-safe recovered Proposal exact-output capture",
+                proposal_output_capture,
+                (
+                    "self.proposal_work_retired",
+                    "authority.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new())",
+                    "tag != self.active_tag",
+                    "self.local_validator != Some(proposal.proposer)",
+                    "proposal.manifest != *payload.manifest()",
+                    "identity.same_instance(&body_store_identity)",
+                    "Arc::ptr_eq(&self.output_guard, &authority_output_guard)",
+                    "message.validate_version()",
+                    "proposal.validate(&self.context)",
+                    "RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(",
+                    "payload.into_parts()",
+                    "manifest.validate(&self.context)",
+                    "chunk.signature_preimage(&self.context, &manifest)",
+                    "Signature::try_new(self.key_pair.private_key(), &preimage)",
+                    "let peers = self.remote_voters()",
+                    "let control = PendingExactFanout::claimed(",
+                    "ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope())",
+                    "let chunks = PendingExactFanout::claimed(",
+                    "ExactOutputRolloverClaim::PayloadChunks",
+                    "control.into_iter().chain(chunks)",
+                    "begin_fail_stop_operation()",
+                    "let pending = self.lock_pending_exact_output()?",
+                    "pending.prepare_atomic_fanout_batch(fanouts)",
+                    "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(retry_authority,)",
+                    "RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(",
+                    "authority: Some(retry_authority)",
+                ),
+            )
+            require_token_count(
+                worker_path,
+                "fail-stop recovered Proposal capture errors",
+                proposal_output_capture,
+                "drop(operation)",
+                2,
+            )
+            reject_tokens(
+                worker_path,
+                "all-voter recovered Proposal retransmission policy",
+                proposal_output_capture,
+                ("fast_path_proposals", "remote_voters_for_indices"),
+            )
+            broadcast_consensus = region(
+                worker_path,
+                worker_source,
+                "production consensus broadcast",
+                "fn broadcast_consensus(",
+                "fn sign_body_request(",
+            )
+            proposal_live_atomic = region(
+                worker_path,
+                broadcast_consensus,
+                "live Proposal control-plus-chunk atomic transfer",
+                "if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {",
+                "let control = vec![Self::preencode_v2_network_message(message)?]",
+            )
+            require_order(
+                worker_path,
+                "live Proposal control-plus-chunk atomic transfer",
+                proposal_live_atomic,
+                (
+                    "self.outbound_chunks.get(&manifest_hash)",
+                    "let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round)",
+                    "PendingExactFanout::claimed(",
+                    "ExactOutputRolloverClaim::PayloadChunks",
+                    "self.enqueue_atomic_fanout_batch_while_guarded(",
+                    "ownership == ExactFanoutOwnership::Owned && first_fast_path_send",
+                    "self.fast_path_proposals.insert(proposal.round)",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "live Proposal control-plus-chunk atomic transfer",
+                proposal_live_atomic,
+                (
+                    "enqueue_exact_fanout_while_guarded(",
+                    "self.fast_path_proposals.insert(proposal.round);\n            let payload_targets",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "atomic Proposal output behavior regressions",
+                worker_source,
+                (
+                    "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+                    "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
+                    "fn armed_recovered_proposal_output_reservation_fails_stop_on_drop()",
+                    "fn proposal_broadcast_reports_source_retained_until_corridor_acceptance()",
+                ),
+            )
+            proposal_output_behavior = region(
+                worker_path,
+                worker_source,
+                "recovered Proposal atomic output behavior",
+                "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+                "fn prepare_and_commit_votes_reach_every_remote_voter_across_views()",
+            )
+            require_tokens(
+                worker_path,
+                "recovered Proposal atomic output behavior",
+                proposal_output_behavior,
+                (
+                    "after, before",
+                    "vec![Some(expected_batch_first_fifo), expected_batch_first_fifo.checked_add(1),]",
+                    "fanout.peers.iter().cloned().collect::<BTreeSet<_>>()",
+                    "wire::ConsensusMessageV2Payload::PayloadChunk(chunk)",
+                    "chunk.validate(&service.context, manifest)",
+                    "Signature::try_from_bytes(&chunk.signature)",
+                    "signature.verify(signer.public_key()",
+                    "capture_recovered_lifecycle_proposal_exact_output(retirement_authority).is_err()",
+                ),
+            )
+            require_order(
+                worker_path,
+                "post-Decision live Proposal output fence",
+                broadcast_consensus,
+                (
+                    "self.proposal_work_retired",
+                    "wire::ConsensusMessageV2Payload::Proposal(_)",
+                    "begin_fail_stop_operation()",
+                    "if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload",
+                ),
+            )
+            next_vote_candidate_projection = region(
+                replay_authority_path,
+                replay_authority_source,
+                "full executable recovered next-WAL-Vote candidate",
+                "pub(in crate::sumeragi) fn into_candidate_projection(",
+                "/// Rejoin the retained body marker to one exact recovered phase-vote repair.",
+            )
+            require_order(
+                replay_authority_path,
+                "full executable recovered next-WAL-Vote candidate",
+                next_vote_candidate_projection,
+                (
+                    "self.wal_identity.is_exact()",
+                    "self.matches_verified_height(verified)",
+                    "PendingRuntimeEffectBinding::from_exact_recovered_next_wal_vote(",
+                    "self.replay_evidence.project_recovered_vote_candidate(",
+                    "RecoveredLifecycleNextWalVoteCandidateProjectionV1 {",
+                    "projection.is_exact(verified)",
+                ),
+            )
+            require_tokens(
+                runtime_path,
+                "runtime-private recovered next-WAL-Vote candidate mint",
+                runtime_source,
+                (
+                    "fn project_recovered_lifecycle_next_wal_vote_candidate(",
+                    "RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1::new()",
+                    "RecoveredWalCandidateProjectionPermit::new()",
+                ),
+            )
+            require_tokens(
+                wal_recovery_path,
+                "WAL-bound recovered Broadcast-and-next-Sign projection",
+                wal_recovery_source,
+                (
+                    "fn project_authenticated_signed_broadcast_and_sign(",
+                    "next_sign.matches_verified_height(verified)",
+                    "next_sign.matches_phase_vote_repair(self)",
+                    "project_recovered_lifecycle_next_wal_vote_candidate(verified, next_sign)",
+                    "combined.children_are_exact(verified)",
+                ),
+            )
+            combined_cold_projection = region(
+                wal_recovery_path,
+                wal_recovery_source,
+                "affine recovered Broadcast-and-next-Sign cold adapter projection",
+                "impl RecoveredLifecycleSignedBroadcastAndSignProjectionV1 {",
+                "fn project_recovered_signed_broadcast(",
+            )
+            require_order(
+                wal_recovery_path,
+                "affine recovered Broadcast-and-next-Sign cold adapter projection",
+                combined_cold_projection,
+                (
+                    "self.cold_adapter_authority_minted",
+                    "self.children_are_exact(verified)",
+                    "self.next_sign.project_cold_adapter_next_sign(",
+                    "RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(",
+                    "self.cold_adapter_authority_minted = true",
+                    "candidates.get(&self.broadcast.candidate.key) == Some(&self.broadcast.candidate)",
+                    "self.next_sign.owns_spliced_candidate(candidates)",
+                ),
+            )
+            reject_tokens(
+                wal_recovery_path,
+                "affine recovered Broadcast-and-next-Sign cold adapter projection",
+                combined_cold_projection,
+                (
+                    "fn into_parts(",
+                    "pub fn broadcast(",
+                    "pub fn next_sign(",
+                    "candidates.len() == 2",
+                ),
+            )
+            next_vote_cold_projection = region(
+                replay_authority_path,
+                replay_authority_source,
+                "sealed recovered next-WAL-Vote cold adapter projection",
+                "pub(super) fn project_cold_adapter_next_sign(",
+                "/// Return the exact installed effect digest",
+            )
+            require_order(
+                replay_authority_path,
+                "sealed recovered next-WAL-Vote cold adapter projection",
+                next_vote_cold_projection,
+                (
+                    "RecoveredLifecycleSignBroadcastProjectionPermitV1",
+                    "self.is_exact(verified)",
+                    "self.seal.effect.clone()",
+                ),
+            )
+            combined_cold_authority = region(
+                adapter_path,
+                adapter_source,
+                "opaque recovered Broadcast-and-next-Sign cold adapter authority",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {",
+                "impl RecoveredLifecycleSignColdAdapterAuthorityV1",
+            )
+            require_tokens(
+                adapter_path,
+                "opaque recovered Broadcast-and-next-Sign cold adapter authority",
+                combined_cold_authority,
+                (
+                    "broadcast: AdapterEffect",
+                    "next_sign: AdapterEffect",
+                    "RecoveredLifecycleSignBroadcastProjectionPermitV1",
+                    "ConsensusMessageV2Payload::Proposal(proposal)",
+                    "ConsensusMessageV2Payload::Vote(vote)",
+                    "GlobalPhase::Prepare => tag.view() == next_vote.round.view",
+                    "GlobalPhase::Commit => tag.view() >= next_vote.round.view",
+                    "relation_is_exact.then_some(Self",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "opaque recovered Broadcast-and-next-Sign cold adapter authority",
+                combined_cold_authority,
+                (
+                    "fn into_parts(",
+                    "fn broadcast(",
+                    "fn next_sign(",
+                    "impl Clone for RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1",
+                ),
+            )
+            combined_cold_adapter = region(
+                adapter_path,
+                adapter_source,
+                "recovered Broadcast-and-next-Sign cold adapter replay",
+                "pub(in crate::sumeragi) fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
+                "/// Seal every adapter-owned input required by the adjacent gate open.",
+            )
+            require_order(
+                adapter_path,
+                "recovered Broadcast-and-next-Sign cold adapter replay",
+                combined_cold_adapter,
+                (
+                    "verified.verify_consensus_message(message)",
+                    "adapter.reducer.awaiting_signature()",
+                    "next_reducer.step(event.clone())",
+                    "replayed_broadcast != broadcast",
+                    "replayed_next_sign != next_sign",
+                    "adapter.reducer = next_reducer",
+                    "adapter.registry = next_registry",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "recovered Broadcast-and-next-Sign cold adapter replay",
+                combined_cold_adapter,
+                ("publish_status", ".append(", "broadcast_consensus", "enqueue("),
+            )
+            combined_ledger_classifier = region(
+                ledger_path,
+                ledger_source,
+                "frame-bound recovered Broadcast-and-next-Sign ledger classifier",
+                "pub(in crate::sumeragi) fn recovered_lifecycle_signed_broadcast_and_sign_pairs(",
+                "/// Stage the exact all-row tombstone successor for CompleteTip retirement.",
+            )
+            require_tokens(
+                ledger_path,
+                "frame-bound recovered Broadcast-and-next-Sign ledger classifier",
+                combined_ledger_classifier,
+                (
+                    "self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?",
+                    "let ledger_frame_identity = self.frame_identity()",
+                    "RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1::new(&self.records)",
+                    "index.unique_parent_index(broadcast_ordinal)",
+                    "index.owner_record_count(next_sign_owner) != 1",
+                    "index.has_incoming_edge(next_sign_ordinal)",
+                    "let next_sign_ordinal = broadcast_ordinal.checked_add(1)?",
+                    "signed_broadcast_continuation_is_exact(",
+                    "recovered_broadcast_and_next_sign_keys_are_exact(",
+                    "next_sign_owner.first_admission_ordinal() != next_sign_ordinal",
+                    "parent_record_count == 2",
+                    "parent_record_count == 3",
+                    "DurableContinuationEdge::ValidateToSignPrepare",
+                    "ledger_frame_identity",
+                ),
+            )
+            combined_ledger_enumerator = region(
+                ledger_path,
+                ledger_source,
+                "linear recovered Broadcast-and-next-Sign ledger enumeration",
+                "pub(in crate::sumeragi) fn recovered_lifecycle_signed_broadcast_and_sign_pairs(",
+                "fn project_recovered_lifecycle_signed_broadcast_and_sign_at(",
+            )
+            require_order(
+                ledger_path,
+                "linear recovered Broadcast-and-next-Sign ledger enumeration",
+                combined_ledger_enumerator,
+                (
+                    "self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?",
+                    "let ledger_frame_identity = self.frame_identity()",
+                    "RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1::new(&self.records)",
+                    "self.records.iter()",
+                    "project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
+                    "&index",
+                ),
+            )
+            require_token_count(
+                ledger_path,
+                "linear recovered Broadcast-and-next-Sign ledger enumeration",
+                combined_ledger_enumerator,
+                "self.frame_identity()",
+                1,
+            )
+            reject_tokens(
+                ledger_path,
+                "frame-bound recovered Broadcast-and-next-Sign ledger classifier",
+                combined_ledger_classifier,
+                ("high_water == next_sign_ordinal", "persist_exact_successor"),
+            )
+            combined_ledger_reauth = region(
+                ledger_path,
+                ledger_source,
+                "single-hash recovered Broadcast-and-next-Sign ledger reauthentication",
+                "pub(in crate::sumeragi) fn exactly_matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {",
+                "/// Complete version-one durable lifecycle ledger.",
+            )
+            require_tokens(
+                ledger_path,
+                "single-hash recovered Broadcast-and-next-Sign ledger reauthentication",
+                combined_ledger_reauth,
+                (
+                    "project_recovered_lifecycle_signed_broadcast_and_sign_at(self.broadcast_ordinal)",
+                    "== Some(self)",
+                ),
+            )
+            reject_tokens(
+                ledger_path,
+                "single-hash recovered Broadcast-and-next-Sign ledger reauthentication",
+                combined_ledger_reauth,
+                ("ledger.frame_identity()",),
+            )
+            combined_registry_prepare = region(
+                registry_path,
+                registry_source,
+                "opaque recovered Broadcast-and-next-Sign registry preparation",
+                "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
+                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor",
+            )
+            require_order(
+                registry_path,
+                "opaque recovered Broadcast-and-next-Sign registry preparation",
+                combined_registry_prepare,
+                (
+                    "adapter.dispatch_key() != key",
+                    "sign.matches_claimed_record(",
+                    "adapter.project_broadcast_and_sign_authority(body)",
+                    ".project_authenticated_signed_broadcast_and_sign(verified, projection_authority)",
+                    "PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor {",
+                ),
+            )
+            reject_tokens(
+                registry_path,
+                "unpublished recovered Broadcast-and-next-Sign registry preparation",
+                combined_registry_prepare,
+                (
+                    "ValidatedBodyReceipt",
+                    "into_parts",
+                    "entries.insert",
+                    "entries.remove",
+                    "persist_exact_successor",
+                ),
+            )
+            combined_transition = region(
+                body_pipeline_path,
+                body_pipeline_source,
+                "inert recovered Broadcast-and-next-Sign coordinator staging",
+                "fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+                "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]\nfn stage_body_stage_transition_with_payload_relation(",
+            )
+            require_order(
+                body_pipeline_path,
+                "inert recovered Broadcast-and-next-Sign coordinator staging",
+                combined_transition,
+                (
+                    "stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast)",
+                    "first.child_ordinal.checked_add(1)",
+                    "staged.reduce_admit(AdmissionRequest::Candidate(next_sign))",
+                    "next_sign_owner == broadcast_owner",
+                    "staged.high_water != next_sign_ordinal",
+                    "capacity_generation_before[&CapacityClass::Effect].saturating_add(1)",
+                    "capacity_used_before[&CapacityClass::Consensus].saturating_add(1)",
+                    "Ok(StagedRecoveredLifecycleSignBroadcastAndSignTransition {",
+                ),
+            )
+            reject_tokens(
+                body_pipeline_path,
+                "inert recovered Broadcast-and-next-Sign coordinator staging",
+                combined_transition,
+                (
+                    "persist_exact_successor",
+                    "commit_after_publication",
+                    "registry.entries",
+                ),
+            )
+            combined_transition_publication = region(
+                body_pipeline_path,
+                body_pipeline_source,
+                "durable recovered Broadcast-and-next-Sign publication",
+                "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+                "fn map_sealed_successor_projection_error(",
+            )
+            require_order(
+                body_pipeline_path,
+                "durable recovered Broadcast-and-next-Sign publication",
+                combined_transition_publication,
+                (
+                    "persist_exact_staged_successor(&self.staged)",
+                    "successor.commit_after_publication()",
+                    "*coordinator = staged",
+                    "if publication_is_vote",
+                    "ready_index.contains(&next_sign_ordinal)",
+                    "adapter.commit_after_durable_vote_broadcast_and_sign()",
+                ),
+            )
+            require_tokens(
+                body_pipeline_path,
+                "Proposal publication parks only its durable Broadcast debt",
+                combined_transition_publication,
+                (
+                    "ready_index.remove(&broadcast_ordinal)",
+                    "LifecycleState::Waiting(broadcast_wait)",
+                    "adapter.commit_after_durable_broadcast_and_sign()",
+                ),
+            )
+            combined_transition_tail = combined_transition_publication.split(
+                "successor.commit_after_publication()", 1
+            )[-1]
+            reject_tokens(
+                body_pipeline_path,
+                "infallible recovered Proposal two-child publication tail",
+                combined_transition_tail,
+                ("return", "is_err", "Result"),
+            )
+            combined_adapter_commit = region(
+                adapter_path,
+                adapter_source,
+                "durable recovered Proposal adapter two-child commit",
+                "pub(in crate::sumeragi) fn commit_after_durable_broadcast_and_sign(self)",
+                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+            )
+            require_order(
+                adapter_path,
+                "durable recovered Proposal adapter two-child commit",
+                combined_adapter_commit,
+                (
+                    "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
+                    "next_sign: Some(_)",
+                    "combined_authority_minted: true",
+                    "proposal_output_authority_minted: true",
+                    "outbound_payload: Some(_)",
+                    "adapter.reducer = next_reducer",
+                    "adapter.registry = next_registry",
+                ),
+            )
+            combined_vote_adapter_commit = region(
+                adapter_path,
+                adapter_source,
+                "durable recovered Vote adapter two-child commit",
+                "pub(in crate::sumeragi) fn commit_after_durable_vote_broadcast_and_sign(self)",
+                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+            )
+            require_order(
+                adapter_path,
+                "durable recovered Vote adapter two-child commit",
+                combined_vote_adapter_commit,
+                (
+                    "self.is_vote_broadcast_and_sign()",
+                    "next_sign: Some(_)",
+                    "combined_authority_minted: true",
+                    "proposal_output_authority_minted: false",
+                    "outbound_payload: None",
+                    "adapter.reducer = next_reducer",
+                    "adapter.registry = next_registry",
+                ),
+            )
+            require_tokens(
+                registry_validate_path,
+                "follow-on recovered WAL Vote remains an executable Sign carrier",
+                registry_validate_source,
+                (
+                    "ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(sign)",
+                    "PreparedRecoveredLifecycleSignCarrier::NextWalVote(sign)",
+                ),
+            )
+            recovered_sign_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Sign-to-Broadcast settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
+                "/// Settle a recovered Prepare Vote into Broadcast plus Commit Sign.",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Sign-to-Broadcast settlement",
+                recovered_sign_settlement,
+                (
+                    "recovered_lifecycle_sign_completion.take()",
+                    "prepare_recovered_lifecycle_sign_completion(authority)",
+                    "prepare_recovered_lifecycle_sign_broadcast_successor(",
+                    "prepare_recovered_lifecycle_sign_broadcast_transition(",
+                    "output_guard.begin_fail_stop_operation()",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "completion.acknowledge_after_publication()",
+                    "operation.complete()",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "restart-closed recovered Sign-to-Broadcast settlement",
+                recovered_sign_settlement,
+                (
+                    "ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired",
+                    "ProductionRecoveredLifecycleSignBroadcastSettlementV1::Applied",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "durable recovered Sign-to-Broadcast settlement leaves output to its child",
+                recovered_sign_settlement,
+                (
+                    "capture_recovered_lifecycle_signed_broadcast_refanout",
+                    "output.commit_after_publication()",
+                    "TurnOutcome::Terminal",
+                ),
+            )
+            recovered_sign_tail = recovered_sign_settlement.split(
+                "transition.commit_after_publication();", 1
+            )[-1]
+            reject_tokens(
+                launch_path,
+                "infallible recovered Sign-to-Broadcast post-fsync tail",
+                recovered_sign_tail,
+                ("return", "Result", "is_err"),
+            )
+            recovered_vote_two_child_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Vote Broadcast-and-next-Sign settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
+                "/// Fsync an initial Proposal `PrepareIntent`, then publish both successors.",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Vote Broadcast-and-next-Sign settlement",
+                recovered_vote_two_child_settlement,
+                (
+                    "recovered_lifecycle_sign_completion.take()",
+                    "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
+                    "preview.is_vote_broadcast_and_sign_shape()",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+                    "output_guard.begin_fail_stop_operation()",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "completion.acknowledge_after_publication()",
+                    "operation.complete()",
+                    "ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Applied",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "Vote settlement leaves durable output to typed refanout",
+                recovered_vote_two_child_settlement,
+                (
+                    "project_proposal_exact_output_authority",
+                    "capture_recovered_lifecycle_proposal_exact_output",
+                    "output.commit_after_publication()",
+                    "TurnOutcome::Terminal",
+                ),
+            )
+            recovered_vote_two_child_tail = recovered_vote_two_child_settlement.split(
+                "transition.commit_after_publication();", 1
+            )[-1]
+            reject_tokens(
+                launch_path,
+                "infallible recovered Vote two-child post-fsync tail",
+                recovered_vote_two_child_tail,
+                ("return", "Result", "is_err", "?"),
+            )
+            recovered_proposal_two_child_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
+                "/// Refanout one durable recovered signed Broadcast",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
+                recovered_proposal_two_child_settlement,
+                (
+                    "recovered_lifecycle_sign_completion.take()",
+                    "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
+                    "preview.project_proposal_exact_output_authority()",
+                    "capture_recovered_lifecycle_proposal_exact_output(output_authority)",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "completion.acknowledge_after_publication()",
+                    "output.commit_after_publication()",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied",
+                ),
+            )
+            require_token_count(
+                launch_path,
+                "typed recovered Proposal pre-fsync output release",
+                recovered_proposal_two_child_settlement,
+                "output.abort_before_publication()",
+                2,
+            )
+            require_tokens(
+                launch_path,
+                "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
+                recovered_proposal_two_child_settlement,
+                (
+                    "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable",
+                    "*recovered_lifecycle_sign_completion = Some(completion)",
+                    "drop(output)",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired",
+                ),
+            )
+            recovered_proposal_two_child_tail = recovered_proposal_two_child_settlement.split(
+                "transition.commit_after_publication();", 1
+            )[-1]
+            reject_tokens(
+                launch_path,
+                "infallible recovered Proposal two-child post-fsync tail",
+                recovered_proposal_two_child_tail,
+                ("return", "Result", "is_err", "?"),
+            )
+            recovered_broadcast_refanout = region(
+                scheduler_path,
+                scheduler_source,
+                "restart-safe recovered signed-Broadcast refanout",
+                "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+                "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch",
+            )
+            require_order(
+                scheduler_path,
+                "restart-safe recovered signed-Broadcast refanout",
+                recovered_broadcast_refanout,
+                (
+                    "services.matches_lifecycle_body_store(body_store_identity)",
+                    "if exact_ready != self.coordinator.ready_index",
+                    "work_class == LifecycleWorkClass::Broadcast",
+                    "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
+                    "attest_ready_recovered_lifecycle_signed_broadcast",
+                    "for ready_ordinal in &exact_ready",
+                    "attest_ready_recovered_lifecycle_sign(",
+                    "self.coordinator.plan_turn(inputs)",
+                    "project_claimed_recovered_lifecycle_signed_broadcast_output",
+                    "capture_recovered_lifecycle_signed_broadcast_refanout(authority)",
+                    "let wait_source = super::WaitSource::Recovery(wait_digest)",
+                    "settle_turn(lease, super::TurnOutcome::Blocked(wait))",
+                    "output.commit_after_publication()",
+                ),
+            )
+            require_tokens(
+                scheduler_path,
+                "restart-safe recovered signed-Broadcast refanout",
+                recovered_broadcast_refanout,
+                (
+                    "rollback_unpublished_turn(&lease)",
+                    "close_admission_for_restart()",
+                    "ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::CapacityUnavailable",
+                    "ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::RestartRequired",
+                    "ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned",
+                    "attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(",
+                ),
+            )
+            reject_tokens(
+                scheduler_path,
+                "volatile recovered signed-Broadcast refanout wait",
+                recovered_broadcast_refanout,
+                (
+                    "persist_exact_successor",
+                    "TurnOutcome::Terminal",
+                    "exact_ready.len() == 2",
+                    "exact_ready.len() != 2",
+                ),
+            )
+            require_tokens(
+                registry_validate_path,
+                "retained recovered Broadcast-and-next-Vote pair seal",
+                registry_validate_source,
+                (
+                    "fn recovered_lifecycle_signed_broadcast_declares_next_vote(",
+                    "fn recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(",
+                    "let (next, next_digest) = broadcast.paired_next_sign?",
+                    "next_record.physical_slots.get(&next.slot) == Some(&next_digest)",
+                    "self.recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal( coordinator, broadcast_ordinal, ) != Some(next_sign_ordinal)",
+                    "DurableRecoveredLifecycleNextWalVoteSign(next_sign)",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "durable recovered signed-Broadcast service capture",
+                worker_source,
+                (
+                    "fn capture_recovered_lifecycle_signed_broadcast_refanout(",
+                    "authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new())",
+                    "PendingExactFanout::claimed(",
+                    "pending.can_enqueue(fanout)",
+                    "fn capture_recovered_lifecycle_cold_proposal_message(",
+                    "output.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new())",
+                    "self.proposal_work_retired",
+                    "pending.prepare_atomic_fanout_batch(fanouts)",
+                    "cold_durable_proposal_refanout_atomically_owns_control_and_chunks",
+                ),
+            )
+            require_tokens(
+                ledger_path,
+                "cold recovered signed-Broadcast ledger join",
+                ledger_source,
+                (
+                    "fn authenticate_recovered_control_signed_broadcast(",
+                    "fn authenticate_recovered_phase_signed_broadcast_repair(",
+                    "project_recovered_signed_broadcast_child(self.context())",
+                    "recover_durable_signed_broadcast(verified, child)",
+                    "broadcast.exactly_matches_record(",
+                ),
+            )
+            require_tokens(
+                wal_recovery_path,
+                "cold recovered signed-Broadcast WAL and roster join",
+                wal_recovery_source,
+                (
+                    "fn recover_durable_signed_broadcast(",
+                    "verified.verify_consensus_message(message)",
+                    "fn project_cold_adapter_authority(",
+                    "RecoveredLifecycleSignColdAdapterAuthorityV1::from_recovered_wal(",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "cold recovered signed-Broadcast reducer fast-forward",
+                adapter_source,
+                (
+                    "fn advance_recovered_lifecycle_signed_broadcast(",
+                    "verify_individual_signature(",
+                    "let [reducer::Effect::Broadcast(message)] = core_effects.as_slice()",
+                    "replayed != broadcast",
+                    "next_reducer.pending_persistence_record().is_some()",
+                    "next_reducer.awaiting_signature().is_some()",
+                ),
+            )
+            require_literal_count(
+                adapter_path,
+                "cold recovered signed-Broadcast reducer fast-forward",
+                adapter_source,
+                '"Proposal cold replay requires its body and Prepare WAL successor"',
+                2,
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "cold recovered signed-Broadcast storage census",
+                lifecycle_open_source,
+                (
+                    "PhaseBroadcast(",
+                    "PhaseBroadcastAndSign(",
+                    "PhaseBroadcastAndNextSign(",
+                    "ControlBroadcast(",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup",
+                    "assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup",
+                ),
+            )
+            require_tokens(
+                ledger_path,
+                "cold recovered phase Broadcast-and-Sign ledger join",
+                ledger_source,
+                (
+                    "fn authenticate_recovered_phase_signed_broadcast_and_sign(",
+                    "combined.broadcast_exactly_matches(&broadcast)",
+                    "combined.exactly_matches_fresh_records(",
+                    "fn revalidates_recovered_phase_signed_broadcast_and_sign(",
+                ),
+            )
+            require_tokens(
+                registry_path,
+                "cold recovered phase Broadcast-and-Sign registry join",
+                registry_source,
+                (
+                    "fn prepare_cold_adapter_startup(",
+                    "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
+                    "project_authenticated_cold_signed_broadcast_and_sign(verified, seal)",
+                    "authenticate_recovered_phase_signed_broadcast_and_sign(",
+                    "advance_recovered_lifecycle_signed_broadcast_and_sign(",
+                    "fn install_recovered_broadcast_and_next_vote(",
+                    "paired_next_sign: Some((next_sign_address, next_sign_digest))",
+                    "fn phase_broadcast_and_next_vote_projection(",
+                    "owns_recovered_phase_broadcast_and_next_sign(",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "cold recovered phase owner handoff",
+                adapter_source,
+                (
+                    "install_recovered_sign(&body_store)",
+                    "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+                ),
+            )
+            recovered_phase_broadcast_assembly = region(
+                lifecycle_open_path,
+                lifecycle_open_source,
+                "cold recovered phase-Broadcast storage assembly",
+                "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+                "/// Assemble the exact standalone control Sign with every durable Fetch.",
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "cold recovered phase-Broadcast storage assembly",
+                recovered_phase_broadcast_assembly,
+                (
+                    "RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast)",
+                    "assemble_storage_only_with_terminal_validate_outcomes(",
+                ),
+            )
+            recovered_control_broadcast_assembly = region(
+                lifecycle_open_path,
+                lifecycle_open_source,
+                "cold recovered control-Broadcast storage assembly",
+                "fn assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(",
+                "/// Assemble the standalone Decision Fetch with every durable body-backed Fetch.",
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "cold recovered control-Broadcast storage assembly",
+                recovered_control_broadcast_assembly,
+                (
+                    "RecoveredWalStartupProjectionV1::ControlBroadcast(control, broadcast)",
+                    "assemble_storage_only_with_terminal_validate_outcomes(",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "dedicated recovered Sign queue ownership",
+                worker_source,
+                (
+                    "recovered_lifecycle_signs:",
+                    "BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>",
+                    "fn transfer_recovered_lifecycle_sign_completion_at(",
+                    "io.prepare_recovered_lifecycle_sign_completion(guarded, ownership_position)",
+                    "fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_families()",
+                    "fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction()",
+                    "fn recovered_lifecycle_sign_capacity_unavailable_leaves_no_dedicated_index()",
+                ),
+            )
+            recovered_sign_capacity = region(
+                worker_path,
+                worker_source,
+                "recovered Sign capacity capture release",
+                "fn capture_recovered_lifecycle_sign_capacity<'a>(",
+                "fn begin_decision_serve_reconciliation(",
+            )
+            require_token_count(
+                worker_path,
+                "recovered Sign capacity capture release",
+                recovered_sign_capacity,
+                "operation.complete()",
+                5,
+            )
+            reject_tokens(
+                worker_path,
+                "recovered Sign capacity capture release",
+                recovered_sign_capacity,
+                ("drop(operation)",),
+            )
+            rollback_unpublished = region(
+                owner_path,
+                owner_source,
+                "unpublished recovered Sign claim rollback",
+                "fn rollback_unpublished_turn(&mut self, lease: &TurnLease) -> bool {",
+                "/// Rebuild records after seeding the ordinal high-water mark.",
+            )
+            require_tokens(
+                owner_path,
+                "unpublished recovered Sign claim rollback",
+                rollback_unpublished,
+                (
+                    "lease.output_reservation.is_some()",
+                    "assert!( inserted,",
+                    "self.active_lease = None",
+                ),
+            )
+            reject_tokens(
+                owner_path,
+                "unpublished recovered Sign claim rollback",
+                rollback_unpublished,
+                ("debug_assert!",),
+            )
+            require_tokens(
+                owner_path,
+                "unpublished recovered Sign rollback regression",
+                owner_source,
+                (
+                    "fn unpublished_turn_rollback_restores_ready_and_clears_the_active_lease()",
+                ),
+            )
+            launched_owner_fields = region(
+                launch_path,
+                launch_source,
+                "launched recovered Sign Drop order",
+                "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
+                "/// Result of draining one dedicated recovered Apply worker completion.",
+            )
+            require_order(
+                launch_path,
+                "launched recovered Sign Drop order",
+                launched_owner_fields,
+                (
+                    "services: ProductionV2Services",
+                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
+                ),
+            )
+            recovered_fetch_dispatch = region(
+                scheduler_path,
+                scheduler_source,
+                "lifecycle-owned recovered Decision Fetch dispatch",
+                "fn dispatch_recovered_decision_fetch_with_runner_debt(",
+                "/// Persist one selected recovered Decision Fetch response",
+            )
+            require_order(
+                scheduler_path,
+                "lifecycle-owned recovered Decision Fetch dispatch",
+                recovered_fetch_dispatch,
+                (
+                    "attest_ready_recovered_decision_fetch",
+                    "take_request_authority()",
+                    "authenticate_recovered_decision_fetch_request(authority)",
+                    "capture_recovered_decision_fetch_exact_output(&owner)",
+                    "prepare_recovered_decision_fetch_request_registration(owner)",
+                    "self.coordinator.plan_turn(inputs)",
+                    "prepare_recovered_decision_fetch_dispatch",
+                    "registration.commit(prepared)",
+                    "output.commit()",
+                ),
+            )
+            require_tokens(
+                scheduler_path,
+                "lifecycle-owned recovered Decision Fetch dispatch",
+                recovered_fetch_dispatch,
+                (
+                    "services.matches_lifecycle_body_store(body_store_identity)",
+                    "services.matches_lifecycle_executor_output_guard(executor)",
+                    "ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor",
+                    "output.abort_before_claim()",
+                    "self.coordinator.rollback_unpublished_turn(&lease)",
+                    "assert_eq!(installed, dispatch_key)",
+                ),
+            )
+            reject_tokens(
+                scheduler_path,
+                "sealed recovered Decision Fetch request dispatch",
+                recovered_fetch_dispatch,
+                (
+                    "EffectWorkId",
+                    "RuntimeEffectOwnership",
+                    "PendingRuntimeEffectBinding",
+                    "into_parts",
+                    "settle",
+                ),
+            )
+            recovered_fetch_phase_a = region(
+                scheduler_path,
+                scheduler_source,
+                "recovered Decision Fetch response persistence Phase A",
+                "fn persist_recovered_decision_fetch_response_after_runner(",
+                "/// Plan, submit, and reblock one exact selected certified-Fetch response.",
+            )
+            require_order(
+                scheduler_path,
+                "recovered Decision Fetch response persistence Phase A",
+                recovered_fetch_phase_a,
+                (
+                    "capture_lifecycle_capacity_rank(selector)",
+                    "reservation.preflight_recovered_decision_fetch_target_absent()",
+                    "executor.prepare_recovered_decision_fetch_body_persistence(prepared)",
+                    "matches_claimed_dispatched_recovered_decision_fetch(",
+                    "reservation.preflight_recovered_decision_fetch_body_persistence(&task)",
+                    "executor.prepare_recovered_decision_fetch_response_claim(&task)",
+                    "claim.commit_with_queue(reservation, task)",
+                    "assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))",
+                ),
+            )
+            require_tokens(
+                scheduler_path,
+                "recovered Decision Fetch response persistence Phase A",
+                scheduler_source,
+                (
+                    "runner.target() != LifecycleRunnerRankTarget::Ingress",
+                    "ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation",
+                ),
+            )
+            require_tokens(
+                effects_path,
+                "recovered Decision Fetch foreign-cursor owner regression",
+                effects_source,
+                (
+                    "fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once()",
+                    "owner.persist_recovered_decision_fetch_response(",
+                    "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation)",
+                ),
+            )
+            require_literal_count(
+                effects_path,
+                "recovered Decision Fetch foreign-cursor owner regression",
+                effects_source,
+                '"a foreign Ingress cursor cannot change the recovered Fetch lease or registry row"',
+                1,
+            )
+            require_tokens(
+                launch_path,
+                "recovered Decision Fetch source-order regression",
+                launch_source,
+                (
+                    "fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation()",
+                ),
+            )
+            recovered_fetch_ready = region(
+                registry_validate_path,
+                registry_validate_source,
+                "closed Ready and claimed recovered Decision Fetch carrier",
+                "pub(super) fn attest_ready_recovered_decision_fetch(",
+                "/// Project a comparison-only seal for this exact registry instance.",
+            )
+            require_tokens(
+                registry_validate_path,
+                "closed Ready and claimed recovered Decision Fetch carrier",
+                recovered_fetch_ready,
+                (
+                    "fetch.dispatch_key.is_some()",
+                    "fetch.matches_current_ready_record(address, digest, coordinator)",
+                    "RecoveredDecisionFetchDispatchIdentityV1::new(",
+                    "project_recovered_decision_fetch_request(identity)",
+                    "fn matches_claimed_dispatched_recovered_decision_fetch(",
+                    "fetch.dispatch_key == Some(key)",
+                    "fetch.matches_claimed_record(address, digest, coordinator, lease)",
+                    "fn prepare_recovered_decision_fetch_dispatch(",
+                ),
+            )
+            recovered_fetch_projection = region(
+                wal_recovery_path,
+                wal_recovery_source,
+                "payload-free recovered Decision Fetch projection",
+                "pub(super) fn project_recovered_decision_fetch_request(",
+                "/// Prove the authenticated recovery cut retains this exact Fetch.",
+            )
+            require_tokens(
+                wal_recovery_path,
+                "payload-free recovered Decision Fetch projection",
+                recovered_fetch_projection,
+                (
+                    "AdapterEffect::FetchBody {",
+                    "manifest: None",
+                    "certificate: Some(certificate)",
+                    "RecoveredDecisionFetchRequestAuthorityV1::from_registry_projection(",
+                ),
+            )
+            reject_tokens(
+                wal_recovery_path,
+                "payload-free recovered Decision Fetch projection",
+                recovered_fetch_projection,
+                ("EffectWorkId", "RuntimeEffectOwnership", "into_parts"),
+            )
+            recovered_fetch_registration = region(
+                effects_path,
+                effects_source,
+                "dedicated recovered Decision Fetch request owner census",
+                "pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(",
+                "/// Take ownership of an exact-body store opened during sealed preflight.",
+            )
+            require_tokens(
+                effects_path,
+                "dedicated recovered Decision Fetch request owner census",
+                recovered_fetch_registration,
+                (
+                    "self.validated_certified_request_presence().is_err()",
+                    "self.outstanding_requests.len().checked_add(self.recovered_decision_fetches.len())",
+                    "owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)",
+                    "owner.matches_body_coordinates(pending.task.round, pending.task.subject)",
+                    "PreparedRecoveredDecisionFetchRequestRegistrationV1 { executor: self, owner: Some(owner), }",
+                ),
+            )
+            require_tokens(
+                effects_path,
+                "complete recovered Decision Fetch request census and terminal fence",
+                effects_source,
+                (
+                    "recovered_decision_fetches: BTreeMap<",
+                    "recovered_decision_fetch_by_request: BTreeMap<",
+                    "fn recovered_decision_fetch_request_index_is_exact_and_empty(&self) -> bool",
+                    "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
+                    "fn validated_certified_request_presence(",
+                    "Ok(!pending_hashes.is_empty() || !recovered_hashes.is_empty())",
+                ),
+            )
+            ordinary_fetch_admission = region(
+                effects_path,
+                effects_source,
+                "ordinary and recovered Decision Fetch coordinate fence",
+                "fn begin_fetch<S: V2EffectServices>(",
+                "fn retained_body_manifest_hash(",
+            )
+            require_tokens(
+                effects_path,
+                "ordinary and recovered Decision Fetch coordinate fence",
+                ordinary_fetch_admission,
+                (
+                    "self.recovered_decision_fetches.values()",
+                    "owner.matches_body_coordinates(round, subject)",
+                ),
+            )
+            require_literal_count(
+                effects_path,
+                "ordinary and recovered Decision Fetch coordinate fence",
+                ordinary_fetch_admission,
+                '"body-fetch coordinates already have a recovered Decision Fetch owner"',
+                1,
+            )
+            require_tokens(
+                effects_path,
+                "symmetric recovered Decision Fetch owner census",
+                effects_source,
+                (
+                    "owner.matches_body_coordinates(pending.task.round, pending.task.subject)",
+                    "fn recovered_decision_fetch_fences_later_ordinary_body_coordinates()",
+                    "executor.validated_certified_request_presence()",
+                ),
+            )
+            recovered_fetch_selector = region(
+                selector_path,
+                selector_source,
+                "typed recovered Decision Fetch selector consumption",
+                "pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_body_persistence(",
+                "/// Consume one exact selected family into a bounded body-store command.",
+            )
+            require_order(
+                selector_path,
+                "typed recovered Decision Fetch selector consumption",
+                recovered_fetch_selector,
+                (
+                    "self.revalidate_recovered_decision_fetch_response_candidate(",
+                    "PreparedCertifiedResponseCandidate::Recovered(candidate)",
+                    "let authenticated = candidate.into_authenticated_response()",
+                    "RecoveredDecisionFetchBodyPersistenceTaskV1 {",
+                ),
+            )
+            require_tokens(
+                selector_path,
+                "typed recovered Decision Fetch selector target",
+                selector_source,
+                (
+                    "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
+                    "LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence",
+                    "fn matches_recovered_decision_fetch_key(",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "typed recovered Decision Fetch selector target consumer",
+                worker_source,
+                (
+                    "target.matches_recovered_decision_fetch_key(task.dispatch_key())",
+                ),
+            )
+            recovered_fetch_claim = region(
+                effects_path,
+                effects_source,
+                "recovered Decision Fetch response claim publication",
+                "pub(in crate::sumeragi) fn commit_with_queue(",
+                "impl RecoveredDecisionFetchResponseCandidateV1",
+            )
+            require_order(
+                effects_path,
+                "recovered Decision Fetch response claim publication",
+                recovered_fetch_claim,
+                (
+                    "owner.matches_response_claim_preflight(response_hash, preflight)",
+                    "owner.commit_exact_response_claim(response_hash)",
+                    "queue.commit_recovered_decision_fetch_body_persistence(task)",
+                ),
+            )
+            recovered_fetch_mixed_head = region(
+                worker_path,
+                worker_source,
+                "recovered Decision Fetch mixed completion head fence",
+                "fn take_io_completion(&mut self, runtime_capacity_available: bool)",
+                "fn take_recovered_decision_apply_completion(",
+            )
+            require_order(
+                worker_path,
+                "recovered Decision Fetch mixed completion head fence",
+                recovered_fetch_mixed_head,
+                (
+                    "let ownership_position =",
+                    "io.completion_ownership_at(ownership_position)",
+                    "owned.recovered_decision_fetch.is_some()",
+                    "return IoCompletionTake::retained_runtime()",
+                    "io.try_recv_completion_unacknowledged()",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "dedicated recovered Decision Fetch worker ownership",
+                worker_source,
+                (
+                    "PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1)",
+                    "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
+                    "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
+                    "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
+                    "fn drain_recovered_decision_fetch_body_completion(",
+                    "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
+                ),
+            )
+            parked_fetch_completion = region(
+                worker_path,
+                worker_source,
+                "opaque parked recovered Decision Fetch completion",
+                "pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {",
+                "impl PreparedRecoveredLifecycleSignCompletionV1",
+            )
+            reject_tokens(
+                worker_path,
+                "opaque parked recovered Decision Fetch completion",
+                parked_fetch_completion,
+                (
+                    "fn into_parts(",
+                    "fn durable_receipt(",
+                    "fn response(",
+                    "fn acknowledge(",
+                    "fn settle(",
+                ),
+            )
+            recovered_fetch_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Decision Fetch-to-Store settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(",
+                "/// Reserve, claim, and queue one recovered Sign",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Decision Fetch-to-Store settlement",
+                recovered_fetch_settlement,
+                (
+                    "prepare_lifecycle_ingress_selector(",
+                    "prepare_recovered_decision_fetch_owner_retirement(",
+                    "into_locked_recovered_decision_fetch_dequeue(",
+                    "prepare_recovered_decision_fetch_store_adapter_authority(",
+                    "prepare_recovered_decision_fetch_store_adapter(",
+                    "prepare_recovered_decision_fetch_store_successor(",
+                    "prepare_recovered_decision_fetch_store_transition(",
+                    "begin_fail_stop_operation()",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "commit_recovered_decision_fetch_owner_retirement(retirement)",
+                    "locked_dequeue.commit()",
+                    "completion.acknowledge_after_publication()",
+                    "operation.complete()",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "restart-closed recovered Decision Fetch-to-Store settlement",
+                recovered_fetch_settlement,
+                (
+                    "*recovered_decision_fetch_body_completion = Some(completion)",
+                    "owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure)",
+                    "ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired",
+                    "ProductionRecoveredDecisionFetchStoreSettlementV1::Applied",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "dedicated recovered Decision Fetch-to-Store settlement",
+                recovered_fetch_settlement,
+                ("EffectWorkId", "RuntimeEffectOwnership", "into_parts"),
+            )
+            require_tokens(
+                worker_path,
+                "recovered Decision Fetch worker acknowledgement tail",
+                region(
+                    worker_path,
+                    worker_source,
+                    "recovered Decision Fetch worker acknowledgement tail",
+                    "fn acknowledge_recovered_decision_fetch_body(",
+                    "fn prepare_certified_fetch_body_persistence_ack(",
+                ),
+                (
+                    "fn acknowledge_recovered_decision_fetch_body(",
+                    ".recovered_decision_fetch_bodies",
+                    ".remove(&key)",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "recovered Decision Fetch guarded acknowledgement tail",
+                worker_source,
+                (
+                    "fn acknowledge_after_publication(mut self)",
+                    "self.drop_guard.disarm()",
+                ),
+            )
+            require_tokens(
+                ledger_path,
+                "recovered Decision Store cold restart and marker-prefix closure",
+                ledger_source,
+                (
+                    "fn authenticate_recovered_decision_fetch_store(",
+                    "fn open_recovered_decision_store_startup(",
+                    "fn stage_recovered_decision_apply_projection(",
+                    "successor_records_after_live_store(",
+                    "fn recovered_decision_store_crash_prefix_restarts_once_then_stutters()",
+                    "fn recovered_decision_store_restart_rejects_an_exact_child_key_collision()",
+                ),
+            )
+            require_tokens(
+                body_pipeline_path,
+                "recovered Decision Fetch payload-free parent transition",
+                body_pipeline_source,
+                (
+                    "fn stage_recovered_decision_fetch_store_transition(",
+                    "DurablePayloadReference::None",
+                    "DurableContinuationEdge::FetchToStore",
+                    "BodyStagePayloadRelationV1::RecoveredDecisionFetch",
+                    "fn persist_exact_successor(",
+                    "fn commit_after_publication(self)",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "recovered Decision Store cold adapter reconstruction",
+                adapter_source,
+                (
+                    "fn advance_recovered_decision_fetch_store(",
+                    "project_store_adapter_authority(body)",
+                    "project_decision_fetch_store(verified, projection_body, preview.store_effect())",
+                    "preview.commit_after_durable_settlement()",
+                ),
+            )
+            require_tokens(
+                body_store_path,
+                "recovered Decision Store body-frame reconstruction",
+                body_store_source,
+                (
+                    "struct RecoveredDecisionFetchStoreBodyAuthorityV1",
+                    "fn recovered_decision_fetch_store_body(",
+                    "Ok(RecoveredDecisionFetchStoreBodyAuthorityV1 { manifest: manifest.clone(), durable: durable.clone(), })",
+                ),
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "typed recovered Decision Store storage census",
+                lifecycle_open_source,
+                (
+                    "RecoveredWalStartupProjectionV1::DecisionStore",
+                    "assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup",
+                    "recovered_decision_store_chain_records(",
+                ),
+            )
+            require_tokens(
+                registry_validate_path,
+                "dedicated recovered Decision Store registry install",
+                registry_validate_source,
+                (
+                    "RecoveredWalRegistrySlotV1::DecisionStore",
+                    "fn install_recovered_wal_decision_store<'registry>(",
+                    "ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore",
+                ),
+            )
+            require_order(
+                launch_path,
+                "launched recovered Decision Fetch Drop order",
+                launched_owner_fields,
+                (
+                    "services: ProductionV2Services",
+                    "recovered_decision_fetch_body_completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>",
+                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
+                ),
+            )
+            request_scoped_response = region(
+                transport_path,
+                transport_source,
+                "request-scoped certified response authentication",
+                "pub(in crate::sumeragi) fn authenticate_response(",
+                "/// Certified-body response admitted for one outstanding exact request.",
+            )
+            require_tokens(
+                transport_path,
+                "request-scoped certified response authentication",
+                request_scoped_response,
+                (
+                    "authenticate_certified_body_response_for_request(",
+                    "response.validate_against(",
+                    "verify_signature(",
+                    "decode_framed_signed_block(&response.body)",
+                    "AuthenticatedCertifiedBodyResponse { response }",
                 ),
             )
             require_tokens(
@@ -1564,9 +3836,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             )
         payload_store_path, payload_store_source = load(
             "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs"
-        )
-        lifecycle_open_path, lifecycle_open_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs"
         )
         coordinator_path, coordinator_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
@@ -2089,6 +4358,22 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         "crates/iroha_core/src/sumeragi/v2_effects.rs"
     )
     if effects_source:
+        require_tokens(
+            effects_path,
+            "recovered Sign foreign-cursor owner regression",
+            effects_source,
+            (
+                "owner.dispatch_recovered_lifecycle_sign(",
+                "Err(ProductionRecoveredLifecycleSignDispatchErrorV1::ForeignRunnerObservation)",
+            ),
+        )
+        require_literal_count(
+            effects_path,
+            "recovered Sign foreign-cursor owner regression",
+            effects_source,
+            '"a non-Completion runner cursor cannot claim or mutate a recovered Sign owner"',
+            1,
+        )
         certified = region(
             effects_path,
             effects_source,
@@ -2159,7 +4444,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     f"{release_path}: production refinement test must be pinned exactly once: {test}"
                 )
     return errors
-
 
 def _successor_stale_token_mutation_source_fidelity_errors(
     formal_dir: Path,
@@ -2414,2459 +4698,4 @@ def _successor_stale_token_mutation_source_fidelity_errors(
                 f"{cfg_path}: successor stale-token mutation configuration "
                 f"must equal {expected_lines!r}; found {actual_lines!r}"
             )
-    return errors
-
-
-def _successor_activation_rank_source_fidelity_errors(
-    formal_dir: Path,
-) -> list[str]:
-    """Pin the exact finite-rank corridor used by successor liveness."""
-
-    proof_path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
-    if not proof_path.is_file():
-        return []
-
-    source = proof_path.read_text(encoding="utf-8")
-    errors: list[str] = []
-    operator_contracts = {
-        "SuccessorActivationRankCarrier": "0..21",
-        "SuccessorActivationPipelineDistance": " ".join(
-            r'''
-            LET successorContext ==
-                  CanonicalIndexedContext(parentContext.height + 1)
-                marker ==
-                  SuccessorActivationMarker(parentContext, node, successorContext)
-            IN CASE successorActivationStatus[parentContext][node] = "Queued" -> 10
-               [] /\ successorActivationStatus[parentContext][node] = "Running"
-                  /\ ~SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                      -> 9
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node] = {}
-                      -> 8
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationAdapterPrerequisites
-                      -> 7
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationRuntimePrerequisites
-                      -> 6
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationServicePrerequisites
-                      -> 5
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationStartupPrerequisites
-                      -> 4
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationClockPrerequisites
-                  /\ marker \notin preparedSuccessorActivationMarkers
-                      -> 3
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationClockPrerequisites
-                  /\ marker \in preparedSuccessorActivationMarkers
-                      -> 2
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationRequiredPrerequisites
-                      -> 1
-               [] OTHER -> 0
-            '''.split()
-        ),
-        "SuccessorActivationRank": (
-            "IF SuccessorPublicationOrSuperseded(parentContext, node) THEN 0 "
-            "ELSE IF successorPredecessorStatusOwnership[parentContext][node] "
-            '= "Published" THEN 11 + '
-            "SuccessorActivationPipelineDistance(parentContext, node) "
-            "ELSE SuccessorActivationPipelineDistance(parentContext, node)"
-        ),
-        "SuccessorActivationPending": (
-            "IndexedSuccessorActivationPending(parentContext, node)"
-        ),
-        "SuccessorActivationHasDurableParentWitness": (
-            "/\\ \\E application \\in Chain!DecisionEvidenceSet: "
-            "ExactDurableParentApplication(parentContext, node, application)"
-        ),
-        "SuccessorActivationAtRank": (
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationRank(parentContext, node) = rank"
-        ),
-        "SuccessorActivationFailureAbsent": (
-            "SuccessorActivationOwner(parentContext, node) "
-            "\\notin successorActivationFailures"
-        ),
-        "SuccessorActivationPendingStructureProperty": (
-            "[](\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationPending(parentContext, node) "
-            "=> /\\ SuccessorActivationHasDurableParentWitness( "
-            "parentContext, node) "
-            "/\\ SuccessorActivationPipelineDistance(parentContext, node) "
-            "\\in 1..10 "
-            "/\\ SuccessorActivationRank(parentContext, node) "
-            "\\in SuccessorActivationRankCarrier "
-            "/\\ ENABLED <<IndexedSuccessorActivationProgressStep( "
-            "parentContext, node)>>_(IndexedChainVars))"
-        ),
-        "SuccessorActivationStepDecreasesRankProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[][ /\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "< SuccessorActivationRank(parentContext, node) "
-            "]_IndexedChainVars"
-        ),
-        "SuccessorActivationPendingIsNotOrphanedProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[][ /\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ SuccessorActivationPending(parentContext, node)' "
-            "]_IndexedChainVars"
-        ),
-        "SuccessorActivationOutcomeIsStableProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[][ /\\ SuccessorPublicationOrSuperseded(parentContext, node) "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "]_IndexedChainVars"
-        ),
-        "SuccessorActivationRankProgressProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "SuccessorActivationAtRank(parentContext, node, rank) "
-            "~> (SuccessorPublicationOrSuperseded(parentContext, node) "
-            "\\/ \\E lower \\in SetLessThan( rank, OpToRel(<, Nat), "
-            "SuccessorActivationRankCarrier): "
-            "SuccessorActivationAtRank(parentContext, node, lower))"
-        ),
-        "SuccessorActivationStarvationFreedomProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node)"
-        ),
-        "SuccessorActivationTemporalKernel": (
-            "/\\ []IndexedCompositionInvariant "
-            "/\\ []SuccessorActivationProtocolInvariant "
-            "/\\ [][IndexedChainNext]_IndexedChainVars "
-            "/\\ WF_IndexedChainVars( "
-            "IndexedSuccessorActivationProgressStep(parentContext, node))"
-        ),
-        "SuccessorActivationFailureFreeSuffix": (
-            "[]SuccessorActivationFailureAbsent(parentContext, node)"
-        ),
-        "FailedSuccessorStartupRestartStep": (
-            "\\E successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "RehydrateFailedSuccessorStartup( "
-            "parentContext, node, successorContext, application)"
-        ),
-    }
-    for symbol, exact_body in operator_contracts.items():
-        extracted = _top_level_operator_body(
-            source, symbol, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(f"{proof_path}: missing successor-rank operator {symbol}")
-            continue
-        body, line = extracted
-        normalized = " ".join(body.split())
-        if normalized != exact_body:
-            errors.append(
-                f"{proof_path}:{line}: {symbol} must equal only "
-                f"{exact_body!r}; found {normalized!r}"
-            )
-
-    theorem_contracts = {
-        "SuccessorActivationPendingRankTierClassification": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationShape "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "=> \\/ /\\ successorPredecessorStatusOwnership"
-            "[parentContext][node] = \"Published\" "
-            "/\\ SuccessorActivationRank(parentContext, node) \\in 12..21 "
-            "\\/ /\\ successorPredecessorStatusOwnership"
-            "[parentContext][node] = \"Absent\" "
-            "/\\ SuccessorActivationRank(parentContext, node) \\in 1..10",
-            (
-                "SuccessorActivationShape",
-                "SuccessorActivationProtocolInvariant",
-                "SuccessorActivationRank",
-                "Isa",
-            ),
-        ),
-        "ExactDurableParentApplicationHasAdmissibleSuccessorContext": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in ValidatorIds, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ Chain!ChainEpochInvariant "
-            "/\\ ExactDurableParentApplication(parentContext, node, application) "
-            "=> CanonicalIndexedContext(parentContext.height + 1) "
-            "\\in AdmissibleContextRecords",
-            (
-                "Chain!ChainEpochTypeInvariant",
-                "Chain!NodesDoNotOutrunCertificates",
-                "Chain!CertifiedPrefixBacked",
-                "FrozenContextAdmissible",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationProgressPreservesProtocolInvariant": (
-            "\\A selectedParent \\in AdmissibleContextRecords, "
-            "selectedNode \\in ValidatorIds: "
-            "Chain!ChainEpochInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ IndexedSuccessorActivationProgressStep( "
-            "selectedParent, selectedNode) "
-            "=> SuccessorActivationProtocolInvariant'",
-            (
-                "ExactDurableParentApplicationHasAdmissibleSuccessorContext",
-                "ExpandENABLED",
-                "Isa",
-            ),
-        ),
-        "IndexedActionPreservesSuccessorActivationProtocolInvariant": (
-            "IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ IndexedChainNext "
-            "=> SuccessorActivationProtocolInvariant'",
-            (
-                "IndexedProductActionPreservesSuccessorActivationProtocolInvariant",
-                "SuccessorActivationProgressPreservesProtocolInvariant",
-                "DEF IndexedCompositionInvariant",
-            ),
-        ),
-        "CleanCompleteTipRestartDescendsPublishedTier": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ RehydrateCleanCompleteTipSuccessorStartup( "
-            "parentContext, node, successorContext, application) "
-            "=> /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "< SuccessorActivationRank(parentContext, node)",
-            (
-                "CleanCompleteTipRestartCrossesPublishedToAbsentTier",
-                "Isa",
-            ),
-        ),
-        "FailureFreeBracketExcludesSuccessorResetActions": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "=> /\\ ~SuccessorStartupFailureStep(parentContext, node) "
-            "/\\ ~FailedSuccessorStartupRestartStep(parentContext, node)",
-            (
-                "SuccessorStartupFailureStep",
-                "FailedSuccessorStartupRestartStep",
-                "LatchAppliedSuccessorStartupFailure",
-                "LatchRecoveredSuccessorStartupFailure",
-                "RehydrateFailedSuccessorStartup",
-                "Isa",
-            ),
-        ),
-        "CleanCompleteTipRestartCrossesPublishedToAbsentTier": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ RehydrateCleanCompleteTipSuccessorStartup( "
-            "parentContext, node, successorContext, application) "
-            "=> /\\ SuccessorActivationRank(parentContext, node) \\in 12..21 "
-            "/\\ successorPredecessorStatusOwnership'[parentContext][node] "
-            "= \"Absent\" "
-            "/\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' = 10 "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)'",
-            (
-                "SuccessorActivationRank",
-                "SuccessorActivationPipelineDistance",
-                "RehydrateCleanCompleteTipSuccessorStartup",
-                "ExactDurableParentApplication",
-                "Isa",
-            ),
-        ),
-        "RecoveredAuthenticationDescendsAbsentTier": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ AuthenticateRecoveredSuccessorActivation( "
-            "parentContext, node, successorContext, application) "
-            "=> /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ successorPredecessorStatusOwnership'[parentContext][node] "
-            "= \"Absent\" "
-            "/\\ SuccessorActivationRank(parentContext, node) = 10 "
-            "/\\ SuccessorActivationRank(parentContext, node)' = 8 "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)'",
-            (
-                "AuthenticateRecoveredSuccessorActivation",
-                "SuccessorActivationCredentialReady",
-                "ExactSuccessorActivationToken",
-                "ExactCompleteTipRecoveryAuthority",
-                "SuccessorActivationRank",
-                "SuccessorActivationPipelineDistance",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "< SuccessorActivationRank(parentContext, node)",
-            (
-                "FailureFreeBracketExcludesSuccessorResetActions",
-                "SuccessorActivationPendingRankTierClassification",
-                "RecoveredAuthenticationDescendsAbsentTier",
-                "CleanCompleteTipRestartDescendsPublishedTier",
-                "LatchAppliedSuccessorStartupFailure",
-                "LatchRecoveredSuccessorStartupFailure",
-                "RehydrateFailedSuccessorStartup",
-                "Isa",
-            ),
-        ),
-        "IndexedProductActionDoesNotRaisePendingSuccessorRank": (
-            "\\A initialContext \\in JoinedContexts, "
-            "parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ IndexedProductActionAt(initialContext) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "<= SuccessorActivationRank(parentContext, node)",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "IndexedProductActionAt",
-                "IndexedReceiptClassification",
-                "QueueSuccessorActivation",
-                "Isa",
-            ),
-        ),
-        "OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "selectedParent \\in AdmissibleContextRecords, "
-            "selectedNode \\in ValidatorIds: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationOwner(selectedParent, selectedNode) "
-            "# SuccessorActivationOwner(parentContext, node) "
-            "/\\ IndexedSuccessorActivationProgressStep( "
-            "selectedParent, selectedNode) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "= SuccessorActivationRank(parentContext, node)",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "SuccessorActivationOwner",
-                "IndexedSuccessorActivationProgressStep",
-                "Isa",
-            ),
-        ),
-        "IndexedStepRetainsExactDurableParentWitnessOrExits": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationHasDurableParentWitness( "
-            "parentContext, node)'",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "IndexedStepPreservesSuccessorActivationProtocolInvariant",
-                "SuccessorActivationHasDurableParentWitness",
-                "Isa",
-            ),
-        ),
-        "IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "<= SuccessorActivationRank(parentContext, node)",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "IndexedProductActionDoesNotRaisePendingSuccessorRank",
-                "OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes",
-                "FailureFreeBracketExcludesSuccessorResetActions",
-                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
-                "IndexedChainNext",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationFailureFreeRankPersistsOrExits": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorActivationAtRank(parentContext, node, rank)' "
-            "\\/ SuccessorActivationRankExit(parentContext, node, rank)'",
-            (
-                "IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank",
-                "IndexedStepRetainsExactDurableParentWitnessOrExits",
-                "IndexedStepPreservesSuccessorActivationProtocolInvariant",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationFailureFreeProgressExitsCurrentRank": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "/\\ Chain!ChainEpochInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ <<IndexedSuccessorActivationProgressStep( "
-            "parentContext, node)>>_(IndexedChainVars) "
-            "=> SuccessorActivationRankExit(parentContext, node, rank)'",
-            (
-                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
-                "SuccessorActivationProgressPreservesProtocolInvariant",
-                "Isa",
-            ),
-        ),
-        "FailureFreeSuccessorActivationRankLeadsToExit": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationAtRank(parentContext, node, rank) "
-            "~> SuccessorActivationRankExit(parentContext, node, rank))",
-            (
-                "SuccessorActivationFailureFreeRankPersistsOrExits",
-                "SuccessorActivationAtRankEnablesFairProgress",
-                "SuccessorActivationFailureFreeProgressExitsCurrentRank",
-                "Chain!ChainEpochInvariant",
-                "DEF IndexedCompositionInvariant",
-                "WF_IndexedChainVars",
-                "PTL",
-            ),
-        ),
-        "FailureFreeSuccessorActivationRankConverges": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> \\A rank \\in SuccessorActivationRankCarrier: "
-            "SuccessorActivationAtRank(parentContext, node, rank) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node)",
-            (
-                "SuccessorActivationRankOrderingIsWellFounded",
-                "FailureFreeSuccessorActivationRankLeadsToExit",
-                "WellFoundedLeadsTo",
-            ),
-        ),
-        "FailureFreeSuccessorActivationConverges": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
-            (
-                "FailureFreeSuccessorActivationRankConverges",
-                "SuccessorActivationRankExistentialLift",
-                "SuccessorActivationPendingHasRankWitness",
-                "PTL",
-            ),
-        ),
-        "SuccessorActivationTemporalKernelIsSuffixClosed": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationTemporalKernel(parentContext, node) "
-            "=> []SuccessorActivationTemporalKernel(parentContext, node)",
-            ("PTL", "SuccessorActivationTemporalKernel"),
-        ),
-        "FailureFreeSuccessorActivationConvergenceAtEverySuffix": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[]( /\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node)))",
-            ("FailureFreeSuccessorActivationConverges", "PTL"),
-        ),
-        "SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ <>SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> (SuccessorPublicationOrSuperseded(parentContext, node) "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix( "
-            "parentContext, node)))",
-            (
-                "IndexedStepRetainsExactDurableParentWitnessOrExits",
-                "SuccessorActivationTemporalKernel",
-                "SuccessorActivationFailureFreeSuffix",
-                "PTL",
-            ),
-        ),
-        "EventualFailureFreeSuffixLiftsSuccessorConvergence": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ <>SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
-            (
-                "SuccessorActivationTemporalKernelIsSuffixClosed",
-                "FailureFreeSuccessorActivationConvergenceAtEverySuffix",
-                "SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome",
-                "PTL",
-            ),
-        ),
-        "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom": (
-            "IndexedChainSpec => "
-            "SuccessorActivationStarvationFreedomProperty",
-            (
-                "IndexedChainSpecEstablishesSuccessorActivationTemporalKernel",
-                "EventualFailureFreeSuccessorStartupSuffix",
-                "EventualFailureFreeSuffixLiftsSuccessorConvergence",
-            ),
-        ),
-        "IndexedChainSpecEstablishesSuccessorActivationRankProgress": (
-            "IndexedChainSpec => SuccessorActivationRankProgressProperty",
-            (
-                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
-                "SuccessorActivationRankProgressProperty",
-                "PTL",
-            ),
-        ),
-    }
-    exact_proof_token_counts = {
-        "IndexedActionPreservesSuccessorActivationProtocolInvariant": {
-            "DEF IndexedCompositionInvariant": 2,
-        },
-        "FailureFreeSuccessorActivationRankLeadsToExit": {
-            "Chain!ChainEpochInvariant": 1,
-            "DEF IndexedCompositionInvariant": 1,
-        },
-    }
-    for symbol, (exact_statement, required_proof_tokens) in (
-        theorem_contracts.items()
-    ):
-        theorem = _top_level_theorem_body(
-            source, symbol, preserve_string_contents=True
-        )
-        if theorem is None:
-            errors.append(f"{proof_path}: missing successor-rank theorem {symbol}")
-            continue
-        theorem_body, line = theorem
-        observed_statement = _tla_statement_without_proof(theorem_body)
-        if observed_statement != exact_statement:
-            errors.append(
-                f"{proof_path}:{line}: {symbol} must state only "
-                f"{exact_statement!r}; found {observed_statement!r}"
-            )
-        theorem_parts = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
-            theorem_body,
-            maxsplit=1,
-        )
-        if len(theorem_parts) != 2:
-            errors.append(
-                f"{proof_path}:{line}: {symbol} must retain an explicit "
-                "non-vacuous proof body"
-            )
-            continue
-        observed_proof = theorem_parts[1]
-        for required_token in required_proof_tokens:
-            if not _tla_dependency_present(observed_proof, required_token):
-                errors.append(
-                    f"{proof_path}:{line}: {symbol} proof must invoke "
-                    f"{required_token}"
-                )
-        for exact_token, exact_count in exact_proof_token_counts.get(
-            symbol, {}
-        ).items():
-            observed_count = len(
-                _tla_dependency_positions(observed_proof, exact_token)
-            )
-            if observed_count != exact_count:
-                errors.append(
-                    f"{proof_path}:{line}: {symbol} proof must contain "
-                    f"{exact_token!r} exactly {exact_count} time(s); found "
-                    f"{observed_count}"
-                )
-        if re.search(
-            r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
-            r"\bPROVE\s+TRUE\b)",
-            observed_proof,
-        ):
-            errors.append(
-                f"{proof_path}:{line}: {symbol} proof may not use a "
-                "vacuous assertion"
-            )
-
-    chain_path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
-    if chain_path.is_file():
-        chain_source = chain_path.read_text(encoding="utf-8")
-        pending = _top_level_operator_body(
-            chain_source,
-            "IndexedSuccessorActivationPending",
-            preserve_string_contents=True,
-        )
-        exact_pending = (
-            "/\\ parentContext \\in AdmissibleContextRecords "
-            "/\\ node \\in ValidatorIds "
-            "/\\ parentContext.height < MaxHeight "
-            "/\\ successorActivationStatus[parentContext][node] "
-            '\\in {"Queued", "Running"} '
-            "/\\ ~SuccessorPublicationOrSuperseded(parentContext, node)"
-        )
-        if pending is None:
-            errors.append(
-                f"{chain_path}: missing IndexedSuccessorActivationPending"
-            )
-        else:
-            body, line = pending
-            normalized = " ".join(body.split())
-            if normalized != exact_pending:
-                errors.append(
-                    f"{chain_path}:{line}: IndexedSuccessorActivationPending "
-                    f"must equal only {exact_pending!r}; found {normalized!r}"
-                )
-
-    theorem_symbol = "SuccessorActivationStarvationFreedomObligation"
-    theorem = _top_level_theorem_body(
-        source, theorem_symbol, preserve_string_contents=True
-    )
-    exact_statement = (
-        "IndexedChainSpec "
-        "=> /\\ SuccessorActivationPendingStructureProperty "
-        "/\\ SuccessorActivationStepDecreasesRankProperty "
-        "/\\ SuccessorActivationPendingIsNotOrphanedProperty "
-        "/\\ SuccessorActivationOutcomeIsStableProperty "
-        "/\\ SuccessorActivationRankProgressProperty "
-        "/\\ SuccessorActivationStarvationFreedomProperty"
-    )
-    if theorem is None:
-        errors.append(f"{proof_path}: missing {theorem_symbol}")
-    else:
-        body, line = theorem
-        theorem_parts = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )
-        statement = theorem_parts[0]
-        normalized = " ".join(statement.split())
-        if normalized != exact_statement:
-            errors.append(
-                f"{proof_path}:{line}: {theorem_symbol} must state only "
-                f"{exact_statement!r}; found {normalized!r}"
-            )
-        if len(theorem_parts) != 2:
-            errors.append(
-                f"{proof_path}:{line}: {theorem_symbol} must retain the "
-                "explicit candidate TLAPS proof while strict verification "
-                "remains pending"
-            )
-        else:
-            aggregate_proof = theorem_parts[1]
-            required_aggregate_dependencies = (
-                "IndexedChainSpecEstablishesSuccessorActivationPendingStructure",
-                "IndexedChainSpecEstablishesSuccessorActivationStepDecrease",
-                "IndexedChainSpecEstablishesSuccessorActivationNonOrphaning",
-                "IndexedChainSpecEstablishesSuccessorActivationOutcomeStability",
-                "IndexedChainSpecEstablishesSuccessorActivationRankProgress",
-                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
-            )
-            for dependency in required_aggregate_dependencies:
-                if len(
-                    _tla_dependency_positions(aggregate_proof, dependency)
-                ) != 1:
-                    errors.append(
-                        f"{proof_path}:{line}: {theorem_symbol} proof must "
-                        f"invoke {dependency} exactly once"
-                    )
-            if re.search(
-                r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
-                r"\bPROVE\s+TRUE\b)",
-                aggregate_proof,
-            ):
-                errors.append(
-                    f"{proof_path}:{line}: {theorem_symbol} proof may not "
-                    "use a vacuous assertion"
-                )
-
-    equivalence_symbol = "SuccessorActivationStarvationMatchesChainProgress"
-    equivalence = _top_level_theorem_body(
-        source, equivalence_symbol, preserve_string_contents=True
-    )
-    exact_equivalence = (
-        "SuccessorActivationStarvationFreedomProperty "
-        "<=> IndexedSuccessorActivationProgress"
-    )
-    if equivalence is None:
-        errors.append(f"{proof_path}: missing {equivalence_symbol}")
-    else:
-        body, line = equivalence
-        statement = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )[0]
-        normalized = " ".join(statement.split())
-        if normalized != exact_equivalence:
-            errors.append(
-                f"{proof_path}:{line}: {equivalence_symbol} must state only "
-                f"{exact_equivalence!r}; found {normalized!r}"
-            )
-    return errors
-
-
-def _async_historical_recovery_source_fidelity_errors(
-    formal_dir: Path,
-) -> list[str]:
-    """Pin the exact all-responsive historical-recovery proof boundary."""
-
-    path = formal_dir / "SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla"
-    if not path.is_file():
-        return [f"{path}: missing Async historical-recovery liveness child"]
-
-    raw_source = path.read_text(encoding="utf-8")
-    source = strip_tla_comments(raw_source, preserve_string_contents=True)
-    errors: list[str] = []
-
-    extends = re.search(r"(?m)^EXTENDS\s+([^\n]+)$", source)
-    exact_extends = "SumeragiV2AsyncTimeoutOwnershipProofs, TLAPS"
-    if extends is None or " ".join(extends.group(1).split()) != exact_extends:
-        errors.append(
-            f"{path}: Async historical-recovery child must extend exactly "
-            f"{exact_extends!r}"
-        )
-
-    operator_contracts = {
-        "HistoricalRecoveryTargetDecisionProgressProperty": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node)) "
-            "~> NodeHasDecision(node)"
-        ),
-        "ResponsiveDecisionApplicationProgressProperty": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ NodeHasDecision(node)) "
-            "~> NodeHasApplication(node)"
-        ),
-        "HistoricalRecoveryAsyncTemporalPrerequisites": (
-            "/\\ HistoricalRecoveryTargetDecisionProgressProperty(specification) "
-            "/\\ ResponsiveDecisionApplicationProgressProperty(specification)"
-        ),
-        "HistoricalProtectedCandidateOwned": (
-            "/\\ candidate.node \\in Responsive "
-            "/\\ HistoricalRecoveryTarget(candidate.node) "
-            "/\\ ProtectedCandidateOwned(candidate)"
-        ),
-        "HistoricalProtectedOwnedAtServiceRank": (
-            "/\\ gst /\\ HistoricalProtectedCandidateOwned(candidate) "
-            "/\\ CandidateServiceRank(candidate) = rank"
-        ),
-        "HistoricalProtectedServiceOwnershipExit": (
-            "~HistoricalProtectedCandidateOwned(candidate)"
-        ),
-        "HistoricalProtectedServiceRankProgressProperty": (
-            "specification => \\A candidate \\in AsyncCandidateSet, "
-            "rank \\in OwnedServiceRankCarrier: "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, rank) "
-            "~> (HistoricalProtectedServiceOwnershipExit(candidate) "
-            "\\/ \\E lower \\in SetLessThan( rank, "
-            "OwnedServiceRankOrdering, OwnedServiceRankCarrier): "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, lower))"
-        ),
-        "HistoricalProtectedStageRankProgressProperty": (
-            "specification => \\A candidate \\in AsyncCandidateSet, "
-            "position \\in Nat: (gst "
-            "/\\ HistoricalProtectedCandidateOwned(candidate) "
-            "/\\ CandidateServiceRank(candidate) = <<stage, position>>) "
-            "~> (HistoricalProtectedServiceOwnershipExit(candidate) "
-            "\\/ \\E lower \\in SetLessThan( <<stage, position>>, "
-            "OwnedServiceRankOrdering, OwnedServiceRankCarrier): "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, lower))"
-        ),
-        "HistoricalProtectedStage2RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 2)"
-        ),
-        "HistoricalProtectedStage3RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 3)"
-        ),
-        "HistoricalProtectedStage4RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 4)"
-        ),
-        "HistoricalProtectedStage5RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 5)"
-        ),
-        "HistoricalProtectedStage6RankProgressProperty": (
-            "HistoricalProtectedStageRankProgressProperty(specification, 6)"
-        ),
-        "HistoricalProtectedServiceRankLeafProperties": (
-            "/\\ HistoricalProtectedStage2RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage3RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage4RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage5RankProgressProperty(specification) "
-            "/\\ HistoricalProtectedStage6RankProgressProperty(specification)"
-        ),
-        "HistoricalProtectedCandidateStarvationProperty": (
-            "specification => \\A candidate \\in AsyncCandidateSet: "
-            "(gst /\\ HistoricalProtectedCandidateOwned(candidate)) "
-            "~> HistoricalProtectedServiceOwnershipExit(candidate)"
-        ),
-        "HistoricalCommitCertificateDiscoveryPending": (
-            "/\\ AsyncStrongTypeInvariant /\\ gst "
-            "/\\ HistoricalCommitCertificateDiscoveryDue(node)"
-        ),
-        "HistoricalCommitCertificateDiscoveryOutcome": (
-            "\\/ NodeHasDecision(node) "
-            "\\/ /\\ HistoricalRecoveryTarget(node) "
-            "/\\ ActiveCommitCertificateRequests(node) # {}"
-        ),
-        "HistoricalCommitCertificateDiscoveryPersistenceObligation": (
-            "\\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPending(node) "
-            "/\\ [AsyncNext]_AsyncAllVars "
-            "=> HistoricalCommitCertificateDiscoveryPending(node)' "
-            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node)'"
-        ),
-        "HistoricalCommitCertificateDiscoveryPersistenceUnless": (
-            "[][HistoricalCommitCertificateDiscoveryPending(node) "
-            "/\\ ~HistoricalCommitCertificateDiscoveryOutcome(node) "
-            "=> HistoricalCommitCertificateDiscoveryPending(node)' "
-            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node)']_AsyncAllVars"
-        ),
-        "HistoricalCommitCertificateDiscoveryPersistenceProperty": (
-            "specification => \\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPersistenceUnless(node)"
-        ),
-        "HistoricalRecoveryTargetRemoteServerInvariant": (
-            "\\A node \\in Responsive: HistoricalRecoveryTarget(node) "
-            "=> CommitCertificateRequestOutbox(node) # {}"
-        ),
-        "HistoricalRecoveryTargetRemoteServerProperty": (
-            "specification => []HistoricalRecoveryTargetRemoteServerInvariant"
-        ),
-        "HistoricalCommitCertificateDiscoveryClockProgressProperty": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node)) "
-            "~> (NodeHasDecision(node) "
-            "\\/ /\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\/ ActiveCommitCertificateRequests(node) # {} "
-            "\\/ asyncNow >= AsyncRoundTimeout)"
-        ),
-        "HistoricalCommitCertificateRequestScheduled": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E request \\in ActiveCommitCertificateRequests(node): "
-            "ItemScheduled(request)"
-        ),
-        "HistoricalCommitCertificateResponseScheduled": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E response \\in AsyncNetworkItems: "
-            "/\\ response.kind = \"CommitCertificateResponse\" "
-            "/\\ response.envelope.recipient = node "
-            "/\\ CommitCertificateResponseAuthorized(response) "
-            "/\\ ItemScheduled(response)"
-        ),
-        "HistoricalCommitDecisionDirectEvidence": (
-            "/\\ candidate.evidence \\in asyncSentItems "
-            '/\\ candidate.evidence.kind = "CommitQC" '
-            "/\\ candidate.evidence.envelope = "
-            "QcEnvelope(candidate.node, qc) "
-            "/\\ candidate.causalOrigin = "
-            "AsyncDeliveryCandidateCausalOriginAt("
-            "candidate.evidence, context)"
-        ),
-        "HistoricalCommitDecisionResponseEvidence": (
-            "/\\ candidate.evidence \\in asyncSentItems "
-            '/\\ candidate.evidence.kind = "CommitCertificateResponse" '
-            "/\\ candidate.evidence.source = "
-            "candidate.evidence.envelope.request.envelope.recipient "
-            "/\\ candidate.evidence.envelope.recipient = candidate.node "
-            "/\\ candidate.evidence.envelope.qc = qc "
-            "/\\ CommitCertificateRequestAuthorized( "
-            "candidate.evidence.envelope.request) "
-            "/\\ candidate.causalOrigin = "
-            "AsyncCommitCertificateResponseCandidateCausalOriginAt( "
-            "candidate.evidence, context)"
-        ),
-        "HistoricalCommitDecisionCandidateOwned": (
-            "\\E candidate \\in AsyncCandidateSet, qc \\in commitQCs: "
-            "/\\ candidate.node = node /\\ candidate.kind = kind "
-            '/\\ kind \\in {"DeliverQC", "BeginDecision", '
-            '"PersistDecision"} '
-            "/\\ qc.context = context /\\ qc.phase = \"Commit\" "
-            "/\\ candidate.consumerContext = context "
-            "/\\ candidate.view = qc.view "
-            "/\\ candidate.subject = qc.subject "
-            "/\\ HistoricalProtectedCandidateOwned(candidate) "
-            "/\\ \\/ HistoricalCommitDecisionDirectEvidence(candidate, qc) "
-            "\\/ HistoricalCommitDecisionResponseEvidence(candidate, qc) "
-            '/\\ IF kind = "DeliverQC" THEN candidate.item = '
-            'IF candidate.evidence.kind = "CommitQC" '
-            "THEN candidate.evidence "
-            "ELSE DiscoveredCommitQcItem(candidate.evidence) "
-            "ELSE candidate.item = NoAsyncItem"
-        ),
-        "HistoricalActiveRequestRetransmissionProgressLeaf": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ ActiveCommitCertificateRequests(node) # {}) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitCertificateRequestScheduled(node))"
-        ),
-        "HistoricalCommitRequestServeProgressLeaf": (
-            "StarvationFreedomProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitCertificateRequestScheduled(node)) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitCertificateResponseScheduled(node)))"
-        ),
-        "HistoricalCommitResponseAdmissionProgressLeaf": (
-            "specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitCertificateResponseScheduled(node)) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"DeliverQC\"))"
-        ),
-        "HistoricalCommitDeliveryProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitDecisionCandidateOwned(node, \"DeliverQC\")) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"BeginDecision\")))"
-        ),
-        "HistoricalBeginDecisionProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"BeginDecision\")) "
-            "~> (NodeHasDecision(node) "
-            "\\/ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"PersistDecision\")))"
-        ),
-        "HistoricalPersistDecisionProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalCommitDecisionCandidateOwned( "
-            "node, \"PersistDecision\")) ~> NodeHasDecision(node))"
-        ),
-        "HistoricalCommitCertificateConcreteLeafProperties": (
-            "/\\ HistoricalActiveRequestRetransmissionProgressLeaf(specification) "
-            "/\\ HistoricalCommitRequestServeProgressLeaf(specification) "
-            "/\\ HistoricalCommitResponseAdmissionProgressLeaf(specification) "
-            "/\\ HistoricalCommitDeliveryProgressLeaf(specification) "
-            "/\\ HistoricalBeginDecisionProgressLeaf(specification) "
-            "/\\ HistoricalPersistDecisionProgressLeaf(specification)"
-        ),
-        "HistoricalDecisionRecordMatches": (
-            "/\\ decision \\in decisions /\\ decision.node = node "
-            "/\\ decision.qc.context = context "
-            "/\\ decision.qc.phase = \"Commit\""
-        ),
-        "HistoricalDecisionPipelineKindOwned": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E decision \\in decisions: "
-            "/\\ HistoricalDecisionRecordMatches(node, decision) "
-            "/\\ DecisionPipelineKindOwned(node, decision.qc, kind)"
-        ),
-        "HistoricalDecisionCertifiedRequestActive": (
-            "/\\ HistoricalRecoveryTarget(node) "
-            "/\\ \\E decision \\in decisions: "
-            "/\\ HistoricalDecisionRecordMatches(node, decision) "
-            "/\\ DecisionCertifiedRequestActive(node, decision.qc)"
-        ),
-        "HistoricalDecisionRecoveryFrontier": (
-            "\\/ NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"FetchBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned("
-            "node, \"RequestCertifiedBody\") "
-            "\\/ HistoricalDecisionCertifiedRequestActive(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned("
-            "node, \"FetchCertifiedBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"StoreBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"ValidateBody\") "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"Apply\")"
-        ),
-        "HistoricalDecisionFrontierAvailabilityProperty": (
-            "specification => []\\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ NodeHasDecision(node)) "
-            "=> HistoricalDecisionRecoveryFrontier(node)"
-        ),
-        "HistoricalDecisionFetchProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"FetchBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"RequestCertifiedBody\") "
-            "\\/ HistoricalDecisionCertifiedRequestActive(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"ValidateBody\")))"
-        ),
-        "HistoricalDecisionRequestBodyProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned( "
-            "node, \"RequestCertifiedBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionCertifiedRequestActive(node)))"
-        ),
-        "HistoricalDecisionCertifiedResponseProgressLeaf": (
-            "(/\\ StarvationFreedomProperty(specification) "
-            "/\\ HistoricalProtectedCandidateStarvationProperty(specification)) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionCertifiedRequestActive(node)) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"FetchCertifiedBody\")))"
-        ),
-        "HistoricalDecisionFetchCertifiedProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned( "
-            "node, \"FetchCertifiedBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"StoreBody\")))"
-        ),
-        "HistoricalDecisionStoreProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"StoreBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned( "
-            "node, \"ValidateBody\")))"
-        ),
-        "HistoricalDecisionValidateProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned("
-            "node, \"ValidateBody\")) "
-            "~> (NodeHasApplication(node) "
-            "\\/ HistoricalDecisionPipelineKindOwned(node, \"Apply\")))"
-        ),
-        "HistoricalDecisionApplyProgressLeaf": (
-            "HistoricalProtectedCandidateStarvationProperty(specification) "
-            "=> (specification => \\A node \\in Responsive: "
-            "(gst /\\ HistoricalDecisionPipelineKindOwned(node, \"Apply\")) "
-            "~> NodeHasApplication(node))"
-        ),
-        "HistoricalDecisionConcreteLeafProperties": (
-            "/\\ HistoricalDecisionFetchProgressLeaf(specification) "
-            "/\\ HistoricalDecisionRequestBodyProgressLeaf(specification) "
-            "/\\ HistoricalDecisionCertifiedResponseProgressLeaf(specification) "
-            "/\\ HistoricalDecisionFetchCertifiedProgressLeaf(specification) "
-            "/\\ HistoricalDecisionStoreProgressLeaf(specification) "
-            "/\\ HistoricalDecisionValidateProgressLeaf(specification) "
-            "/\\ HistoricalDecisionApplyProgressLeaf(specification)"
-        ),
-        "ResponsiveDecisionServiceOwnershipInvariant": (
-            "\\A node \\in Responsive: "
-            "(gst /\\ NodeHasDecision(node) /\\ ~NodeHasApplication(node)) "
-            "=> \\/ node \\in AsyncCurrentResponsiveVoters "
-            "\\/ HistoricalRecoveryTarget(node)"
-        ),
-        "ResponsiveDecisionServiceOwnershipProperty": (
-            "specification => []ResponsiveDecisionServiceOwnershipInvariant"
-        ),
-        "HistoricalRecoveryAsyncTemporalClosurePremises": (
-            "/\\ HistoricalCommitCertificateDiscoveryPersistenceProperty(specification) "
-            "/\\ HistoricalRecoveryTargetRemoteServerProperty(specification) "
-            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties(specification) "
-            "/\\ HistoricalCommitCertificateConcreteLeafProperties(specification) "
-            "/\\ HistoricalDecisionFrontierAvailabilityProperty(specification) "
-            "/\\ HistoricalDecisionConcreteLeafProperties(specification) "
-            "/\\ ResponsiveDecisionServiceOwnershipProperty(specification) "
-            "/\\ ApplicationCompletionProgressProperty(specification)"
-        ),
-        "HistoricalRecoveryAsyncRemainingCorridorPremises": (
-            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties(specification) "
-            "/\\ HistoricalCommitCertificateConcreteLeafProperties(specification) "
-            "/\\ HistoricalDecisionFrontierAvailabilityProperty(specification) "
-            "/\\ HistoricalDecisionConcreteLeafProperties(specification) "
-            "/\\ ApplicationCompletionProgressProperty(specification)"
-        ),
-        "HistoricalLockedBodyRecoveryOutcome": (
-            "\\/ HistoricalLockedBodySourceRetired(node, qc) "
-            "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc)"
-        ),
-        "HistoricalLockedCommitCarrierRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedCommitRecoveryWitness(node, qc) "
-            "/\\ ~HistoricalLockedBodyValidated(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyRestartAuthority(node, qc) "
-            "\\/ HistoricalLockedBodyFetchOwned(node, qc) "
-            "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
-            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
-        ),
-        "HistoricalLockedRestartRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyRestartAuthority(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyFetchOwned(node, qc))"
-        ),
-        "HistoricalLockedFetchRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyFetchOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
-            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
-        ),
-        "HistoricalLockedRequestCandidateProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyRequestOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedCertifiedRequestActive(node, qc))"
-        ),
-        "HistoricalLockedActiveRequestProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedCertifiedRequestActive(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyCertifiedFetchOwned(node, qc))"
-        ),
-        "HistoricalLockedCertifiedFetchProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyCertifiedFetchOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyStoreOwned(node, qc))"
-        ),
-        "HistoricalLockedStoreRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyStoreOwned(node, qc)) "
-            "~> (HistoricalLockedBodyRecoveryOutcome(node, qc) "
-            "\\/ HistoricalLockedBodyValidateOwned(node, qc))"
-        ),
-        "HistoricalLockedValidateRecoveryProgressLeaf": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(/\\ gst "
-            "/\\ HistoricalLockedPrepareSource(node, qc) "
-            "/\\ HistoricalLockedBodyValidateOwned(node, qc)) "
-            "~> HistoricalLockedBodyRecoveryOutcome(node, qc)"
-        ),
-        "HistoricalLockedBodyRecoveryConeLeafProperties": (
-            "/\\ HistoricalLockedCommitCarrierRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedRestartRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedFetchRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedRequestCandidateProgressLeaf(specification) "
-            "/\\ HistoricalLockedActiveRequestProgressLeaf(specification) "
-            "/\\ HistoricalLockedCertifiedFetchProgressLeaf(specification) "
-            "/\\ HistoricalLockedStoreRecoveryProgressLeaf(specification) "
-            "/\\ HistoricalLockedValidateRecoveryProgressLeaf(specification)"
-        ),
-        "HistoricalLockedBodyRecoveryConeProperty": (
-            "specification => \\A node \\in AsyncCurrentResponsiveVoters, "
-            "qc \\in prepareQCs: "
-            "(gst /\\ HistoricalLockedPrepareSource(node, qc)) "
-            "~> HistoricalLockedBodyRecoveryOutcome(node, qc)"
-        ),
-    }
-    for symbol, exact_body in operator_contracts.items():
-        extracted = _top_level_operator_body(
-            raw_source, symbol, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(f"{path}: missing Async historical operator {symbol}")
-            continue
-        body, line = extracted
-        normalized = " ".join(body.split())
-        if normalized != exact_body:
-            errors.append(
-                f"{path}:{line}: {symbol} must equal only "
-                f"{exact_body!r}; found {normalized!r}"
-            )
-
-    endpoint_symbols = (
-        "HistoricalRecoveryTargetDecisionProgressProperty",
-        "ResponsiveDecisionApplicationProgressProperty",
-        "HistoricalRecoveryAsyncTemporalPrerequisites",
-    )
-    for symbol in endpoint_symbols:
-        if _symbol_exists(source, symbol, theorem_only=True):
-            errors.append(
-                f"{path}: {symbol} must remain an operator property until its "
-                "exact corridor is proved without extra premises"
-            )
-
-    if re.search(r"(?m)^CONSTANTS?\b", source):
-        errors.append(
-            f"{path}: Async historical-recovery child may not replace exact "
-            "temporal predicates with unconstrained constants"
-        )
-    if re.search(r"\bResponsiveProtectedCandidateOwned\b", source):
-        errors.append(
-            f"{path}: historical rank may not reuse the current-voter-only "
-            "ResponsiveProtectedCandidateOwned predicate"
-        )
-
-    theorem_contracts = {
-        "HistoricalProtectedServiceRankProgressFromStageLeaves": (
-            "\\A specification: "
-            "HistoricalProtectedServiceRankLeafProperties(specification) "
-            "=> HistoricalProtectedServiceRankProgressProperty(specification)",
-            (
-                "HistoricalProtectedStage2RankProgressProperty",
-                "HistoricalProtectedStage3RankProgressProperty",
-                "HistoricalProtectedStage4RankProgressProperty",
-                "HistoricalProtectedStage5RankProgressProperty",
-                "HistoricalProtectedStage6RankProgressProperty",
-                "HistoricalProtectedStageRankProgressProperty",
-            ),
-        ),
-        "HistoricalProtectedCandidateHasServiceRank": (
-            "\\A candidate: /\\ AsyncTypeInvariant /\\ gst "
-            "/\\ HistoricalProtectedCandidateOwned(candidate) "
-            "=> \\E rank \\in OwnedServiceRankCarrier: "
-            "HistoricalProtectedOwnedAtServiceRank(candidate, rank)",
-            (
-                "ScheduledCandidateServiceRankInCarrier",
-                "HistoricalProtectedOwnedAtServiceRank",
-            ),
-        ),
-        "HistoricalProtectedServiceRankProgressImpliesStarvation": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalProtectedServiceRankProgressProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalProtectedCandidateStarvationProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "OwnedServiceRankOrderingWellFounded",
-                "WellFoundedLeadsTo",
-                "HistoricalProtectedCandidateHasServiceRank",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryReadinessFromClock": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalRecoveryTargetRemoteServerProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node)) "
-            "~> (HistoricalCommitCertificateDiscoveryPending(node) "
-            "\\/ HistoricalCommitCertificateDiscoveryOutcome(node))",
-            (
-                "DEF HistoricalRecoveryTargetRemoteServerProperty",
-                "DEF HistoricalCommitCertificateDiscoveryClockProgressProperty",
-                "HistoricalRecoveryTargetRemoteServerInvariant",
-                "HistoricalCommitCertificateDiscoveryPending",
-                "HistoricalCommitCertificateDiscoveryOutcome",
-            ),
-        ),
-        "DirectHistoricalCommitCertificateDiscoveryPublishes": (
-            "\\A node \\in ValidatorIds: "
-            "DirectHistoricalCommitCertificateDiscoveryStep(node) "
-            "=> /\\ HistoricalRecoveryTarget(node)' "
-            "/\\ ActiveCommitCertificateRequests(node)' # {}",
-            (
-                "CommitCertificateDiscoveryStepWork",
-                "PublishCommitCertificateRequests",
-                "ActiveCommitCertificateRequests",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryPrefixIsEnabled": (
-            "\\A node \\in ValidatorIds: "
-            "HistoricalCommitCertificateDiscoveryDue(node) "
-            "=> ENABLED DirectHistoricalCommitCertificateDiscoveryStep(node)",
-            (
-                "ExpandENABLED",
-                "DirectHistoricalCommitCertificateDiscoveryStep",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryPendingEnablesFairPrefix": (
-            "\\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPending(node) "
-            "=> ENABLED "
-            "<<PostGstHistoricalCommitCertificateDiscovery(node)>>_AsyncAllVars",
-            (
-                "HistoricalRecoveryTargetsAreValidators",
-                "HistoricalCommitCertificateDiscoveryPrefixIsEnabled",
-                "DirectHistoricalCommitCertificateDiscoveryPublishes",
-                "ENABLEDaxioms",
-            ),
-        ),
-        "HistoricalCommitCertificateDiscoveryFairStepPublishes": (
-            "\\A node \\in Responsive: "
-            "/\\ HistoricalCommitCertificateDiscoveryPending(node) "
-            "/\\ <<PostGstHistoricalCommitCertificateDiscovery(node)>>_AsyncAllVars "
-            "=> HistoricalCommitCertificateDiscoveryOutcome(node)'",
-            (
-                "DirectHistoricalCommitCertificateDiscoveryPublishes",
-                "HistoricalCommitCertificateDiscoveryOutcome",
-            ),
-        ),
-        "FairHistoricalCommitCertificateDiscoveryFromPersistence": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalCommitCertificateDiscoveryPersistenceProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "HistoricalCommitCertificateDiscoveryPending(node) "
-            "~> HistoricalCommitCertificateDiscoveryOutcome(node)",
-            (
-                "HistoricalCommitCertificateDiscoveryPendingEnablesFairPrefix",
-                "HistoricalCommitCertificateDiscoveryFairStepPublishes",
-                "HistoricalCommitCertificateDiscoveryPersistenceUnless",
-                "HistoricalCommitCertificateDiscoveryPersistenceProperty",
-                "WF_AsyncAllVars(",
-                "PostGstHistoricalCommitCertificateDiscovery(node)",
-            ),
-        ),
-        "HistoricalActiveCommitCertificateRequestReachesDecision": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalCommitCertificateConcreteLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ ActiveCommitCertificateRequests(node) # {}) "
-            "~> NodeHasDecision(node)",
-            (
-                "HistoricalProtectedServiceRankProgressFromStageLeaves",
-                "HistoricalProtectedServiceRankProgressImpliesStarvation",
-                "StarvationFreedomObligation",
-                "HistoricalActiveRequestRetransmissionProgressLeaf",
-                "HistoricalCommitRequestServeProgressLeaf",
-                "HistoricalCommitResponseAdmissionProgressLeaf",
-                "HistoricalCommitDeliveryProgressLeaf",
-                "HistoricalBeginDecisionProgressLeaf",
-                "HistoricalPersistDecisionProgressLeaf",
-            ),
-        ),
-        "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalProtectedServiceRankLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalDecisionFrontierAvailabilityProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalDecisionConcreteLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "=> \\A node \\in Responsive: "
-            "(gst /\\ HistoricalRecoveryTarget(node) "
-            "/\\ NodeHasDecision(node)) ~> NodeHasApplication(node)",
-            (
-                "HistoricalProtectedServiceRankProgressFromStageLeaves",
-                "HistoricalProtectedServiceRankProgressImpliesStarvation",
-                "StarvationFreedomObligation",
-                "HistoricalDecisionFrontierAvailabilityProperty",
-                "HistoricalDecisionFetchProgressLeaf",
-                "HistoricalDecisionRequestBodyProgressLeaf",
-                "HistoricalDecisionCertifiedResponseProgressLeaf",
-                "HistoricalDecisionFetchCertifiedProgressLeaf",
-                "HistoricalDecisionStoreProgressLeaf",
-                "HistoricalDecisionValidateProgressLeaf",
-                "HistoricalDecisionApplyProgressLeaf",
-            ),
-        ),
-        "HistoricalRecoveryTargetDecisionFromExactCorridor": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalRecoveryTargetDecisionProgressProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "FairHistoricalCommitCertificateDiscoveryFromPersistence",
-                "HistoricalCommitCertificateDiscoveryReadinessFromClock",
-                "HistoricalActiveCommitCertificateRequestReachesDecision",
-                "HistoricalCommitCertificateDiscoveryOutcome",
-            ),
-        ),
-        "ResponsiveDecisionApplicationFromExactCorridor": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
-            "AsyncSpecAt(initialContext)) "
-            "=> ResponsiveDecisionApplicationProgressProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves",
-                "ApplicationCompletionProgressProperty",
-                "ResponsiveDecisionServiceOwnershipProperty",
-                "AsyncSpecAlwaysUsesFixedResponsiveVoters",
-            ),
-        ),
-        "HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
-            "AsyncSpecAt(initialContext)) "
-            "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalRecoveryAsyncTemporalPrerequisites( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "HistoricalRecoveryTargetDecisionFromExactCorridor",
-                "ResponsiveDecisionApplicationFromExactCorridor",
-            ),
-        ),
-        "HistoricalLockedBodyRecoveryConeComposesFromExactLeaves": (
-            "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
-            "/\\ HistoricalLockedBodyRecoveryConeLeafProperties( "
-            "AsyncSpecAt(initialContext)) "
-            "=> HistoricalLockedBodyRecoveryConeProperty( "
-            "AsyncSpecAt(initialContext))",
-            (
-                "AsyncSpecAlwaysHistoricalLockedBodyRecoveryStage",
-                "HistoricalLockedCommitCarrierRecoveryProgressLeaf",
-                "HistoricalLockedRestartRecoveryProgressLeaf",
-                "HistoricalLockedFetchRecoveryProgressLeaf",
-                "HistoricalLockedRequestCandidateProgressLeaf",
-                "HistoricalLockedActiveRequestProgressLeaf",
-                "HistoricalLockedCertifiedFetchProgressLeaf",
-                "HistoricalLockedStoreRecoveryProgressLeaf",
-                "HistoricalLockedValidateRecoveryProgressLeaf",
-                "HistoricalLockedBodyRecoveryStageInvariant",
-                "HistoricalLockedBodyRecoveryOutcome",
-                "PTL",
-            ),
-        ),
-    }
-
-    for symbol, (exact_statement, proof_tokens) in theorem_contracts.items():
-        extracted = _top_level_theorem_body(
-            raw_source, symbol, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(f"{path}: missing Async historical theorem {symbol}")
-            continue
-        body, line = extracted
-        parts = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )
-        statement = " ".join(parts[0].split())
-        if statement != exact_statement:
-            errors.append(
-                f"{path}:{line}: {symbol} must state only "
-                f"{exact_statement!r}; found {statement!r}"
-            )
-        proof = parts[1] if len(parts) == 2 else ""
-        missing = tuple(
-            token
-            for token in proof_tokens
-            if not _tla_dependency_present(proof, token)
-        )
-        vacuous = re.search(
-            r"(?:\bASSUME\s+FALSE\b|\bPROVE\s+TRUE\b|\bBY\s+TRUE\b)",
-            proof,
-        )
-        if len(parts) != 2 or missing or vacuous is not None:
-            errors.append(
-                f"{path}:{line}: {symbol} proof must retain exact historical "
-                "dependencies without a vacuous proof; "
-                f"missing={missing!r}, vacuous={vacuous is not None}, "
-                f"has_proof={len(parts) == 2}"
-            )
-
-    return errors
-
-
-def _persistent_recovery_cut_source_fidelity_errors(
-    repo_root: Path = ROOT_DIR,
-) -> list[str]:
-    """Bind crash-safe producer and live leader-wire recovery cuts to Rust."""
-
-    base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
-    paths = {
-        "adapter": base / "v2.rs",
-        "runtime": base / "v2_runtime.rs",
-        "effects": base / "v2_effects.rs",
-        "store": base / "serviced_candidate_store.rs",
-        "ingress": base / "mod.rs",
-        "worker": base / "v2_worker.rs",
-        "formal": repo_root
-        / "formal"
-        / "sumeragi_v2"
-        / "SumeragiV2AsyncNetwork.tla",
-    }
-    errors: list[str] = []
-    for path in paths.values():
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: persistent recovery-cut source must be a regular file"
-            )
-    if errors:
-        return errors
-
-    sources = {
-        name: path.read_text(encoding="utf-8") for name, path in paths.items()
-    }
-
-    def require_context_item(
-        source_name: str,
-        item_name: str,
-        context: tuple[tuple[str, ...], ...],
-        description: str,
-    ) -> RustItem | None:
-        path = paths[source_name]
-        matches = [
-            item
-            for item in rust_items(sources[source_name], item_name)
-            if item.brace_context == context
-        ]
-        if len(matches) != 1:
-            errors.append(
-                f"{path}: require exactly one {description} item {item_name} "
-                f"in context {context!r}; found {len(matches)}"
-            )
-            return None
-        return matches[0]
-
-    adapter_context = (("impl", "SumeragiV2Adapter"),)
-    runtime_context = (
-        ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
-    )
-    executor_context = (
-        (
-            "impl",
-            "<",
-            "R",
-            ":",
-            "EffectRuntime",
-            ">",
-            "V2EffectExecutor",
-            "<",
-            "R",
-            ">",
-        ),
-    )
-    store_context = (("impl", "LeaderWireLifecycleStoreGate"),)
-    ingress_context = (("impl", "FairV2Ingress"),)
-    worker_services_context = (
-        ("impl", "V2EffectServices", "for", "ProductionV2Services"),
-    )
-
-    persist_release = require_context_item(
-        "adapter",
-        "persist_unrecorded_producer_releases",
-        adapter_context,
-        "atomic persistent producer release",
-    )
-    for sequence, description in (
-        (
-            """
-if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
-    return Ok(());
-}
-""",
-            "producer release must not resurrect an epoch reclaimed by durable Decision",
-        ),
-        (
-            """
-if !addresses.insert(token.address) {
-    return Err(self.fail_serviced_candidate_store(
-        "one producer address had multiple simultaneous release authorities"
-            .to_owned(),
-    ));
-}
-""",
-            "producer release must reject duplicate durable addresses",
-        ),
-        (
-            """
-if current.status() != ProducerContinuationStatus::Reserved
-    || current.identity().address() != token.address
-    || self.durable_producer_continuations.get(&token.address) != Some(current)
-    || self.pending_producer_handoffs.contains_key(&token.address)
-{
-""",
-            "producer release must exact-match process and durable aliases before mutation",
-        ),
-        (
-            """
-let process_previous = self.producer_continuations.clone();
-let durable_previous = self.durable_producer_continuations.clone();
-let dormant_previous = self.restored_dormant_producer_continuations.clone();
-let handoffs_previous = self.pending_producer_handoffs.clone();
-""",
-            "producer release must retain one complete rollback image",
-        ),
-        (
-            """
-if let Err(reason) = self
-    .serviced_candidate_store
-    .persist_with_producer_continuations(
-        &self.durable_serviced_candidates,
-        &self.durable_producer_continuations,
-        self.serviced_candidates_decision_reclaimed,
-    )
-{
-    self.producer_continuations = process_previous;
-    self.durable_producer_continuations = durable_previous;
-    self.restored_dormant_producer_continuations = dormant_previous;
-    self.pending_producer_handoffs = handoffs_previous;
-""",
-            "failed producer persistence must roll every alias back",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["adapter"], persist_release, sequence, description, errors
-        )
-
-    deferred_release = require_context_item(
-        "adapter",
-        "release_deferred_producer_continuations_before_owner_removal",
-        adapter_context,
-        "persist-before-remove Busy producer release",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        deferred_release,
-        """
-let active = self.all_deferred_admission_ordinals();
-if !retiring.is_subset(&active)
-    || !self
-        .deferred_producer_continuations
-        .keys()
-        .all(|ordinal| active.contains(ordinal))
-{
-""",
-        "deferred release must retain one exact Busy owner for every producer",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        deferred_release,
-        """
-self.persist_unrecorded_producer_releases(&tokens)?;
-for ordinal in retiring {
-    self.deferred_producer_continuations.remove(ordinal);
-}
-""",
-        "deferred release must persist the batch before dropping ownership aliases",
-        errors,
-    )
-
-    retire_deferred_body = require_context_item(
-        "adapter",
-        "retire_deferred_body_available",
-        adapter_context,
-        "exact deferred BodyAvailable retirement",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        retire_deferred_body,
-        """
-self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
-let before = self.deferred_completions.len();
-self.deferred_completions.retain(|input| !matches(input));
-""",
-        "deferred BodyAvailable retirement must persist before queue removal",
-        errors,
-    )
-
-    retire_deferred_pipeline = require_context_item(
-        "adapter",
-        "retire_deferred_body_pipeline_completions",
-        adapter_context,
-        "transactional deferred body-pipeline retirement",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        retire_deferred_pipeline,
-        """
-if retiring.len() != retirements.len() {
-    return Err(self.fail_serviced_candidate_store(
-        "one deferred body occurrence occupied multiple serialized queues".to_owned(),
-    ));
-}
-self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
-""",
-        "pipeline retirement must reject duplicate owners before persistent release",
-        errors,
-    )
-
-    frontier = require_context_item(
-        "adapter",
-        "reconcile_restored_reserved_producer_frontier",
-        adapter_context,
-        "restart-only Reserved producer frontier reconciliation",
-    )
-    for sequence, description in (
-        (
-            """
-if self.reducer.durable_state().decision().is_some() {
-    return Ok(());
-}
-let current_view = self.reducer.current_tag().view();
-let protected = self.reducer.durable_state().locked().map(|certificate| {
-""",
-            "restart reconciliation must derive its cut from replayed WAL state",
-        ),
-        (
-            """
-if candidate.source_view() > current_view {
-    return Err(self.fail_serviced_candidate_store(
-        "restored producer originated beyond the replayed durable view".to_owned(),
-    ));
-}
-if candidate.source_view() == current_view {
-    continue;
-}
-""",
-            "restart reconciliation must reject the future and retain current-view producers",
-        ),
-        (
-            """
-let protects_body_pipeline = protected.is_some_and(|(view, subject)| {
-    candidate.source_view() == view
-        && candidate.target() == Some(subject)
-        && matches!(
-            stage,
-            ServicedCandidateStage::LocalProposalReady
-                | ServicedCandidateStage::BodyAvailable
-                | ServicedCandidateStage::BodyStored
-                | ServicedCandidateStage::ValidationCompleted
-        )
-});
-if !protects_body_pipeline {
-    retiring.push(address);
-}
-""",
-            "only the exact protected-lock body pipeline may survive an older restart frontier",
-        ),
-        (
-            """
-if let Err(reason) = self
-    .serviced_candidate_store
-    .persist_with_producer_continuations(
-        &self.durable_serviced_candidates,
-        &self.durable_producer_continuations,
-        self.serviced_candidates_decision_reclaimed,
-    )
-{
-    self.producer_continuations = process_previous;
-    self.durable_producer_continuations = durable_previous;
-    self.restored_dormant_producer_continuations = dormant_previous;
-""",
-            "restart frontier pruning must roll back all aliases on persistence failure",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["adapter"], frontier, sequence, description, errors
-        )
-
-    adapter_open = require_context_item(
-        "adapter",
-        "open_with_aggregator_and_publication_with_capacity",
-        adapter_context,
-        "capacity-bound restart constructor",
-    )
-    _require_rust_item_context(
-        paths["adapter"],
-        adapter_open,
-        adapter_context,
-        "capacity-bound restart constructor",
-        errors,
-        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        adapter_open,
-        """
-adapter.reconcile_restored_reserved_producer_frontier()?;
-adapter.reclaim_serviced_candidates()?;
-let replay_tag = adapter.reducer.current_tag();
-""",
-        "restart frontier pruning must precede runtime replay and dormant capacity installation",
-        errors,
-    )
-
-    persistent_deferred = require_context_item(
-        "adapter",
-        "deferred_body_available_has_persistent_producer",
-        adapter_context,
-        "Busy-deferred persistent body-owner classifier",
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        persistent_deferred,
-        """
-if record.status() != ProducerContinuationStatus::Reserved
-    || record.source_class() != ProducerContinuationSourceClass::VolatileBody
-    || record.identity().address() != address
-    || record.identity().stage() != ServicedCandidateStage::BodyAvailable as u8
-    || self.durable_producer_continuations.get(&address) != Some(record)
-""",
-        "persistent deferred body classification must exact-match the stage-7 durable root",
-        errors,
-    )
-
-    persistent_body = require_context_item(
-        "runtime",
-        "body_available_has_persistent_producer",
-        runtime_context,
-        "serialized persistent body-owner classifier",
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        persistent_body,
-        """
-if ingress && deferred {
-    self.latch_fail_closed("one body completion retained two persistent producer carriers");
-    return Err(
-        "Sumeragi v2 body completion has duplicate persistent producer ownership"
-            .to_owned(),
-    );
-}
-Ok(ingress || deferred)
-""",
-        "one serialized body owner may have at most one persistent producer carrier",
-        errors,
-    )
-
-    rebind_body = require_context_item(
-        "runtime",
-        "rebind_body_available",
-        runtime_context,
-        "persistent-root-preserving body rebind",
-    )
-    for sequence, description in (
-        (
-            """
-let source_persistent =
-    self.body_available_has_persistent_producer(previous, manifest)?;
-let destination_persistent =
-    self.body_available_has_persistent_producer(rebound, manifest)?;
-if source_persistent && destination_persistent {
-""",
-            "rebind must classify both persistent roots before mutation",
-        ),
-        (
-            """
-if source_persistent {
-    if !self.retire_body_available(rebound, manifest)? {
-""",
-            "a sole persistent source must retire the ordinary destination",
-        ),
-        (
-            """
-let ingress = self
-    .ingress
-    .rebind_canonical_body_available(previous, rebound, manifest);
-let deferred = self
-    .driver
-    .rebind_deferred_body_available(previous, rebound, manifest);
-ingress.saturating_add(deferred)
-} else {
-""",
-            "a sole persistent source must be retagged rather than retired",
-        ),
-        (
-            """
-let deferred = match self
-    .driver
-    .retire_deferred_body_available(previous, manifest)
-{
-""",
-            "a nonpersistent source must persist deferred release before coalescence",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["runtime"], rebind_body, sequence, description, errors
-        )
-
-    retire_fetch_parent = require_context_item(
-        "runtime",
-        "retire_restored_body_fetch_parent",
-        runtime_context,
-        "pre-BodyAvailable restored Fetch retirement",
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        retire_fetch_parent,
-        """
-let AdapterEffect::FetchBody {
-    round,
-    subject,
-    manifest,
-    ..
-} = effect
-else {
-""",
-        "restored Fetch retirement must extract only exact FetchBody coordinates",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        retire_fetch_parent,
-        """
-if !ownership.exactly_binds_adapter_effect(effect) {
-    self.latch_fail_closed(
-        "restored body-fetch retirement changed its exact effect binding",
-    );
-""",
-        "restored Fetch retirement must exact-match the bound Fetch effect",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["runtime"],
-        retire_fetch_parent,
-        """
-match self.driver.retire_restored_body_fetch_parent(
-    *round,
-    *subject,
-    manifest.as_ref()
-) {
-""",
-        "restored Fetch retirement must delegate durable parent lookup to the adapter",
-        errors,
-    )
-
-    adapter_fetch_parent = require_context_item(
-        "adapter",
-        "retire_restored_body_fetch_parent",
-        adapter_context,
-        "durable coordinate-bound Fetch-parent retirement",
-    )
-    for sequence, description in (
-        (
-            """
-if self.selected_producer_lifecycle.is_some()
-    || round.context_id != self.wire_context.id()
-    || round.height != self.wire_context.height
-{
-""",
-            "Fetch-parent retirement must retain immutable height geometry",
-        ),
-        (
-            """
-manifest.validate(&self.wire_context)?;
-if manifest.round != round || manifest.subject != subject {
-    return Err(AdapterError::DurableBodyMismatch);
-}
-""",
-            "a supplied Fetch manifest must exact-match its round and subject",
-        ),
-        (
-            """
-let [(address, record)] = coordinate_matches.as_slice() else {
-    return match coordinate_matches.len() {
-        0 => Ok(false),
-        _ => Err(self.fail_serviced_candidate_store(
-""",
-            "manifest-less Fetch-parent lookup must select at most one dormant stage-7 record",
-        ),
-        (
-            """
-if expected_candidate.is_some_and(|expected| record.identity().candidate() != expected) {
-    return Err(self.fail_serviced_candidate_store(
-        "restored body-fetch manifest changed its persisted producer identity".to_owned(),
-    ));
-}
-self.persist_restored_body_producer_retirement(*address, record)?;
-""",
-            "Fetch-parent retirement must bind full manifest identity before persistence",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["adapter"], adapter_fetch_parent, sequence, description, errors
-        )
-
-    commit_fetch_retirement = require_context_item(
-        "effects",
-        "commit_pending_fetch_retirement",
-        executor_context,
-        "terminal pending-Fetch retirement",
-    )
-    _require_rust_token_sequence(
-        paths["effects"],
-        commit_fetch_retirement,
-        """
-if !retired_completion {
-    let effect = plan.pending.task.adapter_effect();
-    self.runtime
-        .retire_restored_body_fetch_parent(&effect, plan.pending.task.ownership())
-        .map_err(EffectExecutorError::Runtime)?;
-}
-let work_id = plan.pending.task.id();
-let removed = self.pending_fetches.remove(&work_id);
-""",
-        "a terminal Fetch without a token must retire its restored parent before P/Q ownership",
-        errors,
-    )
-
-    production_fetch_parent_retirement = require_context_item(
-        "effects",
-        "retire_restored_body_fetch_parent",
-        (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),),
-        "production restored Fetch-parent retirement delegate",
-    )
-    _require_rust_token_sequence(
-        paths["effects"],
-        production_fetch_parent_retirement,
-        """
-SerializedV2Runtime::retire_restored_body_fetch_parent(self, effect, ownership)
-""",
-        "production EffectRuntime must not use the ordinary no-op Fetch-parent default",
-        errors,
-    )
-
-    authority_advance = _require_rust_item(
-        paths["store"], sources["store"], "advance_view", errors
-    )
-    _require_rust_item_context(
-        paths["store"],
-        authority_advance,
-        (("impl", "LeaderWireRecoveryAuthority"),),
-        "monotone leader-wire view authority",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        authority_advance,
-        """
-if durable_view < self.durable_view {
-    return Err("leader-wire recovery authority regressed its durable view".to_owned());
-}
-""",
-        "leader-wire view authority must reject regression",
-        errors,
-    )
-
-    store_cut = require_context_item(
-        "store",
-        "advance_recovery_cut",
-        store_context,
-        "durable leader-wire live recovery cut",
-    )
-    for sequence, description in (
-        (
-            """
-if !next.matches_geometry(self.context_id, self.height, self.owner) {
-    return Err("leader-wire recovery cut changed immutable geometry".to_owned());
-}
-""",
-            "leader-wire cut must retain frozen geometry",
-        ),
-        (
-            """
-if !next.monotonically_extends(state.recovery_authority) {
-    return Err("leader-wire recovery cut is not monotone".to_owned());
-}
-""",
-            "leader-wire cut must monotonically extend the WAL authority",
-        ),
-        (
-            """
-if retiring != *expected_dormant_slots || !retiring.is_subset(&state.replay_dormant) {
-""",
-            "durable and mirrored obsolete Dormant sets must be exactly equal",
-        ),
-        (
-            """
-let previous = state.clone();
-state.recovery_authority = next;
-for slot in &retiring {
-""",
-            "leader-wire cut must retain one complete rollback image before removal",
-        ),
-        (
-            """
-if !retiring.is_empty()
-    && let Err(error) = self.persist_locked(&state)
-{
-    *state = previous;
-    return Err(error);
-}
-""",
-            "failed leader-wire persistence must restore authority and records",
-        ),
-    ):
-        _require_rust_token_sequence(
-            paths["store"], store_cut, sequence, description, errors
-        )
-
-    admit_ingress = require_context_item(
-        "store",
-        "admit_ingress",
-        store_context,
-        "durable leader-wire ingress admission",
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        admit_ingress,
-        """
-if state.recovery_authority.obsoletes(&token) {
-    return Err(
-        "leader-wire admission is obsolete under the durable recovery cut".to_owned(),
-    );
-}
-""",
-        "durable admission must reject an obsolete identity before lookup or mutation",
-        errors,
-    )
-
-    fair_admission = _require_rust_item(
-        paths["ingress"],
-        sources["ingress"],
-        "fair_v2_ingress_admit_leader_wire",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["ingress"],
-        fair_admission,
-        """
-if gate
-    .identity_is_obsolete(&identity)
-    .map_err(|_| FairV2IngressLeaderWireAdmissionError::Exhausted)?
-{
-    return Err(FairV2IngressLeaderWireAdmissionError::Rejected);
-}
-let durable_exact = gate
-    .lookup_exact(&identity, &slot)
-""",
-        "fair ingress must reject below-cut wire before durable exact lookup",
-        errors,
-    )
-
-    fair_cut = require_context_item(
-        "ingress",
-        "advance_leader_wire_recovery_cut",
-        ingress_context,
-        "gate-first fair-ingress recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["ingress"],
-        fair_cut,
-        """
-gate.advance_recovery_cut(next, &retiring)?;
-for slot in &retiring {
-    let removed = state
-        .leader_wire_lifecycles
-        .remove(slot)
-""",
-        "persistent gate publication must precede mirror pruning",
-        errors,
-    )
-
-    entered_view = require_context_item(
-        "worker",
-        "entered_view",
-        worker_services_context,
-        "production certified-view recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        entered_view,
-        """
-let next_recovery_authority = self
-    .leader_wire_recovery_authority
-    .advance_view(tag.view())?;
-self.leader_wire_ingress
-    .advance_leader_wire_recovery_cut(next_recovery_authority)?;
-self.leader_wire_recovery_authority = next_recovery_authority;
-""",
-        "certified EnterView must publish the gate cut before exposing its authority",
-        errors,
-    )
-
-    finish_decision = require_context_item(
-        "worker",
-        "finish_decision_serve_reconciliation",
-        worker_services_context,
-        "production durable-Decision recovery cut",
-    )
-    _require_rust_token_sequence(
-        paths["worker"],
-        finish_decision,
-        """
-if decided_subject.is_some() {
-    let next = self.leader_wire_recovery_authority.with_durable_decision();
-    self.leader_wire_ingress
-        .advance_leader_wire_recovery_cut(next)?;
-    self.leader_wire_recovery_authority = next;
-}
-""",
-        "durable Decision must publish the all-wire gate cut before service reconciliation",
-        errors,
-    )
-
-    regression_contracts = (
-        (
-            "adapter",
-            "failed_busy_parent_retirement_retains_queue_and_durable_owner",
-            "restores the exact queue and durable producer after injected failure",
-        ),
-        (
-            "adapter",
-            "strict_view_advance_retains_live_producer_admission_until_owner_release",
-            "distinguishes live handoff retention from restart-only frontier pruning",
-        ),
-        (
-            "adapter",
-            "restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline",
-            "retains every exact protected-lock body-pipeline stage",
-        ),
-        (
-            "adapter",
-            "restart_frontier_rejects_reserved_producer_beyond_the_durable_view",
-            "rejects a future-view producer during replay reconciliation",
-        ),
-        (
-            "adapter",
-            "durable_decision_release_does_not_restore_stale_process_only_predecessor",
-            "keeps the canonical empty producer epoch after durable Decision",
-        ),
-        (
-            "adapter",
-            "body_rebind_coalescence_preserves_the_only_persistent_producer",
-            "keeps the sole persistent rebind root across a second restart",
-        ),
-        (
-            "runtime",
-            "body_available_rebind_coalesces_exact_busy_deferred_destination_owner",
-            "retains a persistent destination while retiring an ordinary source",
-        ),
-        (
-            "runtime",
-            "body_available_rebind_rejects_two_persistent_roots_before_mutation",
-            "rejects two durable roots before either serialized owner changes",
-        ),
-        (
-            "store",
-            "leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone",
-            "checks live Dormant-only cut, rollback, and high-water retention",
-        ),
-        (
-            "worker",
-            "entered_view_advances_live_leader_wire_recovery_cut",
-            "rejects stale wire after live EnterView",
-        ),
-        (
-            "worker",
-            "durable_decision_advances_live_leader_wire_recovery_cut",
-            "rejects every wire after durable Decision",
-        ),
-    )
-    for source_name, item_name, _description in regression_contracts:
-        _require_rust_item(
-            paths[source_name], sources[source_name], item_name, errors
-        )
-
-    live_cut_regression = _require_rust_item(
-        paths["store"],
-        sources["store"],
-        "leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-assert!(restored.records().is_empty(), "{label}");
-assert_eq!(restored.last_admission_ordinal(), 11, "{label}");
-assert_eq!(restored.scheduler_ordinal_high_watermark(), 73, "{label}");
-assert!(
-    gate.identity_is_obsolete(&token.identity)
-        .expect("inspect live recovery cut"),
-""",
-        "live leader-wire regression must retain both high-waters and reject the retired identity",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-assert!(
-    gate.advance_recovery_cut(regressed, &BTreeSet::new())
-        .is_err(),
-    "{label} cannot regress durable view/Decision authority"
-);
-""",
-        "live leader-wire regression must reject view and Decision regression",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-for retained_status in [
-    LeaderWireLifecycleStatus::Ingress,
-    LeaderWireLifecycleStatus::Runtime,
-] {
-""",
-        "live leader-wire regression must retain active Ingress and Runtime owners",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["store"],
-        live_cut_regression,
-        """
-std::fs::create_dir(&gate.path).expect("block recovery-cut publication");
-assert!(
-    gate.advance_recovery_cut(
-""",
-        "live leader-wire regression must inject and observe persistent-cut rollback",
-        errors,
-    )
-
-    stage_seven_regression = _require_rust_item(
-        paths["adapter"],
-        sources["adapter"],
-        "restored_body_available_terminal_retirement_is_persistent_before_token_release",
-        errors,
-    )
-    _require_rust_token_sequence(
-        paths["adapter"],
-        stage_seven_regression,
-        """
-assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
-assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
-""",
-        "stage-7 regression must cover manifest-bound and manifest-less terminal Fetch retirement before reservation",
-        errors,
-    )
-
-    formal_source = sources["formal"]
-    formal_contracts = {
-        "AsyncLeaderWireRecoveryCutObsoletesItem": (
-            "DeliveryView(item) < nodeView[item.envelope.recipient]",
-            "NodeHasDecision(item.envelope.recipient)",
-        ),
-        "AsyncLeaderWireAtomicAdmissionAllows": (
-            "~AsyncLeaderWireRecoveryCutObsoletesItem(item)",
-        ),
-        "AsyncLeaderWireLifecycleRecoveryCutObsolete": (
-            "AsyncLeaderWireLifecycleDormant(record)",
-            "record.view < nodeView[record.recipient]",
-            "NodeHasDecision(record.recipient)",
-        ),
-        "AsyncLeaderWireLifecycleCanTerminal": (
-            "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
-        ),
-        "RetireLeaderWireLifecycleSlot": (
-            "IF AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
-            "THEN asyncLeaderWireLifecycles \\ {record}",
-        ),
-    }
-    for operator, required in formal_contracts.items():
-        extracted = _top_level_operator_body(
-            formal_source, operator, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(
-                f"{paths['formal']}: missing persistent recovery-cut operator {operator}"
-            )
-            continue
-        body, line = extracted
-        for token in required:
-            if token not in body:
-                errors.append(
-                    f"{paths['formal']}:{line}: {operator} must retain "
-                    f"persistent recovery-cut token {token!r}"
-                )
-
-    highwater_theorem = _top_level_theorem_body(
-        formal_source,
-        "LeaderWireRecoveryCutRetainsOrdinalHighwaters",
-        preserve_string_contents=True,
-    )
-    if highwater_theorem is None:
-        errors.append(
-            f"{paths['formal']}: missing leader-wire recovery-cut high-water theorem"
-        )
-    else:
-        body, line = highwater_theorem
-        for token in (
-            "RetireLeaderWireLifecycleSlot(slot)",
-            "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
-            "AsyncNextIngressPhysicalOrdinal(node)' =",
-            "AsyncNextCandidateLifecycleOrdinal(node)' =",
-        ):
-            if token not in body:
-                errors.append(
-                    f"{paths['formal']}:{line}: leader-wire recovery-cut "
-                    f"high-water theorem must retain token {token!r}"
-                )
-
     return errors

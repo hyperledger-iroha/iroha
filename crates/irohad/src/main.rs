@@ -12019,7 +12019,7 @@ impl core::fmt::Display for ConfigError {
             #[cfg(not(feature = "embedded-soracloud-runtime"))]
             Self::SoracloudRuntimeFeatureRequired => write!(
                 f,
-            "`soracloud_runtime.production_mode = true` requires building iroha3d with the `embedded-soracloud-runtime` feature"
+                "`soracloud_runtime.production_mode = true` requires building iroha3d with the `embedded-soracloud-runtime` feature"
             ),
             Self::SorafsStorageComplianceRequired => write!(
                 f,

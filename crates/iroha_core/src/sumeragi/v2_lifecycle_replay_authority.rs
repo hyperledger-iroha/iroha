@@ -15,8 +15,8 @@ use crate::sumeragi::{
     v2::{
         AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
         PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
-        RecoveredWalFrameIdentity, RegisteredPrepareInvalidBodyReportCapability, SignRequest,
-        VerifiedHeightContext,
+        RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
+        RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
     },
     v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
     v2_certified_serve_payload_store::{
@@ -28,6 +28,7 @@ use crate::sumeragi::{
     v2_core::EventTag,
     v2_runtime::{
         LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
         RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
         RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
     },
@@ -496,6 +497,61 @@ pub(crate) struct RecoveredWalVoteReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
 }
 
+/// Opaque adapter-authenticated authority for one WAL-owned follow-on Vote Sign.
+///
+/// The exact unsigned Sign, authenticated WAL owner, canonical replay evidence,
+/// and validated body receipt remain inseparable. This is deliberately inert
+/// until combined with the signed Broadcast parent; the live transaction and
+/// cold recovery path must retain the resulting pair as one authority.
+#[must_use = "a recovered follow-on Sign must remain sealed to its WAL and body authority"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteSealV1 {
+    wal_identity: RecoveredWalFrameIdentity,
+    replay_evidence: RecoveredWalVoteReplayEvidenceV1,
+    effect: AdapterEffect,
+    validated: ValidatedBodyReceipt,
+}
+
+/// Complete replay-authorized projection of one recovered follow-on Vote Sign.
+///
+/// The consumed adapter seal remains attached to its reconstructed pending
+/// owner and canonical standalone admission. No effect, pending, WAL, body,
+/// candidate, key, or parts accessor exists. Registry publication consumes it
+/// only through the dedicated private affine permit.
+#[must_use = "a recovered follow-on Sign projection must enter its combined registry transition"]
+pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+    seal: RecoveredLifecycleNextWalVoteSealV1,
+    pending: PendingRuntimeEffectBinding,
+    candidate: CandidateAdmission,
+}
+
+/// Closed signed-Broadcast successor of one recovered follow-on WAL Vote.
+///
+/// The signed effect, inherited pending owner, and replay-authorized admission
+/// remain inseparable. Only WAL recovery can unpack this projection, using its
+/// private affine permit, after the adapter-authenticated signature has been
+/// rejoined to the exact recovered Vote carrier.
+#[must_use = "a recovered next-WAL-Vote Broadcast must rejoin WAL-owned publication"]
+pub(super) struct RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
+    effect: AdapterEffect,
+    pending: PendingRuntimeEffectBinding,
+    candidate: CandidateAdmission,
+}
+
+impl RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
+    /// Release the closed projection only to the WAL module's private permit.
+    pub(super) fn consume_for_recovered_wal(
+        self,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> (
+        AdapterEffect,
+        PendingRuntimeEffectBinding,
+        CandidateAdmission,
+    ) {
+        (self.effect, self.pending, self.candidate)
+    }
+}
+
 /// Canonical structural evidence for a recovered ProposalIntent or TimeoutIntent Sign.
 ///
 /// This is inert, cloneable evidence; executable authority remains in the
@@ -912,6 +968,54 @@ impl RecoveredDecisionApplyReplayLineageV1 {
             ) == Some(true)
     }
 
+    /// Project only the first body-backed Store successor of the recovered Fetch.
+    ///
+    /// This does not require or fabricate a validation result. The full replay
+    /// family remains sealed solely so later cold recovery can prove that the
+    /// Store row still descends from the original payload-free WAL Decision.
+    pub(super) fn project_recovered_fetch_store_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        receipt: &DurableBodyReceipt,
+        store_effect: &AdapterEffect,
+        store_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        let context = super::projection::lifecycle_context(verified.context());
+        if receipt.context_id() != verified.context().id() || !self.is_stage_closed(context) {
+            return None;
+        }
+        let payload =
+            DurablePayloadReference::BodyFrame(durable_body_frame_reference(context, receipt)?);
+        let authority = self
+            .body
+            .authority_for(context, LifecycleStageKind::StoreBody)?;
+        let candidate = candidate_from_authorized_projection(
+            context,
+            super::projection::authority_free_admission_projection(
+                context,
+                verified,
+                store_effect,
+                store_pending,
+            )
+            .ok()?,
+            payload,
+            authority,
+        )?;
+        (candidate.work_class == LifecycleWorkClass::Store
+            && candidate.stage.kind() == LifecycleStageKind::StoreBody
+            && candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.payload == payload
+            && candidate.replay_authority_is_exact(context)
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::FetchToStore,
+                &self.fetch,
+                DurablePayloadReference::None,
+                &candidate.replay_authority,
+                candidate.payload,
+            ) == Some(true))
+        .then_some(candidate)
+    }
+
     /// Consume the inert replay family into the sole fixed reducer-derived
     /// Store/Validate/Apply logical lineage.
     ///
@@ -1006,6 +1110,22 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
             && record.durable_payload() == Some(candidate.payload)
             && record.continuation() == Some(continuation)
             && record.replay_matches_candidate(candidate)
+    }
+
+    /// Construct one exact logical lineage for ledger-local restart tests.
+    #[cfg(test)]
+    pub(super) fn from_candidates_for_test(
+        fetch: LifecycleReplayAuthorityV1,
+        store: CandidateAdmission,
+        validate: CandidateAdmission,
+        apply: CandidateAdmission,
+    ) -> Self {
+        Self {
+            fetch,
+            store,
+            validate,
+            apply,
+        }
     }
 
     /// Recheck the complete fixed body lineage without releasing a candidate.
@@ -1151,6 +1271,88 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         Some([store, validate, apply])
     }
 
+    /// Advance one already durable live Store and append its exact Validate/Apply tail.
+    ///
+    /// The Store ordinal can precede unrelated durable rows: its typed
+    /// continuation, rather than physical adjacency, binds the newly appended
+    /// Validate child. Validate and Apply are still adjacent because this
+    /// restart repair publishes both in one LedgerV1 frame.
+    pub(super) fn successor_records_after_live_store(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+        validate_ordinal: u128,
+        apply_ordinal: u128,
+    ) -> Option<[LifecycleLedgerRecordV1; 3]> {
+        if !self.exactly_matches_live_store_record(owner, store)
+            || store.ordinal() >= validate_ordinal
+            || validate_ordinal.checked_add(1) != Some(apply_ordinal)
+        {
+            return None;
+        }
+        let store = LifecycleLedgerRecordV1::new(
+            self.store.key,
+            owner,
+            store.ordinal(),
+            self.store.work_class,
+            self.store.stage,
+            Some(TerminalOutcome::Advanced),
+            self.store.reconstruction_source,
+            self.store.payload,
+            self.store.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::StoreToValidate,
+                validate_ordinal,
+            ),
+        )
+        .ok()?;
+        let validate = LifecycleLedgerRecordV1::new(
+            self.validate.key,
+            owner,
+            validate_ordinal,
+            self.validate.work_class,
+            self.validate.stage,
+            Some(TerminalOutcome::Advanced),
+            self.validate.reconstruction_source,
+            self.validate.payload,
+            self.validate.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                apply_ordinal,
+            ),
+        )
+        .ok()?;
+        let apply = LifecycleLedgerRecordV1::new(
+            self.apply.key,
+            owner,
+            apply_ordinal,
+            self.apply.work_class,
+            self.apply.stage,
+            None,
+            self.apply.reconstruction_source,
+            self.apply.payload,
+            self.apply.replay_authority.clone(),
+            super::schema::DurableContinuation::None,
+        )
+        .ok()?;
+        Some([store, validate, apply])
+    }
+
+    /// Compare the exact crash-cut Store before its validation successor exists.
+    pub(super) fn exactly_matches_live_store_record(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        Self::candidate_matches_record(
+            &self.store,
+            store,
+            owner,
+            None,
+            super::schema::DurableContinuation::None,
+        )
+    }
+
     /// Compare all three successor rows, including the final live Apply.
     pub(super) fn exactly_matches_successor_records(
         &self,
@@ -1159,7 +1361,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         validate: &LifecycleLedgerRecordV1,
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
-        store.ordinal().checked_add(1) == Some(validate.ordinal())
+        store.ordinal() < validate.ordinal()
             && validate.ordinal().checked_add(1) == Some(apply.ordinal())
             && Self::candidate_matches_record(
                 &self.store,
@@ -1204,7 +1406,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         validate: &LifecycleLedgerRecordV1,
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
-        store.ordinal().checked_add(1) == Some(validate.ordinal())
+        store.ordinal() < validate.ordinal()
             && validate.ordinal().checked_add(1) == Some(apply.ordinal())
             && Self::candidate_matches_record(
                 &self.store,
@@ -1393,6 +1595,565 @@ impl RecoveredWalVoteReplayEvidenceV1 {
             self.authority.clone(),
         )
     }
+
+    /// Recompute and compare one recovered Vote candidate without releasing it.
+    pub(in crate::sumeragi) fn project_recovered_vote_candidate_for_comparison(
+        &self,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        expected: &CandidateAdmission,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } = effect
+        else {
+            return false;
+        };
+        if !self.exactly_matches_recovered_vote(locator, *tag, vote) {
+            return false;
+        }
+        let active_context = super::projection::lifecycle_context(verified.context());
+        let Ok(projected) = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            effect,
+            pending,
+        ) else {
+            return false;
+        };
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            DurablePayloadReference::None,
+            self.authority.clone(),
+        )
+        .as_ref()
+            == Some(expected)
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleNextWalVoteSealV1 {
+    /// Seal one exact adapter successor against its authenticated WAL owner and body.
+    ///
+    /// Construction additionally requires the adapter-private one-shot permit,
+    /// so structural replay evidence retained by another recovery path cannot
+    /// independently mint a runnable successor.
+    pub(in crate::sumeragi) fn from_authenticated_adapter(
+        _permit: RecoveredLifecycleNextWalVoteSealPermitV1,
+        wal_identity: RecoveredWalFrameIdentity,
+        replay_evidence: RecoveredWalVoteReplayEvidenceV1,
+        effect: AdapterEffect,
+        validated: ValidatedBodyReceipt,
+    ) -> Option<Self> {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } = &effect
+        else {
+            return None;
+        };
+        let durable = validated.durable();
+        if !vote.signature.is_empty()
+            || !replay_evidence.exactly_matches_recovered_vote(wal_identity, *tag, vote)
+            || durable.context_id() != vote.round.context_id
+            || durable.round() != vote.proposal_round
+            || durable.subject() != vote.subject
+            || validated.execution_commitment() != vote.execution_commitment
+        {
+            return None;
+        }
+        Some(Self {
+            wal_identity,
+            replay_evidence,
+            effect,
+            validated,
+        })
+    }
+
+    /// Compare the complete sealed binding without releasing any authority part.
+    pub(in crate::sumeragi) fn exactly_matches(
+        &self,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        validated: &ValidatedBodyReceipt,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } = effect
+        else {
+            return false;
+        };
+        self.wal_identity.exactly_matches(wal_identity)
+            && self.effect == *effect
+            && self.validated == *validated
+            && self
+                .replay_evidence
+                .exactly_matches_recovered_vote(wal_identity, *tag, vote)
+    }
+
+    /// Recheck the sealed successor against the WAL carrier's verified height.
+    pub(in crate::sumeragi) fn matches_verified_height(
+        &self,
+        verified: &VerifiedHeightContext,
+    ) -> bool {
+        let AdapterEffect::Sign {
+            request: SignRequest::Vote(vote),
+            ..
+        } = &self.effect
+        else {
+            return false;
+        };
+        let durable = self.validated.durable();
+        vote.round.context_id == verified.context().id()
+            && vote.round.height == verified.context().height
+            && usize::try_from(vote.signer)
+                .is_ok_and(|index| index < verified.context().roster.len())
+            && durable.context_id() == verified.context().id()
+            && durable.round() == vote.proposal_round
+            && durable.subject() == vote.subject
+            && self.validated.execution_commitment() == vote.execution_commitment
+    }
+
+    /// Consume this full executable seal into one runtime-authenticated candidate.
+    ///
+    /// Every failure returns the intact seal. The pending owner is reconstructed
+    /// from the opaque WAL locator, and the canonical replay envelope mints the
+    /// admission only after the exact verified height and body binding rejoin.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_candidate_projection(
+        self,
+        permit: RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        candidate_permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+    ) -> Result<RecoveredLifecycleNextWalVoteCandidateProjectionV1, Self> {
+        if !self.wal_identity.is_exact()
+            || !self.matches_verified_height(verified)
+            || !self.exactly_matches(self.wal_identity, &self.effect, &self.validated)
+        {
+            return Err(self);
+        }
+        let Some(pending) = PendingRuntimeEffectBinding::from_exact_recovered_next_wal_vote(
+            &permit,
+            self.wal_identity,
+            &self.effect,
+        ) else {
+            return Err(self);
+        };
+        let Some(candidate) = self.replay_evidence.project_recovered_vote_candidate(
+            candidate_permit,
+            verified,
+            self.wal_identity,
+            &self.effect,
+            &pending,
+        ) else {
+            return Err(self);
+        };
+        let projection = RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+            seal: self,
+            pending,
+            candidate,
+        };
+        if !projection.is_exact(verified) {
+            let RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+                seal,
+                pending: _,
+                candidate: _,
+            } = projection;
+            return Err(seal);
+        }
+        Ok(projection)
+    }
+
+    /// Rejoin the retained body marker to one exact recovered phase-vote repair.
+    ///
+    /// This comparison releases no receipt or replay constituent. It is the
+    /// only phase-parent body oracle used by the combined successor projection.
+    pub(super) fn matches_phase_vote_repair(
+        &self,
+        repair: &super::wal_recovery::DurableAuthenticatedWalVoteLifecycleRepair,
+    ) -> bool {
+        repair.concrete_pair_matches_validation(&self.validated)
+    }
+
+    /// Construct a fully checked adapter-shaped seal for focused runtime tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        wal_identity: RecoveredWalFrameIdentity,
+        tag: EventTag,
+        vote: wire::Vote,
+        validated: ValidatedBodyReceipt,
+    ) -> Option<Self> {
+        let replay_evidence =
+            RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote(wal_identity, tag, &vote)?;
+        let effect = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        };
+        let seal = Self {
+            wal_identity,
+            replay_evidence,
+            effect,
+            validated,
+        };
+        seal.exactly_matches(wal_identity, &seal.effect, &seal.validated)
+            .then_some(seal)
+    }
+
+    /// Substitute only the opaque WAL owner in a focused fail-closed test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn substitute_wal_identity_for_test(
+        &mut self,
+        wal_identity: RecoveredWalFrameIdentity,
+    ) {
+        self.wal_identity = wal_identity;
+    }
+
+    /// Substitute only the executable effect in a focused fail-closed test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn substitute_effect_for_test(&mut self, effect: AdapterEffect) {
+        self.effect = effect;
+    }
+
+    /// Substitute only the retained body authority in a focused fail-closed test.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn substitute_validated_for_test(
+        &mut self,
+        validated: ValidatedBodyReceipt,
+    ) {
+        self.validated = validated;
+    }
+}
+
+impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+    /// Revalidate the full retained executable seal, pending owner, candidate,
+    /// and canonical standalone Ready/Effect geometry.
+    pub(in crate::sumeragi) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        self.seal.wal_identity.is_exact()
+            && self.seal.matches_verified_height(verified)
+            && self.seal.exactly_matches(
+                self.seal.wal_identity,
+                &self.seal.effect,
+                &self.seal.validated,
+            )
+            && self.pending.exactly_binds_adapter_effect(&self.seal.effect)
+            && self
+                .seal
+                .replay_evidence
+                .project_recovered_vote_candidate_for_comparison(
+                    verified,
+                    self.seal.wal_identity,
+                    &self.seal.effect,
+                    &self.pending,
+                    &self.candidate,
+                )
+            && recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
+    }
+
+    /// Clone the exact next Sign only for the WAL module's cold-adapter seal.
+    ///
+    /// The move-only WAL permit prevents this comparison projection from
+    /// becoming a general effect accessor. The full executable seal remains
+    /// owned by this value for the cold registry splice.
+    pub(super) fn project_cold_adapter_next_sign(
+        &self,
+        verified: &VerifiedHeightContext,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> Option<AdapterEffect> {
+        self.is_exact(verified).then(|| self.seal.effect.clone())
+    }
+
+    /// Project the exact signed Broadcast successor without releasing either
+    /// the recovered Vote or the derived executable child.
+    ///
+    /// The adapter-authenticated message must be the retained unsigned Vote
+    /// with only its signature filled, and that signature is rechecked against
+    /// the exact recovered height roster. The returned closed value can be
+    /// unpacked only by WAL recovery's private affine permit.
+    pub(super) fn project_authenticated_signed_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        broadcast: AdapterEffect,
+    ) -> Option<RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1> {
+        let AdapterEffect::Broadcast(message) = &broadcast else {
+            return None;
+        };
+        if !self.is_exact(verified) || verified.verify_consensus_message(message).is_err() {
+            return None;
+        }
+        let pending = self
+            .pending
+            .project_signed_broadcast_successor(&self.seal.effect, &broadcast)?;
+        let candidate = exact_signed_broadcast_successor_candidate(verified, &broadcast, &pending)?;
+        let projection = RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
+            effect: broadcast,
+            pending,
+            candidate,
+        };
+        self.signed_broadcast_successor_is_exact(
+            verified,
+            &projection.effect,
+            &projection.pending,
+            &projection.candidate,
+        )
+        .then_some(projection)
+    }
+
+    /// Recheck a closed signed child against this exact recovered WAL Vote.
+    pub(super) fn signed_broadcast_successor_is_exact(
+        &self,
+        verified: &VerifiedHeightContext,
+        broadcast: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        candidate: &CandidateAdmission,
+    ) -> bool {
+        let AdapterEffect::Broadcast(message) = broadcast else {
+            return false;
+        };
+        self.is_exact(verified)
+            && verified.verify_consensus_message(message).is_ok()
+            && self
+                .pending
+                .project_signed_broadcast_successor(&self.seal.effect, broadcast)
+                .as_ref()
+                == Some(pending)
+            && exact_signed_broadcast_successor_candidate(verified, broadcast, pending).as_ref()
+                == Some(candidate)
+    }
+
+    /// Return the exact installed effect digest without exposing its binding.
+    pub(super) fn digest(&self) -> LifecycleDigest {
+        LifecycleDigest::new(*self.pending.exact_effect_identity().as_ref())
+    }
+
+    /// Recheck the complete executable carrier at one deterministic address.
+    pub(super) fn validates_at(
+        &self,
+        verified: &VerifiedHeightContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+    ) -> bool {
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let slot = PhysicalSlotId::for_capacity(super::schema::CapacityClass::Effect, 0);
+        self.is_exact(verified)
+            && self.digest() == installed_digest
+            && self.candidate.causal_root == address.owner.causal_root()
+            && address.owner.first_admission_ordinal() == address.ordinal
+            && address.slot == slot
+            && physical == std::collections::BTreeMap::from([(slot, installed_digest)])
+            && universe == std::collections::BTreeSet::from([slot])
+            && consumed == universe
+    }
+
+    /// Compare the exact Ready coordinator row, metadata, indexes, and geometry.
+    pub(super) fn matches_current_ready_record(
+        &self,
+        verified: &VerifiedHeightContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+    ) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let (Some(record), Some(metadata)) = (
+            coordinator.records.get(&address.ordinal),
+            coordinator.durable_records.get(&address.ordinal),
+        ) else {
+            return false;
+        };
+        self.validates_at(verified, address, digest)
+            && coordinator.fault.is_none()
+            && coordinator.active_context == context
+            && coordinator.high_water >= address.ordinal
+            && record.key == self.candidate.key
+            && record.owner == address.owner
+            && record.ordinal == address.ordinal
+            && record.work_class == LifecycleWorkClass::SignVote
+            && record.stage == self.candidate.stage
+            && record.state == super::LifecycleState::Ready
+            && record.physical_slots == physical
+            && record.episode.slot_universe == universe
+            && record.episode.consumed_slots == consumed
+            && physical.get(&address.slot) == Some(&digest)
+            && metadata.matches_admission(&self.candidate)
+            && metadata.continuation == super::schema::DurableContinuation::None
+            && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
+            && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+            && coordinator.ready_index.contains(&address.ordinal)
+    }
+
+    /// Compare the exact claimed row and the coordinator's sole active lease.
+    pub(super) fn matches_current_claimed_record(
+        &self,
+        verified: &VerifiedHeightContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+        lease: &super::TurnLease,
+    ) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        let (Some(record), Some(metadata)) = (
+            coordinator.records.get(&address.ordinal),
+            coordinator.durable_records.get(&address.ordinal),
+        ) else {
+            return false;
+        };
+        self.validates_at(verified, address, digest)
+            && coordinator.fault.is_none()
+            && coordinator.active_context == context
+            && coordinator.active_lease.as_ref() == Some(lease)
+            && lease.ordinal() == address.ordinal
+            && lease.owner() == address.owner
+            && lease.key() == record.key
+            && lease.work_class() == LifecycleWorkClass::SignVote
+            && lease.stage() == record.stage
+            && lease.physical_slots() == &physical
+            && record.key == self.candidate.key
+            && record.owner == address.owner
+            && record.ordinal == address.ordinal
+            && record.work_class == LifecycleWorkClass::SignVote
+            && record.stage == self.candidate.stage
+            && record.state == super::LifecycleState::Claimed(lease.id())
+            && record.physical_slots == physical
+            && record.episode.slot_universe == universe
+            && record.episode.consumed_slots == consumed
+            && metadata.matches_admission(&self.candidate)
+            && metadata.continuation == super::schema::DurableContinuation::None
+            && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
+            && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+            && !coordinator.ready_index.contains(&address.ordinal)
+    }
+
+    /// Project the exact retained Sign into the existing opaque worker task.
+    pub(super) fn project_recovered_lifecycle_sign_task(
+        &self,
+        verified: &VerifiedHeightContext,
+        identity: super::work_registry::RecoveredLifecycleSignDispatchIdentityV1,
+    ) -> Option<crate::sumeragi::v2_worker::RecoveredLifecycleSignTaskV1> {
+        if !self.is_exact(verified) {
+            return None;
+        }
+        let AdapterEffect::Sign { tag, request } = &self.seal.effect else {
+            return None;
+        };
+        crate::sumeragi::v2_worker::RecoveredLifecycleSignTaskV1::from_registry_projection(
+            identity,
+            *tag,
+            request.clone(),
+        )
+    }
+
+    /// Clone only the inert admission under the transition module's affine permit.
+    pub(super) fn project_candidate_for_combined_transition(
+        &self,
+        _permit: super::body_pipeline_transition::RecoveredLifecycleBroadcastAndSignTransitionProjectionPermitV1,
+    ) -> CandidateAdmission {
+        self.candidate.clone()
+    }
+
+    /// Compare one fresh standalone ledger row with the complete sealed candidate.
+    pub(super) fn exactly_matches_fresh_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        let owner = OwnerId::new(self.candidate.causal_root, record.ordinal());
+        recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
+            && record.key() == Some(self.candidate.key)
+            && record.owner() == owner
+            && record.work_class() == Some(LifecycleWorkClass::SignVote)
+            && record.stage() == Some(self.candidate.stage)
+            && record.terminal() == Some(None)
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == Some(DurablePayloadReference::None)
+            && record.continuation() == Some(super::schema::DurableContinuation::None)
+            && record.replay_matches_candidate(&self.candidate)
+    }
+
+    /// Insert this exact candidate after its fresh row has been revalidated.
+    pub(super) fn splice_candidate_from_fresh_record(
+        &self,
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+        candidates: &mut std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        self.exactly_matches_fresh_record(context, record)
+            && !candidates.contains_key(&self.candidate.key)
+            && candidates
+                .insert(self.candidate.key, self.candidate.clone())
+                .is_none()
+    }
+
+    /// Compare one cold-census entry without exposing its candidate key.
+    pub(super) fn owns_spliced_candidate(
+        &self,
+        candidates: &std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        candidates.get(&self.candidate.key) == Some(&self.candidate)
+    }
+
+    /// Compare pair identity without exposing either next-Sign constituent.
+    pub(super) fn is_distinct_from_broadcast_candidate(
+        &self,
+        broadcast: &CandidateAdmission,
+    ) -> bool {
+        self.candidate.key != broadcast.key && self.candidate.causal_root != broadcast.causal_root
+    }
+
+    /// Check cold-census vacancy without releasing the next-Sign key.
+    pub(super) fn is_absent_from_candidates(
+        &self,
+        candidates: &std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        !candidates.contains_key(&self.candidate.key)
+    }
+}
+
+fn recovered_next_wal_vote_candidate_shape_is_exact(
+    candidate: &CandidateAdmission,
+    context: LifecycleContext,
+) -> bool {
+    let Ok(canonical) = candidate.physical_geometry.canonicalized() else {
+        return false;
+    };
+    let Ok((physical, universe, consumed)) = candidate.physical_geometry.normalized() else {
+        return false;
+    };
+    candidate.work_class == LifecycleWorkClass::SignVote
+        && matches!(
+            candidate.stage.kind(),
+            LifecycleStageKind::SignPrepareVote | LifecycleStageKind::SignCommitVote
+        )
+        && candidate.stage.predecessor_scope() == PredecessorScope::Independent
+        && candidate.initial_state == InitialLifecycleState::Ready
+        && candidate.key.context() == context.id()
+        && candidate.key.round().height() == context.height()
+        && candidate.causal_root.digest() == candidate.reconstruction_source
+        && candidate.payload == DurablePayloadReference::None
+        && candidate.producer_turn.is_none()
+        && candidate.replay_authority_is_exact(context)
+        && canonical == candidate.physical_geometry
+        && physical.len() == 1
+        && universe.len() == 1
+        && consumed == universe
+        && physical
+            .keys()
+            .all(|slot| slot.capacity_class() == Some(super::schema::CapacityClass::Effect))
 }
 
 /// Non-decodable live authority for one exact fsynced WAL continuation.
@@ -1930,6 +2691,52 @@ pub(super) struct SignedBroadcastReplayEvidenceV1 {
     pending: DirectSignedPendingBindingV1,
 }
 
+/// Opaque decoded signed-Broadcast child awaiting its recovered WAL parent.
+///
+/// Ledger bytes alone are not execution authority: this projection can be
+/// unpacked only with the WAL module's private one-shot permit, after which the
+/// parent binding and verified roster must reconstruct the exact candidate.
+pub(super) struct DurableRecoveredSignedBroadcastChildV1 {
+    effect: AdapterEffect,
+}
+
+impl DurableRecoveredSignedBroadcastChildV1 {
+    /// Release the canonical signed effect only to its recovered-WAL parent.
+    pub(super) fn consume_for_recovered_wal(
+        self,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> AdapterEffect {
+        self.effect
+    }
+}
+
+/// Authenticate the durable envelope shape without granting execution authority.
+pub(super) fn project_durable_recovered_signed_broadcast_child(
+    context: LifecycleContext,
+    key: LifecycleKey,
+    work_class: LifecycleWorkClass,
+    stage: LifecycleStage,
+    terminal: Option<TerminalOutcome>,
+    reconstruction_source: LifecycleDigest,
+    owner: OwnerId,
+    payload: DurablePayloadReference,
+    continuation: super::schema::DurableContinuation,
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<DurableRecoveredSignedBroadcastChildV1> {
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &authority.source else {
+        return None;
+    };
+    let effect = AdapterEffect::Broadcast(message.clone());
+    (work_class == LifecycleWorkClass::Broadcast
+        && terminal.is_none()
+        && reconstruction_source == owner.causal_root().digest()
+        && payload == DurablePayloadReference::None
+        && continuation == super::schema::DurableContinuation::None
+        && authority.structurally_matches_record(context, key, work_class, stage, payload)
+        && exact_signed_broadcast_authority(&effect).as_ref() == Some(authority))
+    .then_some(DurableRecoveredSignedBroadcastChildV1 { effect })
+}
+
 impl SignedBroadcastReplayEvidenceV1 {
     /// Seal one exact runtime-bound signed broadcast into canonical evidence.
     pub(super) fn from_exact_effect(
@@ -1956,6 +2763,148 @@ impl SignedBroadcastReplayEvidenceV1 {
             && exact_signed_broadcast_authority(effect)
                 .is_some_and(|expected| expected == self.authority)
     }
+}
+
+/// Project the exact signed Broadcast child of one pending Sign owner.
+///
+/// The pending binding remains non-decodable process authority. The returned
+/// admission carries the complete signed consensus envelope as durable replay
+/// source, while its inherited causal root has already been checked by the
+/// fixed `Sign -> Broadcast` binding projection.
+pub(super) fn exact_signed_broadcast_successor_candidate(
+    verified: &VerifiedHeightContext,
+    broadcast_effect: &AdapterEffect,
+    broadcast_pending: &PendingRuntimeEffectBinding,
+) -> Option<CandidateAdmission> {
+    let evidence =
+        SignedBroadcastReplayEvidenceV1::from_exact_effect(broadcast_effect, broadcast_pending)?;
+    let authority = evidence.authority.clone();
+    let AdapterEffect::Broadcast(message) = broadcast_effect else {
+        return None;
+    };
+    let round = match &message.payload {
+        wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal.round,
+        wire::ConsensusMessageV2Payload::Vote(vote) => vote.round,
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
+        wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
+    };
+    let context = replay_context(round);
+    let projected = super::projection::authority_free_admission_projection(
+        context,
+        verified,
+        broadcast_effect,
+        broadcast_pending,
+    )
+    .ok()?;
+    candidate_from_authorized_projection(
+        context,
+        projected,
+        DurablePayloadReference::None,
+        authority,
+    )
+}
+
+/// Rejoin one durable WAL Sign source to its exact signed Broadcast envelope.
+///
+/// LedgerV1 invokes this for the four Sign-to-Broadcast continuation codes.
+/// The parent must retain an unsigned WAL action, and the child must be the
+/// byte-exact same message with only a nonempty signature filled. This is an
+/// inert persistence check; cold production open additionally verifies the
+/// signature cryptographically against the recovered height roster.
+pub(super) fn signed_broadcast_continuation_is_exact(
+    edge: super::schema::DurableContinuationEdge,
+    parent: &LifecycleReplayAuthorityV1,
+    parent_payload: DurablePayloadReference,
+    child: &LifecycleReplayAuthorityV1,
+    child_payload: DurablePayloadReference,
+) -> Option<bool> {
+    use super::schema::DurableContinuationEdge;
+
+    if !matches!(
+        edge,
+        DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast
+    ) {
+        return None;
+    }
+    let LifecycleReplaySourceV1::Wal(parent_source) = &parent.source else {
+        return Some(false);
+    };
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &child.source else {
+        return Some(false);
+    };
+    if parent_payload != DurablePayloadReference::None
+        || child_payload != DurablePayloadReference::None
+        || !parent.payload.is_none()
+        || !child.payload.is_none()
+        || exact_signed_broadcast_authority(&AdapterEffect::Broadcast(message.clone())).as_ref()
+            != Some(child)
+    {
+        return Some(false);
+    }
+    let exact = match (edge, &parent_source.action, &message.payload) {
+        (
+            DurableContinuationEdge::SignProposalToBroadcast,
+            WalReplayActionV1::SignProposal(unsigned),
+            wire::ConsensusMessageV2Payload::Proposal(signed),
+        ) => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignPrepareToBroadcast,
+            WalReplayActionV1::SignVote(unsigned),
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        ) if unsigned.phase == wire::GlobalPhase::Prepare => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignCommitToBroadcast,
+            WalReplayActionV1::SignVote(unsigned),
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        ) if unsigned.phase == wire::GlobalPhase::Commit => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignTimeoutToBroadcast,
+            WalReplayActionV1::SignTimeoutVote(unsigned),
+            wire::ConsensusMessageV2Payload::TimeoutVote(signed),
+        ) => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast,
+            _,
+            _,
+        ) => false,
+        _ => unreachable!("non-Sign continuation returned above"),
+    };
+    Some(exact)
 }
 
 /// Canonical inert replay evidence for one exact authenticated equivocation report.
@@ -3714,1111 +4663,7 @@ pub(in crate::sumeragi) struct InvalidBodyReportReplayEvidenceV1 {
     report_pending: DirectSignedPendingBindingV1,
 }
 
-/// One inert replay family shared by a Certified-Serve request and its
-/// atomically reserved ProducerTurn.
-///
-/// The family is runtime-only authority. Its canonical storage source remains
-/// private and cannot be decoded or reconstructed from source parts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CertifiedServeStorageReplayFamilyV1 {
-    source: CertifiedServeStorageSourceV1,
-}
-
-/// Opaque replay evidence for one exact post-fsync Certified-Serve record.
-#[derive(Debug, PartialEq, Eq)]
-#[must_use = "Certified-Serve replay evidence must remain with its reserved producer turn"]
-struct CertifiedServeReplayEvidenceV1 {
-    family: Arc<CertifiedServeStorageReplayFamilyV1>,
-    payload: ReplayPayloadBindingV1,
-}
-
-/// Opaque replay evidence for the dormant ProducerTurn reserved beside one
-/// exact Certified-Serve request.
-#[derive(Debug, PartialEq, Eq)]
-#[must_use = "ProducerTurn replay evidence must remain with its Certified-Serve origin"]
-struct CertifiedServeProducerTurnReplayEvidenceV1 {
-    family: Arc<CertifiedServeStorageReplayFamilyV1>,
-}
-
-/// Closed pair preserving one common post-fsync storage origin across the
-/// Certified-Serve record and its reserved ProducerTurn.
-#[derive(Debug, PartialEq, Eq)]
-#[must_use = "the Certified-Serve replay pair has not entered durable admission"]
-pub(super) struct CertifiedServeReplayEvidencePairV1 {
-    serve: CertifiedServeReplayEvidenceV1,
-    producer: CertifiedServeProducerTurnReplayEvidenceV1,
-}
-
-/// One move-only terminal replay-family replacement for an adjacent
-/// Certified-Serve/ProducerTurn pair.
-///
-/// Production construction is closed over either a post-fsync terminal
-/// receipt or an authenticated payload-store recovery record. In particular,
-/// no caller can inject the terminal payload-frame hash as raw bytes.
-#[derive(Debug)]
-#[must_use = "the terminal Certified-Serve replay pair must be installed atomically"]
-pub(super) struct CertifiedServeTerminalReplayAuthorityPairV1 {
-    terminal_payload: DurablePayloadReference,
-    terminal_outcome: TerminalOutcome,
-    serve: LifecycleReplayAuthorityV1,
-    producer: LifecycleReplayAuthorityV1,
-}
-
-impl CertifiedServeTerminalReplayAuthorityPairV1 {
-    /// Return the terminal tombstone bound by this sealed pair.
-    pub(super) const fn terminal_outcome(&self) -> TerminalOutcome {
-        self.terminal_outcome
-    }
-
-    /// Clone this still-sealed terminal family into one whole concrete-carrier
-    /// proof. No serve/producer authority or raw frame hash leaves the replay
-    /// module; the registry may install the returned pair only through its
-    /// typed terminal transition.
-    pub(super) fn terminal_carrier_replay_evidence(
-        &self,
-    ) -> Option<CertifiedServeReplayEvidencePairV1> {
-        let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &self.serve.source else {
-            return None;
-        };
-        let family = Arc::new(CertifiedServeStorageReplayFamilyV1 {
-            source: source.clone(),
-        });
-        let evidence = CertifiedServeReplayEvidencePairV1 {
-            serve: CertifiedServeReplayEvidenceV1 {
-                family: Arc::clone(&family),
-                payload: ReplayPayloadBindingV1::from_payload(self.terminal_payload),
-            },
-            producer: CertifiedServeProducerTurnReplayEvidenceV1 { family },
-        };
-        (evidence.shares_exact_storage_origin()
-            && evidence.serve.exactly_matches_authority(&self.serve)
-            && evidence.producer.exactly_matches_authority(&self.producer))
-        .then_some(evidence)
-    }
-
-    /// Rebind one live Pending pair from an exact post-fsync completion
-    /// receipt.
-    pub(super) fn from_completed_receipt(
-        active_context: LifecycleContext,
-        serve_record: &LifecycleRecord,
-        serve_metadata: &DurableRecordMetadata,
-        producer_record: &LifecycleRecord,
-        producer_metadata: &DurableRecordMetadata,
-        receipt: DurableCertifiedServeCompletedReceipt,
-    ) -> Option<Self> {
-        let DurablePayloadReference::CertifiedServePending {
-            request,
-            certificate,
-        } = serve_metadata.payload
-        else {
-            return None;
-        };
-        if request != digest_from_bytes(receipt.id().request_hash().as_ref())
-            || certificate != digest_from_bytes(receipt.certificate_hash().as_ref())
-        {
-            return None;
-        }
-        let response = digest_from_bytes(receipt.response_hash().as_ref());
-        Self::from_terminal_frame(
-            active_context,
-            serve_record,
-            serve_metadata,
-            producer_record,
-            producer_metadata,
-            DurablePayloadReference::CertifiedServeCompleted {
-                request,
-                certificate,
-                response,
-            },
-            TerminalOutcome::Completed(Some(response)),
-            receipt.payload_hash(),
-        )
-    }
-
-    /// Rebind one live Pending pair from an exact post-fsync negative receipt.
-    pub(super) fn from_negative_receipt(
-        active_context: LifecycleContext,
-        serve_record: &LifecycleRecord,
-        serve_metadata: &DurableRecordMetadata,
-        producer_record: &LifecycleRecord,
-        producer_metadata: &DurableRecordMetadata,
-        receipt: DurableCertifiedServeNegativeReceipt,
-    ) -> Option<Self> {
-        let DurablePayloadReference::CertifiedServePending {
-            request,
-            certificate,
-        } = serve_metadata.payload
-        else {
-            return None;
-        };
-        if request != digest_from_bytes(receipt.id().request_hash().as_ref())
-            || certificate != digest_from_bytes(receipt.certificate_hash().as_ref())
-        {
-            return None;
-        }
-        let outcome = match receipt.outcome() {
-            CertifiedServePayloadNegativeOutcome::Cancelled => {
-                DurableServeNegativeOutcome::Cancelled
-            }
-            CertifiedServePayloadNegativeOutcome::Rejected(code) => {
-                DurableServeNegativeOutcome::Rejected(code)
-            }
-            CertifiedServePayloadNegativeOutcome::Failed(code) => {
-                DurableServeNegativeOutcome::Failed(code)
-            }
-        };
-        Self::from_terminal_frame(
-            active_context,
-            serve_record,
-            serve_metadata,
-            producer_record,
-            producer_metadata,
-            DurablePayloadReference::CertifiedServeNegative {
-                request,
-                certificate,
-                outcome,
-            },
-            outcome.terminal(),
-            receipt.payload_hash(),
-        )
-    }
-
-    /// Seal the terminal replay pair recovered from one authenticated payload
-    /// frame and its independently reconstructed admission candidate.
-    pub(super) fn from_authenticated_recovery(
-        active_context: LifecycleContext,
-        recovered: &AuthenticatedRecoveredCertifiedServePayload,
-        candidate: &CandidateAdmission,
-        terminal_payload: DurablePayloadReference,
-        terminal_outcome: TerminalOutcome,
-    ) -> Option<Self> {
-        if !recovered.exactly_matches_persisted_payload()
-            || !terminal_payload
-                .matches_terminal(LifecycleWorkClass::CertifiedServe, Some(terminal_outcome))
-            || candidate.work_class != LifecycleWorkClass::CertifiedServe
-            || !candidate.payload.same_admission_material(terminal_payload)
-        {
-            return None;
-        }
-        let recovered_payload = recovered_certified_serve_payload(recovered)?;
-        if recovered_payload != ReplayPayloadBindingV1::from_payload(terminal_payload) {
-            return None;
-        }
-        let recovered_family = exact_certified_serve_storage_replay_family(
-            active_context,
-            recovered.request(),
-            recovered.payload_hash(),
-            recovered.local_retainer(),
-        )?;
-        let recovered_source =
-            LifecycleReplaySourceV1::CertifiedServeStorage(recovered_family.source.clone());
-        if candidate.replay_authority.source != recovered_source {
-            return None;
-        }
-        let producer = candidate.producer_turn.as_ref()?;
-        let serve = LifecycleReplayAuthorityV1 {
-            format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-            payload: recovered_payload,
-            source: recovered_source,
-        };
-        let sealed = Self {
-            terminal_payload,
-            terminal_outcome,
-            serve,
-            producer: producer.replay_authority.clone(),
-        };
-        sealed
-            .pending_candidate_matches_terminal_family(active_context, candidate)
-            .then_some(sealed)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn from_terminal_frame(
-        active_context: LifecycleContext,
-        serve_record: &LifecycleRecord,
-        serve_metadata: &DurableRecordMetadata,
-        producer_record: &LifecycleRecord,
-        producer_metadata: &DurableRecordMetadata,
-        terminal_payload: DurablePayloadReference,
-        terminal_outcome: TerminalOutcome,
-        terminal_frame_hash: Hash,
-    ) -> Option<Self> {
-        if !terminal_payload
-            .matches_terminal(LifecycleWorkClass::CertifiedServe, Some(terminal_outcome))
-            || !serve_metadata
-                .payload
-                .same_admission_material(terminal_payload)
-        {
-            return None;
-        }
-        let LifecycleReplaySourceV1::CertifiedServeStorage(mut source) =
-            serve_metadata.replay_authority.source.clone()
-        else {
-            return None;
-        };
-        source.payload_hash = *terminal_frame_hash.as_ref();
-        let terminal_source = LifecycleReplaySourceV1::CertifiedServeStorage(source);
-        let sealed = Self {
-            terminal_payload,
-            terminal_outcome,
-            serve: LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::from_payload(terminal_payload),
-                source: terminal_source.clone(),
-            },
-            producer: LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::None,
-                source: terminal_source,
-            },
-        };
-        sealed
-            .exactly_advances_pending_records(
-                active_context,
-                serve_record,
-                serve_metadata,
-                producer_record,
-                producer_metadata,
-            )
-            .then_some(sealed)
-    }
-
-    /// Construct a synthetic terminal-frame transition for pure reducer tests.
-    /// Production paths have no raw-hash constructor and must use a durable
-    /// receipt or authenticated recovery record.
-    #[cfg(test)]
-    pub(super) fn from_test_terminal_outcome(
-        active_context: LifecycleContext,
-        serve_record: &LifecycleRecord,
-        serve_metadata: &DurableRecordMetadata,
-        producer_record: &LifecycleRecord,
-        producer_metadata: &DurableRecordMetadata,
-        terminal_outcome: TerminalOutcome,
-    ) -> Option<Self> {
-        let terminal_payload = serve_metadata.payload.terminalized(terminal_outcome)?;
-        let mut preimage = Vec::with_capacity(Hash::LENGTH + 2);
-        let LifecycleReplaySourceV1::CertifiedServeStorage(source) =
-            &serve_metadata.replay_authority.source
-        else {
-            return None;
-        };
-        preimage.extend_from_slice(&source.payload_hash);
-        preimage.push(0xFF);
-        preimage.push(match terminal_outcome {
-            TerminalOutcome::Advanced => 0,
-            TerminalOutcome::Completed(_) => 1,
-            TerminalOutcome::Cancelled => 2,
-            TerminalOutcome::Rejected(_) => 3,
-            TerminalOutcome::Failed(_) => 4,
-        });
-        Self::from_terminal_frame(
-            active_context,
-            serve_record,
-            serve_metadata,
-            producer_record,
-            producer_metadata,
-            terminal_payload,
-            terminal_outcome,
-            Hash::new(preimage),
-        )
-    }
-
-    /// Prove the sole permitted payload-store-ahead transition: one exact
-    /// Pending ledger pair advances to this authenticated terminal frame while
-    /// request, certificate, local retainer, keys, and stages remain fixed.
-    pub(super) fn exactly_advances_pending_records(
-        &self,
-        active_context: LifecycleContext,
-        serve_record: &LifecycleRecord,
-        serve_metadata: &DurableRecordMetadata,
-        producer_record: &LifecycleRecord,
-        producer_metadata: &DurableRecordMetadata,
-    ) -> bool {
-        self.exactly_advances_pending_coordinates(
-            active_context,
-            serve_record.key,
-            serve_record.owner,
-            serve_record.ordinal,
-            serve_record.stage,
-            serve_metadata.reconstruction_source,
-            serve_metadata.payload,
-            &serve_metadata.replay_authority,
-            producer_record.key,
-            producer_record.owner,
-            producer_record.ordinal,
-            producer_record.stage,
-            producer_metadata.reconstruction_source,
-            producer_metadata.payload,
-            &producer_metadata.replay_authority,
-        )
-    }
-
-    /// Match a Pending logical pair after both authorities have already been
-    /// rebound to this exact terminal frame family but before the terminal
-    /// payload/tombstone is installed.
-    pub(super) fn exactly_matches_rebound_records(
-        &self,
-        active_context: LifecycleContext,
-        serve_record: &LifecycleRecord,
-        serve_metadata: &DurableRecordMetadata,
-        producer_record: &LifecycleRecord,
-        producer_metadata: &DurableRecordMetadata,
-    ) -> bool {
-        let DurablePayloadReference::CertifiedServePending { .. } = serve_metadata.payload else {
-            return false;
-        };
-        serve_record.ordinal.checked_add(1) == Some(producer_record.ordinal)
-            && serve_record.work_class == LifecycleWorkClass::CertifiedServe
-            && serve_record.stage.kind() == LifecycleStageKind::CertifiedServe
-            && producer_record.work_class == LifecycleWorkClass::ProducerTurn
-            && producer_record.stage.kind() == LifecycleStageKind::ProducerTurn
-            && serve_record.owner == producer_record.owner
-            && serve_and_producer_keys_match(serve_record.key, producer_record.key)
-            && serve_metadata.reconstruction_source == producer_metadata.reconstruction_source
-            && serve_metadata.reconstruction_source == serve_record.owner.causal_root().digest()
-            && producer_metadata.payload == DurablePayloadReference::None
-            && self
-                .terminal_payload
-                .same_admission_material(serve_metadata.payload)
-            && serve_metadata.replay_authority == self.serve
-            && producer_metadata.replay_authority == self.producer
-            && self.serve.structurally_matches_record(
-                active_context,
-                serve_record.key,
-                LifecycleWorkClass::CertifiedServe,
-                serve_record.stage,
-                self.terminal_payload,
-            )
-            && self.producer.structurally_matches_record(
-                active_context,
-                producer_record.key,
-                LifecycleWorkClass::ProducerTurn,
-                producer_record.stage,
-                DurablePayloadReference::None,
-            )
-            && self.serve.same_persisted_family(&self.producer)
-    }
-
-    /// Apply the transition-only oracle to decoded ledger coordinates without
-    /// exposing either encoded authority outside the lifecycle subsystem.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn exactly_advances_pending_coordinates(
-        &self,
-        active_context: LifecycleContext,
-        serve_key: LifecycleKey,
-        serve_owner: OwnerId,
-        serve_ordinal: u128,
-        serve_stage: LifecycleStage,
-        serve_reconstruction_source: LifecycleDigest,
-        serve_payload: DurablePayloadReference,
-        serve_authority: &LifecycleReplayAuthorityV1,
-        producer_key: LifecycleKey,
-        producer_owner: OwnerId,
-        producer_ordinal: u128,
-        producer_stage: LifecycleStage,
-        producer_reconstruction_source: LifecycleDigest,
-        producer_payload: DurablePayloadReference,
-        producer_authority: &LifecycleReplayAuthorityV1,
-    ) -> bool {
-        let DurablePayloadReference::CertifiedServePending { .. } = serve_payload else {
-            return false;
-        };
-        if serve_ordinal.checked_add(1) != Some(producer_ordinal)
-            || serve_stage.kind() != LifecycleStageKind::CertifiedServe
-            || producer_stage.kind() != LifecycleStageKind::ProducerTurn
-            || serve_owner != producer_owner
-            || !serve_and_producer_keys_match(serve_key, producer_key)
-            || producer_payload != DurablePayloadReference::None
-            || serve_reconstruction_source != producer_reconstruction_source
-            || serve_reconstruction_source != serve_owner.causal_root().digest()
-            || !serve_authority.same_persisted_family(producer_authority)
-            || !serve_authority.structurally_matches_record(
-                active_context,
-                serve_key,
-                LifecycleWorkClass::CertifiedServe,
-                serve_stage,
-                serve_payload,
-            )
-            || !producer_authority.structurally_matches_record(
-                active_context,
-                producer_key,
-                LifecycleWorkClass::ProducerTurn,
-                producer_stage,
-                DurablePayloadReference::None,
-            )
-            || !self.terminal_payload.same_admission_material(serve_payload)
-            || !self.serve.structurally_matches_record(
-                active_context,
-                serve_key,
-                LifecycleWorkClass::CertifiedServe,
-                serve_stage,
-                self.terminal_payload,
-            )
-            || !self.producer.structurally_matches_record(
-                active_context,
-                producer_key,
-                LifecycleWorkClass::ProducerTurn,
-                producer_stage,
-                DurablePayloadReference::None,
-            )
-            || !self.serve.same_persisted_family(&self.producer)
-        {
-            return false;
-        }
-        certified_serve_sources_share_origin_except_frame(
-            &serve_authority.source,
-            &self.serve.source,
-        )
-    }
-
-    /// Match the exact terminal candidate reconstructed from the same
-    /// authenticated recovery frame.
-    pub(super) fn exactly_matches_recovered_candidate(
-        &self,
-        active_context: LifecycleContext,
-        candidate: &CandidateAdmission,
-    ) -> bool {
-        let Some(producer) = candidate.producer_turn.as_ref() else {
-            return false;
-        };
-        candidate.work_class == LifecycleWorkClass::CertifiedServe
-            && candidate.payload == self.terminal_payload
-            && candidate.replay_authority_is_exact(active_context)
-            && candidate.replay_authority == self.serve
-            && producer.replay_authority == self.producer
-            && self.serve.same_persisted_family(&self.producer)
-    }
-
-    /// Replace the Pending projection fields with the exact terminal payload
-    /// and authority derived from the same authenticated recovery frame.
-    pub(super) fn bind_recovered_candidate(
-        &self,
-        active_context: LifecycleContext,
-        candidate: &mut CandidateAdmission,
-    ) -> bool {
-        if !self.pending_candidate_matches_terminal_family(active_context, candidate) {
-            return false;
-        }
-        candidate.payload = self.terminal_payload;
-        candidate.replay_authority = self.serve.clone();
-        self.exactly_matches_recovered_candidate(active_context, candidate)
-    }
-
-    fn pending_candidate_matches_terminal_family(
-        &self,
-        active_context: LifecycleContext,
-        candidate: &CandidateAdmission,
-    ) -> bool {
-        let Some(producer) = candidate.producer_turn.as_ref() else {
-            return false;
-        };
-        matches!(
-            candidate.payload,
-            DurablePayloadReference::CertifiedServePending { .. }
-        ) && candidate.work_class == LifecycleWorkClass::CertifiedServe
-            && candidate
-                .payload
-                .same_admission_material(self.terminal_payload)
-            && candidate.replay_authority_is_exact(active_context)
-            && candidate
-                .replay_authority
-                .same_persisted_family(&self.serve)
-            && producer.replay_authority == self.producer
-            && self.serve.same_persisted_family(&self.producer)
-    }
-
-    /// Consume the authenticated frame transition into the exact terminal
-    /// payload, outcome, and separately encoded adjacent authorities.
-    pub(super) fn consume_terminal_rebind(
-        self,
-    ) -> (
-        DurablePayloadReference,
-        TerminalOutcome,
-        LifecycleReplayAuthorityV1,
-        LifecycleReplayAuthorityV1,
-    ) {
-        (
-            self.terminal_payload,
-            self.terminal_outcome,
-            self.serve,
-            self.producer,
-        )
-    }
-}
-
-fn certified_serve_sources_share_origin_except_frame(
-    pending: &LifecycleReplaySourceV1,
-    terminal: &LifecycleReplaySourceV1,
-) -> bool {
-    let (
-        LifecycleReplaySourceV1::CertifiedServeStorage(pending),
-        LifecycleReplaySourceV1::CertifiedServeStorage(terminal),
-    ) = (pending, terminal)
-    else {
-        return false;
-    };
-    pending.request == terminal.request && pending.local_retainer == terminal.local_retainer
-}
-
-// The pair is consumed only by the fixed adjacent CandidateAdmission factory;
-// its decoded ledger descendants remain inert and cannot reconstruct this pair.
-
-impl CertifiedServeReplayEvidencePairV1 {
-    /// Seal one exact freshly persisted Pending request and its ProducerTurn.
-    pub(super) fn from_post_fsync_pending(
-        active_context: LifecycleContext,
-        authenticated: &AuthenticatedCertifiedBodyRequest,
-        receipt: DurableCertifiedServeAdmissionReceipt,
-    ) -> Option<Self> {
-        if !receipt.exactly_matches_pending(authenticated)
-            || receipt.id().request_hash() != authenticated.request_hash()
-            || receipt.certificate_hash() != HashOf::new(&authenticated.request().certificate)
-        {
-            return None;
-        }
-        let payload = certified_serve_pending_payload(authenticated);
-        let family = exact_certified_serve_storage_replay_family(
-            active_context,
-            authenticated,
-            receipt.payload_hash(),
-            receipt.local_retainer(),
-        )?;
-        let evidence = Self {
-            serve: CertifiedServeReplayEvidenceV1 {
-                family: Arc::clone(&family),
-                payload,
-            },
-            producer: CertifiedServeProducerTurnReplayEvidenceV1 { family },
-        };
-        evidence
-            .exactly_matches_post_fsync_pending(active_context, authenticated, receipt)
-            .then_some(evidence)
-    }
-
-    /// Reconstruct the same closed pair only from a fully authenticated
-    /// payload-store recovery record.
-    pub(super) fn from_authenticated_recovery(
-        active_context: LifecycleContext,
-        recovered: &AuthenticatedRecoveredCertifiedServePayload,
-    ) -> Option<Self> {
-        if !recovered.exactly_matches_persisted_payload() {
-            return None;
-        }
-        let payload = recovered_certified_serve_payload(recovered)?;
-        let family = exact_certified_serve_storage_replay_family(
-            active_context,
-            recovered.request(),
-            recovered.payload_hash(),
-            recovered.local_retainer(),
-        )?;
-        let evidence = Self {
-            serve: CertifiedServeReplayEvidenceV1 {
-                family: Arc::clone(&family),
-                payload,
-            },
-            producer: CertifiedServeProducerTurnReplayEvidenceV1 { family },
-        };
-        evidence
-            .exactly_matches_recovered(active_context, recovered)
-            .then_some(evidence)
-    }
-
-    /// Project one exact shared storage family into the adjacent durable
-    /// admission pair without consuming the runtime-only family. Semantic keys,
-    /// stages, payloads, authorities, slots, and physical digests are all
-    /// derived here. The same pair can then move, whole, into the two concrete
-    /// registry carriers.
-    pub(super) fn admission_candidate(
-        &self,
-        active_context: LifecycleContext,
-    ) -> Option<CandidateAdmission> {
-        let storage_payload = self.serve.payload.durable_payload()?;
-        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
-        let serve_stage = LifecycleStage::new(
-            LifecycleStageKind::CertifiedServe,
-            PredecessorScope::ReadyOrdinalPrefix,
-        );
-        let producer_stage = LifecycleStage::new(
-            LifecycleStageKind::ProducerTurn,
-            PredecessorScope::ProducerHandoffBarrier,
-        );
-        let serve_shape = self
-            .serve
-            .family
-            .source
-            .project(active_context, serve_stage.kind(), &self.serve.payload)
-            .ok()?;
-        let producer_shape = self
-            .producer
-            .family
-            .source
-            .project(
-                active_context,
-                producer_stage.kind(),
-                &ReplayPayloadBindingV1::None,
-            )
-            .ok()?;
-        if !self.exactly_matches_serve_record(
-            active_context,
-            serve_shape.key,
-            serve_stage,
-            storage_payload,
-            storage_payload_hash,
-        ) || !self.exactly_matches_producer_record(
-            active_context,
-            producer_shape.key,
-            producer_stage,
-            DurablePayloadReference::None,
-            storage_payload_hash,
-        ) {
-            return None;
-        }
-        let source =
-            LifecycleReplaySourceV1::CertifiedServeStorage(self.serve.family.source.clone());
-        let request = digest_from_bytes(HashOf::new(&self.serve.family.source.request).as_ref());
-        let certificate =
-            digest_from_bytes(HashOf::new(&self.serve.family.source.request.certificate).as_ref());
-        let serve_payload = DurablePayloadReference::certified_serve_pending(request, certificate);
-        let serve_authority = LifecycleReplayAuthorityV1::decode_canonical(
-            &LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::from_payload(serve_payload),
-                source: source.clone(),
-            }
-            .encode(),
-        )
-        .ok()?;
-        let producer_authority = LifecycleReplayAuthorityV1::decode_canonical(
-            &LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::None,
-                source,
-            }
-            .encode(),
-        )
-        .ok()?;
-        let reconstruction_source = request;
-        let serve_slot =
-            PhysicalSlotId::for_capacity(LifecycleWorkClass::CertifiedServe.capacity_class(), 0);
-        let producer_slot =
-            PhysicalSlotId::for_capacity(LifecycleWorkClass::ProducerTurn.capacity_class(), 0);
-        Some(CandidateAdmission::new(
-            serve_shape.key,
-            CausalRoot::new(reconstruction_source),
-            LifecycleWorkClass::CertifiedServe,
-            serve_stage,
-            InitialLifecycleState::Ready,
-            reconstruction_source,
-            serve_payload,
-            serve_authority,
-            PhysicalGeometry::new(
-                [PhysicalSlot::new(
-                    serve_slot,
-                    digest_from_hash(&storage_payload_hash),
-                )],
-                [serve_slot],
-            ),
-            Some(ProducerTurnAdmission::new(
-                producer_shape.key,
-                producer_stage,
-                reconstruction_source,
-                producer_authority,
-                PhysicalGeometry::new(
-                    [PhysicalSlot::new(
-                        producer_slot,
-                        self.producer_physical_digest(),
-                    )],
-                    [producer_slot],
-                ),
-            )),
-        ))
-    }
-
-    /// Compare the retained Serve evidence with one exact logical record and
-    /// its independently retained payload-store frame hash.
-    pub(super) fn exactly_matches_serve_record(
-        &self,
-        active_context: LifecycleContext,
-        key: LifecycleKey,
-        stage: LifecycleStage,
-        payload: DurablePayloadReference,
-        storage_payload_hash: Hash,
-    ) -> bool {
-        self.shares_exact_storage_origin()
-            && self.serve.exactly_matches_record(
-                active_context,
-                key,
-                stage,
-                payload,
-                storage_payload_hash,
-            )
-    }
-
-    /// Match one exact terminal Serve row without inventing an executable
-    /// physical carrier. Steady terminal Ledger rows reopen with empty geometry,
-    /// while payload-store-ahead reconciliation may retain the former Pending
-    /// geometry in its reconciled tombstone. Neither shape is executable: the
-    /// retained storage family derives its own frame hash and must still match
-    /// the complete logical/durable authority.
-    pub(super) fn exactly_matches_terminal_serve_record(
-        &self,
-        active_context: LifecycleContext,
-        record: &LifecycleRecord,
-        metadata: &DurableRecordMetadata,
-    ) -> bool {
-        let super::LifecycleState::Terminal(outcome) = record.state else {
-            return false;
-        };
-        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
-        record.work_class == LifecycleWorkClass::CertifiedServe
-            && record.owner.causal_root().digest() == metadata.reconstruction_source
-            && metadata
-                .payload
-                .matches_terminal(LifecycleWorkClass::CertifiedServe, Some(outcome))
-            && self.exactly_matches_serve_record(
-                active_context,
-                record.key,
-                record.stage,
-                metadata.payload,
-                storage_payload_hash,
-            )
-            && self
-                .serve
-                .exactly_matches_authority(&metadata.replay_authority)
-    }
-
-    /// Compare the retained ProducerTurn evidence with one exact dormant
-    /// logical record while retaining the same payload-store origin.
-    pub(super) fn exactly_matches_producer_record(
-        &self,
-        active_context: LifecycleContext,
-        key: LifecycleKey,
-        stage: LifecycleStage,
-        payload: DurablePayloadReference,
-        storage_payload_hash: Hash,
-    ) -> bool {
-        self.shares_exact_storage_origin()
-            && self.producer.exactly_matches_record(
-                active_context,
-                key,
-                stage,
-                payload,
-                storage_payload_hash,
-            )
-    }
-
-    fn shares_exact_storage_origin(&self) -> bool {
-        Arc::ptr_eq(&self.serve.family, &self.producer.family)
-    }
-
-    /// Match the exact one-slot Serve carrier without exposing the payload-store
-    /// frame hash retained by this family.
-    pub(super) fn exactly_matches_serve_carrier(
-        &self,
-        active_context: LifecycleContext,
-        key: LifecycleKey,
-        stage: LifecycleStage,
-        payload: DurablePayloadReference,
-        physical_digest: LifecycleDigest,
-        replay_authority: &LifecycleReplayAuthorityV1,
-    ) -> bool {
-        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
-        physical_digest == digest_from_hash(&storage_payload_hash)
-            && self.exactly_matches_serve_record(
-                active_context,
-                key,
-                stage,
-                payload,
-                storage_payload_hash,
-            )
-            && self.serve.exactly_matches_authority(replay_authority)
-    }
-
-    /// Match the exact one-slot ProducerTurn carrier while retaining the same
-    /// opaque payload-store family as its Serve origin.
-    pub(super) fn exactly_matches_producer_carrier(
-        &self,
-        active_context: LifecycleContext,
-        key: LifecycleKey,
-        stage: LifecycleStage,
-        payload: DurablePayloadReference,
-        physical_digest: LifecycleDigest,
-        replay_authority: &LifecycleReplayAuthorityV1,
-    ) -> bool {
-        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
-        physical_digest == self.producer_physical_digest()
-            && self.exactly_matches_producer_record(
-                active_context,
-                key,
-                stage,
-                payload,
-                storage_payload_hash,
-            )
-            && self.producer.exactly_matches_authority(replay_authority)
-    }
-
-    fn producer_physical_digest(&self) -> LifecycleDigest {
-        certified_serve_producer_physical_digest(&self.serve.family.source)
-    }
-
-    fn exactly_matches_post_fsync_pending(
-        &self,
-        active_context: LifecycleContext,
-        authenticated: &AuthenticatedCertifiedBodyRequest,
-        receipt: DurableCertifiedServeAdmissionReceipt,
-    ) -> bool {
-        self.shares_exact_storage_origin()
-            && receipt.exactly_matches_pending(authenticated)
-            && self.serve.payload == certified_serve_pending_payload(authenticated)
-            && self
-                .serve
-                .family
-                .source
-                .project(
-                    active_context,
-                    LifecycleStageKind::CertifiedServe,
-                    &self.serve.payload,
-                )
-                .is_ok()
-            && exact_certified_serve_storage_replay_family(
-                active_context,
-                authenticated,
-                receipt.payload_hash(),
-                receipt.local_retainer(),
-            )
-            .is_some_and(|expected| {
-                expected.as_ref() == self.serve.family.as_ref()
-                    && receipt.id().request_hash() == authenticated.request_hash()
-                    && receipt.certificate_hash()
-                        == HashOf::new(&authenticated.request().certificate)
-            })
-    }
-
-    fn exactly_matches_recovered(
-        &self,
-        active_context: LifecycleContext,
-        recovered: &AuthenticatedRecoveredCertifiedServePayload,
-    ) -> bool {
-        self.shares_exact_storage_origin()
-            && recovered.exactly_matches_persisted_payload()
-            && recovered_certified_serve_payload(recovered).as_ref() == Some(&self.serve.payload)
-            && self
-                .serve
-                .family
-                .source
-                .project(
-                    active_context,
-                    LifecycleStageKind::CertifiedServe,
-                    &self.serve.payload,
-                )
-                .is_ok()
-            && exact_certified_serve_storage_replay_family(
-                active_context,
-                recovered.request(),
-                recovered.payload_hash(),
-                recovered.local_retainer(),
-            )
-            .is_some_and(|expected| {
-                expected.as_ref() == self.serve.family.as_ref()
-                    && recovered.id().request_hash() == recovered.request().request_hash()
-                    && recovered.certificate_hash()
-                        == HashOf::new(&recovered.request().request().certificate)
-            })
-    }
-}
-
-impl CertifiedServeReplayEvidenceV1 {
-    fn exactly_matches_record(
-        &self,
-        active_context: LifecycleContext,
-        key: LifecycleKey,
-        stage: LifecycleStage,
-        payload: DurablePayloadReference,
-        storage_payload_hash: Hash,
-    ) -> bool {
-        self.family.source.payload_hash == *storage_payload_hash.as_ref()
-            && self.exactly_matches_authority(&LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::from_payload(payload),
-                source: LifecycleReplaySourceV1::CertifiedServeStorage(self.family.source.clone()),
-            })
-            && LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: self.payload.clone(),
-                source: LifecycleReplaySourceV1::CertifiedServeStorage(self.family.source.clone()),
-            }
-            .validate_record(
-                active_context,
-                key,
-                LifecycleWorkClass::CertifiedServe,
-                stage,
-                payload,
-            )
-            .is_ok()
-    }
-
-    fn exactly_matches_authority(&self, authority: &LifecycleReplayAuthorityV1) -> bool {
-        authority
-            == &LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: self.payload.clone(),
-                source: LifecycleReplaySourceV1::CertifiedServeStorage(self.family.source.clone()),
-            }
-    }
-}
-
-impl CertifiedServeProducerTurnReplayEvidenceV1 {
-    fn exactly_matches_record(
-        &self,
-        active_context: LifecycleContext,
-        key: LifecycleKey,
-        stage: LifecycleStage,
-        payload: DurablePayloadReference,
-        storage_payload_hash: Hash,
-    ) -> bool {
-        self.family.source.payload_hash == *storage_payload_hash.as_ref()
-            && self.exactly_matches_authority(&LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::from_payload(payload),
-                source: LifecycleReplaySourceV1::CertifiedServeStorage(self.family.source.clone()),
-            })
-            && LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::None,
-                source: LifecycleReplaySourceV1::CertifiedServeStorage(self.family.source.clone()),
-            }
-            .validate_record(
-                active_context,
-                key,
-                LifecycleWorkClass::ProducerTurn,
-                stage,
-                payload,
-            )
-            .is_ok()
-    }
-
-    fn exactly_matches_authority(&self, authority: &LifecycleReplayAuthorityV1) -> bool {
-        authority
-            == &LifecycleReplayAuthorityV1 {
-                format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
-                payload: ReplayPayloadBindingV1::None,
-                source: LifecycleReplaySourceV1::CertifiedServeStorage(self.family.source.clone()),
-            }
-    }
-}
-
-fn certified_serve_producer_physical_digest(
-    source: &CertifiedServeStorageSourceV1,
-) -> LifecycleDigest {
-    let request_hash = HashOf::new(&source.request);
-    let mut projection =
-        Vec::with_capacity(PRODUCER_TURN_PHYSICAL_DOMAIN.len() + size_of::<u64>() + Hash::LENGTH);
-    projection.extend_from_slice(PRODUCER_TURN_PHYSICAL_DOMAIN);
-    append_field(&mut projection, request_hash.as_ref());
-    digest_from_hash(&Hash::new(projection))
-}
-
-fn exact_certified_serve_storage_replay_family(
-    active_context: LifecycleContext,
-    authenticated: &AuthenticatedCertifiedBodyRequest,
-    storage_payload_hash: Hash,
-    local_retainer: wire::ValidatorIndex,
-) -> Option<Arc<CertifiedServeStorageReplayFamilyV1>> {
-    let request = authenticated.request();
-    let local_retainer_index = usize::try_from(local_retainer).ok()?;
-    if authenticated.request_hash() != HashOf::new(request)
-        || local_retainer_index >= wire::MAX_VALIDATORS_PER_HEIGHT
-        || request
-            .certificate
-            .signers
-            .binary_search(&local_retainer)
-            .is_err()
-    {
-        return None;
-    }
-    let source = CertifiedServeStorageSourceV1 {
-        request: request.clone(),
-        payload_hash: *storage_payload_hash.as_ref(),
-        local_retainer,
-    };
-    let serve = source
-        .project(
-            active_context,
-            LifecycleStageKind::CertifiedServe,
-            &certified_serve_pending_payload(authenticated),
-        )
-        .ok()?;
-    let producer = source
-        .project(
-            active_context,
-            LifecycleStageKind::ProducerTurn,
-            &ReplayPayloadBindingV1::None,
-        )
-        .ok()?;
-    if super::schema::producer_turn_key_for_serve(serve.key) != Some(producer.key)
-        || serve.work_class != LifecycleWorkClass::CertifiedServe
-        || producer.work_class != LifecycleWorkClass::ProducerTurn
-    {
-        return None;
-    }
-    Some(Arc::new(CertifiedServeStorageReplayFamilyV1 { source }))
-}
-
-fn certified_serve_pending_payload(
-    authenticated: &AuthenticatedCertifiedBodyRequest,
-) -> ReplayPayloadBindingV1 {
-    ReplayPayloadBindingV1::CertifiedServePending {
-        request: *authenticated.request_hash().as_ref(),
-        certificate: *HashOf::new(&authenticated.request().certificate).as_ref(),
-    }
-}
-
-fn recovered_certified_serve_payload(
-    recovered: &AuthenticatedRecoveredCertifiedServePayload,
-) -> Option<ReplayPayloadBindingV1> {
-    let request = recovered.request();
-    let request_hash = request.request_hash();
-    let certificate_hash = recovered.certificate_hash();
-    if recovered.id().request_hash() != request_hash
-        || request_hash != HashOf::new(request.request())
-        || certificate_hash != HashOf::new(&request.request().certificate)
-    {
-        return None;
-    }
-    Some(match recovered.state() {
-        AuthenticatedRecoveredCertifiedServePayloadState::Pending => {
-            ReplayPayloadBindingV1::CertifiedServePending {
-                request: *request_hash.as_ref(),
-                certificate: *certificate_hash.as_ref(),
-            }
-        }
-        AuthenticatedRecoveredCertifiedServePayloadState::Completed(completed) => {
-            ReplayPayloadBindingV1::CertifiedServeCompleted {
-                request: *request_hash.as_ref(),
-                certificate: *certificate_hash.as_ref(),
-                response: *completed.response_hash().as_ref(),
-            }
-        }
-        AuthenticatedRecoveredCertifiedServePayloadState::Negative(outcome) => {
-            let outcome = match outcome {
-                CertifiedServePayloadNegativeOutcome::Cancelled => {
-                    DurableServeNegativeOutcome::Cancelled
-                }
-                CertifiedServePayloadNegativeOutcome::Rejected(code) => {
-                    DurableServeNegativeOutcome::Rejected(*code)
-                }
-                CertifiedServePayloadNegativeOutcome::Failed(code) => {
-                    DurableServeNegativeOutcome::Failed(*code)
-                }
-            };
-            ReplayPayloadBindingV1::from_payload(DurablePayloadReference::CertifiedServeNegative {
-                request: LifecycleDigest::new(*request_hash.as_ref()),
-                certificate: LifecycleDigest::new(*certificate_hash.as_ref()),
-                outcome,
-            })
-        }
-    })
-}
+include!("v2_lifecycle_replay_authority_certified_serve.rs");
 
 include!("v2_lifecycle_replay_authority_certified_body.rs");
 
@@ -4831,7 +4676,7 @@ mod tests {
 
 #[cfg(test)]
 pub(super) use tests::{
-    durable_certified_fetch_projection_fixture, exact_body_record_fixture,
+    ReplayCase, durable_certified_fetch_projection_fixture, exact_body_record_fixture,
     exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
     exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
     exact_replay_authority_for_payload_fixture, foreign_certified_serve_family_authority_fixture,

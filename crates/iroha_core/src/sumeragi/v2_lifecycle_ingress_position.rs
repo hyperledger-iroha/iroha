@@ -285,6 +285,19 @@ struct PreparedFairIngressQueueSelection {
     disposition: FairV2IngressDequeueDisposition,
 }
 
+/// Prevalidated exact dequeue retaining the queue's exclusive service lock.
+///
+/// Producers may append beyond the frozen cut, but no competing consumer can
+/// change or remove the selected prefix between this preflight and LedgerV1
+/// publication. Consequently the post-fsync dequeue is assertion-only.
+#[must_use = "locked fair-ingress dequeue must commit or retain its witness"]
+pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
+    queue: &'a FairV2Ingress,
+    _service_guard: MutexGuard<'a, ()>,
+    witness: PreparedFairIngressQueueWitness,
+    selection: PreparedFairIngressQueueSelection,
+}
+
 impl PreparedFairIngressQueueWitness {
     /// Return the first physical ordinal excluded from this exact witness.
     pub(super) const fn physical_cut(&self) -> u128 {
@@ -328,6 +341,45 @@ impl PreparedFairIngressQueueWitness {
     /// Return the frozen ordinary dequeue disposition for the selected row.
     pub(super) const fn selected_disposition(&self) -> FairV2IngressDequeueDisposition {
         self.selected_disposition
+    }
+
+    /// Pre-lock and revalidate the exact dequeue before any durable publication.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn lock_exact_dequeue_retaining<'a>(
+        self,
+        queue: &'a FairV2Ingress,
+        expected_context: LifecycleContext,
+        expected_physical_ordinal: u64,
+    ) -> Result<LockedPreparedFairIngressExactDequeue<'a>, (FairIngressQueueCutError, Self)> {
+        if !Arc::ptr_eq(&self.queue_identity, &queue.queue_identity) {
+            return Err((FairIngressQueueCutError::ForeignQueue, self));
+        }
+        if self.selected_identity.context != expected_context {
+            return Err((FairIngressQueueCutError::ForeignCommitContext, self));
+        }
+        if self.selected_identity.physical_admission_ordinal != expected_physical_ordinal {
+            return Err((FairIngressQueueCutError::ForeignCommitOrdinal, self));
+        }
+        if !self.is_internally_exact() {
+            return Err((FairIngressQueueCutError::QueueCutChanged, self));
+        }
+        let service_guard = queue.service_lock.lock();
+        let selection = match self.revalidate_for_commit(queue) {
+            Ok(selection) if selection.disposition == self.selected_disposition => selection,
+            Ok(_) => return Err((FairIngressQueueCutError::QueueCutChanged, self)),
+            Err(error) => return Err((error, self)),
+        };
+        let state = queue.state.lock();
+        if !self.metadata_matches_locked(&state) {
+            return Err((FairIngressQueueCutError::QueueCutChanged, self));
+        }
+        drop(state);
+        Ok(LockedPreparedFairIngressExactDequeue {
+            queue,
+            _service_guard: service_guard,
+            witness: self,
+            selection,
+        })
     }
 
     /// Atomically remove the exact selected occurrence while retaining this
@@ -585,6 +637,37 @@ impl PreparedFairIngressQueueWitness {
             && current == self.geometry
             && serve_projection == self.serve_projection
             && leader_wire_projection == self.leader_wire_projection
+    }
+}
+
+impl LockedPreparedFairIngressExactDequeue<'_> {
+    /// Assertion-remove the prevalidated occurrence after LedgerV1 fsync.
+    pub(super) fn commit(self) -> (InboundBlockMessage, FairV2IngressDequeueDisposition) {
+        let Self {
+            queue,
+            _service_guard,
+            witness,
+            selection,
+        } = self;
+        let mut state = queue.state.lock();
+        assert!(
+            witness.metadata_matches_locked(&state),
+            "locked recovered Fetch ingress prefix changed after LedgerV1 publication"
+        );
+        let dequeued = queue
+            .dequeue_selected_locked(
+                &mut state,
+                &selection.ready_sources,
+                selection.selected_source_index,
+                selection.physical_admission_ordinal,
+                selection.disposition,
+                true,
+                Instant::now(),
+            )
+            .expect("prevalidated recovered Fetch dequeue is infallible after publication");
+        drop(state);
+        drop(_service_guard);
+        dequeued
     }
 }
 

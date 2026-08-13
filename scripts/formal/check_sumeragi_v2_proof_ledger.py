@@ -192,6 +192,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py",
     "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
     "sumeragi_v2_proof_ledger_successor_recovery_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py",
     "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
     "sumeragi_v2_proof_ledger_release_inventory_contracts.py",
     "sumeragi_v2_proof_ledger_proof_architecture_contracts.py",
@@ -49446,7 +49447,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
-    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
+    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "6799b44549fe649a8253b718b8f3ba76fcce296e594f41e212d9c8c7e3bc3d23"
     ),
@@ -75125,10 +75126,9 @@ if confirmed_snapshot != artifact_snapshot
 
 
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_chain_inventory_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_release_inventory_contracts.py")
-
-
 
 _execute_checker_component("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py")
 

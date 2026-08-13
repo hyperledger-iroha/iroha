@@ -111,7 +111,10 @@ use super::{
         CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
         LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal,
         PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
-        ProductionV2CompletionObserverActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+        PreparedRecoveredLifecycleSignDispatch, ProductionV2CompletionObserverActivationPermitV1,
+        RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchBodyPersistenceCompletionV1,
+        RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
+        RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
     },
     v2_runtime::{
         ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
@@ -119,7 +122,7 @@ use super::{
         SerializedV2Runtime,
     },
     v2_transport::{
-        AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
+        AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk, V2TransportError,
         authenticate_certified_body_request_identity,
         authenticate_certified_body_request_with_validator_pops,
     },
@@ -289,6 +292,389 @@ pub(crate) fn reliable_flush_trace_projection(
     })
 }
 
+/// Move-only exact Sign command projected from one closed recovered carrier.
+///
+/// Construction consumes a registry-minted identity and rehashes the complete
+/// tag/request pair against its installed Effect digest. A Prepare vote also
+/// retains its exact future `PreparedCandidateBody` marker. The task exposes
+/// no raw request, marker, signature, outbound payload, runtime binding, or
+/// generic work identifier outside this worker module.
+#[must_use = "a recovered Sign task must enter its dedicated worker reservation"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignTaskV1 {
+    identity: RecoveredLifecycleSignDispatchIdentityV1,
+    tag: EventTag,
+    request: super::v2::SignRequest,
+    prepared_candidate: Option<PreparedCandidateBody>,
+}
+
+impl RecoveredLifecycleSignTaskV1 {
+    /// Seal exact carrier-derived material under its registry identity.
+    pub(in crate::sumeragi) fn from_registry_projection(
+        identity: RecoveredLifecycleSignDispatchIdentityV1,
+        tag: EventTag,
+        request: super::v2::SignRequest,
+    ) -> Option<Self> {
+        let prepared_candidate = match &request {
+            super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
+                Some(PreparedCandidateBody {
+                    tag,
+                    subject: vote.subject,
+                })
+            }
+            super::v2::SignRequest::Proposal(_)
+            | super::v2::SignRequest::Vote(_)
+            | super::v2::SignRequest::TimeoutVote(_) => None,
+        };
+        identity.authorizes_request(tag, &request).then_some(Self {
+            identity,
+            tag,
+            request,
+            prepared_candidate,
+        })
+    }
+
+    /// Return the dedicated class-sensitive queue key.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
+        self.identity.key()
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        ordinal: u128,
+        tag: EventTag,
+        request: super::v2::SignRequest,
+        class: super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1,
+    ) -> Self {
+        let identity =
+            RecoveredLifecycleSignDispatchIdentityV1::for_test(ordinal, tag, &request, class)
+                .expect("recovered Sign fixture retains one exact class and effect digest");
+        Self::from_registry_projection(identity, tag, request)
+            .expect("registry fixture identity revalidates its exact Sign material")
+    }
+}
+
+/// Move-only carrier-derived authority for one recovered Decision Fetch request.
+///
+/// Construction requires the registry-minted identity still sealed in the
+/// recovered WAL carrier. This type lives beside [`ProductionV2Services`] so
+/// its exact request material and the service's signer/context fields are
+/// joined by one private implementation with no raw-key permit surface.
+#[must_use = "recovered Decision Fetch authority must enter the fixed production service"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchRequestAuthorityV1 {
+    identity: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchIdentityV1,
+    tag: EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    sources: Vec<PeerId>,
+    certificate: wire::QuorumCertificate,
+}
+
+impl RecoveredDecisionFetchRequestAuthorityV1 {
+    /// Seal exact carrier material under its registry-minted identity.
+    pub(in crate::sumeragi) fn from_registry_projection(
+        identity: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchIdentityV1,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        sources: Vec<PeerId>,
+        certificate: wire::QuorumCertificate,
+    ) -> Option<Self> {
+        identity
+            .authorizes_request(tag, round, subject, &sources, &certificate)
+            .then_some(Self {
+                identity,
+                tag,
+                round,
+                subject,
+                sources,
+                certificate,
+            })
+    }
+}
+
+/// Dedicated executor owner for one lifecycle-recovered certified request.
+///
+/// No public or crate-visible constructor exists: only the fixed production
+/// service method below can sign and authenticate the carrier-derived request.
+#[must_use = "a recovered Decision Fetch owner must enter its dedicated executor index"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchRequestOwnerV1 {
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    tag: EventTag,
+    sources: Vec<PeerId>,
+    authenticated: AuthenticatedCertifiedBodyRequest,
+    response_claim: Option<HashOf<wire::CertifiedBodyResponse>>,
+}
+
+impl RecoveredDecisionFetchRequestOwnerV1 {
+    /// Build one exact dedicated owner from an already authenticated request.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        tag: EventTag,
+        sources: Vec<PeerId>,
+        authenticated: AuthenticatedCertifiedBodyRequest,
+    ) -> Self {
+        Self {
+            key,
+            tag,
+            sources,
+            authenticated,
+            response_claim: None,
+        }
+    }
+
+    /// Return the exact lifecycle request/response key.
+    pub(in crate::sumeragi) const fn dispatch_key(
+        &self,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        self.key
+    }
+
+    /// Hash of the exact signed request family.
+    pub(in crate::sumeragi) fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.authenticated.request_hash()
+    }
+
+    /// Compare the private transport logical request identity.
+    pub(in crate::sumeragi) fn has_same_logical_identity(
+        &self,
+        request: &wire::CertifiedBodyRequest,
+    ) -> bool {
+        let owned = self.authenticated.request();
+        owned.round == request.round
+            && owned.subject == request.subject
+            && owned.requester == request.requester
+    }
+
+    /// Ask the ordinary tracker whether it already owns this private request identity.
+    pub(in crate::sumeragi) fn conflicts_with_ordinary_tracker(
+        &self,
+        tracker: &super::v2_transport::OutstandingCertifiedBodyRequests,
+    ) -> bool {
+        tracker.contains_authenticated_identity(&self.authenticated)
+    }
+
+    /// Compare body coordinates without exposing the retained signed request.
+    pub(in crate::sumeragi) fn matches_body_coordinates(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        self.authenticated.request().round == round
+            && self.authenticated.request().subject == subject
+    }
+
+    /// Recheck the exact dedicated executor height and requester.
+    pub(in crate::sumeragi) fn validates_exact_executor_context(
+        &self,
+        context: &wire::HeightContext,
+        requester: &PeerId,
+    ) -> bool {
+        let request = self.authenticated.request();
+        self.key.matches_height_context(context)
+            && self.tag.height() == context.height
+            && request.round.context_id == context.id()
+            && request.round.height == context.height
+            && &request.requester == requester
+            && self.request_hash() == HashOf::new(request)
+            && self.sources
+                == context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>()
+    }
+
+    /// Authenticate one response against this exact request without exposing it.
+    pub(in crate::sumeragi) fn authenticate_response(
+        &self,
+        context: &wire::HeightContext,
+        response: wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+    ) -> Result<super::v2_transport::AuthenticatedCertifiedBodyResponse, V2TransportError> {
+        self.authenticated
+            .authenticate_response(context, response, authenticated_responder)
+    }
+
+    /// Project only the immutable candidate coordinates needed by the selector.
+    pub(in crate::sumeragi) const fn candidate_projection(
+        &self,
+    ) -> RecoveredDecisionFetchOwnerCandidateProjectionV1 {
+        RecoveredDecisionFetchOwnerCandidateProjectionV1 {
+            tag: self.tag,
+            round: self.authenticated.request().round,
+            subject: self.authenticated.request().subject,
+            response_claim: self.response_claim,
+        }
+    }
+
+    /// Recheck the exact claimed response before post-publication owner retirement.
+    pub(in crate::sumeragi) fn matches_settlement(
+        &self,
+        key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) -> bool {
+        self.key == key && self.response_claim == Some(response_hash)
+    }
+
+    /// Recheck the request-scoped response claim observed by a sealed selector candidate.
+    pub(in crate::sumeragi) fn matches_response_claim_preflight(
+        &self,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+        expected: super::v2_transport::CertifiedBodyResponseClaimPreflight,
+    ) -> bool {
+        match (self.response_claim, expected) {
+            (None, super::v2_transport::CertifiedBodyResponseClaimPreflight::Vacant) => true,
+            (
+                Some(claimed),
+                super::v2_transport::CertifiedBodyResponseClaimPreflight::ExactRetransmission,
+            ) => claimed == response_hash,
+            (Some(_), super::v2_transport::CertifiedBodyResponseClaimPreflight::Vacant)
+            | (
+                None,
+                super::v2_transport::CertifiedBodyResponseClaimPreflight::ExactRetransmission,
+            ) => false,
+        }
+    }
+
+    /// Install or coalesce only the exact response hash which was revalidated
+    /// immediately before the dedicated queue publication tail.
+    pub(in crate::sumeragi) fn commit_exact_response_claim(
+        &mut self,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) -> bool {
+        match self.response_claim {
+            None => {
+                self.response_claim = Some(response_hash);
+                true
+            }
+            Some(claimed) => claimed == response_hash,
+        }
+    }
+}
+
+/// Minimal immutable selector projection of a dedicated recovered request owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchOwnerCandidateProjectionV1 {
+    pub(in crate::sumeragi) tag: EventTag,
+    pub(in crate::sumeragi) round: wire::ConsensusRound,
+    pub(in crate::sumeragi) subject: wire::BlockSubject,
+    pub(in crate::sumeragi) response_claim: Option<HashOf<wire::CertifiedBodyResponse>>,
+}
+
+/// Closed signed output retained for the eventual restart-closed successor transaction.
+///
+/// The complete task remains inside this result, so the exact tag/request is
+/// transitively pinned to the carrier and queue key. Prepare-body successor
+/// material stays in that opaque task and Proposal payload bytes stay in this
+/// opaque result; neither is applied to services in this dispatch-only tranche.
+/// The raw signature likewise has no projection surface.
+struct RecoveredLifecycleSignWorkerResultV1 {
+    task: RecoveredLifecycleSignTaskV1,
+    signature: Vec<u8>,
+    outbound_payload: Option<EncodedV2Payload>,
+}
+
+/// Move-only worker proof consumed only by the recovered-Sign adapter preview.
+///
+/// The constructor stays private to this module and the material can be
+/// released only with the adapter-private one-shot permit. This keeps the raw
+/// request, signature, and restored Proposal payload out of lifecycle callers
+/// while still letting the sole serialized adapter replay `Signed` exactly.
+#[must_use = "recovered Sign material must enter the fixed adapter preview"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
+    key: RecoveredLifecycleSignDispatchKeyV1,
+    tag: EventTag,
+    request: super::v2::SignRequest,
+    signature: Vec<u8>,
+    outbound_payload: Option<EncodedV2Payload>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
+    /// Consume the worker proof through the adapter's private projection seam.
+    pub(in crate::sumeragi) fn consume_for_adapter(
+        self,
+        _permit: super::v2::RecoveredLifecycleSignAdapterCompletionPermitV1,
+    ) -> (
+        RecoveredLifecycleSignDispatchKeyV1,
+        EventTag,
+        super::v2::SignRequest,
+        Vec<u8>,
+        Option<EncodedV2Payload>,
+    ) {
+        (
+            self.key,
+            self.tag,
+            self.request,
+            self.signature,
+            self.outbound_payload,
+        )
+    }
+
+    /// Build exact guarded Sign material for adapter-preview behavior tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        ordinal: u128,
+        tag: EventTag,
+        request: super::v2::SignRequest,
+        signature: Vec<u8>,
+        outbound_payload: Option<EncodedV2Payload>,
+        class: super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1,
+    ) -> Self {
+        let task = RecoveredLifecycleSignTaskV1::for_test(ordinal, tag, request, class);
+        Self {
+            key: task.dispatch_key(),
+            tag: task.tag,
+            request: task.request,
+            signature,
+            outbound_payload,
+        }
+    }
+}
+
+impl RecoveredLifecycleSignWorkerResultV1 {
+    const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
+        self.task.dispatch_key()
+    }
+
+    fn is_exact(&self) -> bool {
+        let expected_prepared = match &self.task.request {
+            super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
+                Some(PreparedCandidateBody {
+                    tag: self.task.tag,
+                    subject: vote.subject,
+                })
+            }
+            super::v2::SignRequest::Proposal(_)
+            | super::v2::SignRequest::Vote(_)
+            | super::v2::SignRequest::TimeoutVote(_) => None,
+        };
+        self.task
+            .identity
+            .authorizes_request(self.task.tag, &self.task.request)
+            && self.task.prepared_candidate == expected_prepared
+            && !self.signature.is_empty()
+            && match (&self.task.request, &self.outbound_payload) {
+                (super::v2::SignRequest::Proposal(proposal), Some(payload)) => {
+                    payload.manifest() == &proposal.manifest
+                }
+                (
+                    super::v2::SignRequest::Vote(_) | super::v2::SignRequest::TimeoutVote(_),
+                    None,
+                ) => true,
+                (
+                    super::v2::SignRequest::Proposal(_)
+                    | super::v2::SignRequest::Vote(_)
+                    | super::v2::SignRequest::TimeoutVote(_),
+                    _,
+                ) => false,
+            }
+    }
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 enum V2IoCommand {
     Sign {
         task: ConsensusSignTask,
@@ -296,9 +682,11 @@ enum V2IoCommand {
     },
     Store(BodyStoreTask),
     PersistCertifiedFetchBody(CertifiedFetchBodyPersistenceTask),
+    PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1),
     Validate(BodyValidationTask),
     Apply(ApplyTask),
     RecoveredDecisionApply(RecoveredDecisionApplyTaskV1),
+    RecoveredLifecycleSign(RecoveredLifecycleSignTaskV1),
     #[cfg(test)]
     RecoveredDecisionApplyFixture(RecoveredDecisionApplyDispatchKeyV1),
     Serve {
@@ -1198,9 +1586,11 @@ impl V2IoCommand {
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Validate(_)
             | Self::Apply(_)
-            | Self::RecoveredDecisionApply(_) => V2IoAdmissionClass::Consensus,
+            | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_) => V2IoAdmissionClass::Consensus,
             #[cfg(test)]
             Self::RecoveredDecisionApplyFixture(_) => V2IoAdmissionClass::Consensus,
             Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
@@ -1217,6 +1607,8 @@ impl V2IoCommand {
             Self::Validate(task) => Some(task.id()),
             Self::Apply(task) => Some(task.id()),
             Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
@@ -1234,6 +1626,10 @@ impl V2IoCommand {
             Self::Validate(task) => Some(task.lifecycle_ordinal()),
             Self::Apply(task) => Some(task.lifecycle_ordinal()),
             Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+            Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+            Self::PersistRecoveredDecisionFetchBody(task) => {
+                Some(task.dispatch_key().lifecycle_ordinal())
+            }
             #[cfg(test)]
             Self::RecoveredDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
             Self::PersistCertifiedFetchBody(_)
@@ -1250,9 +1646,11 @@ impl V2IoCommand {
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
@@ -1268,7 +1666,9 @@ impl V2IoCommand {
             Self::Validate(_) => Some(V2IoCancellableKind::Validate),
             Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
@@ -1323,6 +1723,8 @@ impl V2IoCommand {
                 },
             )),
             Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
@@ -1340,12 +1742,52 @@ impl V2IoCommand {
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Validate(_)
             | Self::Apply(_)
+            | Self::RecoveredLifecycleSign(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
+        }
+    }
+
+    const fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
+        match self {
+            Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key()),
+            Self::Sign { .. }
+            | Self::Store(_)
+            | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::Validate(_)
+            | Self::Apply(_)
+            | Self::RecoveredDecisionApply(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
+        }
+    }
+
+    const fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
+        match self {
+            Self::PersistRecoveredDecisionFetchBody(task) => Some(task.dispatch_key()),
+            Self::Sign { .. }
+            | Self::Store(_)
+            | Self::PersistCertifiedFetchBody(_)
+            | Self::Validate(_)
+            | Self::Apply(_)
+            | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
 }
@@ -1420,6 +1862,8 @@ struct V2IoCompletionOwnership {
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
     recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
 }
 
 #[derive(Debug, Default)]
@@ -1527,6 +1971,8 @@ impl V2IoAdmission {
         requires_runtime_capacity: bool,
         runtime_lifecycle_ordinal: Option<u128>,
         recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+        recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+        recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
     ) {
         let mut state = self
             .completion_state
@@ -1542,6 +1988,8 @@ impl V2IoAdmission {
             requires_runtime_capacity,
             runtime_lifecycle_ordinal,
             recovered_decision_apply,
+            recovered_lifecycle_sign,
+            recovered_decision_fetch,
         });
     }
 
@@ -1580,6 +2028,60 @@ impl V2IoAdmission {
                 && owned.recovered_decision_apply == Some(key)
         });
         matches.next().is_some() && matches.next().is_none()
+    }
+
+    fn transfer_recovered_lifecycle_sign_completion_at(
+        &self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        position: usize,
+    ) -> bool {
+        let mut state = self
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(owner) = state.owned.get(position) else {
+            return false;
+        };
+        if !owner.requires_runtime_capacity
+            || owner.runtime_lifecycle_ordinal != Some(key.lifecycle_ordinal())
+            || owner.recovered_lifecycle_sign != Some(key)
+            || state
+                .owned
+                .iter()
+                .filter(|owned| owned.recovered_lifecycle_sign == Some(key))
+                .count()
+                != 1
+        {
+            return false;
+        }
+        state.owned.remove(position).is_some()
+    }
+
+    fn transfer_recovered_decision_fetch_completion_at(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        position: usize,
+    ) -> bool {
+        let mut state = self
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(owner) = state.owned.get(position) else {
+            return false;
+        };
+        if owner.requires_runtime_capacity
+            || owner.runtime_lifecycle_ordinal != Some(key.lifecycle_ordinal())
+            || owner.recovered_decision_fetch != Some(key)
+            || state
+                .owned
+                .iter()
+                .filter(|owned| owned.recovered_decision_fetch == Some(key))
+                .count()
+                != 1
+        {
+            return false;
+        }
+        state.owned.remove(position).is_some()
     }
 
     fn transfer_recovered_decision_apply_completion(
@@ -1688,6 +2190,18 @@ struct V2IoTrackedRecoveredDecisionApplyV1 {
     state: V2IoWorkState,
 }
 
+#[derive(Debug)]
+struct V2IoTrackedRecoveredLifecycleSignV1 {
+    state: V2IoWorkState,
+}
+
+#[derive(Debug)]
+struct V2IoTrackedRecoveredDecisionFetchBodyV1 {
+    id: super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceIdV1,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    state: V2IoWorkState,
+}
+
 enum RecoveredDecisionApplyRetryQueueErrorV1<T> {
     Unavailable(T),
     InvalidOwner(T),
@@ -1776,6 +2290,10 @@ struct V2IoCommandQueueState {
     work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
     recovered_decision_applies:
         BTreeMap<RecoveredDecisionApplyDispatchKeyV1, V2IoTrackedRecoveredDecisionApplyV1>,
+    recovered_lifecycle_signs:
+        BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>,
+    recovered_decision_fetch_bodies:
+        BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,
     serves: BTreeMap<CertifiedServeLifecycleId, V2IoTrackedServe>,
     serve_by_request: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CertifiedServeLifecycleId>,
     /// One monotone high-watermark/lifecycle slot per signed requester and
@@ -2005,6 +2523,47 @@ impl LifecycleIoCapacityReservation<'_> {
         self.preflight_selected_target_work_absent() && state.work.get(&work_id).is_none()
     }
 
+    /// Verify that one recovered body persistence task owns this exact target
+    /// and has no queued, active, or completion-pending dedicated predecessor.
+    pub(in crate::sumeragi) fn preflight_recovered_decision_fetch_body_persistence(
+        &self,
+        task: &RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) -> bool {
+        let target = self
+            .target
+            .as_ref()
+            .expect("live reservation retains its one-shot target");
+        let state = self
+            .state
+            .as_ref()
+            .expect("live reservation retains the queue guard");
+        target.kind() == LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+            && task.matches_ingress_identity(target.ingress_identity())
+            && target.matches_recovered_decision_fetch_key(task.dispatch_key())
+            && !state
+                .recovered_decision_fetch_bodies
+                .contains_key(&task.dispatch_key())
+    }
+
+    /// Reject an exact recovered target already represented anywhere in its
+    /// dedicated queued/active/completion-pending index before consuming the selector.
+    pub(in crate::sumeragi) fn preflight_recovered_decision_fetch_target_absent(&self) -> bool {
+        let target = self
+            .target
+            .as_ref()
+            .expect("live reservation retains its one-shot target");
+        let state = self
+            .state
+            .as_ref()
+            .expect("live reservation retains the queue guard");
+        target.kind() == LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+            && !state
+                .recovered_decision_fetch_bodies
+                .keys()
+                .copied()
+                .any(|key| target.matches_recovered_decision_fetch_key(key))
+    }
+
     /// Abort before planning and restore the one-shot target into its exact
     /// selector while releasing capacity under the retained queue lock.
     pub(crate) fn abort_into_prepared(
@@ -2067,6 +2626,45 @@ impl LifecycleIoCapacityReservation<'_> {
         self.operation
             .take()
             .expect("committed reservation retains its fail-stop operation")
+            .complete();
+    }
+
+    /// Publish one exact recovered persistence command under its dedicated
+    /// lifecycle key. Preflight plus the retained queue mutex makes this tail
+    /// assertion-only after the executor response claim is installed.
+    pub(in crate::sumeragi) fn commit_recovered_decision_fetch_body_persistence(
+        mut self,
+        task: RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) {
+        assert!(
+            self.preflight_recovered_decision_fetch_body_persistence(&task),
+            "reserved recovered Decision Fetch persistence changed before publication"
+        );
+        let key = task.dispatch_key();
+        let tracked = V2IoTrackedRecoveredDecisionFetchBodyV1 {
+            id: task.id(),
+            response_hash: task.response_hash(),
+            state: V2IoWorkState::Queued,
+        };
+        let mut state = self
+            .state
+            .take()
+            .expect("committed reservation retains the queue guard");
+        assert!(
+            state
+                .recovered_decision_fetch_bodies
+                .insert(key, tracked)
+                .is_none(),
+            "exact preflight forbids duplicate recovered body persistence"
+        );
+        state
+            .commands
+            .push_back(V2IoCommand::PersistRecoveredDecisionFetchBody(task));
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("committed recovered persistence retains its fail-stop operation")
             .complete();
     }
 
@@ -2212,6 +2810,146 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureErrorV1 {
     /// The exact queue position is not representable in the scheduler rank.
     PositionOverflow,
     /// The same closed carrier already owns queued, active, or pending work.
+    AlreadyDispatched,
+}
+
+/// Locked Consensus capacity for one exact lifecycle-owned recovered Sign.
+#[must_use = "the recovered Sign reservation must commit its prepared dispatch"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignCapacityReservationV1<'a> {
+    queue: &'a V2IoCommandQueue,
+    state: Option<std::sync::MutexGuard<'a, V2IoCommandQueueState>>,
+    operation: Option<ConsensusFailStopOperation<'a>>,
+    key: RecoveredLifecycleSignDispatchKeyV1,
+    predecessor_debt: u64,
+    predecessor_ordinal: Option<u128>,
+}
+
+impl RecoveredLifecycleSignCapacityReservationV1<'_> {
+    /// Return frozen worker predecessor debt only to scheduler authority.
+    pub(in crate::sumeragi) const fn authenticated_predecessor_debt(
+        &self,
+        _factory: &AuthenticatedSchedulerInputsFactory,
+    ) -> u64 {
+        self.predecessor_debt
+    }
+
+    /// Recheck that the claimed registry projection names this reservation.
+    pub(in crate::sumeragi) fn preflight(
+        &self,
+        prepared: &PreparedRecoveredLifecycleSignDispatch<'_>,
+    ) -> bool {
+        let state = self
+            .state
+            .as_ref()
+            .expect("live recovered Sign reservation retains its queue cut");
+        prepared.dispatch_key() == self.key
+            && !state.recovered_lifecycle_signs.contains_key(&self.key)
+    }
+
+    /// Release an uncommitted queue cut after the caller proved no claim remains.
+    pub(in crate::sumeragi) fn cancel_uncommitted(mut self) {
+        self.operation
+            .take()
+            .expect("cancelled recovered Sign reservation retains its operation")
+            .complete();
+    }
+
+    /// Atomically arm the closed carrier and publish its dedicated command.
+    pub(in crate::sumeragi) fn commit(self, prepared: PreparedRecoveredLifecycleSignDispatch<'_>) {
+        assert!(
+            self.preflight(&prepared),
+            "reserved recovered Sign changed before queue publication"
+        );
+        let task = prepared.commit_for_worker();
+        self.publish_task(task);
+    }
+
+    /// Publish one exact test task through the production reservation state machine.
+    #[cfg(test)]
+    fn commit_for_test(self, task: RecoveredLifecycleSignTaskV1) {
+        self.publish_task(task);
+    }
+
+    fn publish_task(mut self, task: RecoveredLifecycleSignTaskV1) {
+        assert_eq!(
+            task.dispatch_key(),
+            self.key,
+            "registry projection returned another recovered Sign dispatch"
+        );
+        let mut state = self
+            .state
+            .take()
+            .expect("committed recovered Sign reservation retains its queue cut");
+        let replaced = state.recovered_lifecycle_signs.insert(
+            self.key,
+            V2IoTrackedRecoveredLifecycleSignV1 {
+                state: V2IoWorkState::Queued,
+            },
+        );
+        assert!(
+            replaced.is_none(),
+            "exact preflight forbids duplicate recovered Sign dispatch"
+        );
+        state
+            .commands
+            .push_back(V2IoCommand::RecoveredLifecycleSign(task));
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("committed recovered Sign retains its fail-stop operation")
+            .complete();
+    }
+}
+
+impl Drop for RecoveredLifecycleSignCapacityReservationV1<'_> {
+    fn drop(&mut self) {
+        drop(self.operation.take());
+        if let Some(mut state) = self.state.take() {
+            self.queue.admission.release();
+            if let Some(predecessor_ordinal) = self.predecessor_ordinal {
+                let reservation = state
+                    .serve_ingress_reservation
+                    .as_mut()
+                    .expect("reserved recovered Sign predecessor retains its Serve ticket");
+                if let CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } = &mut reservation.runtime_episode
+                    && *selected == Some(predecessor_ordinal)
+                {
+                    *selected = None;
+                }
+            }
+            let materialized = self.queue.materialize_serve_barrier(&mut state);
+            drop(state);
+            if materialized {
+                self.queue.ready.notify_all();
+            }
+        }
+    }
+}
+
+/// Typed capacity result for the dedicated recovered Sign queue.
+#[must_use = "the recovered Sign capacity result must be consumed"]
+pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureV1<'a> {
+    /// Exact queue position is reserved for registry projection commit.
+    Reserved(RecoveredLifecycleSignCapacityReservationV1<'a>),
+    /// No Consensus position was available; no logical row was claimed.
+    Unavailable,
+}
+
+/// Failure before recovered Sign worker capacity can be retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureErrorV1 {
+    /// The dispatch key belongs to another immutable height context.
+    ForeignContext,
+    /// The height-local worker command corridor is closed.
+    Disconnected,
+    /// Canonical output admission already requires restart.
+    OutputClosed,
+    /// The exact queue position is not representable in scheduler rank.
+    PositionOverflow,
+    /// The same carrier already owns queued, active, or pending work.
     AlreadyDispatched,
 }
 
@@ -2977,6 +3715,8 @@ fn build_v2_io_command_channel(
             commands: VecDeque::with_capacity(capacity.min(1_024)),
             work: BTreeMap::new(),
             recovered_decision_applies: BTreeMap::new(),
+            recovered_lifecycle_signs: BTreeMap::new(),
+            recovered_decision_fetch_bodies: BTreeMap::new(),
             serves,
             serve_by_request,
             serve_by_family,
@@ -3542,6 +4282,9 @@ impl V2IoCommandQueue {
             LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence => {
                 V2IoAdmissionClass::Consensus
             }
+            LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence => {
+                V2IoAdmissionClass::Consensus
+            }
         };
         let state = self.lock();
         if !state.sender_open || !state.receiver_open {
@@ -3675,6 +4418,105 @@ impl V2IoCommandQueue {
         }
         Ok(RecoveredDecisionApplyCapacityCaptureV1::Reserved(
             RecoveredDecisionApplyCapacityReservationV1 {
+                queue: self.as_ref(),
+                state: Some(state),
+                operation: Some(operation),
+                key,
+                predecessor_debt,
+                predecessor_ordinal: exact_predecessor_ordinal,
+            },
+        ))
+    }
+
+    fn capture_recovered_lifecycle_sign_capacity<'a>(
+        self: &'a Arc<Self>,
+        operation: ConsensusFailStopOperation<'a>,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+    ) -> Result<
+        RecoveredLifecycleSignCapacityCaptureV1<'a>,
+        RecoveredLifecycleSignCapacityCaptureErrorV1,
+    > {
+        let mut state = self.lock();
+        if !state.sender_open || !state.receiver_open {
+            operation.complete();
+            return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::Disconnected);
+        }
+        if state.recovered_lifecycle_signs.contains_key(&key) {
+            operation.complete();
+            return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::AlreadyDispatched);
+        }
+        let predecessor_debt = match u64::try_from(state.commands.len()) {
+            Ok(debt) => debt,
+            Err(_) => {
+                operation.complete();
+                return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::PositionOverflow);
+            }
+        };
+        let command_ordinal = key.lifecycle_ordinal();
+        let exact_predecessor_ordinal =
+            state
+                .serve_ingress_reservation
+                .as_ref()
+                .and_then(|reservation| {
+                    if command_ordinal >= reservation.id.0 {
+                        return None;
+                    }
+                    match reservation.runtime_episode {
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: None,
+                        } => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: Some(existing),
+                        } if existing == command_ordinal => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Ready
+                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
+                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                    }
+                });
+        let exact_target_active = state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some();
+        if exact_target_active && exact_predecessor_ordinal.is_none() {
+            operation.complete();
+            return Ok(RecoveredLifecycleSignCapacityCaptureV1::Unavailable);
+        }
+        let suspended_target = exact_predecessor_ordinal.is_some()
+            && self.suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
+        if state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
+        {
+            if suspended_target {
+                assert!(
+                    self.materialize_serve_barrier(&mut state),
+                    "failed recovered Sign reservation must restore its Serve placeholder"
+                );
+            }
+            operation.complete();
+            return Ok(RecoveredLifecycleSignCapacityCaptureV1::Unavailable);
+        }
+        if let Some(predecessor_ordinal) = exact_predecessor_ordinal {
+            let reservation = state
+                .serve_ingress_reservation
+                .as_mut()
+                .expect("recovered Sign predecessor retains its exact Serve ticket");
+            match &mut reservation.runtime_episode {
+                CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } => match selected {
+                    Some(existing) => assert_eq!(
+                        *existing, predecessor_ordinal,
+                        "one Serve turn cannot admit two causal lifecycle owners"
+                    ),
+                    None => *selected = Some(predecessor_ordinal),
+                },
+                CertifiedServeRuntimeEpisodeState::Ready
+                | CertifiedServeRuntimeEpisodeState::Complete => {
+                    unreachable!("recovered Sign predecessor escaped its claimed Serve turn")
+                }
+            }
+        }
+        Ok(RecoveredLifecycleSignCapacityCaptureV1::Reserved(
+            RecoveredLifecycleSignCapacityReservationV1 {
                 queue: self.as_ref(),
                 state: Some(state),
                 operation: Some(operation),
@@ -6954,6 +7796,14 @@ impl V2IoCommandQueue {
         if let Some(key) = command.recovered_decision_apply_key() {
             return Err(V2IoTrySendError::UnreservedRecoveredDecisionApply { key, command });
         }
+        assert!(
+            command.recovered_lifecycle_sign_key().is_none(),
+            "recovered Sign commands require their locked lifecycle reservation"
+        );
+        assert!(
+            command.recovered_decision_fetch_key().is_none(),
+            "recovered Decision Fetch persistence requires its locked lifecycle reservation"
+        );
         let descriptor = command.work_descriptor();
         let mut state = self.lock();
         if !state.sender_open || !state.receiver_open {
@@ -7134,6 +7984,22 @@ impl V2IoCommandQueue {
                     assert_eq!(tracked.state, V2IoWorkState::Queued);
                     tracked.state = V2IoWorkState::Active;
                 }
+                if let Some(key) = command.recovered_lifecycle_sign_key() {
+                    let tracked = state
+                        .recovered_lifecycle_signs
+                        .get_mut(&key)
+                        .expect("queued recovered Sign must have an ownership record");
+                    assert_eq!(tracked.state, V2IoWorkState::Queued);
+                    tracked.state = V2IoWorkState::Active;
+                }
+                if let Some(key) = command.recovered_decision_fetch_key() {
+                    let tracked = state
+                        .recovered_decision_fetch_bodies
+                        .get_mut(&key)
+                        .expect("queued recovered Decision Fetch body must retain its owner");
+                    assert_eq!(tracked.state, V2IoWorkState::Queued);
+                    tracked.state = V2IoWorkState::Active;
+                }
                 if let Some(lifecycle_id) = command.serve_lifecycle_id() {
                     let tracked = state
                         .serves
@@ -7195,6 +8061,22 @@ impl V2IoCommandQueue {
             assert_eq!(tracked.state, V2IoWorkState::Queued);
             tracked.state = V2IoWorkState::Active;
         }
+        if let Some(key) = command.recovered_lifecycle_sign_key() {
+            let tracked = state
+                .recovered_lifecycle_signs
+                .get_mut(&key)
+                .expect("queued recovered Sign must have an ownership record");
+            assert_eq!(tracked.state, V2IoWorkState::Queued);
+            tracked.state = V2IoWorkState::Active;
+        }
+        if let Some(key) = command.recovered_decision_fetch_key() {
+            let tracked = state
+                .recovered_decision_fetch_bodies
+                .get_mut(&key)
+                .expect("queued recovered Decision Fetch body must retain its owner");
+            assert_eq!(tracked.state, V2IoWorkState::Queued);
+            tracked.state = V2IoWorkState::Active;
+        }
         if let Some(lifecycle_id) = command.serve_lifecycle_id() {
             let tracked = state
                 .serves
@@ -7231,6 +8113,52 @@ impl V2IoCommandQueue {
         if tracked.state != V2IoWorkState::Active || result.dispatch_key() != key {
             return Err(
                 "completed recovered Decision Apply changed its exact dispatch material".to_owned(),
+            );
+        }
+        tracked.state = V2IoWorkState::CompletionPending;
+        Ok(())
+    }
+
+    fn complete_recovered_lifecycle_sign(
+        &self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        result: &RecoveredLifecycleSignWorkerResultV1,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_lifecycle_signs
+            .get_mut(&key)
+            .ok_or_else(|| "completed recovered Sign lost its lifecycle owner".to_owned())?;
+        if tracked.state != V2IoWorkState::Active
+            || result.dispatch_key() != key
+            || !result.is_exact()
+        {
+            return Err("completed recovered Sign changed its exact dispatch material".to_owned());
+        }
+        tracked.state = V2IoWorkState::CompletionPending;
+        Ok(())
+    }
+
+    fn complete_recovered_decision_fetch_body(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_decision_fetch_bodies
+            .get_mut(&key)
+            .ok_or_else(|| {
+                "completed recovered Decision Fetch body lost its lifecycle owner".to_owned()
+            })?;
+        if tracked.state != V2IoWorkState::Active
+            || completion.dispatch_key() != key
+            || completion.id() != tracked.id
+            || completion.response_hash() != tracked.response_hash
+        {
+            return Err(
+                "completed recovered Decision Fetch body changed its exact persistence material"
+                    .to_owned(),
             );
         }
         tracked.state = V2IoWorkState::CompletionPending;
@@ -7380,6 +8308,23 @@ impl V2IoCommandQueue {
         })
     }
 
+    fn transfer_recovered_lifecycle_sign_completion(
+        self: &Arc<Self>,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        ownership_position: usize,
+    ) -> bool {
+        let state = self.lock();
+        let pending = state
+            .recovered_lifecycle_signs
+            .get(&key)
+            .is_some_and(|tracked| tracked.state == V2IoWorkState::CompletionPending);
+        if !pending {
+            return false;
+        }
+        self.admission
+            .transfer_recovered_lifecycle_sign_completion_at(key, ownership_position)
+    }
+
     fn acknowledge_recovered_decision_apply(&self, key: RecoveredDecisionApplyDispatchKeyV1) {
         let mut state = self.lock();
         let tracked = state
@@ -7387,6 +8332,31 @@ impl V2IoCommandQueue {
             .remove(&key)
             .expect("settled recovered Decision Apply must retain its exact command owner");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn acknowledge_recovered_lifecycle_sign(&self, key: RecoveredLifecycleSignDispatchKeyV1) {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_lifecycle_signs
+            .remove(&key)
+            .expect("settled recovered Sign must retain its exact command owner");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn acknowledge_recovered_decision_fetch_body(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        id: super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceIdV1,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_decision_fetch_bodies
+            .remove(&key)
+            .expect("settled recovered Decision Fetch must retain its exact command owner");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+        assert_eq!(tracked.id, id);
+        assert_eq!(tracked.response_hash, response_hash);
     }
 
     fn prepare_certified_fetch_body_persistence_ack(
@@ -7513,6 +8483,12 @@ impl V2IoCommandQueue {
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
         state
             .recovered_decision_applies
+            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+        state
+            .recovered_lifecycle_signs
+            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+        state
+            .recovered_decision_fetch_bodies
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
         for _ in 0..queued.saturating_add(active_serves) {
             self.admission.release();
@@ -7714,6 +8690,23 @@ impl V2IoCommandReceiver {
         self.queue.complete_recovered_decision_apply(key, result)
     }
 
+    fn complete_recovered_lifecycle_sign(
+        &self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        result: &RecoveredLifecycleSignWorkerResultV1,
+    ) -> Result<(), String> {
+        self.queue.complete_recovered_lifecycle_sign(key, result)
+    }
+
+    fn complete_recovered_decision_fetch_body(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
+    ) -> Result<(), String> {
+        self.queue
+            .complete_recovered_decision_fetch_body(key, completion)
+    }
+
     fn complete_serve_response(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -7786,6 +8779,63 @@ struct GuardedCertifiedFetchBodyPersistenceCompletion {
     drop_guard: CertifiedFetchBodyPersistenceDropGuard,
 }
 
+struct RecoveredDecisionFetchBodyCompletionDropGuardV1 {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl RecoveredDecisionFetchBodyCompletionDropGuardV1 {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RecoveredDecisionFetchBodyCompletionDropGuardV1 {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+struct GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
+    completion: Option<RecoveredDecisionFetchBodyPersistenceCompletionV1>,
+    drop_guard: RecoveredDecisionFetchBodyCompletionDropGuardV1,
+}
+
+impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
+    fn new(
+        completion: RecoveredDecisionFetchBodyPersistenceCompletionV1,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self {
+            completion: Some(completion),
+            drop_guard: RecoveredDecisionFetchBodyCompletionDropGuardV1::new(output_guard),
+        }
+    }
+
+    fn completion(&self) -> &RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+        self.completion
+            .as_ref()
+            .expect("armed recovered Decision Fetch completion retains its payload")
+    }
+
+    fn acknowledge_after_publication(mut self) {
+        let _completion = self
+            .completion
+            .take()
+            .expect("settled recovered Decision Fetch consumes its completion once");
+        self.drop_guard.disarm();
+    }
+}
+
 impl GuardedCertifiedFetchBodyPersistenceCompletion {
     fn new(
         completion: CertifiedFetchBodyPersistenceCompletion,
@@ -7842,6 +8892,57 @@ impl Drop for RecoveredDecisionApplyCompletionDropGuardV1 {
 struct GuardedRecoveredDecisionApplyWorkerResultV1 {
     result: Option<RecoveredDecisionApplyWorkerResultV1>,
     drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
+}
+
+struct RecoveredLifecycleSignCompletionDropGuardV1 {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl RecoveredLifecycleSignCompletionDropGuardV1 {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RecoveredLifecycleSignCompletionDropGuardV1 {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+struct GuardedRecoveredLifecycleSignWorkerResultV1 {
+    result: RecoveredLifecycleSignWorkerResultV1,
+    drop_guard: RecoveredLifecycleSignCompletionDropGuardV1,
+}
+
+impl GuardedRecoveredLifecycleSignWorkerResultV1 {
+    fn new(
+        result: RecoveredLifecycleSignWorkerResultV1,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self {
+            result,
+            drop_guard: RecoveredLifecycleSignCompletionDropGuardV1::new(output_guard),
+        }
+    }
+
+    const fn result(&self) -> &RecoveredLifecycleSignWorkerResultV1 {
+        &self.result
+    }
+
+    fn acknowledge_after_publication(mut self) {
+        self.drop_guard.disarm();
+    }
 }
 
 impl GuardedRecoveredDecisionApplyWorkerResultV1 {
@@ -7934,6 +9035,119 @@ impl Drop for RecoveredDecisionApplyWorkAckV1 {
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyCompletionV1 {
     guarded: Box<GuardedRecoveredDecisionApplyWorkerResultV1>,
     work_ack: RecoveredDecisionApplyWorkAckV1,
+}
+
+/// Guarded lifecycle-owned recovered Sign completion parked for fixed settlement.
+///
+/// This token deliberately has no raw result, signature, payload, request,
+/// parts, acknowledgement, or generic settlement method. Its fixed projection
+/// mints an adapter-private preview authority while retaining the guarded
+/// result. Its queue `Arc` remains alive while the guarded completion drops,
+/// so abandonment closes output while the exact dedicated command owner is
+/// still representable for crash recovery.
+#[must_use = "recovered Sign completion must enter restart-closed owner settlement"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {
+    guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+    queue: Arc<V2IoCommandQueue>,
+}
+
+/// Guarded durable recovered-Fetch body parked for restart-closed Store settlement.
+#[must_use = "recovered Decision Fetch persistence remains guarded and indexed"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {
+    guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+    queue: Arc<V2IoCommandQueue>,
+}
+
+impl PreparedRecoveredDecisionFetchBodyCompletionV1 {
+    fn new(
+        guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+        queue: Arc<V2IoCommandQueue>,
+        ownership_position: usize,
+    ) -> Option<Self> {
+        let key = guarded.completion().dispatch_key();
+        let state_is_exact = {
+            let state = queue.lock();
+            state
+                .recovered_decision_fetch_bodies
+                .get(&key)
+                .is_some_and(|tracked| {
+                    tracked.state == V2IoWorkState::CompletionPending
+                        && tracked.id == guarded.completion().id()
+                        && tracked.response_hash == guarded.completion().response_hash()
+                })
+        };
+        (state_is_exact
+            && queue
+                .admission
+                .transfer_recovered_decision_fetch_completion_at(key, ownership_position))
+        .then_some(Self { guarded, queue })
+    }
+
+    /// Borrow the opaque durable completion for fixed settlement projections.
+    pub(in crate::sumeragi) fn completion(
+        &self,
+    ) -> &RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+        self.guarded.completion()
+    }
+
+    /// Retire the exact command index and disarm restart closure after LedgerV1 publication.
+    pub(in crate::sumeragi) fn acknowledge_after_publication(self) {
+        let key = self.guarded.completion().dispatch_key();
+        let id = self.guarded.completion().id();
+        let response_hash = self.guarded.completion().response_hash();
+        self.queue
+            .acknowledge_recovered_decision_fetch_body(key, id, response_hash);
+        self.guarded.acknowledge_after_publication();
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl PreparedRecoveredLifecycleSignCompletionV1 {
+    fn new(
+        guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+        queue: Arc<V2IoCommandQueue>,
+        ownership_position: usize,
+    ) -> Option<Self> {
+        queue
+            .transfer_recovered_lifecycle_sign_completion(
+                guarded.result().dispatch_key(),
+                ownership_position,
+            )
+            .then_some(Self { guarded, queue })
+    }
+
+    /// Revalidate and clone the still-guarded worker result for adapter preview.
+    ///
+    /// The returned value exposes no fields and cannot be unpacked without the
+    /// adapter-private permit. The original guarded result remains parked until
+    /// the complete LedgerV1 publication transaction acknowledges it.
+    pub(in crate::sumeragi) fn project_adapter_completion_authority(
+        &self,
+    ) -> Option<RecoveredLifecycleSignAdapterCompletionAuthorityV1> {
+        let result = self.guarded.result();
+        if !result.is_exact() {
+            return None;
+        }
+        Some(RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
+            key: result.dispatch_key(),
+            tag: result.task.tag,
+            request: result.task.request.clone(),
+            signature: result.signature.clone(),
+            outbound_payload: result.outbound_payload.clone(),
+        })
+    }
+
+    /// Retire the exact dedicated command owner and disarm restart closure.
+    ///
+    /// The lifecycle owner may call this only after LedgerV1 has durably
+    /// published the signed Broadcast successor and every volatile owner has
+    /// completed its assertion-only tail.
+    pub(in crate::sumeragi) fn acknowledge_after_publication(self) {
+        let key = self.guarded.result().dispatch_key();
+        self.queue.acknowledge_recovered_lifecycle_sign(key);
+        self.guarded.acknowledge_after_publication();
+    }
 }
 
 /// Result of atomically returning one guarded missing-sidecar Apply to the worker FIFO.
@@ -8029,9 +9243,13 @@ enum V2IoCompletion {
     },
     Stored(BodyStoreCompletion),
     CertifiedFetchBodyPersisted(GuardedCertifiedFetchBodyPersistenceCompletion),
+    RecoveredDecisionFetchBodyPersisted(
+        Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+    ),
     Validated(BodyValidationCompletion),
     Applied(Box<DurableApplyCompletion>),
     RecoveredDecisionApply(Box<GuardedRecoveredDecisionApplyWorkerResultV1>),
+    RecoveredLifecycleSign(Box<GuardedRecoveredLifecycleSignWorkerResultV1>),
     ApplyDeferred {
         work_id: EffectWorkId,
         reference: CertifiedMergeLedgerReference,
@@ -8070,6 +9288,22 @@ impl V2IoCompletion {
         }
     }
 
+    fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
+        match self {
+            Self::RecoveredLifecycleSign(guarded) => Some(guarded.result().dispatch_key()),
+            _ => None,
+        }
+    }
+
+    fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
+        match self {
+            Self::RecoveredDecisionFetchBodyPersisted(guarded) => {
+                Some(guarded.completion().dispatch_key())
+            }
+            _ => None,
+        }
+    }
+
     // `false` variants never enqueue a reducer completion. They operate only
     // on non-reducer effect, network, or service state (or report a terminal
     // failure), so they may be serviced behind one retained runtime result
@@ -8082,6 +9316,7 @@ impl V2IoCompletion {
                 | Self::Validated(_)
                 | Self::Applied(_)
                 | Self::RecoveredDecisionApply(_)
+                | Self::RecoveredLifecycleSign(_)
         )
     }
 
@@ -8094,12 +9329,18 @@ impl V2IoCompletion {
             Self::CertifiedFetchBodyPersisted(_) => {
                 V2IoCompletionAcknowledgement::LifecycleWorkRetained
             }
+            Self::RecoveredDecisionFetchBodyPersisted(_) => {
+                V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained
+            }
             Self::Validated(completion) => {
                 V2IoCompletionAcknowledgement::Work(completion.work_id())
             }
             Self::Applied(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
             Self::RecoveredDecisionApply(_) => {
                 V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained
+            }
+            Self::RecoveredLifecycleSign(_) => {
+                V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained
             }
             Self::CertifiedResponse {
                 lifecycle_id,
@@ -8129,6 +9370,8 @@ enum V2IoCompletionAcknowledgement {
     Serve(Box<V2IoServeCompletionAcknowledgement>),
     LifecycleWorkRetained,
     RecoveredDecisionApplyRetained,
+    RecoveredLifecycleSignRetained,
+    RecoveredDecisionFetchRetained,
     Untracked,
 }
 
@@ -8224,6 +9467,36 @@ impl V2CompletionDrainOutcome {
 #[must_use = "a returned recovered Decision Apply completion must be settled by its owner"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionDrainV1 {
     completion: Option<PreparedRecoveredDecisionApplyCompletionV1>,
+}
+
+/// Owner-only drain of at most one guarded recovered Sign completion.
+#[must_use = "a recovered Sign drain remains parked under its lifecycle owner"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignCompletionDrainV1 {
+    completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
+}
+
+/// Owner-only drain of at most one guarded recovered Fetch body completion.
+#[must_use = "a recovered Fetch completion must remain parked under its lifecycle owner"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
+    completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
+}
+
+impl RecoveredDecisionFetchBodyCompletionDrainV1 {
+    /// Consume the drain result into its optional guarded persistence completion.
+    pub(in crate::sumeragi) fn into_completion(
+        self,
+    ) -> Option<PreparedRecoveredDecisionFetchBodyCompletionV1> {
+        self.completion
+    }
+}
+
+impl RecoveredLifecycleSignCompletionDrainV1 {
+    /// Consume the drain into its optional opaque guarded completion.
+    pub(in crate::sumeragi) fn into_completion(
+        self,
+    ) -> Option<PreparedRecoveredLifecycleSignCompletionV1> {
+        self.completion
+    }
 }
 
 impl RecoveredDecisionApplyCompletionDrainV1 {
@@ -8527,6 +9800,8 @@ impl V2IoHandle {
                 while let Ok(command) = command_rx.recv() {
                     let work_id = command.work_id();
                     let recovered_decision_apply_key = command.recovered_decision_apply_key();
+                    let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();
+                    let recovered_decision_fetch_key = command.recovered_decision_fetch_key();
                     let serve_lifecycle_id = command.serve_lifecycle_id();
                     let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
                     match command {
@@ -8617,6 +9892,23 @@ impl V2IoHandle {
                                             )
                                         })
                                         .map_err(|(error, _task)| error.to_string()),
+                                    V2IoCommand::PersistRecoveredDecisionFetchBody(task) => task
+                                        .persist(
+                                            body_store
+                                                .as_mut()
+                                                .expect("body store remains live before Retire"),
+                                        )
+                                        .map(|completion| {
+                                            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(
+                                                Box::new(
+                                                    GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1::new(
+                                                        completion,
+                                                        Arc::clone(&output_guard),
+                                                    ),
+                                                ),
+                                            )
+                                        })
+                                        .map_err(|(error, _task)| error.to_string()),
                                     V2IoCommand::Validate(task) => body_store
                                         .as_mut()
                                         .expect("body store remains live before Retire")
@@ -8673,6 +9965,24 @@ impl V2IoHandle {
                                                 Err(error.to_string())
                                             }
                                         }),
+                                    V2IoCommand::RecoveredLifecycleSign(task) => {
+                                        sign_recovered_lifecycle_task(
+                                            body_store
+                                                .as_ref()
+                                                .expect("body store remains live before Retire"),
+                                            &context,
+                                            &key_pair,
+                                            task,
+                                        )
+                                        .map(|result| {
+                                            V2IoCompletion::RecoveredLifecycleSign(Box::new(
+                                                GuardedRecoveredLifecycleSignWorkerResultV1::new(
+                                                    result,
+                                                    Arc::clone(&output_guard),
+                                                ),
+                                            ))
+                                        })
+                                    }
                                     V2IoCommand::Serve {
                                         lifecycle_id,
                                         request,
@@ -8749,6 +10059,38 @@ impl V2IoHandle {
                                                 },
                                             )
                                         }
+                                        V2IoCompletion::RecoveredLifecycleSign(guarded) => {
+                                            recovered_lifecycle_sign_key.map_or_else(
+                                                || {
+                                                    Err("recovered Sign completion lost its command key"
+                                                        .to_owned())
+                                                },
+                                                |key| {
+                                                    command_rx
+                                                        .complete_recovered_lifecycle_sign(
+                                                            key,
+                                                            guarded.result(),
+                                                        )
+                                                        .map(|()| true)
+                                                },
+                                            )
+                                        }
+                                        V2IoCompletion::RecoveredDecisionFetchBodyPersisted(
+                                            guarded,
+                                        ) => recovered_decision_fetch_key.map_or_else(
+                                            || {
+                                                Err("recovered Decision Fetch body completion lost its command key"
+                                                    .to_owned())
+                                            },
+                                            |key| {
+                                                command_rx
+                                                    .complete_recovered_decision_fetch_body(
+                                                        key,
+                                                        guarded.completion(),
+                                                    )
+                                                    .map(|()| true)
+                                            },
+                                        ),
                                         _ => Ok(true),
                                     };
                                     match seal_result {
@@ -8986,6 +10328,15 @@ impl V2IoHandle {
             }
             V2IoCompletionAcknowledgement::LifecycleWorkRetained => {}
             V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained => {}
+            V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained => {
+                // Generic acknowledgement cannot perform the typed owner
+                // settlement, so neither the command index nor its completion
+                // owner may be removed here.
+                return Ok(());
+            }
+            V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained => {
+                return Ok(());
+            }
             V2IoCompletionAcknowledgement::Untracked => {}
         }
         self.admission.acknowledge_completion_at(ownership_position);
@@ -9010,6 +10361,30 @@ impl V2IoHandle {
         self.command_tx
             .queue
             .prepare_recovered_decision_apply_ack(key, output_guard)
+    }
+
+    fn prepare_recovered_lifecycle_sign_completion(
+        &self,
+        guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+        ownership_position: usize,
+    ) -> Option<PreparedRecoveredLifecycleSignCompletionV1> {
+        PreparedRecoveredLifecycleSignCompletionV1::new(
+            guarded,
+            Arc::clone(&self.command_tx.queue),
+            ownership_position,
+        )
+    }
+
+    fn prepare_recovered_decision_fetch_body_completion(
+        &self,
+        guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+        ownership_position: usize,
+    ) -> Option<PreparedRecoveredDecisionFetchBodyCompletionV1> {
+        PreparedRecoveredDecisionFetchBodyCompletionV1::new(
+            guarded,
+            Arc::clone(&self.command_tx.queue),
+            ownership_position,
+        )
     }
 
     fn acknowledge_completion(&self, completion: &V2IoCompletion) -> Result<(), String> {
@@ -9138,11 +10513,15 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
     let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -9164,11 +10543,15 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
     let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.try_send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -9261,6 +10644,31 @@ fn sign_consensus_task(
     Signature::try_new(key_pair.private_key(), &preimage)
         .map(|signature| V2IoCompletion::Signature {
             work_id: task.id(),
+            signature: signature.payload().to_vec(),
+            outbound_payload,
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn sign_recovered_lifecycle_task(
+    body_store: &V2BodyStore,
+    context: &wire::HeightContext,
+    key_pair: &KeyPair,
+    task: RecoveredLifecycleSignTaskV1,
+) -> Result<RecoveredLifecycleSignWorkerResultV1, String> {
+    let (preimage, outbound_payload) = match &task.request {
+        super::v2::SignRequest::Proposal(proposal) => (
+            proposal.signature_preimage(),
+            Some(recover_outbound_proposal_payload(
+                body_store, context, proposal,
+            )?),
+        ),
+        super::v2::SignRequest::Vote(vote) => (vote.signature_preimage(), None),
+        super::v2::SignRequest::TimeoutVote(vote) => (vote.signature_preimage(), None),
+    };
+    Signature::try_new(key_pair.private_key(), &preimage)
+        .map(|signature| RecoveredLifecycleSignWorkerResultV1 {
+            task,
             signature: signature.payload().to_vec(),
             outbound_payload,
         })
@@ -9952,6 +11360,7 @@ const EXACT_OUTPUT_CLASSES: [ExactOutputClass; V2_EXACT_OUTPUT_CLASS_COUNT] = [
     ExactOutputClass::Lane,
     ExactOutputClass::Bulk,
 ];
+const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 2;
 
 const fn exact_output_class_bit(class: ExactOutputClass) -> ExactOutputClassMask {
     match class {
@@ -11741,9 +13150,28 @@ struct PendingExactOutput {
     /// Outstanding units not covered by the first frozen target/class/kind credit.
     shared_ownership_units: usize,
     /// Deterministic actor-admission attempts before yielding to the runner.
+    ///
+    /// Atomic Proposal admission retains the two pre-atomic child slices: one
+    /// for control and one for chunks.
     drive_attempt_budget: usize,
     max_messages_per_fanout: usize,
     max_peers_per_fanout: usize,
+}
+
+/// Fully precomputed mutation for one inseparable topology-fanout batch.
+///
+/// The owning mutex remains held from construction through commit. Every
+/// fallible validation, aggregate-capacity calculation, FIFO allocation, and
+/// source-index projection therefore precedes this assertion-only state swap.
+struct PendingExactOutputBatchPlan {
+    existing_fanout_count: usize,
+    rebased_existing_fifo_ids: Option<Vec<ExactFanoutFifoId>>,
+    fanouts: Vec<PendingExactFanout>,
+    source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
+    reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
+    ownership_units: usize,
+    shared_ownership_units: usize,
+    next_fanout_fifo_id: ExactFanoutFifoId,
 }
 
 impl PendingExactOutput {
@@ -11797,6 +13225,10 @@ impl PendingExactOutput {
         let ownership_unit_capacity = shared_ownership_unit_capacity
             .checked_add(reserved_target_classes.len())
             .ok_or_else(|| "Sumeragi v2 outbound corridor capacity overflowed".to_owned())?;
+        let drive_attempt_budget = max_peers_per_fanout
+            .max(super::v2_core::MAX_EFFECTS_PER_STEP)
+            .checked_mul(ATOMIC_PROPOSAL_FANOUT_COUNT)
+            .ok_or_else(|| "Sumeragi v2 outbound drive budget overflowed".to_owned())?;
         Ok(Self {
             fanouts: VecDeque::new(),
             admitted_sidecar_chunks: VecDeque::new(),
@@ -11810,10 +13242,157 @@ impl PendingExactOutput {
             reservation_owner_counts: BTreeMap::new(),
             ownership_units: 0,
             shared_ownership_units: 0,
-            drive_attempt_budget: max_peers_per_fanout.max(super::v2_core::MAX_EFFECTS_PER_STEP),
+            drive_attempt_budget,
             max_messages_per_fanout,
             max_peers_per_fanout,
         })
+    }
+
+    /// Preflight an all-or-nothing batch of fresh topology fanouts.
+    ///
+    /// Reply coalescence and sidecar replacement have their own stateful
+    /// transactions and are deliberately excluded. Proposal control and chunk
+    /// fanouts are fresh topology owners, so their reservation multiplicities
+    /// can be aggregated once and charged with each frozen credit at most once.
+    #[allow(clippy::too_many_lines)]
+    fn prepare_atomic_fanout_batch(
+        &self,
+        mut fanouts: Vec<PendingExactFanout>,
+    ) -> Result<Option<PendingExactOutputBatchPlan>, String> {
+        let existing_fanout_count = self.fanouts.len();
+        let mut additions = BTreeMap::<ExactTargetReservation, usize>::new();
+        for fanout in &fanouts {
+            self.validate_fanout_bounds(fanout)?;
+            if fanout.is_complete()
+                || fanout.reply_routes.is_some()
+                || fanout.ingress_ownership.is_some()
+                || fanout
+                    .targets
+                    .iter()
+                    .any(|target| !matches!(target.route, ExactTargetRoute::Topology))
+                || self
+                    .fanouts
+                    .iter()
+                    .any(|retained| retained.can_coalesce_retry(fanout))
+                || self
+                    .stranded_responder_control_replacement_index(fanout)
+                    .is_some()
+                || self.retains_retryable_sidecar_responder_control_for(fanout)
+            {
+                return Err(
+                    "Sumeragi v2 atomic Proposal output changed fresh topology geometry".to_owned(),
+                );
+            }
+            for (reservation, count) in fanout.outstanding_reservation_counts()? {
+                let aggregate = additions.entry(reservation).or_default();
+                *aggregate = aggregate.checked_add(count).ok_or_else(|| {
+                    "Sumeragi v2 atomic Proposal output ownership overflowed".to_owned()
+                })?;
+            }
+        }
+        if !self.ownership_capacity_available(&additions)? {
+            return Ok(None);
+        }
+        let (reservation_owner_counts, ownership_units, shared_ownership_units) =
+            self.ownership_state_after_additions(&additions)?;
+
+        let project_ids = |first: ExactFanoutFifoId| {
+            let mut cursor = first;
+            let mut ids = Vec::with_capacity(fanouts.len());
+            for _ in &fanouts {
+                if cursor == ExactFanoutFifoId::MAX {
+                    return None;
+                }
+                ids.push(cursor);
+                cursor = cursor.checked_add(1)?;
+            }
+            Some((ids, cursor))
+        };
+        let (
+            rebased_existing_fifo_ids,
+            fanout_fifo_ids,
+            next_fanout_fifo_id,
+            mut source_fifo_owners,
+        ) = if let Some((ids, next)) = project_ids(self.next_fanout_fifo_id) {
+            (None, ids, next, self.source_fifo_owners.clone())
+        } else {
+            let mut rebuilt = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
+            let mut existing_ids = Vec::with_capacity(self.fanouts.len());
+            for (index, retained) in self.fanouts.iter().enumerate() {
+                let fifo_id = ExactFanoutFifoId::try_from(index).map_err(|_| {
+                    "Sumeragi v2 atomic Proposal FIFO rebase is not representable".to_owned()
+                })?;
+                existing_ids.push(fifo_id);
+                for source in retained.outstanding_sources()? {
+                    rebuilt.entry(source).or_default().insert(fifo_id);
+                }
+            }
+            let first = ExactFanoutFifoId::try_from(self.fanouts.len()).map_err(|_| {
+                "Sumeragi v2 atomic Proposal FIFO sequence is not representable".to_owned()
+            })?;
+            let (ids, next) = project_ids(first)
+                .ok_or_else(|| "Sumeragi v2 atomic Proposal FIFO sequence exhausted".to_owned())?;
+            (Some(existing_ids), ids, next, rebuilt)
+        };
+
+        if fanout_fifo_ids.iter().any(|fifo_id| {
+            source_fifo_owners
+                .values()
+                .any(|owners| owners.contains(fifo_id))
+        }) {
+            return Err("Sumeragi v2 atomic Proposal FIFO reused a live identity".to_owned());
+        }
+        for (fanout, fifo_id) in fanouts.iter_mut().zip(fanout_fifo_ids) {
+            for source in fanout.outstanding_sources()? {
+                source_fifo_owners
+                    .entry(source)
+                    .or_default()
+                    .insert(fifo_id);
+            }
+            fanout.fifo_id = Some(fifo_id);
+        }
+
+        Ok(Some(PendingExactOutputBatchPlan {
+            existing_fanout_count,
+            rebased_existing_fifo_ids,
+            fanouts,
+            source_fifo_owners,
+            reservation_owner_counts,
+            ownership_units,
+            shared_ownership_units,
+            next_fanout_fifo_id,
+        }))
+    }
+
+    /// Commit a batch prepared while this exact mutex guard remained held.
+    fn commit_atomic_fanout_batch(&mut self, plan: PendingExactOutputBatchPlan) {
+        let PendingExactOutputBatchPlan {
+            existing_fanout_count,
+            rebased_existing_fifo_ids,
+            fanouts,
+            source_fifo_owners,
+            reservation_owner_counts,
+            ownership_units,
+            shared_ownership_units,
+            next_fanout_fifo_id,
+        } = plan;
+        assert_eq!(
+            self.fanouts.len(),
+            existing_fanout_count,
+            "atomic Proposal output retained the corridor mutex"
+        );
+        if let Some(rebased) = rebased_existing_fifo_ids {
+            assert_eq!(rebased.len(), self.fanouts.len());
+            for (fanout, fifo_id) in self.fanouts.iter_mut().zip(rebased) {
+                fanout.fifo_id = Some(fifo_id);
+            }
+        }
+        self.fanouts.extend(fanouts);
+        self.source_fifo_owners = source_fifo_owners;
+        self.reservation_owner_counts = reservation_owner_counts;
+        self.ownership_units = ownership_units;
+        self.shared_ownership_units = shared_ownership_units;
+        self.next_fanout_fifo_id = next_fanout_fifo_id;
     }
 
     fn is_pending(&self) -> bool {
@@ -15334,6 +16913,287 @@ pub(crate) struct ProductionV2Services {
     clean_teardown: bool,
 }
 
+/// Service-private permit for unpacking one durable signed Broadcast.
+///
+/// The constructor is private to this module. The WAL/registry projection
+/// accepts the value only by move, preventing another sibling from extracting
+/// or substituting the signed envelope.
+pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputPermitV1 {
+    _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,
+}
+
+struct RecoveredLifecycleSignBroadcastOutputPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleSignBroadcastOutputPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleSignBroadcastOutputPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,
+        }
+    }
+}
+
+/// Service-private one-shot permit for resolving a next-Vote body lookup.
+///
+/// The exact executor mint requires this capability, so no sibling can bypass
+/// the launched worker/store identity join by calling the catalog projection
+/// directly.
+pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
+    _linearity: RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1,
+    context: wire::HeightContext,
+    requester: PeerId,
+    output_guard: Arc<ConsensusOutputGuard>,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+}
+
+struct RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleNextVoteBodyExecutorPermitV1 {
+    fn new(
+        context: wire::HeightContext,
+        requester: PeerId,
+        output_guard: Arc<ConsensusOutputGuard>,
+        body_store_identity: V2BodyStoreInstanceIdentity,
+    ) -> Self {
+        Self {
+            _linearity: RecoveredLifecycleNextVoteBodyExecutorPermitLinearityV1,
+            context,
+            requester,
+            output_guard,
+            body_store_identity,
+        }
+    }
+
+    /// Consume only against the same executor/store owner joined by the service.
+    pub(in crate::sumeragi) fn consume_for_executor(
+        self,
+        context: &wire::HeightContext,
+        requester: &PeerId,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> Option<V2BodyStoreInstanceIdentity> {
+        (self.context == *context
+            && self.requester == *requester
+            && Arc::ptr_eq(&self.output_guard, output_guard)
+            && self.body_store_identity.same_instance(body_store_identity))
+        .then_some(self.body_store_identity)
+    }
+}
+
+/// Service-private permit for consuming one adapter-sealed Proposal payload.
+///
+/// The adapter authority releases its signed control message and canonical
+/// encoded payload only to this module. The service retains both behind one
+/// exact-output reservation, so no sibling can split the pair first.
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputPermitV1 {
+    _linearity: RecoveredLifecycleProposalExactOutputPermitLinearityV1,
+}
+
+struct RecoveredLifecycleProposalExactOutputPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleProposalExactOutputPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleProposalExactOutputPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleProposalExactOutputPermitLinearityV1,
+        }
+    }
+}
+
+/// Result of reserving exact output for a recovered signed Broadcast.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+pub(in crate::sumeragi) enum RecoveredLifecycleSignBroadcastOutputCaptureV1<'service> {
+    /// The bounded corridor cannot retain this fanout yet; nothing changed.
+    Unavailable,
+    /// The exact corridor mutex and fail-stop operation remain retained.
+    Reserved(RecoveredLifecycleSignBroadcastOutputReservationV1<'service>),
+}
+
+/// Borrow-bound exact-output reservation for one durable recovered Broadcast.
+///
+/// Dropping the armed reservation fail-stops. The caller must first park the
+/// volatile claim while leaving LedgerV1 Ready, then commit the fanout.
+#[must_use = "recovered signed Broadcast output must enter its exact corridor"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputReservationV1<'service> {
+    operation: Option<ConsensusFailStopOperation<'service>>,
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    output: Option<RecoveredLifecycleSignBroadcastPreparedOutputV1>,
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum RecoveredLifecycleSignBroadcastPreparedOutputV1 {
+    Single(Option<PendingExactFanout>),
+    Proposal(PendingExactOutputBatchPlan),
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignBroadcastOutputReservationV1<'_> {
+    /// Publish the preflighted fanout in the assertion-only post-fsync tail.
+    pub(in crate::sumeragi) fn commit_after_publication(mut self) {
+        let mut pending = self
+            .pending
+            .take()
+            .expect("recovered Sign output reservation retains its corridor mutex");
+        let operation = self
+            .operation
+            .take()
+            .expect("recovered Sign output commit retains its fail-stop operation");
+        match self
+            .output
+            .take()
+            .expect("recovered Sign output retains its exact publication")
+        {
+            RecoveredLifecycleSignBroadcastPreparedOutputV1::Single(fanout) => {
+                if let Some(fanout) = fanout {
+                    assert_eq!(
+                        pending.enqueue(fanout),
+                        Ok(ExactFanoutOwnership::Owned),
+                        "preflighted recovered Sign fanout must enter exact-output ownership"
+                    );
+                }
+            }
+            RecoveredLifecycleSignBroadcastPreparedOutputV1::Proposal(batch) => {
+                pending.commit_atomic_fanout_batch(batch);
+            }
+        }
+        drop(pending);
+        operation.complete();
+    }
+}
+
+/// Result of atomically reserving Proposal control and payload fanouts.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+pub(in crate::sumeragi) enum RecoveredLifecycleProposalExactOutputCaptureV1<'service> {
+    /// Aggregate ownership does not fit; the corridor remains unchanged and
+    /// the exact authority is returned for a later bounded retry.
+    Unavailable(super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1),
+    /// Both fanouts remain behind one mutex and fail-stop operation.
+    Reserved(RecoveredLifecycleProposalExactOutputReservationV1<'service>),
+}
+
+/// Borrow-bound atomic Proposal output reservation.
+///
+/// Dropping while armed fail-stops output. Every recoverable prepublication
+/// path must consume [`Self::abort_before_publication`].
+#[must_use = "recovered Proposal output must commit atomically or use its typed abort"]
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV1<'service> {
+    operation: Option<ConsensusFailStopOperation<'service>>,
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    batch: Option<PendingExactOutputBatchPlan>,
+    authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
+    /// Release an unchanged aggregate reservation before durable publication.
+    pub(in crate::sumeragi) fn abort_before_publication(
+        mut self,
+    ) -> super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1 {
+        drop(self.pending.take());
+        drop(self.batch.take());
+        self.operation
+            .take()
+            .expect("armed recovered Proposal output retains its fail-stop operation")
+            .complete();
+        self.authority
+            .take()
+            .expect("armed recovered Proposal output retains its retry authority")
+    }
+
+    /// Install both preflighted fanouts in one assertion-only publication tail.
+    pub(in crate::sumeragi) fn commit_after_publication(mut self) {
+        let mut pending = self
+            .pending
+            .take()
+            .expect("recovered Proposal output retains its corridor mutex");
+        // Take this after the mutex guard: reverse local-drop order closes
+        // output before unlocking the corridor if any assertion below unwinds.
+        let operation = self
+            .operation
+            .take()
+            .expect("recovered Proposal output retains its fail-stop operation");
+        let batch = self
+            .batch
+            .take()
+            .expect("recovered Proposal output retains its aggregate batch");
+        let authority = self
+            .authority
+            .take()
+            .expect("recovered Proposal output commit retains its exact authority");
+        pending.commit_atomic_fanout_batch(batch);
+        drop(pending);
+        drop(authority);
+        operation.complete();
+    }
+}
+
+/// Result of reserving exact output for one recovered Decision Fetch request.
+pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service> {
+    /// The bounded corridor cannot own this fanout yet; nothing was claimed.
+    Unavailable,
+    /// The same corridor mutex and fail-stop permit remain retained through claim.
+    Reserved(RecoveredDecisionFetchExactOutputReservationV1<'service>),
+}
+
+/// Borrow-bound exact-output reservation retained before coordinator claim.
+///
+/// Preencoding, topology construction, rollover validation, and `can_enqueue`
+/// all precede scheduler planning. Dropping an armed reservation closes output;
+/// recoverable pre-claim failures must consume [`Self::abort_before_claim`].
+#[must_use = "exact recovered Fetch output must commit or use its typed pre-claim abort"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'service> {
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    operation: Option<ConsensusFailStopOperation<'service>>,
+    fanout: Option<PendingExactFanout>,
+    predecessor_debt: u64,
+}
+
+impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
+    /// Exact retained output-prefix debt used by the authenticated scheduler row.
+    pub(in crate::sumeragi) const fn predecessor_debt(&self) -> u64 {
+        self.predecessor_debt
+    }
+
+    /// Release an unchanged pre-claim reservation without fail-stopping output.
+    pub(in crate::sumeragi) fn abort_before_claim(mut self) {
+        drop(self.pending.take());
+        self.operation
+            .take()
+            .expect("armed recovered Fetch output retains its fail-stop operation")
+            .complete();
+    }
+
+    /// Publish the preflighted fanout in the assertion-only post-arming tail.
+    pub(in crate::sumeragi) fn commit(mut self) {
+        let mut pending = self
+            .pending
+            .take()
+            .expect("recovered Fetch output reservation retains its corridor mutex");
+        if let Some(fanout) = self.fanout.take() {
+            assert_eq!(
+                pending.enqueue(fanout),
+                Ok(ExactFanoutOwnership::Owned),
+                "preflighted recovered Fetch fanout must enter exact-output ownership"
+            );
+        }
+        drop(pending);
+        self.operation
+            .take()
+            .expect("recovered Fetch output commit retains its fail-stop operation")
+            .complete();
+    }
+}
+
 fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
     u64::from(layout.max_chunk_count)
         .saturating_mul(u64::from(layout.chunk_size_bytes))
@@ -15341,6 +17201,461 @@ fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
 }
 
 impl ProductionV2Services {
+    /// Reserve exact output from one still-live durable recovered Broadcast.
+    ///
+    /// The authority is minted only after the closed registry carrier rejoins
+    /// its exact claimed LedgerV1 row. A successful capture does not retire
+    /// that durable row; it remains the crash-recovery output-debt source.
+    pub(in crate::sumeragi) fn capture_recovered_lifecycle_signed_broadcast_refanout(
+        &self,
+        authority: super::v2_lifecycle_coordinator::RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
+    ) -> Result<RecoveredLifecycleSignBroadcastOutputCaptureV1<'_>, String> {
+        let (context_id, height, message, cold_proposal_output) =
+            authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new());
+        if context_id != self.context.id()
+            || height != self.context.height
+            || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(
+                "recovered signed Broadcast refanout belongs to another service cut".to_owned(),
+            );
+        }
+        if let Some(output) = cold_proposal_output {
+            self.capture_recovered_lifecycle_cold_proposal_message(message, output)
+        } else {
+            self.capture_recovered_lifecycle_signed_broadcast_message(message)
+        }
+    }
+
+    fn capture_recovered_lifecycle_signed_broadcast_message(
+        &self,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<RecoveredLifecycleSignBroadcastOutputCaptureV1<'_>, String> {
+        if !matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::Vote(_)
+                | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(
+                "recovered Sign Broadcast is outside the exact single-child service cut".to_owned(),
+            );
+        }
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        let encoded = Self::preencode_v2_network_message(message)?;
+        let fanout = PendingExactFanout::claimed(
+            vec![encoded],
+            self.remote_voters(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "recovered Sign exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            drop(operation);
+            drop(pending);
+            return Err("recovered Sign exact output sealed during capture".to_owned());
+        }
+        if let Some(fanout) = fanout.as_ref() {
+            let available = match pending.can_enqueue(fanout) {
+                Ok(available) => available,
+                Err(error) => {
+                    drop(operation);
+                    drop(pending);
+                    return Err(error);
+                }
+            };
+            if !available {
+                drop(pending);
+                operation.complete();
+                return Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Unavailable);
+            }
+        }
+        Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(
+            RecoveredLifecycleSignBroadcastOutputReservationV1 {
+                operation: Some(operation),
+                pending: Some(pending),
+                output: Some(RecoveredLifecycleSignBroadcastPreparedOutputV1::Single(
+                    fanout,
+                )),
+            },
+        ))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn capture_recovered_lifecycle_cold_proposal_message(
+        &self,
+        message: wire::ConsensusMessageV2,
+        output: super::v2::RecoveredLifecycleColdProposalOutputV1,
+    ) -> Result<RecoveredLifecycleSignBroadcastOutputCaptureV1<'_>, String> {
+        if self.proposal_work_retired || self.exact_output_handoff_owner.is_sealed() {
+            return Err(
+                "cold recovered Proposal output is outside the live service cut".to_owned(),
+            );
+        }
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload else {
+            return Err(
+                "cold recovered Proposal output lost its signed control message".to_owned(),
+            );
+        };
+        let (payload, body_store_identity) =
+            output.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new());
+        if self.io.is_none()
+            || self.local_validator != Some(proposal.proposer)
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || self
+                .lifecycle_body_store_identity
+                .as_ref()
+                .is_none_or(|identity| !identity.same_instance(&body_store_identity))
+            || proposal.manifest != *payload.manifest()
+        {
+            return Err("cold recovered Proposal output belongs to another service cut".to_owned());
+        }
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        proposal
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let (manifest, chunks) = payload.into_parts();
+        manifest
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let manifest_hash = HashOf::new(&manifest);
+        let sender = proposal.proposer;
+        let mut chunk_messages = Vec::with_capacity(chunks.len());
+        for (index, bytes) in chunks.into_iter().enumerate() {
+            let mut chunk = wire::PayloadChunk {
+                manifest_hash,
+                index: u32::try_from(index)
+                    .map_err(|_| "cold recovered Proposal chunk index overflowed".to_owned())?,
+                bytes,
+                sender,
+                signature: Vec::new(),
+            };
+            let preimage = chunk
+                .signature_preimage(&self.context, &manifest)
+                .map_err(|error| error.to_string())?;
+            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+                .map_err(|error| error.to_string())?
+                .payload()
+                .to_vec();
+            chunk_messages.push(Self::preencode_v2_network_message(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
+            )?);
+        }
+        let peers = self.remote_voters();
+        let control = PendingExactFanout::claimed(
+            vec![Self::preencode_v2_network_message(message)?],
+            peers.clone(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let chunks = PendingExactFanout::claimed(
+            chunk_messages,
+            peers,
+            ExactOutputRolloverClaim::PayloadChunks {
+                scope: self.exact_output_scope(),
+                manifest,
+            },
+        )?;
+        let fanouts = control.into_iter().chain(chunks).collect::<Vec<_>>();
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "cold recovered Proposal exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            drop(operation);
+            drop(pending);
+            return Err("cold recovered Proposal output sealed during capture".to_owned());
+        }
+        let batch = match pending.prepare_atomic_fanout_batch(fanouts) {
+            Ok(batch) => batch,
+            Err(error) => {
+                drop(operation);
+                drop(pending);
+                return Err(error);
+            }
+        };
+        let Some(batch) = batch else {
+            drop(pending);
+            operation.complete();
+            return Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Unavailable);
+        };
+        Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(
+            RecoveredLifecycleSignBroadcastOutputReservationV1 {
+                operation: Some(operation),
+                pending: Some(pending),
+                output: Some(RecoveredLifecycleSignBroadcastPreparedOutputV1::Proposal(
+                    batch,
+                )),
+            },
+        ))
+    }
+
+    /// Atomically reserve a signed recovered Proposal and all canonical chunks.
+    ///
+    /// Both topology fanouts are built and their aggregate target/class debt is
+    /// charged while one corridor mutex is held. Capacity failure completes the
+    /// fail-stop operation and leaves every FIFO, index, and fanout unchanged;
+    /// no control-only prefix can escape without its protected body.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn capture_recovered_lifecycle_proposal_exact_output(
+        &self,
+        authority: super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1,
+    ) -> Result<RecoveredLifecycleProposalExactOutputCaptureV1<'_>, String> {
+        if self.proposal_work_retired {
+            return Err("recovered Proposal output is terminal after Decision".to_owned());
+        }
+        let (dispatch_key, tag, message, payload, body_store_identity, authority_output_guard) =
+            authority.consume_for_service(RecoveredLifecycleProposalExactOutputPermitV1::new());
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload else {
+            return Err("recovered Proposal output lost its signed control message".to_owned());
+        };
+        if !dispatch_key.matches_height_context(&self.context)
+            || tag != self.active_tag
+            || proposal.round.context_id != self.context.id()
+            || proposal.round.height != self.context.height
+            || proposal.round.view != tag.view()
+            || self.local_validator != Some(proposal.proposer)
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || proposal.manifest != *payload.manifest()
+            || self.io.is_none()
+            || self
+                .lifecycle_body_store_identity
+                .as_ref()
+                .is_none_or(|identity| !identity.same_instance(&body_store_identity))
+            || !Arc::ptr_eq(&self.output_guard, &authority_output_guard)
+            || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err("recovered Proposal output belongs to another service cut".to_owned());
+        }
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        proposal
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let retry_authority =
+            super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(
+                RecoveredLifecycleProposalExactOutputPermitV1::new(),
+                &self.context,
+                dispatch_key,
+                tag,
+                message.clone(),
+                payload.clone(),
+                body_store_identity,
+                authority_output_guard,
+            )
+            .ok_or_else(|| {
+                "recovered Proposal output could not retain its exact retry authority".to_owned()
+            })?;
+        let (manifest, chunks) = payload.into_parts();
+        manifest
+            .validate(&self.context)
+            .map_err(|error| error.to_string())?;
+        let manifest_hash = HashOf::new(&manifest);
+        let sender = proposal.proposer;
+        let mut chunk_messages = Vec::with_capacity(chunks.len());
+        for (index, bytes) in chunks.into_iter().enumerate() {
+            let mut chunk = wire::PayloadChunk {
+                manifest_hash,
+                index: u32::try_from(index)
+                    .map_err(|_| "recovered Proposal chunk index overflowed".to_owned())?,
+                bytes,
+                sender,
+                signature: Vec::new(),
+            };
+            let preimage = chunk
+                .signature_preimage(&self.context, &manifest)
+                .map_err(|error| error.to_string())?;
+            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+                .map_err(|error| error.to_string())?
+                .payload()
+                .to_vec();
+            chunk_messages.push(Self::preencode_v2_network_message(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
+            )?);
+        }
+        let peers = self.remote_voters();
+        let control = PendingExactFanout::claimed(
+            vec![Self::preencode_v2_network_message(message)?],
+            peers.clone(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let chunks = PendingExactFanout::claimed(
+            chunk_messages,
+            peers,
+            ExactOutputRolloverClaim::PayloadChunks {
+                scope: self.exact_output_scope(),
+                manifest,
+            },
+        )?;
+        let fanouts = control.into_iter().chain(chunks).collect::<Vec<_>>();
+
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "recovered Proposal exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            // Activate fail-stop while the corridor remains locked; releasing
+            // the mutex first would leave a brief open-admission window.
+            drop(operation);
+            drop(pending);
+            return Err("recovered Proposal exact output sealed during capture".to_owned());
+        }
+        let batch = match pending.prepare_atomic_fanout_batch(fanouts) {
+            Ok(batch) => batch,
+            Err(error) => {
+                drop(operation);
+                drop(pending);
+                return Err(error);
+            }
+        };
+        let Some(batch) = batch else {
+            drop(pending);
+            operation.complete();
+            return Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(
+                retry_authority,
+            ));
+        };
+        Ok(RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(
+            RecoveredLifecycleProposalExactOutputReservationV1 {
+                operation: Some(operation),
+                pending: Some(pending),
+                batch: Some(batch),
+                authority: Some(retry_authority),
+            },
+        ))
+    }
+
+    /// Consume one carrier-derived recovered Fetch through this exact service key.
+    pub(in crate::sumeragi) fn authenticate_recovered_decision_fetch_request(
+        &self,
+        authority: RecoveredDecisionFetchRequestAuthorityV1,
+    ) -> Result<RecoveredDecisionFetchRequestOwnerV1, String> {
+        if self.io.is_none() || self.lifecycle_body_store_identity.is_none() {
+            return Err(
+                "recovered Decision Fetch requires the launched body-store worker".to_owned(),
+            );
+        }
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                "recovered Decision Fetch request authentication requires restart".to_owned()
+            })?;
+        if !authority
+            .identity
+            .key()
+            .matches_height_context(&self.context)
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || authority.round.context_id != self.context.id()
+            || authority.round.height != self.context.height
+            || authority.tag.height() != self.context.height
+            || authority.sources
+                != self
+                    .context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>()
+        {
+            return Err(
+                "recovered Decision Fetch changed its fixed production service context".to_owned(),
+            );
+        }
+        let mut request = wire::CertifiedBodyRequest {
+            round: authority.round,
+            subject: authority.subject,
+            certificate: authority.certificate,
+            requester: self.local_peer.clone(),
+            signature: Vec::new(),
+        };
+        request.signature =
+            Signature::try_new(self.key_pair.private_key(), &request.signature_preimage())
+                .map_err(|error| error.to_string())?
+                .payload()
+                .to_vec();
+        let authenticated = authenticate_certified_body_request_with_validator_pops(
+            &self.context,
+            &self.validator_set_pops,
+            request,
+            &self.local_peer,
+        )
+        .map_err(|error| error.to_string())?;
+        let owner = RecoveredDecisionFetchRequestOwnerV1 {
+            key: authority.identity.key(),
+            tag: authority.tag,
+            sources: authority.sources,
+            authenticated,
+            response_claim: None,
+        };
+        operation.complete();
+        Ok(owner)
+    }
+
+    /// Reserve exact output for an already fixed-signature recovered request.
+    pub(in crate::sumeragi) fn capture_recovered_decision_fetch_exact_output(
+        &self,
+        owner: &RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<RecoveredDecisionFetchExactOutputCaptureV1<'_>, String> {
+        if !owner.validates_exact_executor_context(&self.context, &self.local_peer)
+            || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(
+                "recovered Decision Fetch output belongs to another service cut".to_owned(),
+            );
+        }
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyRequest(
+                owner.authenticated.request().clone(),
+            ));
+        let encoded = Self::preencode_v2_network_message(message)?;
+        let peers = owner
+            .sources
+            .iter()
+            .filter(|peer| *peer != &self.local_peer)
+            .cloned()
+            .collect::<Vec<_>>();
+        let fanout = PendingExactFanout::claimed(
+            vec![encoded],
+            peers,
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "recovered Decision Fetch exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            return Err("recovered Decision Fetch output sealed during capture".to_owned());
+        }
+        let predecessor_debt = u64::try_from(pending.fanouts.len())
+            .map_err(|_| "recovered Decision Fetch output debt overflowed".to_owned())?;
+        if let Some(fanout) = fanout.as_ref()
+            && !pending.can_enqueue(fanout)?
+        {
+            drop(pending);
+            operation.complete();
+            return Ok(RecoveredDecisionFetchExactOutputCaptureV1::Unavailable);
+        }
+        Ok(RecoveredDecisionFetchExactOutputCaptureV1::Reserved(
+            RecoveredDecisionFetchExactOutputReservationV1 {
+                pending: Some(pending),
+                operation: Some(operation),
+                fanout,
+                predecessor_debt,
+            },
+        ))
+    }
+
     /// Return whether this service and executor share one canonical output gate.
     pub(in crate::sumeragi) fn matches_lifecycle_executor_output_guard(
         &self,
@@ -15381,6 +17696,57 @@ impl ProductionV2Services {
                 .lifecycle_body_store_identity
                 .as_ref()
                 .is_some_and(|worker_identity| worker_identity.same_instance(owner_identity))
+    }
+
+    fn recovered_lifecycle_next_vote_body_executor_permit<R: EffectRuntime>(
+        &self,
+        executor: &V2EffectExecutor<R>,
+    ) -> Result<RecoveredLifecycleNextVoteBodyExecutorPermitV1, String> {
+        let body_store_identity = self.lifecycle_body_store_identity.as_ref().ok_or_else(|| {
+            "recovered next-Vote body authentication lost its launched store".to_owned()
+        })?;
+        if self.io.is_none()
+            || !executor.matches_recovered_lifecycle_body_service(
+                &self.context,
+                &self.local_peer,
+                &self.output_guard,
+                body_store_identity,
+            )
+        {
+            return Err(
+                "recovered next-Vote body authentication found a foreign service owner".to_owned(),
+            );
+        }
+        Ok(RecoveredLifecycleNextVoteBodyExecutorPermitV1::new(
+            self.context.clone(),
+            self.local_peer.clone(),
+            Arc::clone(&self.output_guard),
+            body_store_identity.clone(),
+        ))
+    }
+
+    /// Preview one recovered Sign and authenticate its next body in one borrow.
+    ///
+    /// The service joins the exact worker/store owner before the executor
+    /// creates its runtime-borrowing adapter preview. The executor then splits
+    /// that runtime borrow from its retained catalogs internally, so callers
+    /// never need a second preview or a conflicting whole-executor reborrow.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(
+        &self,
+        executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+        completion: RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<
+        (
+            super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'executor>,
+            super::v2::RecoveredLifecycleNextVoteBodyAuthorityV1,
+        ),
+        String,
+    > {
+        let permit = self.recovered_lifecycle_next_vote_body_executor_permit(executor)?;
+        executor
+            .prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)
+            .map_err(|error| error.to_string())
     }
 
     /// Publish the live completion owner only from final runner activation.
@@ -15515,6 +17881,34 @@ impl ProductionV2Services {
             .capture_recovered_decision_apply_capacity(operation, key)
     }
 
+    /// Reserve the Consensus lane for one exact lifecycle-owned recovered Sign.
+    ///
+    /// This happens before coordinator claim. The locked reservation accepts
+    /// only a borrow-bound registry projection with the same class-sensitive
+    /// key and releases all capacity automatically on every pre-commit error.
+    pub(in crate::sumeragi) fn capture_recovered_lifecycle_sign_capacity<'a>(
+        &'a self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+    ) -> Result<
+        RecoveredLifecycleSignCapacityCaptureV1<'a>,
+        RecoveredLifecycleSignCapacityCaptureErrorV1,
+    > {
+        if !key.matches_height_context(&self.context) {
+            return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::ForeignContext);
+        }
+        let io = self
+            .io
+            .as_ref()
+            .ok_or(RecoveredLifecycleSignCapacityCaptureErrorV1::Disconnected)?;
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or(RecoveredLifecycleSignCapacityCaptureErrorV1::OutputClosed)?;
+        io.command_tx
+            .queue
+            .capture_recovered_lifecycle_sign_capacity(operation, key)
+    }
+
     /// Restore the actor-global lifecycle source before constructing runtime
     /// owners for this height.
     ///
@@ -15630,7 +18024,8 @@ impl ProductionV2Services {
     ///
     /// Identity validation runs before the shared constructor creates the
     /// context chunk directory or starts any worker, so a substituted State,
-    /// Kura, network, or proof roster fails without startup side effects.
+    /// Kura, context network identity, or proof roster fails without startup
+    /// side effects.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn start_with_apply_service(
         _permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1,
@@ -17266,7 +19661,12 @@ impl ProductionV2Services {
 
     fn take_io_completion(&mut self, runtime_capacity_available: bool) -> IoCompletionTake {
         if self.held_io_completion.as_ref().is_some_and(|completion| {
-            matches!(completion, V2IoCompletion::RecoveredDecisionApply(_))
+            matches!(
+                completion,
+                V2IoCompletion::RecoveredDecisionApply(_)
+                    | V2IoCompletion::RecoveredLifecycleSign(_)
+                    | V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+            )
         }) {
             return IoCompletionTake::retained_runtime();
         }
@@ -17282,6 +19682,22 @@ impl ProductionV2Services {
         let Some(io) = self.io.as_ref() else {
             return IoCompletionTake::unavailable();
         };
+        if ownership_position != 0
+            && io
+                .completion_ownership_at(ownership_position)
+                .is_some_and(|owned| {
+                    owned.recovered_decision_apply.is_some()
+                        || owned.recovered_lifecycle_sign.is_some()
+                        || owned.recovered_decision_fetch.is_some()
+                })
+        {
+            // There is only one payload parking slot. A lifecycle-owned
+            // completion behind an already-held runtime result must remain in
+            // the physical channel until that result is serviced; receiving it
+            // here would detach the payload from its keyed owner or overwrite
+            // the held result.
+            return IoCompletionTake::retained_runtime();
+        }
         // Once the oldest runtime-producing result has crossed the physical
         // channel boundary, keep exactly that one result unacknowledged. The
         // ownership tracker lets us look past it only when the next published
@@ -17295,10 +19711,15 @@ impl ProductionV2Services {
         let Ok(completion) = io.try_recv_completion_unacknowledged() else {
             return IoCompletionTake::unavailable();
         };
-        if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
+        if matches!(
+            &completion,
+            V2IoCompletion::RecoveredDecisionApply(_)
+                | V2IoCompletion::RecoveredLifecycleSign(_)
+                | V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+        ) {
             assert!(
                 self.held_io_completion.is_none(),
-                "completion ownership metadata must preserve one recovered Apply head"
+                "completion ownership metadata must preserve one recovered lifecycle head"
             );
             self.held_io_completion = Some(completion);
             return IoCompletionTake::retained_runtime();
@@ -17335,6 +19756,68 @@ impl ProductionV2Services {
             return IoCompletionTake::unavailable();
         };
         if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
+            IoCompletionTake::ready(PendingServiceCompletion::Io {
+                completion,
+                ownership_position: 0,
+            })
+        } else {
+            self.held_io_completion = Some(completion);
+            IoCompletionTake::unavailable()
+        }
+    }
+
+    fn take_recovered_lifecycle_sign_completion(&mut self) -> IoCompletionTake {
+        if let Some(completion) = self.held_io_completion.take() {
+            if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
+                return IoCompletionTake::ready(PendingServiceCompletion::Io {
+                    completion,
+                    ownership_position: 0,
+                });
+            }
+            self.held_io_completion = Some(completion);
+            return IoCompletionTake::unavailable();
+        }
+        let Some(io) = self.io.as_ref() else {
+            return IoCompletionTake::unavailable();
+        };
+        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
+            return IoCompletionTake::unavailable();
+        };
+        if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
+            IoCompletionTake::ready(PendingServiceCompletion::Io {
+                completion,
+                ownership_position: 0,
+            })
+        } else {
+            self.held_io_completion = Some(completion);
+            IoCompletionTake::unavailable()
+        }
+    }
+
+    fn take_recovered_decision_fetch_body_completion(&mut self) -> IoCompletionTake {
+        if let Some(completion) = self.held_io_completion.take() {
+            if matches!(
+                &completion,
+                V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+            ) {
+                return IoCompletionTake::ready(PendingServiceCompletion::Io {
+                    completion,
+                    ownership_position: 0,
+                });
+            }
+            self.held_io_completion = Some(completion);
+            return IoCompletionTake::unavailable();
+        }
+        let Some(io) = self.io.as_ref() else {
+            return IoCompletionTake::unavailable();
+        };
+        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
+            return IoCompletionTake::unavailable();
+        };
+        if matches!(
+            &completion,
+            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+        ) {
             IoCompletionTake::ready(PendingServiceCompletion::Io {
                 completion,
                 ownership_position: 0,
@@ -17487,6 +19970,12 @@ impl ProductionV2Services {
         let Some(completion) = self.held_io_completion.take() else {
             return;
         };
+        if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
+            // Dropping the armed completion closes output while `self.io`
+            // still retains the dedicated queue/index owner. It must never be
+            // acknowledged or removed by generic teardown.
+            return;
+        }
         if !matches!(&completion, V2IoCompletion::CertifiedResponse { .. })
             && let Some(io) = self.io.as_ref()
         {
@@ -17541,6 +20030,67 @@ impl ProductionV2Services {
             .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))?;
         Ok(RecoveredDecisionApplyCompletionDrainV1 {
             completion: Some(PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }),
+        })
+    }
+
+    /// Drain only the oldest lifecycle-owned recovered Sign completion.
+    ///
+    /// The returned token remains opaque and guarded. A different FIFO head is
+    /// parked for its ordinary owner, and generic drains likewise never
+    /// acknowledge or remove this dedicated completion.
+    pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(
+        &mut self,
+    ) -> Result<RecoveredLifecycleSignCompletionDrainV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let take = self.take_recovered_lifecycle_sign_completion();
+        let Some(PendingServiceCompletion::Io {
+            completion: V2IoCompletion::RecoveredLifecycleSign(guarded),
+            ownership_position,
+        }) = take.completion
+        else {
+            return Ok(RecoveredLifecycleSignCompletionDrainV1 { completion: None });
+        };
+        let completion = self
+            .io
+            .as_ref()
+            .and_then(|io| {
+                io.prepare_recovered_lifecycle_sign_completion(guarded, ownership_position)
+            })
+            .ok_or_else(|| "recovered Sign completion lost its exact dedicated owner".to_owned())?;
+        Ok(RecoveredLifecycleSignCompletionDrainV1 {
+            completion: Some(completion),
+        })
+    }
+
+    /// Drain only the oldest lifecycle-owned recovered Fetch body completion.
+    /// Generic completion service retains this family at the physical head.
+    pub(in crate::sumeragi) fn drain_recovered_decision_fetch_body_completion(
+        &mut self,
+    ) -> Result<RecoveredDecisionFetchBodyCompletionDrainV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let take = self.take_recovered_decision_fetch_body_completion();
+        let Some(PendingServiceCompletion::Io {
+            completion: V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded),
+            ownership_position,
+        }) = take.completion
+        else {
+            return Ok(RecoveredDecisionFetchBodyCompletionDrainV1 { completion: None });
+        };
+        let completion = self
+            .io
+            .as_ref()
+            .and_then(|io| {
+                io.prepare_recovered_decision_fetch_body_completion(guarded, ownership_position)
+            })
+            .ok_or_else(|| {
+                "recovered Decision Fetch body completion lost its exact dedicated owner".to_owned()
+            })?;
+        Ok(RecoveredDecisionFetchBodyCompletionDrainV1 {
+            completion: Some(completion),
         })
     }
 
@@ -17907,6 +20457,24 @@ impl ProductionV2Services {
                         ));
                     }
                     PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::RecoveredLifecycleSign(_),
+                        ..
+                    } => {
+                        return Err(executor.external_service_failed(
+                            "recovered Sign completion crossed the generic executor drain",
+                            self,
+                        ));
+                    }
+                    PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_),
+                        ..
+                    } => {
+                        return Err(executor.external_service_failed(
+                            "recovered Decision Fetch body crossed the generic executor drain",
+                            self,
+                        ));
+                    }
+                    PendingServiceCompletion::Io {
                         completion:
                             V2IoCompletion::CandidateLoadUnavailable {
                                 acquisition_id,
@@ -18007,9 +20575,15 @@ impl ProductionV2Services {
                 Ok(())
             })();
             if let Some((acknowledgement, ownership_position)) = io_acknowledgement {
-                let acknowledge =
-                    !matches!(&acknowledgement, V2IoCompletionAcknowledgement::Serve(_))
-                        || serviced.is_ok();
+                let acknowledge = match &acknowledgement {
+                    V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained
+                    | V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained => false,
+                    V2IoCompletionAcknowledgement::Serve(_) => serviced.is_ok(),
+                    V2IoCompletionAcknowledgement::Work(_)
+                    | V2IoCompletionAcknowledgement::LifecycleWorkRetained
+                    | V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained
+                    | V2IoCompletionAcknowledgement::Untracked => true,
+                };
                 if acknowledge && let Some(io) = self.io.as_ref() {
                     let acknowledged =
                         io.acknowledge_completion_at(acknowledgement, ownership_position);
@@ -18465,6 +21039,30 @@ impl ProductionV2Services {
             let _ = self.drive_pending_exact_output(&mut pending)?;
         }
         Ok(ownership)
+    }
+
+    /// Transfer an inseparable set of fresh topology fanouts into one corridor cut.
+    ///
+    /// Every fallible bound, aggregate-capacity, and FIFO check runs while the
+    /// same mutex is held. A full corridor therefore returns the whole batch to
+    /// its semantic producer without admitting a control-only prefix.
+    fn enqueue_atomic_fanout_batch_while_guarded(
+        &self,
+        fanouts: Vec<PendingExactFanout>,
+        _permit: &ConsensusOutputPermit<'_>,
+    ) -> Result<ExactFanoutOwnership, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            return Err(
+                "Sumeragi v2 exact output is sealed after durable finality handoff".to_owned(),
+            );
+        }
+        let Some(batch) = pending.prepare_atomic_fanout_batch(fanouts)? else {
+            return Ok(ExactFanoutOwnership::SourceRetained);
+        };
+        pending.commit_atomic_fanout_batch(batch);
+        let _ = self.drive_pending_exact_output(&mut pending)?;
+        Ok(ExactFanoutOwnership::Owned)
     }
 
     fn enqueue_owned_exact_reply_routes_while_guarded(
@@ -19995,10 +22593,19 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn broadcast_consensus(
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
+        if self.proposal_work_retired
+            && matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::Proposal(_)
+            )
+        {
+            return Err("Sumeragi v2 Proposal output is terminal after Decision".to_owned());
+        }
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
@@ -20022,14 +22629,6 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
             | wire::ConsensusMessageV2Payload::VrfReveal(_) => self.remote_voters(),
         };
-        let control = vec![Self::preencode_v2_network_message(message.clone())?];
-        let mut source_retained = self.enqueue_exact_fanout_while_guarded(
-            control,
-            control_targets,
-            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
-            operation.permit(),
-        )? == ExactFanoutOwnership::SourceRetained;
-
         if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {
             let manifest_hash = HashOf::new(&proposal.manifest);
             let chunks = self
@@ -20048,22 +22647,52 @@ impl V2EffectServices for ProductionV2Services {
                 .map(Self::preencode_v2_network_message)
                 .collect::<Result<Vec<_>, _>>()?;
             let committee = self.committee_for_round(proposal.round)?;
-            let first_fast_path_send = self.fast_path_proposals.insert(proposal.round);
+            let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round);
             let payload_targets = if first_fast_path_send {
                 self.remote_voters_for_indices(committee.set_a())?
             } else {
                 self.remote_voters()
             };
-            source_retained |= self.enqueue_exact_fanout_while_guarded(
+            let control = PendingExactFanout::claimed(
+                vec![Self::preencode_v2_network_message(message.clone())?],
+                control_targets,
+                ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            )?;
+            let chunks = PendingExactFanout::claimed(
                 encoded_chunks,
                 payload_targets,
                 ExactOutputRolloverClaim::PayloadChunks {
                     scope: self.exact_output_scope(),
                     manifest: proposal.manifest.clone(),
                 },
+            )?;
+            let ownership = self.enqueue_atomic_fanout_batch_while_guarded(
+                control.into_iter().chain(chunks).collect(),
                 operation.permit(),
-            )? == ExactFanoutOwnership::SourceRetained;
+            )?;
+            if ownership == ExactFanoutOwnership::Owned && first_fast_path_send {
+                self.fast_path_proposals.insert(proposal.round);
+            }
+            if ownership == ExactFanoutOwnership::SourceRetained {
+                iroha_logger::debug!(
+                    "deferred atomic Sumeragi v2 Proposal control/chunk fanout to reducer retransmission"
+                );
+            }
+            operation.complete();
+            return Ok(if ownership == ExactFanoutOwnership::SourceRetained {
+                ConsensusBroadcastDisposition::SourceRetained
+            } else {
+                ConsensusBroadcastDisposition::ExactServiceAccepted
+            });
         }
+
+        let control = vec![Self::preencode_v2_network_message(message)?];
+        let source_retained = self.enqueue_exact_fanout_while_guarded(
+            control,
+            control_targets,
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+            operation.permit(),
+        )? == ExactFanoutOwnership::SourceRetained;
         if source_retained {
             iroha_logger::debug!("deferred Sumeragi v2 control fanout to reducer retransmission");
         }
@@ -20850,9 +23479,9 @@ pub(super) mod tests {
         let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
         let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
         let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-        admission.retain_completion(Instant::now(), false, None, None);
-        admission.retain_completion(Instant::now(), true, Some(7), Some(key));
-        admission.retain_completion(Instant::now(), false, Some(8), None);
+        admission.retain_completion(Instant::now(), false, None, None, None, None);
+        admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
+        admission.retain_completion(Instant::now(), false, Some(8), None, None, None);
 
         assert!(admission.recovered_decision_apply_completion_is_exact(key));
         assert!(
@@ -20880,9 +23509,16 @@ pub(super) mod tests {
             v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
         let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
         let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-        admission.retain_completion(Instant::now(), false, None, None);
-        admission.retain_completion(Instant::now(), true, Some(7), Some(key));
-        admission.retain_completion(Instant::now(), true, Some(7), Some(same_ordinal_foreign));
+        admission.retain_completion(Instant::now(), false, None, None, None, None);
+        admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
+        admission.retain_completion(
+            Instant::now(),
+            true,
+            Some(7),
+            Some(same_ordinal_foreign),
+            None,
+            None,
+        );
         command_tx.queue.lock().recovered_decision_applies.insert(
             key,
             V2IoTrackedRecoveredDecisionApplyV1 {
@@ -20961,7 +23597,7 @@ pub(super) mod tests {
                 .try_send(V2IoCommand::Shutdown)
                 .expect("fill the sole physical queue position");
             let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
-            admission.retain_completion(Instant::now(), true, Some(11), Some(key));
+            admission.retain_completion(Instant::now(), true, Some(11), Some(key), None, None);
             command_tx.queue.lock().recovered_decision_applies.insert(
                 key,
                 V2IoTrackedRecoveredDecisionApplyV1 {
@@ -21046,7 +23682,7 @@ pub(super) mod tests {
             .expect("reserve an unclaimed Serve placeholder")
             .lifecycle_id;
         let key = RecoveredDecisionApplyDispatchKeyV1::for_test(13, 4);
-        admission.retain_completion(Instant::now(), true, Some(13), Some(key));
+        admission.retain_completion(Instant::now(), true, Some(13), Some(key), None, None);
         command_tx.queue.lock().recovered_decision_applies.insert(
             key,
             V2IoTrackedRecoveredDecisionApplyV1 {
@@ -21240,11 +23876,40 @@ pub(super) mod tests {
         identity: V2BodyStoreInstanceIdentity,
         class_capacity: usize,
     ) -> LifecyclePlannerIoFixture {
+        install_lifecycle_planner_io_for_validator_for_test(
+            services,
+            context,
+            0,
+            output_guard,
+            body_store,
+            identity,
+            class_capacity,
+        )
+    }
+
+    /// Install a moved exact store for a chosen local-validator service fixture.
+    pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
+        services: &mut ProductionV2Services,
+        context: wire::HeightContext,
+        local_validator: wire::ValidatorIndex,
+        output_guard: Arc<ConsensusOutputGuard>,
+        body_store: V2BodyStore,
+        identity: V2BodyStoreInstanceIdentity,
+        class_capacity: usize,
+    ) -> LifecyclePlannerIoFixture {
         assert!(class_capacity > 0, "test I/O capacity must be non-zero");
         assert!(
             body_store.instance_identity().same_instance(&identity),
             "the worker identity must come from the moved exact store"
         );
+        let local_index =
+            usize::try_from(local_validator).expect("test validator index fits usize");
+        let local_peer = context
+            .roster
+            .get(local_index)
+            .expect("test validator belongs to the service context")
+            .validator
+            .clone();
         let admission = Arc::new(
             V2IoAdmission::new(class_capacity, class_capacity)
                 .expect("bounded lifecycle planner I/O admission"),
@@ -21258,8 +23923,8 @@ pub(super) mod tests {
         );
         let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
         services.context = context.clone();
-        services.local_peer = context.roster[0].validator.clone();
-        services.local_validator = Some(0);
+        services.local_peer = local_peer;
+        services.local_validator = Some(local_validator);
         services.active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
         services.output_guard = output_guard;
         services.lifecycle_body_store_identity = Some(identity);
@@ -21274,6 +23939,19 @@ pub(super) mod tests {
             command_rx,
             _body_store: body_store,
         }
+    }
+
+    /// Install the exact private signer matching the test service's local peer.
+    pub(in crate::sumeragi) fn install_local_signer_for_test(
+        services: &mut ProductionV2Services,
+        key_pair: &KeyPair,
+    ) {
+        assert_eq!(
+            services.local_peer.public_key(),
+            key_pair.public_key(),
+            "test signer must match the already bound local service peer"
+        );
+        services.key_pair = key_pair.clone();
     }
 
     #[test]
@@ -23688,6024 +26366,20 @@ pub(super) mod tests {
 
     include!("tests/v2_worker_backpressure_cases.rs");
 
-    /// Exercise a dead-target output through synthesized durable-height handoff.
-    ///
-    /// The fixture validates the production output/handoff contract only; it
-    /// does not execute the preceding QC-to-application pipeline.
-    pub(in crate::sumeragi) fn production_output_handoff_with_dead_target() -> wire::HeightContext {
-        let (mut service, keys) = fixture();
-        let context = service.context.clone();
-        let (receipt, artifact) = durable_finality_fixture(&service, &keys);
-        let blocked = service.context.roster[1].validator.clone();
-        let later_responsive = service.context.roster[3].validator.clone();
-        let lane_qc = lane_commit_qc(blocked.clone());
-        let lane_message = BlockMessage::LaneBlockQc(lane_qc.clone());
-        let lane_authority = DurableLaneRolloverAuthority::for_test(&artifact, &lane_message);
-        let blocked_for_hook = blocked.clone();
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempts_for_hook = Arc::clone(&attempts);
-        let admitted = Arc::new(Mutex::new(Vec::new()));
-        let admitted_for_hook = Arc::clone(&admitted);
-        service.set_exact_output_admission_hook(move |post, ticket| {
-            if post.peer_id == blocked_for_hook {
-                attempts_for_hook.fetch_add(1, Ordering::Relaxed);
-                return Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 1,
-                });
-            }
-            assert!(ticket.is_none());
-            let kind = match &post.data {
-                NetworkMessage::SumeragiBlock(wire)
-                    if matches!(wire.as_message(), BlockMessage::LaneBlockQc(_)) =>
-                {
-                    "lane-qc"
-                }
-                NetworkMessage::MergeCommitteeSignature(_) => "merge-share",
-                other => panic!("unexpected production output fixture: {other:?}"),
-            };
-            admitted_for_hook
-                .lock()
-                .expect("record admitted production output")
-                .push((post.peer_id, kind));
-            Ok(())
-        });
-
-        service
-            .post_lane_block(blocked.clone(), lane_message.clone())
-            .expect("retain finalized-height lane certificate for blocked target");
-        assert!(
-            service
-                .has_pending_exact_output()
-                .expect("inspect pending production output")
-        );
-
-        service
-            .post_lane_block(later_responsive.clone(), lane_message)
-            .expect("later responsive fanout enters the non-full corridor");
-
-        assert_eq!(attempts.load(Ordering::Relaxed), 2);
-        let admitted = admitted.lock().expect("inspect admitted production output");
-        assert_eq!(
-            admitted
-                .iter()
-                .filter(|(peer, _)| peer == &later_responsive)
-                .cloned()
-                .collect::<Vec<_>>(),
-            vec![(later_responsive, "lane-qc")]
-        );
-        drop(admitted);
-        let pending = service
-            .lock_pending_exact_output()
-            .expect("inspect surviving production target");
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.fanouts[0].peers[0], blocked);
-        assert!(pending.fanouts[0].targets[0].current.is_some());
-        drop(pending);
-
-        service.broadcast_merge_to_voters(merge_share(b"rollover merge share"));
-        let (sidecar_request, _sidecar_chunk) =
-            certified_sidecar_outputs(&service.local_peer, &blocked);
-        service.post_certified_merge_sidecar(blocked.clone(), sidecar_request);
-        assert_eq!(
-            service
-                .lock_pending_exact_output()
-                .expect("inspect typed rollover outputs")
-                .fanouts
-                .len(),
-            3,
-            "lane, merge-share, and locally initiated sidecar request stay owned"
-        );
-
-        assert_eq!(
-            service
-                .handoff_applied_height_output_to_durable_reconstruction(
-                    &receipt,
-                    &artifact,
-                    &lane_authority,
-                )
-                .expect("durable application supersedes dead-target output"),
-            3
-        );
-        assert!(
-            !service
-                .has_pending_exact_output()
-                .expect("inspect applied-height output handoff")
-        );
-        assert!(!service.output_guard.restart_required());
-        context
-    }
-
-    #[test]
-    fn production_output_path_serves_later_fanout_while_target_stays_backpressured() {
-        let _ = production_output_handoff_with_dead_target();
-    }
-
-    #[test]
-    fn response_outputs_without_exact_routes_fail_stop() {
-        let (mut service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let messages = non_retireable_lane_transport_messages(peer.clone());
-        service.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        for message in &messages {
-            let effect = V2LaneWorkEffect::PostLaneBlock {
-                peer: peer.clone(),
-                message: message.clone(),
-            };
-            assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
-            assert_eq!(
-                service.post_lane_block(peer.clone(), message.clone()),
-                Ok(()),
-                "every authenticated non-retireable lane message must enter exact ownership"
-            );
-        }
-        let pending = service
-            .lock_pending_exact_output()
-            .expect("inspect retained non-retireable lane transport");
-        assert_eq!(pending.fanouts.len(), messages.len());
-        for (fanout, expected) in pending.fanouts.iter().zip(&messages) {
-            assert!(matches!(
-                &fanout.rollover_claim,
-                ExactOutputRolloverClaim::NonRetireableLaneTransport {
-                    target,
-                    message_hash,
-                } if target == &peer && *message_hash == HashOf::new(expected)
-            ));
-            assert!(matches!(
-                fanout.messages.as_slice(),
-                [NetworkMessage::SumeragiBlock(envelope)]
-                    if HashOf::new(envelope.as_message()) == HashOf::new(expected)
-            ));
-        }
-        drop(pending);
-        assert!(!service.output_guard.restart_required());
-
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        assert!(
-            service
-                .post_lane_block(peer, BlockMessage::invalid_wire_sentinel())
-                .is_err(),
-            "the lane-only transport must reject decode-only global traffic"
-        );
-        assert!(service.output_guard.restart_required());
-
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        service.post_native_amx(
-            peer,
-            native_amx_output(&service.context, service.local_peer.clone()),
-        );
-        assert!(service.output_guard.restart_required());
-
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_request, chunk) = certified_sidecar_outputs(&service.local_peer, &peer);
-        service.post_certified_merge_sidecar(peer, chunk);
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn locally_authorized_autonomous_transport_has_durable_rollover_claim() {
-        let (mut service, _) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let messages = non_retireable_lane_transport_messages(service.local_peer.clone());
-        service.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        for message in &messages {
-            service
-                .post_lane_block(target.clone(), message.clone())
-                .expect("retain locally reconstructable autonomous transport");
-        }
-
-        let pending = service
-            .lock_pending_exact_output()
-            .expect("inspect autonomous rollover claims");
-        assert_eq!(pending.fanouts.len(), messages.len());
-        let expected_scope = service.exact_output_scope();
-        for fanout in &pending.fanouts {
-            assert!(matches!(
-                &fanout.rollover_claim,
-                ExactOutputRolloverClaim::AutonomousLane {
-                    scope,
-                    local_peer,
-                    proposal_height: 1,
-                } if *scope == expected_scope && local_peer == &service.local_peer
-            ));
-        }
-    }
-
-    #[test]
-    fn generation_hint_requires_exact_reply_route_ownership() {
-        let (mut service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        service.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-        let hint = Arc::new(certified_sidecar_generation_hint(
-            &service.local_peer,
-            &peer,
-            401,
-        ));
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
-        let reply_route = routes.mint_via(peer.clone(), hub);
-        let reply_routes = NetworkReplyRoutes::try_from_route(reply_route.clone())
-            .expect("one live GenerationHint reply route");
-        let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            peer: peer.clone(),
-            reply_routes: Some(reply_routes.clone()),
-            message: Arc::clone(&hint),
-        };
-        assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
-        assert_eq!(
-            service
-                .post_certified_merge_sidecar_with_reply_routes(
-                    peer.clone(),
-                    Some(reply_routes),
-                    Arc::clone(&hint),
-                )
-                .expect("routed GenerationHint has exact reply ownership"),
-            ExactFanoutOwnership::Owned
-        );
-        assert!(!service.output_guard.restart_required());
-        let pending = service
-            .lock_pending_exact_output()
-            .expect("inspect retained routed GenerationHint");
-        assert_eq!(pending.fanouts.len(), 1);
-        let fanout = &pending.fanouts[0];
-        assert!(matches!(
-            fanout.messages.as_slice(),
-            [NetworkMessage::CertifiedMergeSidecar(message)]
-                if matches!(
-                    message.as_ref(),
-                    CertifiedMergeSidecarMessage::GenerationHint(_)
-                )
-        ));
-        assert_eq!(
-            fanout.messages[0].topic(),
-            iroha_p2p::network::message::Topic::Consensus
-        );
-        assert_eq!(fanout.peers, vec![peer.clone()]);
-        assert!(matches!(
-            fanout.targets.as_slice(),
-            [PendingExactTarget {
-                route: ExactTargetRoute::Reply(retained),
-                ..
-            }] if retained.same_delivery(&reply_route)
-        ));
-        assert_eq!(fanout.certified_sidecar_topology_progress_target(), None);
-        drop(pending);
-
-        let (missing_route_service, _) = fixture();
-        let missing_route_peer = missing_route_service.context.roster[1].validator.clone();
-        let missing_route_hint = Arc::new(certified_sidecar_generation_hint(
-            &missing_route_service.local_peer,
-            &missing_route_peer,
-            402,
-        ));
-        let missing_route_effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            peer: missing_route_peer.clone(),
-            reply_routes: None,
-            message: Arc::clone(&missing_route_hint),
-        };
-        assert!(
-            missing_route_service
-                .can_retain_lane_work_effect(&missing_route_effect)
-                .expect_err("GenerationHint missing reply-route ownership must fail preflight")
-                .contains("reply-route ownership")
-        );
-        assert!(
-            missing_route_service
-                .post_certified_merge_sidecar_with_reply_routes(
-                    missing_route_peer,
-                    None,
-                    missing_route_hint,
-                )
-                .expect_err(
-                    "GenerationHint missing reply-route ownership must fail exact-output admission",
-                )
-                .contains("reply-route ownership")
-        );
-        assert!(missing_route_service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
-        let (service, keys) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let vote = lane_drain_vote(&keys[0]);
-        let effect = V2LaneWorkEffect::PostLaneDrainVote {
-            peer: target.clone(),
-            vote: vote.clone(),
-        };
-        assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
-
-        service.post_lane_drain_vote(target.clone(), vote.clone());
-        let pending = service
-            .lock_pending_exact_output()
-            .expect("inspect retained lane-drain output");
-        assert_eq!(pending.fanouts.len(), 1);
-        let fanout = &pending.fanouts[0];
-        assert_eq!(fanout.semantic_peers(), vec![target.clone()]);
-        assert!(matches!(
-            fanout.messages.as_slice(),
-            [NetworkMessage::LaneDrainVote(queued)] if queued.as_ref() == &vote
-        ));
-        assert!(matches!(
-            &fanout.rollover_claim,
-            ExactOutputRolloverClaim::LaneDrainVote {
-                target: claimed_target,
-                vote_hash,
-                ..
-            } if claimed_target == &target && *vote_hash == HashOf::new(&vote)
-        ));
-        drop(pending);
-
-        let mut tampered = vote;
-        tampered.bls_signature[0] ^= 0x01;
-        let error = service
-            .can_retain_lane_work_effect(&V2LaneWorkEffect::PostLaneDrainVote {
-                peer: target,
-                vote: tampered,
-            })
-            .expect_err("tampered drain vote must fail before corridor reservation");
-        assert!(error.contains("invalid vote evidence"));
-    }
-
-    #[test]
-    fn sidecar_receipts_use_a_separate_bounded_control_queue() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_, chunk) = certified_sidecar_outputs(&service.local_peer, &peer);
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(chunk));
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let route = routes.mint(peer.clone());
-        let fanout = || {
-            PendingExactFanout::new_with_routes(
-                vec![message.clone()],
-                vec![peer.clone()],
-                vec![ExactTargetRoute::Reply(route.clone())],
-            )
-            .expect("one routed sidecar response")
-        };
-        let mut pending = PendingExactOutput::new(1, 1, 1, &[])
-            .expect("one ownership unit and one receipt-control unit");
-        assert_eq!(pending.sidecar_admission_capacity, 1);
-        assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
-        let mut first_flush_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("sidecar response must retain its reply route")
-                };
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-                first_flush_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::BudgetExhausted {
-                closest_backpressure_rank: None,
-            })
-        );
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-        assert!(
-            first_flush_control
-                .as_mut()
-                .expect("first sidecar writer owns its flush controller")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("first exact writer flush publishes its receipt");
-        assert_eq!(pending.ownership_units, 0);
-        assert_eq!(pending.pending_sidecar_flushes(), 0);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-
-        assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |_post, _ticket, _route, _timeout_attempt| {
-                panic!("a full receipt queue must stop before actor admission")
-            }),
-            Ok(ExactOutputDriveOutcome::ReceiptBackpressured)
-        );
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-
-        pending
-            .admitted_sidecar_chunks
-            .pop_front()
-            .expect("release the first bounded receipt");
-        let mut second_flush_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("sidecar response must retain its reply route")
-                };
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-                second_flush_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::BudgetExhausted {
-                closest_backpressure_rank: None,
-            })
-        );
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-        assert!(
-            second_flush_control
-                .as_mut()
-                .expect("second sidecar writer owns its flush controller")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("second exact writer flush publishes its receipt");
-        assert_eq!(pending.ownership_units, 0);
-        assert_eq!(pending.pending_sidecar_flushes(), 0);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-    }
-
-    #[test]
-    fn actor_backpressure_cannot_change_returned_payload_identity() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let original = merge_share_message(b"original exact output");
-        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
-        pending
-            .enqueue(
-                PendingExactFanout::new(vec![original], vec![peer]).expect("original exact fanout"),
-            )
-            .expect("retain original exact fanout");
-
-        let error = pending
-            .drive_with(|mut post, ticket, _route| {
-                post.data = merge_share_message(b"mutated returned output");
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 1,
-                })
-            })
-            .expect_err("the actor cannot substitute a same-target payload");
-
-        assert!(error.contains("changed an exact output payload"));
-        assert!(pending.is_pending());
-        assert!(pending.fanouts[0].targets[0].current.is_none());
-    }
-
-    #[test]
-    fn exact_output_retry_rejects_a_different_message_identity() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let reply_route = routes.mint(peer.clone());
-        let original = merge_share_message(b"retained exact output");
-        let mut retained = PendingExactFanout::new_with_routes(
-            vec![original.clone()],
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(reply_route.clone())],
-        )
-        .expect("retained exact fanout");
-        let exact_retry = PendingExactFanout::new_with_routes(
-            vec![original],
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(reply_route.clone())],
-        )
-        .expect("exact same-tenure retransmission");
-        let conflicting = PendingExactFanout::new_with_routes(
-            vec![merge_share_message(b"conflicting exact output")],
-            vec![peer],
-            vec![ExactTargetRoute::Reply(reply_route)],
-        )
-        .expect("conflicting retransmission");
-
-        assert!(retained.can_coalesce_retry(&exact_retry));
-        assert_ne!(retained.message_hashes, conflicting.message_hashes);
-        assert!(
-            !retained
-                .coalesce_retry(&conflicting)
-                .expect("conflicting retry is structurally valid")
-        );
-    }
-
-    #[test]
-    fn outbound_corridor_capacity_keeps_the_owned_front_bounded() {
-        let (service, _) = fixture();
-        let first_peer = service.context.roster[1].validator.clone();
-        let second_peer = service.context.roster[2].validator.clone();
-        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(first_peer.clone())],
-                        vec![first_peer],
-                    )
-                    .expect("first final QC fanout"),
-                )
-                .expect("first fanout is within protocol bounds"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(second_peer.clone())],
-                        vec![second_peer],
-                    )
-                    .expect("second final QC fanout"),
-                )
-                .expect("second fanout is within protocol bounds"),
-            ExactFanoutOwnership::SourceRetained
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-    }
-
-    #[test]
-    fn applied_height_handoff_rejects_output_without_reconstruction() {
-        let (service, keys) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_, artifact) = durable_finality_fixture(&service, &keys);
-        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
-        pending
-            .enqueue(
-                PendingExactFanout::new(
-                    vec![merge_share_message(b"manual untyped output")],
-                    vec![peer],
-                )
-                .expect("non-empty exact-only fanout"),
-            )
-            .expect("retain exact-only fanout");
-
-        let error = pending
-            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
-            .expect_err("exact-only output cannot enter durable reconstruction handoff");
-
-        assert!(error.contains("no typed applied-height rollover claim"));
-        assert!(pending.is_pending());
-
-        let mut other_context = service.context.clone();
-        other_context.height = other_context.height.saturating_add(1);
-        let native = native_amx_output(&other_context, service.local_peer.clone());
-        let native_hash = HashOf::new(&native);
-        let native_round = native_amx_message_body(&native)
-            .expect("valid Native AMX fixture round")
-            .round;
-        let wrong_scope = ExactOutputCreationScope {
-            context_id: native_round.context_id,
-            height: native_round.height,
-        };
-        let mut wrong = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
-        wrong
-            .enqueue(
-                PendingExactFanout::claimed(
-                    vec![NetworkMessage::NativeAmx(Arc::new(native))],
-                    vec![service.context.roster[1].validator.clone()],
-                    ExactOutputRolloverClaim::NativeAmx {
-                        scope: wrong_scope,
-                        round: native_round,
-                        message_hash: native_hash,
-                    },
-                )
-                .expect("internally exact wrong-scope claim")
-                .expect("non-empty wrong-scope fanout"),
-            )
-            .expect("retain wrong-scope Native AMX output");
-        let error = wrong
-            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
-            .expect_err("another height's typed claim must fail closed");
-        assert!(error.contains("another creation scope"));
-        assert!(wrong.is_pending());
-    }
+    include!("v2_worker_output_and_handoff_cases_tests.rs");
 
     include!("v2_worker/applied_height_handoff_tests.rs");
     include!("v2_worker/upstream_reply_route_test.rs");
 
-    #[test]
-    fn closed_network_actor_fails_stop_before_later_output() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        service
-            .lock_pending_exact_output()
-            .expect("lock output corridor")
-            .enqueue(
-                PendingExactFanout::new(vec![lane_commit_qc_message(peer.clone())], vec![peer])
-                    .expect("non-empty final QC fanout"),
-            )
-            .expect("retain final QC before actor admission");
+    include!("v2_worker_locked_candidate_and_routing_cases_tests.rs");
 
-        let error = service
-            .retry_pending_exact_output()
-            .expect_err("a permanently closed network actor must fail stop");
-
-        assert!(error.contains("network actor closed"));
-        assert!(service.output_guard.restart_required());
-        let pending = service
-            .lock_pending_exact_output()
-            .expect("inspect fail-stop output ownership");
-        assert_eq!(pending.fanouts.len(), 1);
-        let retained = pending.fanouts[0].targets[0]
-            .current
-            .as_ref()
-            .expect("closed actor returned the exact final QC post");
-        assert!(matches!(&retained.data, NetworkMessage::SumeragiBlock(_)));
-    }
-
-    #[test]
-    fn full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one-fanout corridor");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(peer.clone())],
-                        vec![peer.clone()],
-                    )
-                    .expect("valid progress fanout"),
-                )
-                .expect("valid fanout enters corridor"),
-            ExactFanoutOwnership::Owned
-        );
-        let error = PendingExactFanout::classified_with_routes(
-            vec![NetworkMessage::Health],
-            vec![peer],
-            vec![ExactTargetRoute::Topology],
-        )
-        .expect_err("a non-progress route has no reliable scheduler class");
-
-        assert!(error.contains("no reliable progress class"));
-        assert_eq!(pending.fanouts.len(), 1);
-        assert!(!service.output_guard.restart_required());
-    }
-
-    fn locked_candidate_subject(label: &[u8]) -> wire::BlockSubject {
-        wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
-            payload_hash: Hash::new(label),
-        }
-    }
-
-    fn locked_candidate_tag(view: u64) -> EventTag {
-        EventTag::new(1, view, Generation::new(view + 1))
-    }
-
-    fn locked_candidate_round(service: &ProductionV2Services, view: u64) -> wire::ConsensusRound {
-        wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view,
-        }
-    }
-
-    fn attach_locked_candidate_io(
-        service: &mut ProductionV2Services,
-        capacity: usize,
-    ) -> V2IoCommandReceiver {
-        let (command_tx, command_rx, admission) = test_io_command_channel(capacity);
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(capacity);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        command_rx
-    }
-
-    fn detach_locked_candidate_io(service: &mut ProductionV2Services) {
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn locked_candidate_requests_coalesce_by_immutable_subject() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let subject = locked_candidate_subject(b"coalesced locked candidate");
-
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("queue the one physical acquisition");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("coalesce an exact retransmission");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(1),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("rebind the same acquisition to a later view");
-        let same_view_rebound = EventTag::new(1, 1, Generation::new(3));
-        service
-            .request_locked_candidate(
-                same_view_rebound,
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("rebind the same acquisition to a newer same-view generation");
-
-        let commands = command_rx.try_iter().collect::<Vec<_>>();
-        assert!(matches!(
-            commands.as_slice(),
-            [V2IoCommand::LoadCandidate { subject: queued, .. }] if *queued == subject
-        ));
-        let acquisition = service
-            .locked_candidate_acquisition
-            .as_ref()
-            .expect("one acquisition owner");
-        assert_eq!(acquisition.subject, subject);
-        assert_eq!(acquisition.consumer, same_view_rebound);
-        assert_eq!(acquisition.pending_count(), 1);
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn locked_candidate_completion_uses_latest_consumer_without_reloading() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let subject = locked_candidate_subject(b"rebound locked candidate");
-        let canonical_wire = b"exact durable body".to_vec();
-
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("queue initial load");
-        let acquisition_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject: queued,
-            }) if queued == subject => acquisition_id,
-            _ => panic!("expected the one exact-subject candidate load"),
-        };
-        service
-            .complete_locked_candidate_load(LockedCandidateLoad {
-                acquisition_id,
-                subject,
-                canonical_wire: canonical_wire.clone(),
-            })
-            .expect("complete the physical load");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(3),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("advance the ready result consumer");
-
-        let first = service
-            .take_loaded_candidate()
-            .expect("deliver ready bytes to the latest view");
-        assert_eq!(first.tag(), locked_candidate_tag(3));
-        assert_eq!(first.round(), locked_candidate_round(&service, 0));
-        assert_eq!(first.subject(), subject);
-        assert_eq!(first.into_canonical_wire(), canonical_wire);
-        assert!(service.take_loaded_candidate().is_none());
-
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(4),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("rebind retained ready bytes once more");
-        let second = service
-            .take_loaded_candidate()
-            .expect("redeliver retained bytes without another read");
-        assert_eq!(second.tag(), locked_candidate_tag(4));
-        assert_eq!(second.subject(), subject);
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn locked_candidate_consumer_rebind_rejects_stale_or_regressive_tags() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let subject = locked_candidate_subject(b"monotonic locked candidate");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(2),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("queue current-view acquisition");
-
-        let stale = service
-            .request_locked_candidate(
-                locked_candidate_tag(1),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect_err("a stale consumer must not replace the latest binding");
-        assert!(stale.contains("did not advance monotonically"));
-        let acquisition = service
-            .locked_candidate_acquisition
-            .as_ref()
-            .expect("original acquisition remains owned");
-        assert_eq!(acquisition.consumer, locked_candidate_tag(2));
-        assert!(service.output_guard.restart_required());
-        assert_eq!(command_rx.try_iter().count(), 1);
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn locked_candidate_duplicate_or_wrong_completion_is_rejected() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let subject = locked_candidate_subject(b"owned locked candidate");
-        let wrong = locked_candidate_subject(b"conflicting locked candidate");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("queue owned acquisition");
-        let acquisition_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject: queued,
-            }) if queued == subject => acquisition_id,
-            _ => panic!("expected the owned candidate load"),
-        };
-
-        let completion_error = service
-            .complete_locked_candidate_load(LockedCandidateLoad {
-                acquisition_id,
-                subject: wrong,
-                canonical_wire: b"wrong body".to_vec(),
-            })
-            .expect_err("wrong-subject completion must be rejected");
-        assert!(completion_error.contains("different acquisition subject"));
-        let acquisition = service
-            .locked_candidate_acquisition
-            .as_ref()
-            .expect("exact acquisition remains owned");
-        assert_eq!(acquisition.subject, subject);
-        assert!(matches!(
-            &acquisition.state,
-            LockedCandidateAcquisitionState::Loading { .. }
-        ));
-
-        service
-            .complete_locked_candidate_load(LockedCandidateLoad {
-                acquisition_id,
-                subject,
-                canonical_wire: b"exact body".to_vec(),
-            })
-            .expect("complete the exact acquisition");
-        let duplicate = service
-            .complete_locked_candidate_load(LockedCandidateLoad {
-                acquisition_id,
-                subject,
-                canonical_wire: b"exact body".to_vec(),
-            })
-            .expect_err("duplicate completion must be rejected");
-        assert!(duplicate.contains("completed more than once"));
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn locked_candidate_future_completion_is_rejected_without_replacing_owner() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let subject = locked_candidate_subject(b"future completion owner");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("queue owned acquisition");
-        let acquisition_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject: queued,
-            }) if queued == subject => acquisition_id,
-            _ => panic!("expected the owned candidate load"),
-        };
-        let future_id = LockedCandidateAcquisitionId(
-            acquisition_id
-                .0
-                .checked_add(1)
-                .expect("test acquisition ID has a successor"),
-        );
-
-        let future = service
-            .complete_locked_candidate_load(LockedCandidateLoad {
-                acquisition_id: future_id,
-                subject,
-                canonical_wire: b"forged future body".to_vec(),
-            })
-            .expect_err("an unissued future completion must fail closed");
-        assert!(future.contains("unknown future acquisition ID"));
-        let acquisition = service
-            .locked_candidate_acquisition
-            .as_ref()
-            .expect("the issued acquisition remains owned");
-        assert_eq!(acquisition.subject, subject);
-        assert!(matches!(
-            acquisition.state,
-            LockedCandidateAcquisitionState::Loading {
-                acquisition_id: owned,
-                subject: owned_subject,
-            } if owned == acquisition_id && owned_subject == subject
-        ));
-        assert!(service.take_loaded_candidate().is_none());
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn higher_different_lock_replaces_load_and_retires_stale_completion() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let original = locked_candidate_subject(b"original locked candidate");
-        let replacement = locked_candidate_subject(b"higher locked candidate");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(1),
-                locked_candidate_round(&service, 0),
-                original,
-            )
-            .expect("queue original acquisition");
-        let original_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject,
-            }) if subject == original => acquisition_id,
-            _ => panic!("expected original candidate load"),
-        };
-
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(1),
-                locked_candidate_round(&service, 1),
-                replacement,
-            )
-            .expect("a higher lock replaces the desired subject");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        assert_eq!(
-            service
-                .complete_locked_candidate_load(LockedCandidateLoad {
-                    acquisition_id: original_id,
-                    subject: original,
-                    canonical_wire: b"superseded body".to_vec(),
-                })
-                .expect("retire superseded physical result"),
-            None
-        );
-        let replacement_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject,
-            }) if subject == replacement => acquisition_id,
-            _ => panic!("expected one replacement candidate load"),
-        };
-        assert!(replacement_id > original_id);
-
-        assert_eq!(
-            service
-                .complete_locked_candidate_load(LockedCandidateLoad {
-                    acquisition_id: original_id,
-                    subject: original,
-                    canonical_wire: b"late duplicate".to_vec(),
-                })
-                .expect("late superseded completion is non-fatal"),
-            None
-        );
-        assert_eq!(
-            service
-                .complete_locked_candidate_load(LockedCandidateLoad {
-                    acquisition_id: replacement_id,
-                    subject: replacement,
-                    canonical_wire: b"replacement body".to_vec(),
-                })
-                .expect("complete replacement acquisition"),
-            Some(locked_candidate_tag(1))
-        );
-        let loaded = service
-            .take_loaded_candidate()
-            .expect("deliver only the higher locked body");
-        assert_eq!(loaded.tag(), locked_candidate_tag(1));
-        assert_eq!(loaded.round(), locked_candidate_round(&service, 1));
-        assert_eq!(loaded.subject(), replacement);
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn superseded_locked_candidate_failure_starts_latest_acquisition() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let original = locked_candidate_subject(b"failing original candidate");
-        let replacement = locked_candidate_subject(b"replacement after failure");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(1),
-                locked_candidate_round(&service, 0),
-                original,
-            )
-            .expect("queue original acquisition");
-        let original_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject,
-            }) if subject == original => acquisition_id,
-            _ => panic!("expected original candidate load"),
-        };
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(1),
-                locked_candidate_round(&service, 1),
-                replacement,
-            )
-            .expect("install higher same-incarnation lock");
-
-        assert_eq!(
-            service
-                .locked_candidate_load_failed(
-                    original_id,
-                    original,
-                    "superseded read failure".to_owned(),
-                )
-                .expect("superseded failure must retire non-fatally"),
-            None
-        );
-        assert!(!service.output_guard.restart_required());
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate { subject, .. }) if subject == replacement
-        ));
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn unavailable_locked_candidate_waits_for_matching_durable_store() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let subject = locked_candidate_subject(b"not-yet-durable locked candidate");
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("queue initial acquisition");
-        let acquisition_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject: queued,
-            }) if queued == subject => acquisition_id,
-            _ => panic!("expected initial candidate load"),
-        };
-
-        assert_eq!(
-            service
-                .locked_candidate_load_unavailable(acquisition_id, subject)
-                .expect("local absence is a recoverable state"),
-            None
-        );
-        let acquisition = service
-            .locked_candidate_acquisition
-            .as_ref()
-            .expect("waiting acquisition remains owned");
-        assert!(matches!(
-            &acquisition.state,
-            LockedCandidateAcquisitionState::Waiting { .. }
-        ));
-        assert_eq!(acquisition.pending_count(), 1);
-        assert!(!service.output_guard.restart_required());
-
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("same request coalesces while certified recovery runs");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        service
-            .retry_locked_candidate_after_store(locked_candidate_subject(b"unrelated body"))
-            .expect("unrelated store cannot steal retry ownership");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        service
-            .retry_locked_candidate_after_store(subject)
-            .expect("matching durable store requeues exactly once");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate { subject: queued, .. }) if queued == subject
-        ));
-        detach_locked_candidate_io(&mut service);
-    }
-
-    #[test]
-    fn unavailable_locked_candidate_rebinds_latest_consumer_before_retry() {
-        let (mut service, _) = fixture();
-        let command_rx = attach_locked_candidate_io(&mut service, 4);
-        let subject = locked_candidate_subject(b"waiting rebound candidate");
-        let canonical_wire = b"recovered exact body".to_vec();
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(0),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("queue initial acquisition");
-        let initial_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject: queued,
-            }) if queued == subject => acquisition_id,
-            _ => panic!("expected initial candidate load"),
-        };
-        service
-            .locked_candidate_load_unavailable(initial_id, subject)
-            .expect("local absence waits for certified recovery");
-
-        service
-            .request_locked_candidate(
-                locked_candidate_tag(7),
-                locked_candidate_round(&service, 0),
-                subject,
-            )
-            .expect("same lock rebinds while durable recovery is pending");
-        let acquisition = service
-            .locked_candidate_acquisition
-            .as_ref()
-            .expect("waiting acquisition remains owned");
-        assert_eq!(acquisition.consumer, locked_candidate_tag(7));
-        assert!(matches!(
-            acquisition.state,
-            LockedCandidateAcquisitionState::Waiting {
-                acquisition_id,
-                subject: waiting_subject,
-            } if acquisition_id == initial_id && waiting_subject == subject
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-
-        service
-            .retry_locked_candidate_after_store(subject)
-            .expect("matching durable store starts one replacement read");
-        let retry_id = match command_rx.try_recv() {
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id,
-                subject: queued,
-            }) if queued == subject => acquisition_id,
-            _ => panic!("expected the matching durable retry"),
-        };
-        assert!(retry_id > initial_id);
-        assert_eq!(
-            service
-                .complete_locked_candidate_load(LockedCandidateLoad {
-                    acquisition_id: retry_id,
-                    subject,
-                    canonical_wire: canonical_wire.clone(),
-                })
-                .expect("complete the recovered exact acquisition"),
-            Some(locked_candidate_tag(7))
-        );
-        let loaded = service
-            .take_loaded_candidate()
-            .expect("deliver recovered bytes only to the latest consumer");
-        assert_eq!(loaded.tag(), locked_candidate_tag(7));
-        assert_eq!(loaded.round(), locked_candidate_round(&service, 0));
-        assert_eq!(loaded.subject(), subject);
-        assert_eq!(loaded.into_canonical_wire(), canonical_wire);
-        assert!(service.take_loaded_candidate().is_none());
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        detach_locked_candidate_io(&mut service);
-    }
-
-    fn proposal_body_and_payload(
-        context: &wire::HeightContext,
-        keys: &[KeyPair],
-    ) -> (Vec<u8>, EncodedV2Payload, wire::Proposal) {
-        let (canonical_wire, payload) = proposal_body_and_payload_at_view(context, keys, 0);
-        let round = payload.manifest().round;
-        let proposer = context.leader(round.view);
-        let proposal = wire::Proposal {
-            round,
-            proposer,
-            subject: payload.manifest().subject,
-            manifest: payload.manifest().clone(),
-            justification: wire::ProposalJustification::ParentCommit(
-                wire::ParentCommitJustification { certificate: None },
-            ),
-            signature: Vec::new(),
-        };
-        (canonical_wire, payload, proposal)
-    }
-
-    fn proposal_body_and_payload_at_view(
-        context: &wire::HeightContext,
-        keys: &[KeyPair],
-        view: u64,
-    ) -> (Vec<u8>, EncodedV2Payload) {
-        let round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view,
-        };
-        let proposer = context.leader(round.view);
-        let proposer_index = usize::try_from(proposer).expect("fixture proposer index");
-        // The immutable body was created by the genesis authority in view 0;
-        // `view` is the certified round in which that exact body is proposed
-        // or reproposed after restart.
-        let header = BlockHeader::new(
-            NonZeroU64::new(round.height).expect("non-zero fixture height"),
-            None,
-            None,
-            None,
-            1_000,
-            0,
-        );
-        let signature =
-            SignatureOf::try_from_hash(keys[proposer_index].private_key(), header.hash())
-                .expect("sign fixture block header");
-        let block = SignedBlock::presigned(
-            BlockSignature::new(u64::from(proposer), signature),
-            header,
-            Vec::new(),
-        );
-        let canonical_wire = block.encode_wire().expect("canonical fixture block");
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: block.hash(),
-            payload_hash: Hash::new(&canonical_wire),
-        };
-        let payload = encode_payload(context, round, subject, &canonical_wire)
-            .expect("encode fixture proposal payload");
-        (canonical_wire, payload)
-    }
-
-    fn allow_fixture_block_payload(context: &mut wire::HeightContext) {
-        context.da_layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1_024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 16_384,
-            max_chunk_count: 32,
-        };
-        context.validate().expect("widened fixture context");
-    }
-
-    fn fixture_with_block_payload() -> (ProductionV2Services, Vec<KeyPair>) {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        (service, keys)
-    }
-
-    type ConsensusRouteObservation = (PeerId, wire::ConsensusMessageV2);
-
-    fn install_consensus_route_observer(
-        service: &mut ProductionV2Services,
-    ) -> Arc<Mutex<Vec<ConsensusRouteObservation>>> {
-        let observations = Arc::new(Mutex::new(Vec::new()));
-        let observed = Arc::clone(&observations);
-        service.set_exact_output_admission_hook(move |post, ticket| {
-            assert!(ticket.is_none());
-            let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
-                panic!("consensus routing emitted a non-Sumeragi message");
-            };
-            let BlockMessage::V2(message) = envelope.as_message() else {
-                panic!("consensus routing emitted a lane message");
-            };
-            observed
-                .lock()
-                .expect("lock consensus route observations")
-                .push((post.peer_id, message.clone()));
-            Ok(())
-        });
-        observations
-    }
-
-    fn take_consensus_route_observations(
-        observations: &Mutex<Vec<ConsensusRouteObservation>>,
-    ) -> Vec<ConsensusRouteObservation> {
-        std::mem::take(
-            &mut *observations
-                .lock()
-                .expect("inspect consensus route observations"),
-        )
-    }
-
-    fn proposal_route_targets(
-        observations: &[ConsensusRouteObservation],
-        round: wire::ConsensusRound,
-        manifest: &wire::PayloadManifest,
-    ) -> BTreeSet<PeerId> {
-        observations
-            .iter()
-            .filter_map(|(peer, message)| match &message.payload {
-                wire::ConsensusMessageV2Payload::Proposal(proposal)
-                    if proposal.round == round && proposal.manifest == *manifest =>
-                {
-                    Some(peer.clone())
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn chunk_route_targets(
-        observations: &[ConsensusRouteObservation],
-        manifest: &wire::PayloadManifest,
-    ) -> BTreeSet<PeerId> {
-        let manifest_hash = HashOf::new(manifest);
-        observations
-            .iter()
-            .filter_map(|(peer, message)| match &message.payload {
-                wire::ConsensusMessageV2Payload::PayloadChunk(chunk)
-                    if chunk.manifest_hash == manifest_hash =>
-                {
-                    Some(peer.clone())
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn set_local_validator(
-        service: &mut ProductionV2Services,
-        keys: &[KeyPair],
-        validator: wire::ValidatorIndex,
-    ) {
-        let index = usize::try_from(validator).expect("fixture validator index");
-        service.local_validator = Some(validator);
-        service.local_peer = service.context.roster[index].validator.clone();
-        service.key_pair = keys[index].clone();
-    }
-
-    fn routing_vote(
-        service: &ProductionV2Services,
-        view: u64,
-        phase: wire::GlobalPhase,
-    ) -> wire::Vote {
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view,
-        };
-        wire::Vote {
-            round,
-            proposal_round: round,
-            phase,
-            subject: wire::BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"routing vote block")),
-                payload_hash: Hash::new(b"routing vote payload"),
-            },
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"routing vote parent state"),
-                Hash::new(b"routing vote post state"),
-                Hash::new(b"routing vote ordinary writes"),
-                1,
-                Hash::new(b"routing vote executed block wire"),
-            ),
-            signer: service
-                .local_validator
-                .expect("routing fixture is a voting validator"),
-            signature: vec![0xA5; 48],
-        }
-    }
-
-    #[test]
-    fn prepare_and_commit_votes_reach_every_remote_voter_across_views() {
-        let (mut service, _) = fixture();
-        let observations = install_consensus_route_observer(&mut service);
-        let roster_len =
-            u64::try_from(service.context.roster.len()).expect("fixture roster length");
-        let expected = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
-
-        for view in 0..roster_len {
-            let round = wire::ConsensusRound {
-                context_id: service.context.id(),
-                height: service.context.height,
-                view,
-            };
-            for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
-                let vote = routing_vote(&service, view, phase);
-                service
-                    .broadcast_consensus(wire::ConsensusMessageV2::new(
-                        wire::ConsensusMessageV2Payload::Vote(vote),
-                    ))
-                    .expect("route phase vote to every remote voter");
-                let routed = take_consensus_route_observations(&observations);
-                let targets = routed
-                    .iter()
-                    .filter_map(|(peer, message)| match &message.payload {
-                        wire::ConsensusMessageV2Payload::Vote(vote)
-                            if vote.round == round && vote.phase == phase =>
-                        {
-                            Some(peer.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect::<BTreeSet<_>>();
-                assert_eq!(
-                    targets, expected,
-                    "phase vote fanout differs in view {view}"
-                );
-                assert_eq!(routed.len(), expected.len());
-            }
-        }
-    }
-
-    #[test]
-    fn first_proposal_routes_manifest_control_to_all_and_chunks_to_set_a() {
-        let (mut service, keys) = fixture_with_block_payload();
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        set_local_validator(&mut service, &keys, proposal.proposer);
-        let manifest = payload.manifest().clone();
-        service
-            .register_outbound_payload(service.active_tag, payload)
-            .expect("retain first proposal chunks");
-        let committee = service
-            .committee_for_round(proposal.round)
-            .expect("project first proposal committee");
-        let expected_control = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
-        let expected_chunks = service
-            .remote_voters_for_indices(committee.set_a())
-            .expect("resolve first proposal Set A")
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let observations = install_consensus_route_observer(&mut service);
-
-        service
-            .broadcast_consensus(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-            ))
-            .expect("broadcast first proposal");
-
-        let routed = take_consensus_route_observations(&observations);
-        assert_eq!(
-            proposal_route_targets(&routed, proposal.round, &manifest),
-            expected_control
-        );
-        assert_eq!(chunk_route_targets(&routed, &manifest), expected_chunks);
-        assert!(routed.iter().all(|(_, message)| matches!(
-            &message.payload,
-            wire::ConsensusMessageV2Payload::Proposal(routed)
-                if routed.manifest == manifest
-        ) || matches!(
-            &message.payload,
-            wire::ConsensusMessageV2Payload::PayloadChunk(_)
-        )));
-    }
-
-    #[test]
-    fn same_round_proposal_retransmission_expands_chunks_to_set_b_and_all_voters() {
-        let (mut service, keys) = fixture_with_block_payload();
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        set_local_validator(&mut service, &keys, proposal.proposer);
-        let manifest = payload.manifest().clone();
-        service
-            .register_outbound_payload(service.active_tag, payload)
-            .expect("retain proposal chunks");
-        let committee = service
-            .committee_for_round(proposal.round)
-            .expect("project proposal committee");
-        let expected_fast = service
-            .remote_voters_for_indices(committee.set_a())
-            .expect("resolve Set A")
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let expected_set_b = service
-            .remote_voters_for_indices(committee.set_b())
-            .expect("resolve Set B")
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let expected_all = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
-        assert!(!expected_set_b.is_empty());
-        let observations = install_consensus_route_observer(&mut service);
-        let message = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
-            proposal.clone(),
-        ));
-
-        service
-            .broadcast_consensus(message.clone())
-            .expect("broadcast first proposal occurrence");
-        let first = take_consensus_route_observations(&observations);
-        assert_eq!(chunk_route_targets(&first, &manifest), expected_fast);
-
-        service
-            .broadcast_consensus(message)
-            .expect("broadcast same-round proposal retransmission");
-        let retransmission = take_consensus_route_observations(&observations);
-        let retransmitted_chunks = chunk_route_targets(&retransmission, &manifest);
-        assert_eq!(retransmitted_chunks, expected_all);
-        assert!(expected_set_b.is_subset(&retransmitted_chunks));
-        assert_eq!(
-            proposal_route_targets(&retransmission, proposal.round, &manifest),
-            expected_all
-        );
-    }
-
-    #[test]
-    fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
-        let (mut service, keys) = fixture_with_block_payload();
-        service
-            .set_exact_output_shared_unit_capacity_for_test(1)
-            .expect("install one-unit adversarial output corridor");
-        service.set_exact_output_admission_hook(|post, ticket| {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message: post,
-                ticket,
-                rank: 1,
-            })
-        });
-
-        let blocking_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
-        assert_eq!(
-            service
-                .broadcast_consensus(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::Vote(blocking_vote),
-                ))
-                .expect("the first control transfers into the exact corridor"),
-            ConsensusBroadcastDisposition::ExactServiceAccepted
-        );
-        assert!(
-            service
-                .has_pending_exact_output()
-                .expect("inspect actor-backpressured control")
-        );
-
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        set_local_validator(&mut service, &keys, proposal.proposer);
-        service
-            .register_outbound_payload(service.active_tag, payload)
-            .expect("retain proposal chunks before broadcast");
-        let message = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
-            proposal.clone(),
-        ));
-        assert_eq!(
-            service
-                .broadcast_consensus(message.clone())
-                .expect("corridor pressure is a typed ownership disposition"),
-            ConsensusBroadcastDisposition::SourceRetained,
-            "a full same-class corridor must not masquerade as Proposal acceptance"
-        );
-        assert!(!service.output_guard.restart_required());
-
-        service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
-        assert!(
-            !service
-                .retry_pending_exact_output()
-                .expect("network recovery drains the previously accepted exact suffix")
-        );
-        assert_eq!(
-            service
-                .broadcast_consensus(message)
-                .expect("the retained Proposal source retries after corridor recovery"),
-            ConsensusBroadcastDisposition::ExactServiceAccepted
-        );
-        assert!(
-            !service
-                .has_pending_exact_output()
-                .expect("accepted retransmission drains immediately")
-        );
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
-        let (mut service, keys) = fixture_with_block_payload();
-        let old_round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: service.active_tag.view(),
-        };
-        assert!(service.fast_path_proposals.insert(old_round));
-        let new_tag = EventTag::new(
-            service.active_tag.height(),
-            service.active_tag.view() + 1,
-            Generation::new(service.active_tag.generation().get() + 1),
-        );
-        service
-            .entered_view(
-                new_tag,
-                timeout_certificate_at_view(&service, old_round.view),
-            )
-            .expect("install certified successor view");
-        assert!(service.fast_path_proposals.is_empty());
-
-        let (_, payload) =
-            proposal_body_and_payload_at_view(&service.context, &keys, new_tag.view());
-        let manifest = payload.manifest().clone();
-        let proposal = wire::Proposal {
-            round: manifest.round,
-            proposer: service.context.leader(manifest.round.view),
-            subject: manifest.subject,
-            manifest: manifest.clone(),
-            justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
-                timeout_certificate: timeout_certificate_at_view(&service, old_round.view),
-                highest_prepare_qc: None,
-            }),
-            signature: vec![0xA5; 48],
-        };
-        set_local_validator(&mut service, &keys, proposal.proposer);
-        service
-            .register_outbound_payload(new_tag, payload)
-            .expect("retain new-view proposal chunks");
-        let committee = service
-            .committee_for_round(proposal.round)
-            .expect("project new-view committee");
-        let expected_set_a = service
-            .remote_voters_for_indices(committee.set_a())
-            .expect("resolve new-view Set A")
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        let expected_all = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
-        assert_ne!(expected_set_a, expected_all);
-        let observations = install_consensus_route_observer(&mut service);
-
-        service
-            .broadcast_consensus(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-            ))
-            .expect("broadcast first proposal in certified successor view");
-
-        let routed = take_consensus_route_observations(&observations);
-        assert_eq!(chunk_route_targets(&routed, &manifest), expected_set_a);
-        assert_eq!(
-            proposal_route_targets(&routed, proposal.round, &manifest),
-            expected_all
-        );
-        assert_eq!(
-            service.fast_path_proposals,
-            BTreeSet::from([proposal.round])
-        );
-    }
-
-    fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
-        let directory = TempDir::new().expect("temporary chunk root");
-        service.chunk_root = directory.path().to_path_buf();
-        directory
-    }
-
-    fn certified_fetch_task(
-        service: &ProductionV2Services,
-        id: u64,
-        tag: EventTag,
-        manifest: Option<wire::PayloadManifest>,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-    ) -> BodyFetchTask {
-        let certificate = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Prepare,
-            subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"fetch fixture parent state"),
-                Hash::new(b"fetch fixture post state"),
-                Hash::new(b"fetch fixture writes"),
-                1,
-                Hash::new(b"fetch fixture block"),
-            ),
-            signers: vec![0],
-            aggregate_signature: vec![1],
-        };
-        let request = wire::CertifiedBodyRequest {
-            round,
-            subject,
-            certificate,
-            requester: service.local_peer.clone(),
-            signature: vec![1],
-        };
-        BodyFetchTask::certified_for_test(
-            id,
-            tag,
-            manifest,
-            vec![service.local_peer.clone()],
-            request,
-        )
-    }
-
-    #[test]
-    fn certified_fetch_fans_out_to_every_frozen_roster_archive() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let request =
-            certified_fetch_task(&service, 62, tag, None, proposal.round, proposal.subject)
-                .certified_request()
-                .expect("fixture certified request")
-                .clone();
-        assert_eq!(request.certificate.signers, vec![0]);
-        let sources = service
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        let expected_targets = sources
-            .iter()
-            .filter(|peer| *peer != &service.local_peer)
-            .cloned()
-            .collect::<Vec<_>>();
-        let task = BodyFetchTask::certified_for_test(62, tag, None, sources.clone(), request);
-        let admitted = Arc::new(Mutex::new(Vec::new()));
-        let admitted_for_hook = Arc::clone(&admitted);
-        service.set_exact_output_admission_hook(move |post, ticket| {
-            assert!(ticket.is_none());
-            let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
-                panic!("certified archive fanout emitted a non-Sumeragi message")
-            };
-            assert!(matches!(
-                envelope.as_message(),
-                BlockMessage::V2(message)
-                    if matches!(
-                        &message.payload,
-                        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
-                    )
-            ));
-            admitted_for_hook
-                .lock()
-                .expect("record frozen-roster archive target")
-                .push(post.peer_id);
-            Ok(())
-        });
-
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("fan out one certified request to every remote archive");
-
-        assert_eq!(task.sources(), sources.as_slice());
-        assert_eq!(
-            admitted
-                .lock()
-                .expect("inspect frozen-roster archive targets")
-                .as_slice(),
-            expected_targets.as_slice()
-        );
-        assert_eq!(
-            expected_targets,
-            service.context.roster[1..]
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>(),
-            "every remote fixture archive is intentionally outside the one-signer QC"
-        );
-    }
-
-    #[test]
-    fn replayed_proposal_signature_restores_exact_durable_payload() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let directory = TempDir::new().expect("temporary body store");
-        let mut body_store =
-            V2BodyStore::open(directory.path(), service.context.clone()).expect("open body store");
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let _receipt = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("store exact proposal body");
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
-        let task =
-            ConsensusSignTask::for_test(7, tag, super::super::v2::SignRequest::Proposal(proposal));
-        let expected_work_id = task.id();
-        let completion =
-            sign_consensus_task(&body_store, &service.context, &keys[proposer], task, true)
-                .expect("sign replayed proposal");
-
-        let V2IoCompletion::Signature {
-            work_id,
-            signature,
-            outbound_payload: Some(restored),
-        } = completion
-        else {
-            panic!("proposal replay must restore its outbound payload");
-        };
-        assert_eq!(work_id, expected_work_id);
-        assert!(!signature.is_empty());
-        assert_eq!(restored, payload);
-    }
+    include!("v2_worker_cold_refanout_and_recovery_cases_tests.rs");
 
     include!("tests/v2_worker_nonzero_view_restart.rs");
 
-    #[test]
-    fn replayed_proposal_signature_rejects_missing_durable_payload() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let directory = TempDir::new().expect("temporary body store");
-        let body_store = V2BodyStore::open(directory.path(), service.context.clone())
-            .expect("open empty body store");
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let proposer = usize::try_from(proposal.proposer).expect("fixture proposer index");
-        let error = match sign_consensus_task(
-            &body_store,
-            &service.context,
-            &keys[proposer],
-            ConsensusSignTask::for_test(8, tag, super::super::v2::SignRequest::Proposal(proposal)),
-            true,
-        ) {
-            Ok(_) => panic!("missing durable proposal body must fail closed"),
-            Err(error) => error,
-        };
-        assert!(error.contains("no durable exact body"));
-    }
+    include!("v2_worker_io_and_selected_serve_cases_01_tests.rs");
 
-    #[test]
-    fn proposal_signing_restores_chunks_only_when_outbound_payload_is_absent() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (command_tx, command_rx, admission) = test_io_command_channel(2);
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(2);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-
-        service
-            .enqueue_consensus_sign(ConsensusSignTask::for_test(
-                9,
-                tag,
-                super::super::v2::SignRequest::Proposal(proposal.clone()),
-            ))
-            .expect("queue replayed proposal signature");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign {
-                restore_outbound_payload: true,
-                ..
-            })
-        ));
-
-        service
-            .register_outbound_payload(tag, payload)
-            .expect("register live proposal payload");
-        service
-            .enqueue_consensus_sign(ConsensusSignTask::for_test(
-                10,
-                tag,
-                super::super::v2::SignRequest::Proposal(proposal),
-            ))
-            .expect("queue live proposal signature");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign {
-                restore_outbound_payload: false,
-                ..
-            })
-        ));
-
-        // No worker owns this synthetic channel; remove it before service Drop
-        // attempts the production shutdown handshake.
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn completion_sources_alternate_under_simultaneous_bursts() {
-        let (mut service, _) = fixture();
-        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        completion_tx
-            .try_send(V2IoCompletion::AuxiliaryNoop)
-            .expect("first I/O completion");
-        completion_tx
-            .try_send(V2IoCompletion::AuxiliaryNoop)
-            .expect("second I/O completion");
-
-        let payload = b"completion fairness body";
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"completion fairness block",
-            )),
-            payload_hash: Hash::new(payload),
-        };
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-        };
-        let manifest = encode_payload(&service.context, round, subject, payload)
-            .expect("encode completion fairness body")
-            .manifest()
-            .clone();
-        let completion_tag = EventTag::new(
-            service.context.height,
-            round.view,
-            Generation::new(service.context.height),
-        );
-        for id in 1..=2 {
-            service
-                .local_completions
-                .push_back(LocalCompletion::Reconstructed {
-                    task: BodyFetchTask::ordinary_for_test(id, completion_tag, manifest.clone()),
-                    manifest: manifest.clone(),
-                    body: payload.to_vec().into(),
-                });
-        }
-
-        assert!(matches!(
-            service.take_next_completion(true),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Io { .. }),
-                ..
-            }
-        ));
-        let first_local = service.take_next_completion(true);
-        let IoCompletionTake {
-            completion:
-                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed {
-                    task: first_task,
-                    ..
-                })),
-            ..
-        } = first_local
-        else {
-            panic!("the local source must follow the first I/O completion");
-        };
-        service
-            .complete_body_reconstruction_fetch(&first_task)
-            .expect("successful reducer admission retires the exact local owner");
-        assert!(matches!(
-            service.take_next_completion(true),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Io { .. }),
-                ..
-            }
-        ));
-        let second_local = service.take_next_completion(true);
-        let IoCompletionTake {
-            completion:
-                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed {
-                    task: second_task,
-                    ..
-                })),
-            ..
-        } = second_local
-        else {
-            panic!("the local source must follow the second I/O completion");
-        };
-        service
-            .complete_body_reconstruction_fetch(&second_task)
-            .expect("successful reducer admission retires the exact local owner");
-        assert!(matches!(
-            service.take_next_completion(true),
-            IoCompletionTake {
-                completion: None,
-                retained_runtime: false
-            }
-        ));
-
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_io() {
-        let (mut service, _) = fixture();
-        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
-        let later_ordinal = 70_u128;
-        let later_work_id = EffectWorkId::for_test(70);
-        try_send_tracked_completion_with_lifecycle_ordinal(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::Signature {
-                work_id: later_work_id,
-                signature: vec![0x70],
-                outbound_payload: None,
-            },
-            Some(later_ordinal),
-        )
-        .expect("retain a completion created after the exact Serve ticket");
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        let payload = b"older local reconstruction";
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"older local reconstruction block",
-            )),
-            payload_hash: Hash::new(payload),
-        };
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-        };
-        let manifest = encode_payload(&service.context, round, subject, payload)
-            .expect("encode older local reconstruction")
-            .manifest()
-            .clone();
-        let tag = EventTag::new(
-            service.context.height,
-            round.view,
-            Generation::new(service.context.height),
-        );
-        let older_task = BodyFetchTask::ordinary_for_test(7, tag, manifest.clone());
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: older_task.clone(),
-                manifest,
-                body: payload.to_vec().into(),
-            });
-
-        let first_ticket_ordinal = 50;
-        assert_eq!(
-            service
-                .certified_serve_predecessor_completion_evidence(true, first_ticket_ordinal,)
-                .expect("project the completed predecessor without consuming it")
-                .map(ExactServePredecessorCompletionEvidence::lifecycle_ordinal),
-            Some(older_task.lifecycle_ordinal()),
-            "the least strict local predecessor must reopen the exact Serve episode"
-        );
-        assert!(
-            service
-                .certified_serve_predecessor_completion_evidence(false, first_ticket_ordinal,)
-                .expect("project the capacity-blocked predecessor")
-                .is_none(),
-            "a completion that needs runtime capacity cannot reopen before capacity exists"
-        );
-        let IoCompletionTake {
-            completion:
-                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed { task, .. })),
-            retained_runtime: false,
-        } = service.take_exact_serve_predecessor_completion(true, first_ticket_ordinal)
-        else {
-            panic!("the strictly older local reconstruction must own the bounded episode");
-        };
-        assert_eq!(task, older_task);
-        service
-            .complete_body_reconstruction_fetch(&task)
-            .expect("successful predecessor admission retires the exact local owner");
-        assert!(service.local_completions.is_empty());
-        assert!(service.held_io_completion.is_none());
-        assert_eq!(
-            service
-                .io
-                .as_ref()
-                .expect("attached completion corridor")
-                .completion_snapshot(Instant::now())
-                .depth,
-            1,
-            "the later I/O completion must remain outside runtime"
-        );
-
-        for fresh_ticket_ordinal in first_ticket_ordinal..=later_ordinal {
-            assert!(
-                service
-                    .certified_serve_predecessor_completion_evidence(true, fresh_ticket_ordinal,)
-                    .expect("project the equal-or-later I/O completion")
-                    .is_none(),
-                "an equal-or-later completion cannot reopen this ticket"
-            );
-            assert!(matches!(
-                service.take_exact_serve_predecessor_completion(true, fresh_ticket_ordinal),
-                IoCompletionTake {
-                    completion: None,
-                    retained_runtime: false,
-                }
-            ));
-            assert!(service.held_io_completion.is_none());
-        }
-        assert_eq!(
-            service
-                .io
-                .as_ref()
-                .expect("attached completion corridor")
-                .completion_snapshot(Instant::now())
-                .depth,
-            1,
-            "retransmission churn cannot let an equal-or-later completion overtake its ticket"
-        );
-
-        assert_eq!(
-            service
-                .certified_serve_predecessor_completion_evidence(true, later_ordinal + 1)
-                .expect("project the newly strict I/O predecessor")
-                .map(ExactServePredecessorCompletionEvidence::lifecycle_ordinal),
-            Some(later_ordinal),
-            "the exact I/O completion becomes eligible only below a later ticket"
-        );
-        assert_eq!(
-            service
-                .io
-                .as_ref()
-                .expect("attached completion corridor")
-                .completion_snapshot(Instant::now())
-                .depth,
-            1,
-            "completion evidence must not consume the projected I/O result"
-        );
-
-        assert!(matches!(
-            service.take_exact_serve_predecessor_completion(true, later_ordinal + 1),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Io {
-                    completion: V2IoCompletion::Signature { work_id, .. },
-                    ownership_position: 0,
-                }),
-                retained_runtime: false,
-            } if work_id == later_work_id
-        ));
-        service
-            .io
-            .as_ref()
-            .expect("attached completion corridor")
-            .admission
-            .acknowledge_completion_at(0);
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
-        let (mut service, _) = fixture();
-        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
-        let timeout_ordinal = 50_u128;
-        let timeout_work_id = EffectWorkId::for_test(50);
-        let successor_work_id = EffectWorkId::for_test(51);
-        for (work_id, ordinal) in [
-            (timeout_work_id, timeout_ordinal),
-            (successor_work_id, timeout_ordinal + 1),
-        ] {
-            try_send_tracked_completion_with_lifecycle_ordinal(
-                &completion_tx,
-                &admission,
-                V2IoCompletion::Signature {
-                    work_id,
-                    signature: vec![u8::try_from(ordinal).expect("small ordinal")],
-                    outbound_payload: None,
-                },
-                Some(ordinal),
-            )
-            .expect("retain exact timeout-boundary completion");
-        }
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        assert!(matches!(
-            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Io {
-                    completion: V2IoCompletion::Signature { work_id, .. },
-                    ownership_position: 0,
-                }),
-                retained_runtime: false,
-            } if work_id == timeout_work_id
-        ));
-        service
-            .io
-            .as_ref()
-            .expect("attached completion corridor")
-            .admission
-            .acknowledge_completion_at(0);
-        assert!(matches!(
-            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
-            IoCompletionTake {
-                completion: None,
-                retained_runtime: false,
-            }
-        ));
-        assert_eq!(
-            service
-                .io
-                .as_ref()
-                .expect("attached completion corridor")
-                .completion_snapshot(Instant::now())
-                .depth,
-            1,
-            "the T+1 producer stays outside the inclusive T prefix"
-        );
-        assert!(matches!(
-            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal + 1),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Io {
-                    completion: V2IoCompletion::Signature { work_id, .. },
-                    ownership_position: 0,
-                }),
-                retained_runtime: false,
-            } if work_id == successor_work_id
-        ));
-        service
-            .io
-            .as_ref()
-            .expect("attached completion corridor")
-            .admission
-            .acknowledge_completion_at(0);
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
-        let (mut service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = service.context.roster[0].validator.clone();
-        let (command_tx, _command_rx, admission) = test_io_command_channel(4);
-        for expected in 1_u128..=4 {
-            assert_eq!(
-                command_tx
-                    .queue
-                    .lifecycle_ordinals
-                    .reserve_one()
-                    .expect("reserve pre-ticket lifecycle ordinal"),
-                expected
-            );
-        }
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect repeated-claim barrier")
-            .expect("admitted exact request owns a barrier");
-        assert_eq!(barrier.scheduler_ordinal(), 5);
-        assert_eq!(
-            command_tx
-                .queue
-                .lifecycle_ordinals
-                .reserve_one()
-                .expect("reserve adversarial post-ticket lifecycle ordinal"),
-            6
-        );
-
-        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
-        let older_io_work_id = EffectWorkId::for_test(1);
-        try_send_tracked_completion_with_lifecycle_ordinal(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::Signature {
-                work_id: older_io_work_id,
-                signature: vec![0x01],
-                outbound_payload: None,
-            },
-            Some(1),
-        )
-        .expect("retain first strictly older I/O completion");
-        let later_io_work_id = EffectWorkId::for_test(6);
-        try_send_tracked_completion_with_lifecycle_ordinal(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::Signature {
-                work_id: later_io_work_id,
-                signature: vec![0x06],
-                outbound_payload: None,
-            },
-            Some(6),
-        )
-        .expect("retain later-rank I/O completion");
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        let payload = b"same-rank replacement source";
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"same-rank replacement source block",
-            )),
-            payload_hash: Hash::new(payload),
-        };
-        let round = wire::ConsensusRound {
-            context_id: service.context.id(),
-            height: service.context.height,
-            view: 0,
-        };
-        let manifest = encode_payload(&service.context, round, subject, payload)
-            .expect("encode same-rank replacement source")
-            .manifest()
-            .clone();
-        let tag = EventTag::new(
-            service.context.height,
-            round.view,
-            Generation::new(service.context.height),
-        );
-        let older_local_task = BodyFetchTask::ordinary_for_test(1, tag, manifest.clone());
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: older_local_task.clone(),
-                manifest,
-                body: payload.to_vec().into(),
-            });
-
-        assert!(
-            service
-                .claim_certified_serve_runtime_episode(barrier)
-                .expect("claim first bounded predecessor turn")
-        );
-        assert!(matches!(
-            service.take_exact_serve_predecessor_completion(
-                true,
-                barrier.scheduler_ordinal()
-            ),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Io {
-                    completion: V2IoCompletion::Signature { work_id, .. },
-                    ownership_position: 0,
-                }),
-                retained_runtime: false,
-            } if work_id == older_io_work_id
-        ));
-        service
-            .io
-            .as_ref()
-            .expect("attached completion corridor")
-            .admission
-            .acknowledge_completion_at(0);
-        service
-            .finish_certified_serve_runtime_episode_turn(barrier, true)
-            .expect("remaining same-rank local owner reopens the episode");
-
-        assert!(
-            service
-                .claim_certified_serve_runtime_episode(barrier)
-                .expect("claim second bounded predecessor turn")
-        );
-        let IoCompletionTake {
-            completion:
-                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed { task, .. })),
-            retained_runtime: false,
-        } = service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal())
-        else {
-            panic!("the second turn must select the same-rank replacement owner");
-        };
-        assert_eq!(task, older_local_task);
-        service
-            .complete_body_reconstruction_fetch(&task)
-            .expect("retire second strictly older source");
-        assert!(matches!(
-            service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal()),
-            IoCompletionTake {
-                completion: None,
-                retained_runtime: false,
-            }
-        ));
-        service
-            .finish_certified_serve_runtime_episode_turn(barrier, false)
-            .expect("later-rank I/O cannot keep the older-owner episode open");
-        assert!(
-            !service
-                .claim_certified_serve_runtime_episode(barrier)
-                .expect("completed episode cannot be reclaimed")
-        );
-        assert_eq!(
-            service
-                .io
-                .as_ref()
-                .expect("attached completion corridor")
-                .completion_snapshot(Instant::now())
-                .depth,
-            1,
-            "later-rank completion remains outside runtime until after target ingress"
-        );
-        assert!(matches!(
-            service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal()),
-            IoCompletionTake {
-                completion: None,
-                retained_runtime: false,
-            }
-        ));
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire repeated-claim gate");
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let (command_tx, command_rx, _admission) = test_io_command_channel(4);
-        for expected in 1_u128..=2 {
-            assert_eq!(
-                command_tx
-                    .queue
-                    .lifecycle_ordinals
-                    .reserve_one()
-                    .expect("reserve predecessor lifecycle ordinal"),
-                expected
-            );
-        }
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect predecessor-witness barrier")
-            .expect("admitted exact request owns a barrier");
-        assert_eq!(barrier.scheduler_ordinal(), 3);
-
-        let first =
-            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 1, 1);
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(barrier)
-                .expect("claim initial predecessor turn")
-        );
-        assert!(
-            !command_tx
-                .observe_serve_predecessor_episode_witness(barrier, first)
-                .expect("record initial runtime witness")
-        );
-        command_tx
-            .finish_serve_runtime_episode_turn(barrier, false)
-            .expect("seal exhausted initial predecessor turn");
-        assert!(
-            !command_tx
-                .observe_serve_predecessor_episode_witness(barrier, first)
-                .expect("same physical episode must coalesce")
-        );
-        assert!(
-            !command_tx
-                .claim_serve_runtime_episode(barrier)
-                .expect("same witness cannot reopen a completed turn")
-        );
-
-        let conflicting =
-            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);
-        assert!(
-            command_tx
-                .observe_serve_predecessor_episode_witness(barrier, conflicting)
-                .is_err(),
-            "one episode cannot change its exact predecessor evidence"
-        );
-        let skipped =
-            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 3);
-        assert!(
-            command_tx
-                .observe_serve_predecessor_episode_witness(barrier, skipped)
-                .is_err(),
-            "the consumer cannot skip a predecessor episode ordinal"
-        );
-
-        let replenished =
-            ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);
-        assert!(
-            command_tx
-                .observe_serve_predecessor_episode_witness(barrier, replenished)
-                .expect("strictly newer runtime witness reopens the target")
-        );
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(barrier)
-                .expect("claim exactly one replenished predecessor turn")
-        );
-        assert!(
-            !command_tx
-                .observe_serve_predecessor_episode_witness(barrier, replenished)
-                .expect("repeated replenishment witness must stutter")
-        );
-        command_tx
-            .finish_serve_runtime_episode_turn(barrier, false)
-            .expect("seal replenished predecessor turn");
-        assert!(
-            command_tx
-                .observe_serve_predecessor_episode_witness(barrier, first)
-                .is_err(),
-            "a consumed predecessor episode cannot regress"
-        );
-
-        let (admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == admission.lifecycle_id
-        ));
-        let producer_episode = command_tx
-            .try_begin_producer_episode()
-            .expect("consume the post-Serve producer handoff")
-            .expect("final target retirement owes one producer episode");
-        drop(producer_episode);
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire predecessor-witness gate");
-    }
-
-    #[test]
-    fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let (command_tx, command_rx, _admission) = test_io_command_channel(1);
-        assert_eq!(
-            command_tx
-                .queue
-                .lifecycle_ordinals
-                .reserve_one()
-                .expect("reserve the causal predecessor ordinal"),
-            1
-        );
-        command_tx
-            .try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(90),
-                    subject: proposal.subject,
-                },
-            )
-            .expect("fill the sole physical slot with a frozen Control predecessor");
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect the exact barrier")
-            .expect("the admitted target owns a barrier");
-        assert_eq!(barrier.scheduler_ordinal(), 2);
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(barrier)
-                .expect("claim the bounded causal predecessor turn")
-        );
-        assert!(
-            !command_tx
-                .serve_runtime_predecessor_capacity_available(barrier)
-                .expect("inspect the full frozen prefix"),
-            "the runner must wait instead of dispatching a retained effect into a full queue"
-        );
-
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let sign = |ordinal| V2IoCommand::Sign {
-            task: ConsensusSignTask::for_test(
-                ordinal,
-                tag,
-                super::super::v2::SignRequest::Proposal(proposal.clone()),
-            ),
-            restore_outbound_payload: false,
-        };
-        assert!(matches!(
-            command_tx.try_send(sign(1)),
-            Err(V2IoTrySendError::Full(_))
-        ));
-        assert!(matches!(
-            command_tx.try_send(sign(2)),
-            Err(V2IoTrySendError::Full(_))
-        ));
-        assert!(matches!(
-            command_tx.try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(91),
-                    subject: proposal.subject,
-                },
-            ),
-            Err(V2IoTrySendError::Full(_))
-        ));
-
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id: LockedCandidateAcquisitionId(90),
-                ..
-            })
-        ));
-        assert!(
-            command_tx
-                .serve_runtime_predecessor_capacity_available(barrier)
-                .expect("the drained Control prefix releases causal capacity")
-        );
-        command_tx
-            .try_send(sign(1))
-            .expect("the claimed turn admits its strictly older causal owner");
-        {
-            let state = command_tx.queue.lock();
-            assert!(matches!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| reservation.runtime_episode),
-                Some(CertifiedServeRuntimeEpisodeState::Claimed {
-                    predecessor_ordinal: Some(1)
-                })
-            ));
-        }
-        assert!(matches!(
-            command_tx.try_send(sign(2)),
-            Err(V2IoTrySendError::Full(_))
-        ));
-        assert!(matches!(
-            command_tx.try_send(sign(3)),
-            Err(V2IoTrySendError::Full(_))
-        ));
-        assert!(matches!(
-            command_tx.try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(92),
-                    subject: proposal.subject,
-                },
-            ),
-            Err(V2IoTrySendError::Full(_))
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign { task, .. }) if task.id() == EffectWorkId::for_test(1)
-        ));
-        command_rx.complete_work(EffectWorkId::for_test(1));
-        command_tx.acknowledge_completion(EffectWorkId::for_test(1));
-
-        let _prepared = command_tx
-            .prepare_reserved_serve(
-                CertifiedServeOwnerKey::Roster(requester.clone()),
-                request.clone(),
-            )
-            .expect("materialize the uncommitted exact target");
-        {
-            let state = command_tx.queue.lock();
-            assert!(matches!(
-                state.commands.front(),
-                Some(V2IoCommand::Serve { .. })
-            ));
-        }
-        assert!(
-            command_tx
-                .serve_runtime_predecessor_capacity_available(barrier)
-                .expect("the older owner can borrow the uncommitted target unit")
-        );
-        command_tx
-            .try_send(sign(1))
-            .expect("same-rank causal replacement precedes the materialized target");
-        {
-            let state = command_tx.queue.lock();
-            assert!(matches!(
-                state.commands.front(),
-                Some(V2IoCommand::Sign { task, .. })
-                    if task.id() == EffectWorkId::for_test(1)
-            ));
-            let lifecycle_id = state
-                .serve_barrier
-                .expect("the exact logical barrier remains installed");
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                Some(V2IoServeState::PendingCapacity),
-                "only the physical target unit transfers to the same-rank predecessor"
-            );
-        }
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign { task, .. }) if task.id() == EffectWorkId::for_test(1)
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert!(matches!(
-                state.commands.front(),
-                Some(V2IoCommand::Serve { .. })
-            ));
-        }
-        command_rx.complete_work(EffectWorkId::for_test(1));
-        command_tx.acknowledge_completion(EffectWorkId::for_test(1));
-        command_tx
-            .finish_serve_runtime_episode_turn(barrier, false)
-            .expect("the mandatory full recheck seals the exhausted causal episode");
-        assert!(
-            !command_tx
-                .claim_serve_runtime_episode(barrier)
-                .expect("sealed causal ownership cannot be resurrected")
-        );
-
-        let (admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. }) if lifecycle_id == admission.lifecycle_id
-        ));
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire the full Control-prefix fixture gate");
-    }
-
-    #[test]
-    fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let channel_capacity = admission.capacity();
-        let (command_tx, _command_rx) = v2_io_command_channel(
-            channel_capacity,
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            Arc::clone(&admission),
-        );
-        let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-        try_send_tracked_completion(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::Signature {
-                work_id: EffectWorkId::for_test(76),
-                signature: vec![0x4b],
-                outbound_payload: None,
-            },
-        )
-        .expect("retain one completed worker result");
-        let snapshot_at = Instant::now() + Duration::from_millis(250);
-        let io = V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        };
-
-        assert!(
-            !io.record_completion_service_attempt(1),
-            "a free runtime slot must not accrue completion service debt"
-        );
-        for expected_debt in 1..=3 {
-            assert!(
-                io.record_completion_service_attempt(0),
-                "the full runtime FIFO must retain the oldest worker completion"
-            );
-            let snapshot = io.completion_snapshot(snapshot_at);
-            assert_eq!(snapshot.depth, 1);
-            assert_eq!(snapshot.capacity, channel_capacity + 2);
-            assert!(
-                snapshot
-                    .oldest_age
-                    .is_some_and(|age| age >= Duration::from_millis(250))
-            );
-            assert_eq!(snapshot.max_service_debt, expected_debt);
-        }
-
-        assert!(matches!(
-            io.try_recv_completion_unacknowledged(),
-            Ok(V2IoCompletion::Signature { work_id, .. })
-                if work_id == EffectWorkId::for_test(76)
-        ));
-        io.admission.acknowledge_completion_at(0);
-        let drained = io.completion_snapshot(snapshot_at + Duration::from_millis(250));
-        assert_eq!(drained.depth, 0);
-        assert_eq!(drained.capacity, channel_capacity + 2);
-        assert_eq!(drained.oldest_age, None);
-        assert_eq!(drained.max_service_debt, 0);
-    }
-
-    #[test]
-    fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime::new(1, 1),
-            BTreeMap::new(),
-            service.context.clone(),
-            service.local_peer.clone(),
-            service.local_validator,
-            EffectQueueConfig::default(),
-        )
-        .expect("construct saturated effect executor");
-        assert_eq!(executor.remaining_completion_capacity(), 0);
-
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let channel_capacity = admission.capacity();
-        let (command_tx, command_rx) = v2_io_command_channel(
-            channel_capacity,
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            Arc::clone(&admission),
-        );
-        let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let work_id = EffectWorkId::for_test(77);
-        let later_work_id = EffectWorkId::for_test(78);
-        command_tx
-            .try_send(V2IoCommand::Sign {
-                task: ConsensusSignTask::for_test(
-                    work_id.get(),
-                    tag,
-                    super::super::v2::SignRequest::Proposal(proposal.clone()),
-                ),
-                restore_outbound_payload: false,
-            })
-            .expect("queue runtime-producing work");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign { .. })
-        ));
-        command_rx.complete_work(work_id);
-        command_tx
-            .try_send(V2IoCommand::Sign {
-                task: ConsensusSignTask::for_test(
-                    later_work_id.get(),
-                    tag,
-                    super::super::v2::SignRequest::Proposal(proposal),
-                ),
-                restore_outbound_payload: false,
-            })
-            .expect("queue later runtime-producing work");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Sign { .. })
-        ));
-        command_rx.complete_work(later_work_id);
-        try_send_tracked_completion(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::Signature {
-                work_id,
-                signature: vec![0x5a],
-                outbound_payload: None,
-            },
-        )
-        .expect("retain runtime-producing completion");
-        try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
-            .expect("retain auxiliary completion behind runtime work");
-        try_send_tracked_completion(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::Signature {
-                work_id: later_work_id,
-                signature: vec![0x6b],
-                outbound_payload: None,
-            },
-        )
-        .expect("retain later runtime completion behind auxiliary work");
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        assert_eq!(
-            service
-                .drain_completions(&mut executor)
-                .expect("full runtime still services auxiliary completion"),
-            1
-        );
-        let first = service
-            .last_status
-            .as_ref()
-            .expect("backpressure publishes effect status");
-        assert_eq!(first.queued_runtime_completions, 1);
-        assert_eq!(first.effect_completion_queue.depth, 2);
-        assert_eq!(first.effect_completion_queue.capacity, channel_capacity + 2);
-        assert!(first.effect_completion_queue.oldest_age.is_some());
-        assert_eq!(first.effect_completion_queue.max_service_debt, 1);
-        assert!(matches!(
-            service.held_io_completion.as_ref(),
-            Some(V2IoCompletion::Signature { work_id: held, .. }) if *held == work_id
-        ));
-        assert_eq!(
-            service
-                .io
-                .as_ref()
-                .expect("attached completion owner")
-                .completion_requires_runtime_capacity_at(1),
-            Some(true),
-            "the later runtime result must remain in the worker FIFO"
-        );
-        assert_eq!(
-            command_rx
-                .queue
-                .lock()
-                .work
-                .get(&work_id)
-                .map(|work| work.state),
-            Some(V2IoWorkState::CompletionPending),
-            "the held runtime result must remain unacknowledged"
-        );
-        assert_eq!(
-            command_rx
-                .queue
-                .lock()
-                .work
-                .get(&later_work_id)
-                .map(|work| work.state),
-            Some(V2IoWorkState::CompletionPending),
-            "the later runtime result must not be popped or acknowledged"
-        );
-
-        assert_eq!(
-            service
-                .drain_completions(&mut executor)
-                .expect("repeated full runtime retains worker result"),
-            0
-        );
-        let second = service
-            .last_status
-            .as_ref()
-            .expect("repeated backpressure republishes effect status");
-        assert_eq!(second.effect_completion_queue.depth, 2);
-        assert_eq!(second.effect_completion_queue.max_service_debt, 2);
-        service.retire_held_io_completion();
-        let drained = service
-            .io
-            .as_ref()
-            .expect("attached completion owner")
-            .completion_snapshot(Instant::now());
-        assert_eq!(drained.depth, 1);
-        assert!(
-            !command_rx.queue.lock().work.contains_key(&work_id),
-            "retiring the consumed held result acknowledges exact work ownership"
-        );
-        assert_eq!(
-            command_rx
-                .queue
-                .lock()
-                .work
-                .get(&later_work_id)
-                .map(|work| work.state),
-            Some(V2IoWorkState::CompletionPending)
-        );
-        assert!(matches!(
-            service
-                .io
-                .as_ref()
-                .expect("attached completion owner")
-                .try_recv_completion(),
-            Ok(V2IoCompletion::Signature { work_id, .. }) if work_id == later_work_id
-        ));
-        let drained = service
-            .io
-            .as_ref()
-            .expect("attached completion owner")
-            .completion_snapshot(Instant::now());
-        assert_eq!(drained.depth, 0);
-        assert_eq!(drained.oldest_age, None);
-        assert_eq!(drained.max_service_debt, 0);
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn successful_auxiliary_drain_republishes_cleared_completion_ownership() {
-        let (mut service, _) = fixture();
-        let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime::new(0, 1),
-            BTreeMap::new(),
-            service.context.clone(),
-            service.local_peer.clone(),
-            service.local_validator,
-            EffectQueueConfig::default(),
-        )
-        .expect("construct effect executor");
-        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
-        let channel_capacity = admission.capacity();
-        let (command_tx, _command_rx) = v2_io_command_channel(
-            channel_capacity,
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            Arc::clone(&admission),
-        );
-        let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-        try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
-            .expect("retain auxiliary completion");
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        assert!(service.last_status.is_none());
-        assert_eq!(
-            service
-                .drain_completions(&mut executor)
-                .expect("service auxiliary completion"),
-            1
-        );
-        let published = service
-            .last_status
-            .as_ref()
-            .expect("successful drain republishes service-owned state");
-        assert_eq!(published.effect_completion_queue.depth, 0);
-        assert_eq!(published.effect_completion_queue.oldest_age, None);
-        assert_eq!(published.effect_completion_queue.max_service_debt, 0);
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn auxiliary_completion_drain_is_batch_bounded() {
-        let (mut service, _) = fixture();
-        let mut executor = V2EffectExecutor::with_runtime(
-            SaturatedCompletionRuntime::new(0, 1),
-            BTreeMap::new(),
-            service.context.clone(),
-            service.local_peer.clone(),
-            service.local_validator,
-            EffectQueueConfig::default(),
-        )
-        .expect("construct effect executor");
-        let admission = Arc::new(
-            V2IoAdmission::new(MAX_COMPLETION_DRAIN_BATCH + 1, 1).expect("bounded I/O admission"),
-        );
-        let channel_capacity = admission.capacity();
-        let (command_tx, _command_rx) = v2_io_command_channel(
-            channel_capacity,
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            channel_capacity.max(1),
-            Arc::clone(&admission),
-        );
-        let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-        for _ in 0..=MAX_COMPLETION_DRAIN_BATCH {
-            try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
-                .expect("retain bounded auxiliary burst");
-        }
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-
-        assert_eq!(
-            service
-                .drain_completions(&mut executor)
-                .expect("drain one bounded batch"),
-            MAX_COMPLETION_DRAIN_BATCH
-        );
-        assert_eq!(
-            service
-                .last_status
-                .as_ref()
-                .expect("batch drain republishes status")
-                .effect_completion_queue
-                .depth,
-            1
-        );
-        assert_eq!(
-            service
-                .drain_completions(&mut executor)
-                .expect("drain remaining auxiliary result"),
-            1
-        );
-        assert_eq!(
-            service
-                .last_status
-                .as_ref()
-                .expect("final drain republishes status")
-                .effect_completion_queue
-                .depth,
-            0
-        );
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn cancelling_fetch_consumes_queued_reconstruction_owner() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(41, tag, payload.manifest().clone());
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: task.clone(),
-                manifest: payload.manifest().clone(),
-                body: canonical_wire.into(),
-            });
-
-        service
-            .cancel_body_fetch(&task)
-            .expect("queued reconstruction owns the cancelled fetch");
-
-        assert!(service.fetches.is_empty());
-        assert!(service.fetch_by_manifest.is_empty());
-        assert!(service.local_completions.is_empty());
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(47, tag, payload.manifest().clone());
-        let rebound_tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height + 1),
-        );
-        let rebound = task
-            .rebind_consumer(rebound_tag)
-            .expect("later same-view generation rebinds immutable fetch work");
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("open exact live reconstruction session");
-        service
-            .rebind_body_fetch(&task, rebound.clone())
-            .expect("rebind live reconstruction consumer");
-        assert_eq!(service.fetches[&task.id()].task, rebound);
-        assert_eq!(
-            service
-                .fetch_by_manifest
-                .get(&HashOf::new(payload.manifest())),
-            Some(&task.id())
-        );
-        assert!(!service.output_guard.restart_required());
-
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(48, tag, payload.manifest().clone());
-        let rebound_tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height + 1),
-        );
-        let rebound = task
-            .rebind_consumer(rebound_tag)
-            .expect("later same-view generation rebinds queued reconstruction");
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: task.clone(),
-                manifest: payload.manifest().clone(),
-                body: canonical_wire.into(),
-            });
-        service
-            .rebind_body_fetch(&task, rebound.clone())
-            .expect("rebind queued reconstruction consumer");
-        assert!(service.fetches.is_empty());
-        assert!(service.fetch_by_manifest.is_empty());
-        assert!(matches!(
-            service.take_next_completion(true),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Local(
-                    LocalCompletion::Reconstructed { task, manifest, .. }
-                )),
-                ..
-            } if task == rebound && manifest == *payload.manifest()
-        ));
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(49, tag, payload.manifest().clone());
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: task.clone(),
-                manifest: payload.manifest().clone(),
-                body: canonical_wire.into(),
-            });
-
-        let error = service
-            .rebind_body_fetch(&task, task.clone())
-            .expect_err("same-view consumer rebind must fail closed");
-
-        assert!(error.contains("invalid consumer rebind"));
-        assert_eq!(service.local_completions.len(), 1);
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn retransmitting_fetch_with_queued_reconstruction_is_idempotent() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(45, tag, payload.manifest().clone());
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: task.clone(),
-                manifest: payload.manifest().clone(),
-                body: canonical_wire.into(),
-            });
-
-        service
-            .enqueue_body_fetch(task)
-            .expect("queued reconstruction makes retransmission idempotent");
-
-        assert!(service.fetches.is_empty());
-        assert!(service.fetch_by_manifest.is_empty());
-        assert_eq!(service.local_completions.len(), 1);
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn retransmitting_fetch_with_conflicting_queued_manifest_fails_closed() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(46, tag, payload.manifest().clone());
-        let mut conflicting_manifest = payload.manifest().clone();
-        conflicting_manifest.payload_size_bytes = conflicting_manifest
-            .payload_size_bytes
-            .checked_add(1)
-            .expect("small fixture payload size");
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: task.clone(),
-                manifest: conflicting_manifest,
-                body: canonical_wire.into(),
-            });
-
-        let error = service
-            .enqueue_body_fetch(task)
-            .expect_err("conflicting queued result must fail closed");
-
-        assert!(error.contains("inconsistent manifest ownership"));
-        assert!(service.fetches.is_empty());
-        assert!(service.fetch_by_manifest.is_empty());
-        assert_eq!(service.local_completions.len(), 1);
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(42, tag, payload.manifest().clone());
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("open exact live reconstruction session");
-
-        service
-            .cancel_body_fetch(&task)
-            .expect("live reconstruction session owns the cancelled fetch");
-
-        assert!(service.fetches.is_empty());
-        assert!(service.fetch_by_manifest.is_empty());
-        assert!(service.local_completions.is_empty());
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let mut invalid_body = body.clone();
-        invalid_body[0] ^= 1;
-        let invalid_chunks = wire::encode_payload_chunks(service.context.da_layout, &invalid_body)
-            .expect("canonically encode the alternate reconstruction body");
-        // Deliberate negative data: the alternate bytes use complete RS16
-        // geometry, but the manifest remains bound to the original proposal
-        // subject so reconstruction reaches the semantic payload-hash check.
-        let invalid_manifest = wire::PayloadManifest::derive(
-            &service.context,
-            proposal.round,
-            proposal.subject,
-            u64::try_from(invalid_body.len()).expect("body length"),
-            &invalid_chunks,
-        )
-        .expect("structurally valid invalid manifest");
-        assert_ne!(invalid_manifest, *payload.manifest());
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(61, tag, invalid_manifest.clone());
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("open invalid remote reconstruction session");
-        let mut chunk = wire::PayloadChunk {
-            manifest_hash: HashOf::new(&invalid_manifest),
-            index: 0,
-            bytes: invalid_chunks[0].clone(),
-            sender: 0,
-            signature: Vec::new(),
-        };
-        chunk.signature = Signature::new(
-            keys[0].private_key(),
-            &chunk
-                .signature_preimage(&service.context, &invalid_manifest)
-                .expect("chunk preimage"),
-        )
-        .payload()
-        .to_vec();
-        let sender = service.context.roster[0].validator.clone();
-        let authenticated =
-            authenticate_payload_chunk(&service.context, &invalid_manifest, chunk, &sender)
-                .expect("authenticate chunk committed by invalid manifest");
-
-        assert_eq!(
-            service
-                .accept_authenticated_chunk(&task, authenticated)
-                .expect("invalid remote reconstruction is not a local service failure"),
-            AuthenticatedChunkDisposition::Rejected
-        );
-        assert_eq!(service.fetches[&task.id()].task, task);
-        assert_eq!(
-            service.fetch_by_manifest[&HashOf::new(&invalid_manifest)],
-            task.id()
-        );
-        assert!(service.local_completions.is_empty());
-        assert!(!service.output_guard.restart_required());
-
-        service
-            .complete_body_reconstruction_fetch(&task)
-            .expect("the reducer retires the exact rejected reconstruction owner");
-        assert!(service.fetches.is_empty());
-        assert!(service.fetch_by_manifest.is_empty());
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn cancelling_unowned_fetch_fails_closed() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(43, tag, payload.manifest().clone());
-
-        let error = service
-            .cancel_body_fetch(&task)
-            .expect_err("missing service ownership must fail closed");
-
-        assert!(error.contains("has no service owner"));
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn cancelling_fetch_with_overlapping_owners_fails_closed() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(44, tag, payload.manifest().clone());
-        let work_id = task.id();
-        let manifest_hash = HashOf::new(payload.manifest());
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("open exact live reconstruction session");
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: task.clone(),
-                manifest: payload.manifest().clone(),
-                body: canonical_wire.into(),
-            });
-
-        let error = service
-            .cancel_body_fetch(&task)
-            .expect_err("overlapping service ownership must fail closed");
-
-        assert!(error.contains("has conflicting service owners"));
-        assert!(service.fetches.contains_key(&work_id));
-        assert_eq!(
-            service.fetch_by_manifest.get(&manifest_hash),
-            Some(&work_id)
-        );
-        assert_eq!(service.local_completions.len(), 1);
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let ordinary = BodyFetchTask::ordinary_for_test(51, tag, payload.manifest().clone());
-        let hybrid = certified_fetch_task(
-            &service,
-            51,
-            tag,
-            Some(payload.manifest().clone()),
-            proposal.round,
-            proposal.subject,
-        );
-        service
-            .enqueue_body_fetch(ordinary)
-            .expect("start manifest acquisition");
-        service
-            .enqueue_body_fetch(hybrid.clone())
-            .expect("add certified authority");
-        let live = service.fetches.get(&hybrid.id()).expect("hybrid owner");
-        assert_eq!(live.task, hybrid);
-        assert!(live.chunks.is_some());
-        assert_eq!(
-            service
-                .fetch_by_manifest
-                .get(&HashOf::new(payload.manifest())),
-            Some(&hybrid.id())
-        );
-
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let certified =
-            certified_fetch_task(&service, 52, tag, None, proposal.round, proposal.subject);
-        let hybrid = certified_fetch_task(
-            &service,
-            52,
-            tag,
-            Some(payload.manifest().clone()),
-            proposal.round,
-            proposal.subject,
-        );
-        service
-            .enqueue_body_fetch(certified)
-            .expect("start certified acquisition");
-        assert!(service.fetch_by_manifest.is_empty());
-        service
-            .enqueue_body_fetch(hybrid.clone())
-            .expect("add manifest authority");
-        let live = service.fetches.get(&hybrid.id()).expect("hybrid owner");
-        assert_eq!(live.task, hybrid);
-        assert!(live.chunks.is_some());
-        assert_eq!(
-            service
-                .fetch_by_manifest
-                .get(&HashOf::new(payload.manifest())),
-            Some(&hybrid.id())
-        );
-    }
-
-    #[test]
-    fn certified_completion_retires_exact_live_or_reconstructed_owner() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let live_task = certified_fetch_task(
-            &service,
-            53,
-            tag,
-            Some(payload.manifest().clone()),
-            proposal.round,
-            proposal.subject,
-        );
-        service
-            .enqueue_body_fetch(live_task.clone())
-            .expect("start hybrid fetch");
-        let manifest_hash = HashOf::new(payload.manifest());
-        let prepared = service
-            .prepare_certified_body_fetch_owner_removal(&live_task)
-            .expect("exact live owner prepares without mutation");
-        drop(prepared);
-        assert_eq!(
-            service
-                .fetches
-                .get(&live_task.id())
-                .map(|fetch| &fetch.task),
-            Some(&live_task)
-        );
-        assert_eq!(
-            service.fetch_by_manifest.get(&manifest_hash),
-            Some(&live_task.id())
-        );
-        assert!(service.local_completions.is_empty());
-        assert!(!service.output_guard.restart_required());
-
-        let foreign_guard = ConsensusOutputGuard::isolated();
-        let foreign_permit = foreign_guard.acquire().expect("foreign output permit");
-        let prepared = service
-            .prepare_certified_body_fetch_owner_removal(&live_task)
-            .expect("exact live owner prepares for permit-binding negative");
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = prepared.commit(&foreign_permit);
-        }));
-        assert!(unwind.is_err());
-        assert_eq!(
-            service
-                .fetches
-                .get(&live_task.id())
-                .map(|fetch| &fetch.task),
-            Some(&live_task)
-        );
-        assert_eq!(
-            service.fetch_by_manifest.get(&manifest_hash),
-            Some(&live_task.id())
-        );
-        assert!(service.local_completions.is_empty());
-        assert!(!service.output_guard.restart_required());
-        drop(foreign_permit);
-        service
-            .complete_certified_body_fetch(&live_task)
-            .expect("certified response retires live owner");
-        assert!(service.fetches.is_empty());
-        assert!(service.fetch_by_manifest.is_empty());
-
-        let queued_ordinary = BodyFetchTask::ordinary_for_test(54, tag, payload.manifest().clone());
-        let queued_task = certified_fetch_task(
-            &service,
-            54,
-            tag,
-            Some(payload.manifest().clone()),
-            proposal.round,
-            proposal.subject,
-        );
-        service
-            .local_completions
-            .push_back(LocalCompletion::Reconstructed {
-                task: queued_ordinary,
-                manifest: payload.manifest().clone(),
-                body: body.into(),
-            });
-        service
-            .enqueue_body_fetch(queued_task.clone())
-            .expect("queued reconstruction accepts certified upgrade");
-        service
-            .complete_certified_body_fetch(&queued_task)
-            .expect("certified response retires queued reconstruction");
-        assert!(service.local_completions.is_empty());
-        assert!(!service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let live_task = certified_fetch_task(
-            &service,
-            55,
-            tag,
-            Some(payload.manifest().clone()),
-            proposal.round,
-            proposal.subject,
-        );
-        service
-            .enqueue_body_fetch(live_task.clone())
-            .expect("start exact hybrid fetch");
-        let mismatched_tag = EventTag::new(
-            tag.height(),
-            tag.view(),
-            Generation::new(tag.generation().get().saturating_add(1)),
-        );
-        let mismatched = certified_fetch_task(
-            &service,
-            55,
-            mismatched_tag,
-            Some(payload.manifest().clone()),
-            proposal.round,
-            proposal.subject,
-        );
-        let manifest_hash = HashOf::new(payload.manifest());
-
-        let error = service
-            .complete_certified_body_fetch(&mismatched)
-            .expect_err("a different executor task cannot retire the live service owner");
-
-        assert!(error.contains("differs from executor ownership"));
-        assert_eq!(
-            service
-                .fetches
-                .get(&live_task.id())
-                .map(|fetch| &fetch.task),
-            Some(&live_task),
-        );
-        assert_eq!(
-            service.fetch_by_manifest.get(&manifest_hash),
-            Some(&live_task.id()),
-        );
-        assert!(service.local_completions.is_empty());
-        assert!(
-            !service.output_guard.restart_required(),
-            "preflight rejection occurs before the guarded mutation boundary",
-        );
-    }
-
-    #[test]
-    fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(55, tag, payload.manifest().clone());
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("start exact fetch");
-        let wrong = BodyFetchTask::ordinary_for_test(
-            55,
-            EventTag::new(
-                service.context.height,
-                proposal.round.view,
-                Generation::new(service.context.height + 1),
-            ),
-            payload.manifest().clone(),
-        );
-
-        let error = service
-            .cancel_body_fetch(&wrong)
-            .expect_err("different task identity must fail closed");
-
-        assert!(error.contains("differs from executor ownership"));
-        assert!(service.fetches.contains_key(&task.id()));
-        assert_eq!(
-            service
-                .fetch_by_manifest
-                .get(&HashOf::new(payload.manifest())),
-            Some(&task.id())
-        );
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn corrupt_manifest_index_is_preserved_and_fails_closed_before_cancellation() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(56, tag, payload.manifest().clone());
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("start exact fetch");
-        let manifest_hash = HashOf::new(payload.manifest());
-        let innocent_owner = EffectWorkId::for_test(999);
-        service
-            .fetch_by_manifest
-            .insert(manifest_hash, innocent_owner);
-
-        let error = service
-            .cancel_body_fetch(&task)
-            .expect_err("corrupt manifest ownership must fail closed");
-
-        assert!(error.contains("mismatched manifest owner"));
-        assert_eq!(
-            service.fetch_by_manifest.get(&manifest_hash),
-            Some(&innocent_owner)
-        );
-        assert!(service.fetches.contains_key(&task.id()));
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn duplicate_queued_fetch_owners_fail_closed_without_consumption() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(57, tag, payload.manifest().clone());
-        for _ in 0..2 {
-            service
-                .local_completions
-                .push_back(LocalCompletion::Reconstructed {
-                    task: task.clone(),
-                    manifest: payload.manifest().clone(),
-                    body: body.clone().into(),
-                });
-        }
-
-        let error = service
-            .cancel_body_fetch(&task)
-            .expect_err("duplicate queue ownership must fail closed");
-
-        assert!(error.contains("duplicate queued reconstruction owners"));
-        assert_eq!(service.local_completions.len(), 2);
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(58, tag, payload.manifest().clone());
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("start exact fetch");
-        let manifest_hash = HashOf::new(payload.manifest());
-        assert_eq!(
-            service.fetch_by_manifest.remove(&manifest_hash),
-            Some(task.id())
-        );
-
-        let error = service
-            .cancel_body_fetch(&task)
-            .expect_err("missing manifest index must fail closed");
-        assert!(error.contains("mismatched manifest owner"));
-        assert!(service.fetch_by_manifest.is_empty());
-        assert!(service.fetches.contains_key(&task.id()));
-        assert!(service.output_guard.restart_required());
-
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(59, tag, payload.manifest().clone());
-        let manifest_hash = HashOf::new(payload.manifest());
-        service.fetch_by_manifest.insert(manifest_hash, task.id());
-
-        let error = service
-            .cancel_body_fetch(&task)
-            .expect_err("orphan manifest index must fail closed");
-        assert!(error.contains("orphaned manifest owner"));
-        assert_eq!(
-            service.fetch_by_manifest.get(&manifest_hash),
-            Some(&task.id())
-        );
-        assert!(service.fetches.is_empty());
-        assert!(service.output_guard.restart_required());
-
-        let (mut service, keys) = fixture();
-        let _chunk_root = install_temporary_chunk_root(&mut service);
-        allow_fixture_block_payload(&mut service.context);
-        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyFetchTask::ordinary_for_test(60, tag, payload.manifest().clone());
-        service
-            .enqueue_body_fetch(task.clone())
-            .expect("start exact fetch");
-        let manifest_hash = HashOf::new(payload.manifest());
-        let wrong_owner = EffectWorkId::for_test(1_000);
-        service.fetch_by_manifest.insert(manifest_hash, wrong_owner);
-
-        let error = service
-            .cancel_body_fetch(&task)
-            .expect_err("wrong manifest index must fail closed");
-        assert!(error.contains("mismatched manifest owner"));
-        assert_eq!(
-            service.fetch_by_manifest.get(&manifest_hash),
-            Some(&wrong_owner)
-        );
-        assert!(service.fetches.contains_key(&task.id()));
-        assert!(service.output_guard.restart_required());
-    }
-
-    #[test]
-    fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let sign = |id| V2IoCommand::Sign {
-            task: ConsensusSignTask::for_test(
-                id,
-                tag,
-                super::super::v2::SignRequest::Proposal(proposal.clone()),
-            ),
-            restore_outbound_payload: false,
-        };
-        let (command_tx, command_rx, admission) = test_io_command_channel(2);
-
-        command_tx
-            .try_send(sign(1))
-            .expect("queue first signing task");
-        command_tx
-            .try_send(sign(2))
-            .expect("queue retained signing task");
-        assert!(matches!(
-            command_tx.try_send(sign(3)),
-            Err(V2IoTrySendError::Full(_))
-        ));
-        assert!(
-            command_tx
-                .cancel(EffectWorkId::for_test(1), V2IoCancellableKind::Sign)
-                .expect("cancel queued signing task")
-        );
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-        command_tx
-            .try_send(sign(3))
-            .expect("reclaimed slot accepts current-view work");
-
-        for expected in [2, 3] {
-            let command = command_rx.try_recv().expect("retained queued command");
-            let work_id = command.work_id().expect("signing work identifier");
-            assert_eq!(work_id, EffectWorkId::for_test(expected));
-            command_rx.complete_work(work_id);
-            command_tx.acknowledge_completion(work_id);
-        }
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-
-        let durable = DurableBodyReceipt::for_test(
-            service.context.id(),
-            proposal.round,
-            proposal.subject,
-            HashOf::new(&proposal.manifest),
-        );
-        let validation = BodyValidationTask::for_test(4, durable);
-        let validation_id = validation.id();
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: Arc::clone(&admission),
-        });
-        service
-            .io()
-            .expect("synthetic validation queue")
-            .enqueue(V2IoCommand::Validate(validation))
-            .expect("queue stale validation");
-        service
-            .cancel_body_validation(validation_id)
-            .expect("production callback cancels queued validation");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-        drop(service.io.take());
-    }
-
-    #[test]
-    fn io_queue_reports_active_store_cancellation_as_retained() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = BodyStoreTask::for_test(5, tag, payload.manifest().clone(), body);
-        let work_id = task.id();
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
-        command_tx
-            .try_send(V2IoCommand::Store(task))
-            .expect("queue body store");
-        let active = command_rx.try_recv().expect("activate body store");
-        assert_eq!(active.work_id(), Some(work_id));
-        assert!(
-            !command_tx
-                .cancel(work_id, V2IoCancellableKind::Store)
-                .expect("active body store remains owned")
-        );
-        assert_eq!(
-            command_tx.queue.lock().work[&work_id].state,
-            V2IoWorkState::Active
-        );
-
-        command_rx.complete_work(work_id);
-        assert!(
-            !command_tx
-                .cancel(work_id, V2IoCancellableKind::Store)
-                .expect("completion-pending body store remains owned")
-        );
-        assert_eq!(
-            command_tx.queue.lock().work[&work_id].state,
-            V2IoWorkState::CompletionPending
-        );
-        command_tx.acknowledge_completion(work_id);
-        assert!(command_tx.queue.lock().work.is_empty());
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-    }
-
-    #[test]
-    fn io_queue_rejects_cancellation_without_tracked_ownership() {
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(1);
-        let missing = EffectWorkId::for_test(6);
-
-        let error = command_tx
-            .cancel(missing, V2IoCancellableKind::Store)
-            .expect_err("missing work ownership must not look active");
-
-        assert!(error.contains("has no tracked owner"));
-        assert!(command_tx.queue.lock().work.is_empty());
-    }
-
-    #[test]
-    fn io_queue_validation_identity_is_only_work_id_and_durable_receipt() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let durable = DurableBodyReceipt::for_test(
-            service.context.id(),
-            proposal.round,
-            proposal.subject,
-            HashOf::new(&proposal.manifest),
-        );
-        let exact = BodyValidationTask::for_test(8, durable.clone());
-        let conflicting = BodyValidationTask::for_test(
-            8,
-            DurableBodyReceipt::for_test(
-                service.context.id(),
-                proposal.round,
-                proposal.subject,
-                HashOf::from_untyped_unchecked(Hash::new(b"conflicting durable manifest")),
-            ),
-        );
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
-        command_tx
-            .try_send(V2IoCommand::Validate(exact.clone()))
-            .expect("queue immutable validation");
-        command_tx
-            .try_send(V2IoCommand::Validate(exact.clone()))
-            .expect("coalesce exact immutable retransmission");
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-        assert!(matches!(
-            command_tx.try_send(V2IoCommand::Validate(conflicting)),
-            Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
-                if work_id == EffectWorkId::for_test(8)
-        ));
-
-        let command = command_rx.try_recv().expect("single validation command");
-        let work_id = command.work_id().expect("validation work identifier");
-        assert_eq!(work_id, EffectWorkId::for_test(8));
-        command_tx
-            .try_send(V2IoCommand::Validate(exact))
-            .expect("coalesce immutable validation while active");
-        command_rx.complete_work(work_id);
-        command_tx.acknowledge_completion(work_id);
-        assert!(command_tx.queue.lock().work.is_empty());
-    }
-
-    #[test]
-    fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let durable = DurableBodyReceipt::for_test(
-            service.context.id(),
-            proposal.round,
-            proposal.subject,
-            HashOf::new(&proposal.manifest),
-        );
-        let validated = ValidatedBodyReceipt::for_test(durable);
-        let certificate = wire::QuorumCertificate {
-            round: proposal.round,
-            proposal_round: proposal.round,
-            phase: wire::GlobalPhase::Commit,
-            subject: proposal.subject,
-            execution_commitment: validated.execution_commitment(),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![1],
-        };
-        let tag = EventTag::new(
-            service.context.height,
-            proposal.round.view,
-            Generation::new(service.context.height),
-        );
-        let task = ApplyTask::for_test(
-            7,
-            tag,
-            proposal.subject,
-            certificate.clone(),
-            validated.clone(),
-        );
-        let conflicting = ApplyTask::for_test(
-            7,
-            EventTag::new(
-                service.context.height,
-                proposal.round.view + 1,
-                Generation::new(service.context.height),
-            ),
-            proposal.subject,
-            certificate,
-            validated,
-        );
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
-        command_tx
-            .try_send(V2IoCommand::Apply(task.clone()))
-            .expect("queue exact apply");
-        command_tx
-            .try_send(V2IoCommand::Apply(task.clone()))
-            .expect("coalesce queued exact apply retransmission");
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-        assert!(matches!(
-            command_tx.try_send(V2IoCommand::Apply(conflicting)),
-            Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
-                if work_id == EffectWorkId::for_test(7)
-        ));
-
-        let command = command_rx.try_recv().expect("single coalesced apply");
-        let work_id = command.work_id().expect("apply work identifier");
-        assert_eq!(work_id, EffectWorkId::for_test(7));
-        assert!(matches!(command, V2IoCommand::Apply(_)));
-        command_tx
-            .try_send(V2IoCommand::Apply(task.clone()))
-            .expect("coalesce exact retransmission while apply is active");
-        command_rx.complete_work(work_id);
-        command_tx
-            .try_send(V2IoCommand::Apply(task.clone()))
-            .expect("coalesce exact retransmission while completion is pending");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        drop(command_rx);
-        command_tx.acknowledge_completion(work_id);
-        assert!(command_tx.queue.lock().work.is_empty());
-    }
-
-    #[test]
-    fn selected_serve_target_waits_for_complete_physical_prefix_and_excludes_later_ingress() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let later_source = service.context.roster[3].validator.clone();
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
-        let route = route_fixture.mint_via(requester.clone(), via.clone());
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
-        let (ingress, _gate) = gated_fair_ingress(&service.context, &command_tx);
-        let ordinary = |height, source: &PeerId| {
-            InboundBlockMessage::from_transport(
-                BlockMessage::V2(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::CommitCertificateRequest(
-                        wire::CommitCertificateRequest {
-                            protocol_version: wire::PROTOCOL_VERSION,
-                            network_id: service.context.network_id,
-                            context_id: service.context.id(),
-                            height,
-                            requester: source.clone(),
-                            signature: vec![u8::try_from(height).unwrap_or(u8::MAX)],
-                        },
-                    ),
-                )),
-                source.clone(),
-                source.clone(),
-            )
-        };
-        let predecessor_height = service.context.height.saturating_add(1);
-        let later_height = service.context.height.saturating_add(2);
-
-        assert!(matches!(
-            ingress.try_push(ordinary(predecessor_height, &via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via.clone(),
-                route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(ordinary(later_height, &later_source)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let barrier = command_tx
-            .serve_barrier()
-            .expect("inspect selected Serve carrier")
-            .expect("exact request owns the selected barrier");
-        assert_eq!(barrier.carrier_ordinal(), 2);
-        assert!(
-            ingress
-                .try_recv_if(|inbound| {
-                    matches!(
-                        inbound.message(),
-                        BlockMessage::V2(wire::ConsensusMessageV2 {
-                            payload:
-                                wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
-                            ..
-                        }) if request.height == later_height
-                    )
-                })
-                .is_none(),
-            "a post-target occurrence cannot enter the selected Serve union"
-        );
-        assert!(
-            ingress
-                .try_recv_if(|inbound| {
-                    matches!(
-                        inbound.message(),
-                        BlockMessage::V2(wire::ConsensusMessageV2 {
-                            payload:
-                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                            ..
-                        }) if HashOf::new(candidate) == request.request_hash()
-                    )
-                })
-                .is_none(),
-            "a predicate which rejects the predecessor cannot select the exact target"
-        );
-        let predecessor = ingress
-            .try_recv_if(|inbound| {
-                matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload:
-                            wire::ConsensusMessageV2Payload::CommitCertificateRequest(candidate),
-                        ..
-                    }) if candidate.height == predecessor_height
-                )
-            })
-            .expect("the finite frozen predecessor remains separately serviceable");
-        assert!(matches!(
-            predecessor.message(),
-            BlockMessage::V2(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(candidate),
-                ..
-            }) if candidate.height == predecessor_height
-        ));
-
-        let mut prepared = None;
-        let mut target = ingress
-            .try_recv_if(|inbound| {
-                let is_target = matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                        ..
-                    }) if HashOf::new(candidate) == request.request_hash()
-                );
-                if is_target {
-                    prepared = Some(
-                        command_tx
-                            .prepare_reserved_serve(
-                                CertifiedServeOwnerKey::Roster(requester.clone()),
-                                request.clone(),
-                            )
-                            .expect("prepare exact selected Serve target"),
-                    );
-                }
-                is_target
-            })
-            .expect("the exact target becomes eligible after its frozen prefix drains");
-        let admission = prepared.expect("target predicate prepared its exact reservation");
-        let ownership = target
-            .take_ingress_ownership()
-            .expect("selected target retains fair ownership");
-        let (_, _, reply_routes) = target.into_message_sender_and_reply_routes();
-        assert!(matches!(
-            command_tx
-                .commit_serve(
-                    &admission,
-                    reply_routes.expect("selected target retains its reply route"),
-                    ownership,
-                )
-                .expect("commit selected Serve target"),
-            CertifiedServeCommit::Queued
-        ));
-        assert_eq!(ingress.len(), 1);
-    }
-
-    #[test]
-    fn selected_serve_request_unblocks_matching_body_dependent_control() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let voter = service.context.roster[0].validator.clone();
-        let vote = wire::Vote {
-            round: proposal.round,
-            proposal_round: proposal.round,
-            phase: wire::GlobalPhase::Prepare,
-            subject: proposal.subject,
-            execution_commitment: request.request().certificate.execution_commitment,
-            signer: 0,
-            signature: vec![0xA5; 48],
-        };
-        let vote_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Vote(vote),
-        ));
-        let qc_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(
-                request.request().certificate.clone(),
-            ),
-        ));
-        let proposal_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-        ));
-
-        for (case, control_message) in [
-            ("proposal", proposal_message),
-            ("vote", vote_message),
-            ("prepare-qc", qc_message),
-        ] {
-            let (command_tx, command_rx, _admission) = test_io_command_channel(4);
-            let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-                128,
-                512 * 1024 * 1024,
-                64 * 1024 * 1024,
-                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-                8 * 1024 * 1024,
-                8 * 1024 * 1024,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                None,
-            );
-            let roster = service
-                .context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<BTreeSet<_>>();
-            ingress
-                .configure_roster_for_context(
-                    roster.iter().cloned(),
-                    &service.context.network_id,
-                    service.context.da_layout,
-                )
-                .expect("configure production-shaped combined ingress");
-            ingress.require_certified_serve_gate();
-            ingress.require_leader_wire_lifecycle_gate();
-
-            let directory = TempDir::new().expect("temporary combined ingress gate");
-            let wal_path = directory
-                .path()
-                .join(format!("{case}-serve-body-recovery.wal"));
-            let owner = [0xAA; 32];
-            let capacity = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-                roster.len(),
-                service.context.da_layout.max_chunk_count,
-            )
-            .expect("derive finite leader lifecycle capacity");
-            let recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                service.context.id(),
-                service.context.height,
-                owner,
-                0,
-                false,
-            );
-            let (leader_gate, restore) =
-                super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                    &wal_path,
-                    service.context.id(),
-                    service.context.height,
-                    owner,
-                    roster,
-                    capacity,
-                    service.context.da_layout.max_chunk_count,
-                    recovery_authority,
-                    &[],
-                    &[],
-                )
-                .expect("open production-shaped leader lifecycle gate");
-            let serve_gate = CertifiedServeIngressGate {
-                queue: Arc::clone(&command_tx.queue),
-            };
-            ingress
-                .bind_certified_serve_gate(serve_gate.clone())
-                .expect("bind exact Serve ingress gate");
-            ingress
-                .bind_leader_wire_lifecycle_gate(
-                    Arc::clone(&leader_gate),
-                    restore,
-                    command_tx.queue.lifecycle_ordinals.clone(),
-                    service.context.id(),
-                    service.context.height,
-                )
-                .expect("bind leader gate to the same actor-global ordinal source");
-            ingress.open().expect("open combined production ingress");
-
-            assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
-                    control_message,
-                    Some(voter.clone()),
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), voter.clone())),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let serve_barrier = serve_gate
-                .selected_barrier()
-                .expect("inspect the bound Serve gate")
-                .expect("the body-recovery request owns the selected Serve barrier");
-            assert_eq!(serve_barrier.scheduler_ordinal(), 2, "case={case}");
-            assert_eq!(serve_barrier.carrier_ordinal(), 2, "case={case}");
-            assert_eq!(
-                leader_gate
-                    .earliest_ingress_scheduler_ordinal()
-                    .expect("inspect the retained control owner"),
-                Some(1),
-                "case={case}"
-            );
-
-            let mut prepared = None;
-            let mut body_request = ingress
-                .try_recv_if_checked(|inbound| {
-                    let is_matching_request = matches!(
-                        inbound.message(),
-                        BlockMessage::V2(wire::ConsensusMessageV2 {
-                            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
-                            ..
-                        }) if candidate.round == proposal.round
-                            && candidate.subject == proposal.subject
-                            && HashOf::new(candidate) == request.request_hash()
-                    );
-                    if is_matching_request {
-                        prepared = Some(
-                            command_tx
-                                .prepare_reserved_serve(
-                                    CertifiedServeOwnerKey::Roster(requester.clone()),
-                                    request.clone(),
-                                )
-                                .expect("prepare the exact selected body-recovery request"),
-                        );
-                    }
-                    is_matching_request
-                })
-                .expect("checked selector preserves both durable gates")
-                .unwrap_or_else(|| {
-                    panic!("selected Serve request crosses blocked matching control: {case}")
-                });
-            let admission = prepared.expect("predicate prepared the exact Serve reservation");
-            let ingress_ownership = body_request
-                .take_ingress_ownership()
-                .expect("body-recovery request retains fair-ingress ownership");
-            let (_, _, reply_routes) = body_request.into_message_sender_and_reply_routes();
-            assert!(matches!(
-                command_tx
-                    .commit_serve(
-                        &admission,
-                        reply_routes.expect("body-recovery request retains its reply route"),
-                        ingress_ownership,
-                    )
-                    .expect("commit the exact body-recovery Serve request"),
-                CertifiedServeCommit::Queued
-            ));
-            assert!(matches!(
-                command_rx.try_recv(),
-                Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                    if lifecycle_id == admission.lifecycle_id
-            ));
-            assert_eq!(
-                ingress.len(),
-                1,
-                "retained control is not displaced: {case}"
-            );
-            assert_eq!(
-                leader_gate
-                    .earliest_ingress_scheduler_ordinal()
-                    .expect("control remains the durable leader-wire owner"),
-                Some(1),
-                "case={case}"
-            );
-        }
-    }
-
-    #[test]
-    fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let serve_via = service.context.roster[0].validator.clone();
-        let timeout_messages = [2_u32, 3_u32].map(|signer| {
-            let source = service.context.roster
-                [usize::try_from(signer).expect("small timeout signer index")]
-            .validator
-            .clone();
-            let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
-                    round: proposal.round,
-                    highest_prepare_qc: None,
-                    signer,
-                    signature: vec![
-                        0x7A_u8
-                            .checked_add(u8::try_from(signer).expect("small signer marker"))
-                            .expect("small signer marker does not overflow");
-                        48
-                    ],
-                }),
-            ));
-            (message, source)
-        });
-
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
-        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            128,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            None,
-        );
-        let roster = service
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<BTreeSet<_>>();
-        ingress
-            .configure_roster_for_context(
-                roster.iter().cloned(),
-                &service.context.network_id,
-                service.context.da_layout,
-            )
-            .expect("configure the production-shaped timeout/Serve ingress");
-        ingress.require_certified_serve_gate();
-        ingress.require_leader_wire_lifecycle_gate();
-
-        let directory = TempDir::new().expect("temporary timeout/Serve ingress gate");
-        let owner = [0xAC; 32];
-        let capacity =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-                roster.len(),
-                service.context.da_layout.max_chunk_count,
-            )
-            .expect("derive finite timeout/Serve lifecycle capacity");
-        let recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            service.context.id(),
-            service.context.height,
-            owner,
-            0,
-            false,
-        );
-        let (leader_gate, restore) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &directory.path().join("timeout-vote-serve-bypass.wal"),
-                service.context.id(),
-                service.context.height,
-                owner,
-                roster,
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("open the timeout/Serve leader lifecycle gate");
-        let serve_gate = CertifiedServeIngressGate {
-            queue: Arc::clone(&command_tx.queue),
-        };
-        ingress
-            .bind_certified_serve_gate(serve_gate.clone())
-            .expect("bind the exact Serve ingress gate");
-        ingress
-            .bind_leader_wire_lifecycle_gate(
-                Arc::clone(&leader_gate),
-                restore,
-                command_tx.queue.lifecycle_ordinals.clone(),
-                service.context.id(),
-                service.context.height,
-            )
-            .expect("bind the timeout-vote lifecycle to the shared ordinal source");
-        ingress.open().expect("open the timeout/Serve ingress");
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), serve_via,)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        for (message, source) in timeout_messages {
-            assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(message, Some(source))),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-        }
-        let serve_barrier = serve_gate
-            .selected_barrier()
-            .expect("inspect the selected Serve barrier")
-            .expect("the exact request owns one selected Serve turn");
-        assert_eq!(serve_barrier.carrier_ordinal(), 1);
-        assert_eq!(serve_barrier.scheduler_ordinal(), 1);
-        assert_eq!(
-            leader_gate
-                .earliest_ingress_scheduler_ordinal()
-                .expect("inspect the queued TimeoutVote owner"),
-            Some(2)
-        );
-
-        assert!(
-            ingress
-                .try_recv_if_checked_retiring_obsolete(|inbound| {
-                    matches!(
-                        inbound.message(),
-                        BlockMessage::V2(wire::ConsensusMessageV2 {
-                            payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
-                            ..
-                        })
-                    )
-                })
-                .expect("ordinary selection preserves the selected Serve barrier")
-                .is_none(),
-            "ordinary ingress cannot move a later TimeoutVote ahead of Serve"
-        );
-        assert!(
-            ingress
-                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-                    |_| false,
-                )
-                .expect("the bypass pass still executes its downstream predicate")
-                .is_none(),
-            "the internal bypass never admits a TimeoutVote by itself"
-        );
-        let mut selected_slots = BTreeSet::new();
-        for expected_scheduler_ordinal in [2_u128, 3_u128] {
-            let (mut timeout_vote, disposition) = ingress
-                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-                    |inbound| {
-                        matches!(
-                            inbound.message(),
-                            BlockMessage::V2(wire::ConsensusMessageV2 {
-                                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
-                                ..
-                            })
-                        )
-                    },
-                )
-                .expect("each timeout episode turn preserves both durable gates")
-                .expect("each exact TimeoutVote reaches the authoritative predicate");
-            assert_eq!(
-                disposition,
-                super::super::FairV2IngressDequeueDisposition::Admit
-            );
-            let ownership = timeout_vote
-                .take_ingress_ownership()
-                .expect("the selected TimeoutVote retains exact ownership");
-            assert!(ownership.validate_exact());
-            let token = ownership
-                .leader_wire_token()
-                .expect("the selected TimeoutVote retains its productive token");
-            assert_eq!(token.scheduler_ordinal(), expected_scheduler_ordinal);
-            assert!(
-                selected_slots.insert(token.slot.clone()),
-                "each roster signer owns a distinct timeout episode slot"
-            );
-            assert!(ownership.leader_wire_runtime_receipt().is_some());
-            assert_eq!(
-                serve_gate
-                    .selected_barrier()
-                    .expect("inspect the retained Serve barrier")
-                    .map(|barrier| barrier.carrier_ordinal()),
-                Some(1),
-                "each timeout turn leaves the older Serve carrier selected"
-            );
-        }
-        assert_eq!(selected_slots.len(), 2);
-        assert_eq!(
-            ingress.len(),
-            1,
-            "both timeout slots drain while the selected Serve carrier remains queued"
-        );
-        assert_eq!(
-            serve_gate
-                .selected_barrier()
-                .expect("inspect the retained Serve barrier")
-                .map(|barrier| barrier.carrier_ordinal()),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn closed_height_atomically_retires_serve_and_leader_ingress() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let round = proposal.round;
-        let proposer = service.context.roster
-            [usize::try_from(proposal.proposer).expect("fixture proposer index fits usize")]
-        .validator
-        .clone();
-        let timeout_signer = service.context.roster[1].validator.clone();
-        let serve_via = service.context.roster[0].validator.clone();
-        let serve_request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let proposal_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Proposal(proposal),
-        ));
-        let timeout_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
-                round,
-                highest_prepare_qc: None,
-                signer: 1,
-                signature: vec![0x5A],
-            }),
-        ));
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
-        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            128,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            None,
-        );
-        let roster = service
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<BTreeSet<_>>();
-        ingress
-            .configure_roster_for_context(
-                roster.iter().cloned(),
-                &service.context.network_id,
-                service.context.da_layout,
-            )
-            .expect("configure production-shaped combined ingress");
-        ingress.require_certified_serve_gate();
-        ingress.require_leader_wire_lifecycle_gate();
-
-        let directory = TempDir::new().expect("temporary combined ingress gate");
-        let owner = [0xAB; 32];
-        let capacity =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-                roster.len(),
-                service.context.da_layout.max_chunk_count,
-            )
-            .expect("derive finite leader lifecycle capacity");
-        let recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            service.context.id(),
-            service.context.height,
-            owner,
-            0,
-            false,
-        );
-        let wal_path = directory.path().join("atomic-height-retirement.wal");
-        let recovery_roster = roster.clone();
-        let (leader_gate, restore) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &wal_path,
-                service.context.id(),
-                service.context.height,
-                owner,
-                roster,
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("open production-shaped leader lifecycle gate");
-        let serve_gate = CertifiedServeIngressGate {
-            queue: Arc::clone(&command_tx.queue),
-        };
-        ingress
-            .bind_certified_serve_gate(serve_gate.clone())
-            .expect("bind exact Serve ingress gate");
-        ingress
-            .bind_leader_wire_lifecycle_gate(
-                Arc::clone(&leader_gate),
-                restore,
-                command_tx.queue.lifecycle_ordinals.clone(),
-                service.context.id(),
-                service.context.height,
-            )
-            .expect("bind leader gate to the same actor-global ordinal source");
-        ingress.open().expect("open combined production ingress");
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(proposal_message, Some(proposer),)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                timeout_message,
-                Some(timeout_signer),
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(serve_request.request(), serve_via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert_eq!(ingress.len(), 3);
-        assert!(
-            serve_gate
-                .selected_barrier()
-                .expect("inspect live Serve reservation")
-                .is_some(),
-            "the closed-height lanes include a live Serve RAII carrier"
-        );
-        let durable_ingress_ordinals = leader_gate
-            .ingress_scheduler_ordinals()
-            .expect("inspect retained productive carriers");
-        assert_eq!(
-            durable_ingress_ordinals.len(),
-            2,
-            "Proposal and TimeoutVote own independent durable lifecycles"
-        );
-        let scheduler_high_watermark = *durable_ingress_ordinals
-            .last()
-            .expect("two durable ingress owners have a high-watermark");
-
-        ingress.close();
-        ingress
-            .unbind_height_ingress_gates(&serve_gate, &leader_gate)
-            .expect("joint retirement cannot expose a carrierless Ingress record");
-
-        let state = ingress.state.lock();
-        assert_eq!(state.len, 0);
-        assert!(state.certified_serve_gate.is_none());
-        assert!(state.leader_wire_lifecycle_gate.is_none());
-        assert!(state.leader_wire_lifecycles.is_empty());
-        ingress.debug_assert_consistent(&state);
-        drop(state);
-        assert_eq!(
-            serve_gate
-                .selected_barrier()
-                .expect("inspect retired Serve reservation"),
-            None,
-            "joint lane retirement rolls back the live Serve RAII carrier"
-        );
-
-        assert_eq!(
-            leader_gate
-                .ingress_scheduler_ordinals()
-                .expect("detached finalized-height gate remains readable"),
-            durable_ingress_ordinals,
-            "detachment must not forge a backward durable lifecycle transition"
-        );
-        drop(leader_gate);
-        let same_height_recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            service.context.id(),
-            service.context.height,
-            owner,
-            round.view,
-            false,
-        );
-        let (dormant_gate, dormant_restore) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &wal_path,
-                service.context.id(),
-                service.context.height,
-                owner,
-                recovery_roster.clone(),
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                same_height_recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("same-height restart normalizes detached active records");
-        assert_eq!(dormant_restore.records().len(), 2);
-        assert!(dormant_restore.records().iter().all(|record| {
-            record.status()
-                == super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
-        }));
-        assert_eq!(
-            dormant_restore.scheduler_ordinal_high_watermark(),
-            scheduler_high_watermark
-        );
-        assert_eq!(
-            dormant_gate
-                .earliest_ingress_scheduler_ordinal()
-                .expect("inspect same-height dormant selector"),
-            None,
-            "restart-dormant records own no physical selector turn"
-        );
-        drop(dormant_gate);
-
-        let decision_recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            service.context.id(),
-            service.context.height,
-            owner,
-            round.view,
-            true,
-        );
-        let (reconciled_gate, reconciled_restore) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &wal_path,
-                service.context.id(),
-                service.context.height,
-                owner,
-                recovery_roster,
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                decision_recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("durable Decision retires finalized-height ingress records on replay");
-        assert!(reconciled_restore.records().is_empty());
-        assert_eq!(
-            reconciled_restore.scheduler_ordinal_high_watermark(),
-            scheduler_high_watermark,
-            "obsolete records leave the anti-ABA scheduler high-watermark intact"
-        );
-        assert_eq!(
-            reconciled_gate
-                .earliest_ingress_scheduler_ordinal()
-                .expect("inspect reconciled finalized-height gate"),
-            None
-        );
-    }
-
-    #[test]
-    fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle() {
-        let (service, keys) = fixture_with_block_payload();
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let response = certified_serve_response(
-            &request,
-            payload.manifest().clone(),
-            canonical_wire,
-            &keys[0],
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let proposer = service.context.roster
-            [usize::try_from(proposal.proposer).expect("fixture proposer index fits usize")]
-        .validator
-        .clone();
-        let leader_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-        ));
-        let BlockMessage::V2(leader_envelope) = &leader_message else {
-            unreachable!("leader fixture is a v2 envelope");
-        };
-
-        let (command_tx, command_rx, _admission) = test_io_command_channel(4);
-        let leader_scheduler_ordinal = (1_u128..=41)
-            .map(|expected| {
-                let ordinal = command_tx
-                    .queue
-                    .lifecycle_ordinals
-                    .reserve_one()
-                    .expect("reserve the pre-restart shared lifecycle prefix");
-                assert_eq!(ordinal, expected);
-                ordinal
-            })
-            .last()
-            .expect("the shared prefix is non-empty");
-        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            128,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            None,
-        );
-        let roster = service
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<BTreeSet<_>>();
-        ingress
-            .configure_roster_for_context(
-                roster.iter().cloned(),
-                &service.context.network_id,
-                service.context.da_layout,
-            )
-            .expect("configure the combined Serve/leader ingress");
-        ingress.require_certified_serve_gate();
-        ingress.require_leader_wire_lifecycle_gate();
-
-        let (identity, slot) = {
-            let state = ingress.state.lock();
-            match super::super::fair_v2_ingress_leader_wire_identity(
-                &state,
-                &leader_message,
-                &proposer,
-                Hash::new(leader_envelope.encode()),
-            ) {
-                super::super::FairV2IngressLeaderWireDerivation::Exact { identity, slot } => {
-                    (identity, slot)
-                }
-                _ => panic!("proposal fixture must derive one exact leader lifecycle"),
-            }
-        };
-        let source_class = identity.phase.source_class();
-        let leader_token = super::super::FairV2IngressLeaderWireToken {
-            identity,
-            slot,
-            admission_ordinal: 7,
-            scheduler_ordinal: leader_scheduler_ordinal,
-            source_class,
-        };
-        assert_eq!(leader_token.scheduler_ordinal(), 41);
-
-        let directory = TempDir::new().expect("temporary combined ingress gate");
-        let wal_path = directory.path().join("serve-leader-order.wal");
-        let owner = [0xA9; 32];
-        let capacity =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-                roster.len(),
-                service.context.da_layout.max_chunk_count,
-            )
-            .expect("derive finite leader lifecycle capacity");
-        let recovery_authority =
-            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                service.context.id(),
-                service.context.height,
-                owner,
-                0,
-                false,
-            );
-        let (leader_gate, _) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &wal_path,
-                service.context.id(),
-                service.context.height,
-                owner,
-                roster.clone(),
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("open pre-restart leader lifecycle gate");
-        leader_gate
-            .reserve(leader_token.clone())
-            .expect("reserve the pre-restart leader lifecycle");
-        drop(leader_gate);
-
-        let recovery_authority =
-            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-                service.context.id(),
-                service.context.height,
-                owner,
-                0,
-                false,
-            );
-        let (leader_gate, restore) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &wal_path,
-                service.context.id(),
-                service.context.height,
-                owner,
-                roster,
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("restore the dormant leader lifecycle");
-        assert_eq!(restore.records().len(), 1);
-        assert_eq!(
-            restore.records()[0].status(),
-            super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
-        );
-        let serve_gate = CertifiedServeIngressGate {
-            queue: Arc::clone(&command_tx.queue),
-        };
-        ingress
-            .bind_certified_serve_gate(serve_gate.clone())
-            .expect("bind the real Serve ingress gate");
-        ingress
-            .bind_leader_wire_lifecycle_gate(
-                Arc::clone(&leader_gate),
-                restore,
-                command_tx.queue.lifecycle_ordinals.clone(),
-                service.context.id(),
-                service.context.height,
-            )
-            .expect("bind the restored leader lifecycle to the shared source");
-        ingress
-            .open()
-            .expect("open the combined production ingress");
-
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
-        let route = route_fixture.mint_via(requester.clone(), via.clone());
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let serve_barrier = serve_gate
-            .selected_barrier()
-            .expect("inspect the bound Serve gate")
-            .expect("the exact Serve request owns the selected barrier");
-        assert_eq!(serve_barrier.scheduler_ordinal(), 42);
-        assert_eq!(serve_barrier.carrier_ordinal(), 8);
-
-        assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(leader_message, Some(proposer),)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let leader_carrier_ordinal = {
-            let state = ingress.state.lock();
-            let record = state
-                .leader_wire_lifecycles
-                .get(&leader_token.slot)
-                .expect("reactivated leader lifecycle remains indexed");
-            assert_eq!(
-                record.status,
-                super::super::FairV2IngressLeaderWireStatus::Ingress
-            );
-            assert_eq!(record.token, leader_token);
-            state
-                .lanes
-                .values()
-                .flat_map(|lane| lane.entries.iter())
-                .find(|entry| entry.leader_wire_token.as_ref() == Some(&leader_token))
-                .expect("reactivated leader owns one exact physical carrier")
-                .admission_ordinal
-        };
-        assert_eq!(leader_carrier_ordinal, 9);
-        assert!(
-            serve_barrier.scheduler_ordinal() > leader_token.scheduler_ordinal(),
-            "the retained leader scheduler identity is older than the selected Serve identity"
-        );
-        assert!(
-            serve_barrier.carrier_ordinal() < leader_carrier_ordinal,
-            "the selected Serve occurrence owns the earlier physical position"
-        );
-        assert_eq!(
-            leader_gate
-                .earliest_ingress_scheduler_ordinal()
-                .expect("inspect durable leader selector"),
-            Some(leader_token.scheduler_ordinal())
-        );
-
-        assert!(
-            ingress
-                .try_recv_if_checked(|inbound| {
-                    matches!(
-                        inbound.message(),
-                        BlockMessage::V2(wire::ConsensusMessageV2 {
-                            payload: wire::ConsensusMessageV2Payload::Proposal(candidate),
-                            ..
-                        }) if candidate.round == proposal.round
-                            && candidate.subject == proposal.subject
-                    )
-                })
-                .expect("checked selector preserves both durable gates")
-                .is_none(),
-            "an older retained scheduler identity cannot cross the earlier Serve carrier"
-        );
-
-        let (admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert!(
-            serve_gate
-                .selected_barrier()
-                .expect("inspect Serve gate after physical retirement")
-                .is_none()
-        );
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve {
-                lifecycle_id,
-                ..
-            }) if lifecycle_id == admission.lifecycle_id
-        ));
-        command_rx
-            .complete_serve_response(admission.lifecycle_id, &response)
-            .expect("seal exact Serve response before later leader I/O");
-        command_tx
-            .acknowledge_serve_completion(
-                admission.lifecycle_id,
-                V2IoServeTerminal::Response(response.clone()),
-            )
-            .expect("retain the drained logical request as a terminal tombstone");
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state.serves.len(),
-                1,
-                "acknowledged Serve retains only its exact replay tombstone"
-            );
-            let tracked = state
-                .serves
-                .get(&admission.lifecycle_id)
-                .expect("acknowledged Serve retains its exact replay tombstone");
-            assert_eq!(tracked.state, V2IoServeState::Terminal);
-            assert_eq!(
-                tracked.terminal.as_ref(),
-                Some(&V2IoServeTerminal::Response(response))
-            );
-            assert!(state.commands.is_empty());
-        }
-
-        let mut leader = ingress
-            .try_recv_if_checked(|inbound| {
-                matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::Proposal(candidate),
-                        ..
-                    }) if candidate.round == proposal.round
-                        && candidate.subject == proposal.subject
-                )
-            })
-            .expect("checked leader dequeue validates the exact durable carrier")
-            .expect("leader follows after the selected Serve retires");
-        let mut ownership = leader
-            .take_ingress_ownership()
-            .expect("leader retains its exact fair-ingress ownership");
-        assert_eq!(ownership.leader_wire_token(), Some(&leader_token));
-        ingress
-            .bind_leader_wire_runtime_ownership(&mut ownership)
-            .expect("bind the exact leader carrier to runtime");
-        let runtime = ownership
-            .leader_wire_runtime_receipt()
-            .expect("leader runtime receipt is installed");
-        assert_eq!(runtime.token(), &leader_token);
-        ingress
-            .mark_leader_wire_volatile_terminal(runtime)
-            .expect("retire the validated leader runtime owner");
-        command_tx
-            .try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(720),
-                    subject: proposal.subject,
-                },
-            )
-            .expect("leader-caused I/O becomes admissible only after Serve terminalization");
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id: LockedCandidateAcquisitionId(720),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let distinct = authenticated_serve_request(
-            &service.context,
-            &keys[2],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let distinct_requester = distinct.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let distinct_via = service.context.roster[3].validator.clone();
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
-        let route = route_fixture.mint_via(requester.clone(), via.clone());
-        let retry_route = route_fixture
-            .redeliver(&route)
-            .expect("mint exact retry route");
-        let distinct_route =
-            route_fixture.mint_via(distinct_requester.clone(), distinct_via.clone());
-        let (command_tx, command_rx, _admission) = test_io_command_channel(4);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
-        let before = fair_ingress_accounting_snapshot(&ingress);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via.clone(),
-                route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let admitted = fair_ingress_accounting_snapshot(&ingress);
-        assert_eq!(admitted.last_admission_ordinal, 1);
-        assert_eq!(admitted.len, 1);
-        assert!(
-            admitted
-                .lanes
-                .iter()
-                .flat_map(|lane| &lane.entries)
-                .all(|entry| { entry.admission_ordinal == 1 && entry.owns_certified_serve_ticket })
-        );
-        {
-            let state = command_tx.queue.lock();
-            let reservation = state
-                .serve_ingress_reservation
-                .as_ref()
-                .expect("selector-visible exact request owns its future-slot ticket");
-            assert_eq!(
-                reservation.state,
-                CertifiedServeIngressReservationState::Provisional
-            );
-            assert_eq!(reservation.projection.request_hash, request.request_hash());
-            assert_eq!(reservation.lifecycle_id.admission_ordinal, 1);
-            assert_eq!(
-                reservation.lifecycle_id.request_hash,
-                request.request_hash()
-            );
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-        }
-        assert_eq!(
-            command_tx
-                .serve_barrier_request_hash()
-                .expect("provisional target is runner-visible"),
-            Some(request.request_hash())
-        );
-        let first_barrier = command_tx
-            .serve_barrier()
-            .expect("inspect exact actor-global barrier")
-            .expect("provisional target retains its barrier");
-        assert_eq!(first_barrier.scheduler_ordinal(), 1);
-        assert_eq!(first_barrier.carrier_ordinal(), 1);
-        let stale_carrier = CertifiedServeBarrier {
-            carrier_ordinal: first_barrier
-                .carrier_ordinal()
-                .checked_add(1)
-                .expect("fixture carrier has a successor"),
-            ..first_barrier
-        };
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(stale_carrier)
-                .expect_err("a different physical carrier cannot claim this exact ticket")
-                .contains("changed barrier identity")
-        );
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(first_barrier)
-                .expect("claim the bounded predecessor episode")
-        );
-        assert!(
-            !command_tx
-                .claim_serve_runtime_episode(first_barrier)
-                .expect("same ticket cannot reopen its episode")
-        );
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via.clone(),
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Coalesced)
-        ));
-        assert_eq!(
-            fair_ingress_accounting_snapshot(&ingress),
-            admitted,
-            "coalescing must retain the ticket, ordinal, and every capacity owner"
-        );
-        assert_eq!(
-            command_tx
-                .serve_barrier()
-                .expect("exact retry retains the selected barrier"),
-            Some(first_barrier)
-        );
-        assert!(
-            !command_tx
-                .claim_serve_runtime_episode(first_barrier)
-                .expect("carrier retry retains the currently claimed episode turn")
-        );
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| reservation.projection.request_hash),
-                Some(request.request_hash())
-            );
-        }
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                distinct.request(),
-                distinct_via,
-                distinct_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 2);
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| reservation.projection.request_hash),
-                Some(request.request_hash()),
-                "the first live fair carrier remains the selected exact target"
-            );
-            assert_eq!(state.serve_ingress_waiters.len(), 1);
-            assert_eq!(state.next_serve_admission_ordinal, 2);
-        }
-        assert!(
-            command_tx
-                .try_begin_producer_episode()
-                .expect("inspect target priority")
-                .is_none(),
-            "an admitted exact target precedes every later local producer episode"
-        );
-        assert!(matches!(
-            command_tx.try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(90),
-                    subject: proposal.subject,
-                },
-            ),
-            Err(V2IoTrySendError::Full(_))
-        ));
-
-        let mut prepared = None;
-        let mut popped = ingress
-            .try_recv_if(|_| {
-                prepared = Some(
-                    command_tx
-                        .prepare_reserved_serve(
-                            CertifiedServeOwnerKey::Roster(requester.clone()),
-                            request.clone(),
-                        )
-                        .expect("predicate-time preparation promotes the exact ticket"),
-                );
-                true
-            })
-            .expect("prepared exact target drains first");
-        let admission = prepared.expect("predicate retained the promoted admission");
-        let ingress_ownership = popped
-            .take_ingress_ownership()
-            .expect("dequeued target retains exact fair ownership");
-        let (_, _, reply_routes) = popped.into_message_sender_and_reply_routes();
-        assert!(matches!(
-            command_tx
-                .commit_serve(
-                    &admission,
-                    reply_routes.expect("target retains its authenticated reply route"),
-                    ingress_ownership,
-                )
-                .expect("commit promoted exact ticket"),
-            CertifiedServeCommit::Queued
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| reservation.projection.request_hash),
-                Some(distinct.request_hash()),
-                "committing one target atomically promotes the next live waiter"
-            );
-            assert!(state.serve_barrier.is_none());
-            assert_eq!(
-                state.next_serve_ingress_reservation_ordinal, 2,
-                "promotion moves a frozen waiter without minting a replacement"
-            );
-            assert_eq!(state.next_serve_admission_ordinal, 2);
-        }
-        assert!(
-            command_tx
-                .try_begin_producer_episode()
-                .expect("inspect second target priority")
-                .is_none(),
-            "the promoted waiter precedes every later local producer episode"
-        );
-
-        let mut distinct_prepared = None;
-        let mut distinct_popped = ingress
-            .try_recv_if(|_| {
-                distinct_prepared = Some(
-                    command_tx
-                        .prepare_reserved_serve(
-                            CertifiedServeOwnerKey::Roster(distinct_requester.clone()),
-                            distinct.clone(),
-                        )
-                        .expect("prepare the promoted exact waiter"),
-                );
-                true
-            })
-            .expect("promoted exact waiter drains second");
-        let distinct_admission =
-            distinct_prepared.expect("predicate retained the second admission");
-        let distinct_ownership = distinct_popped
-            .take_ingress_ownership()
-            .expect("second target retains exact fair ownership");
-        let (_, _, distinct_routes) = distinct_popped.into_message_sender_and_reply_routes();
-        assert!(matches!(
-            command_tx
-                .commit_serve(
-                    &distinct_admission,
-                    distinct_routes.expect("second target retains its authenticated route"),
-                    distinct_ownership,
-                )
-                .expect("commit promoted exact waiter"),
-            CertifiedServeCommit::Queued
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
-            assert_eq!(
-                state.serve_ingress_waiters.len(),
-                0,
-                "drained physical tickets retire while logical Serve owners remain indexed"
-            );
-            assert_eq!(state.next_serve_admission_ordinal, 2);
-        }
-
-        let producer_episode = command_tx
-            .try_begin_producer_episode()
-            .expect("open post-target producer episode")
-            .expect("committed target releases local producers");
-        command_tx
-            .try_send_as(
-                V2IoAdmissionClass::Control,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(91),
-                    subject: proposal.subject,
-                },
-            )
-            .expect("later local work queues behind the committed Serve target");
-        {
-            let state = command_tx.queue.lock();
-            assert!(matches!(
-                state.commands.front(),
-                Some(V2IoCommand::Serve { lifecycle_id, .. })
-                    if *lifecycle_id == admission.lifecycle_id
-            ));
-            assert!(matches!(
-                state.commands.get(1),
-                Some(V2IoCommand::Serve { lifecycle_id, .. })
-                    if *lifecycle_id == distinct_admission.lifecycle_id
-            ));
-            assert!(matches!(
-                state.commands.get(2),
-                Some(V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(91),
-                    ..
-                })
-            ));
-        }
-        drop(producer_episode);
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == admission.lifecycle_id
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == distinct_admission.lifecycle_id
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id: LockedCandidateAcquisitionId(91),
-                ..
-            })
-        ));
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire test gate before queue teardown");
-        assert_eq!(before.last_admission_ordinal, 0);
-    }
-
-    #[test]
-    fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let first = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let second = authenticated_serve_request(
-            &service.context,
-            &keys[2],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let replenishment = authenticated_serve_request(
-            &service.context,
-            &keys[3],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let first_requester = first.request().requester.clone();
-        let second_requester = second.request().requester.clone();
-        let replenishment_requester = replenishment.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let first_route = routes.mint_via(first_requester.clone(), via.clone());
-        let second_route = routes.mint_via(second_requester.clone(), via.clone());
-        let replenishment_route = routes.mint_via(replenishment_requester.clone(), via.clone());
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(6);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                first.request(),
-                via.clone(),
-                first_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                second.request(),
-                via.clone(),
-                second_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(first_requester),
-                &first,
-            )
-            .1,
-            CertifiedServeCommit::Queued
-        ));
-        assert!(matches!(
-            drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(second_requester),
-                &second,
-            )
-            .1,
-            CertifiedServeCommit::Queued
-        ));
-
-        let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-        let lifecycle_ordinal_before = command_tx.queue.lock().next_serve_admission_ordinal;
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.producer_episode_due);
-            assert!(!state.producer_episode_active);
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-        }
-        assert!(matches!(
-            gate.reserve(replenishment.request(), &via, true, 3),
-            Err(CertifiedServeIngressReserveError::Busy)
-        ));
-        assert_eq!(
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-            actor_ordinal_before,
-            "post-Serve replenishment cannot mint an actor-global ordinal before the producer turn"
-        );
-        assert_eq!(
-            command_tx.queue.lock().next_serve_admission_ordinal,
-            lifecycle_ordinal_before,
-            "post-Serve replenishment cannot mint a lifecycle before the producer turn"
-        );
-
-        let producer_episode = command_tx
-            .try_begin_producer_episode()
-            .expect("consume the atomic post-Serve handoff")
-            .expect("the final frozen Serve batch owes one producer episode");
-        {
-            let state = command_tx.queue.lock();
-            assert!(!state.producer_episode_due);
-            assert!(state.producer_episode_active);
-        }
-        assert!(matches!(
-            gate.reserve(replenishment.request(), &via, true, 3),
-            Err(CertifiedServeIngressReserveError::Busy)
-        ));
-        drop(producer_episode);
-        {
-            let state = command_tx.queue.lock();
-            assert!(!state.producer_episode_due);
-            assert!(!state.producer_episode_active);
-        }
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                replenishment.request(),
-                via,
-                replenishment_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(matches!(
-            drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(replenishment_requester),
-                &replenishment,
-            )
-            .1,
-            CertifiedServeCommit::Queued
-        ));
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire post-Serve producer handoff fixture gate");
-    }
-
-    #[test]
-    fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
-        let (service, keys) = fixture_with_block_payload();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let first_route = routes.mint_via(requester.clone(), via.clone());
-        let retry_route = routes
-            .redeliver(&first_route)
-            .expect("mint post-drain exact retransmission route");
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via.clone(),
-                first_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let first_barrier = command_tx
-            .serve_barrier()
-            .expect("inspect first exact barrier")
-            .expect("first carrier owns a barrier");
-        assert_eq!(first_barrier.carrier_ordinal(), 1);
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(first_barrier)
-                .expect("claim first physical occurrence")
-        );
-        command_tx
-            .finish_serve_runtime_episode_turn(first_barrier, false)
-            .expect("seal the drained occurrence after its full predecessor recheck");
-        assert!(
-            !command_tx
-                .claim_serve_runtime_episode(first_barrier)
-                .expect("one physical occurrence cannot resurrect its sealed episode")
-        );
-        let (first_admission, first_commit) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester.clone()),
-            &request,
-        );
-        assert!(matches!(first_commit, CertifiedServeCommit::Queued));
-        assert_eq!(first_barrier.lifecycle_id(), first_admission.lifecycle_id);
-        assert!(command_tx.queue.lock().serve_ingress_waiters.is_empty());
-
-        let scheduler_before_retry = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
-        assert!(matches!(
-            gate.reserve(request.request(), &via, true, 2),
-            Err(CertifiedServeIngressReserveError::Busy)
-        ));
-        assert_eq!(
-            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
-            scheduler_before_retry,
-            "post-drain retry cannot mint a scheduler owner before the owed producer turn"
-        );
-        let post_drain_producer_episode = command_tx
-            .try_begin_producer_episode()
-            .expect("consume the post-drain producer handoff")
-            .expect("final Serve retirement owes one producer episode");
-        drop(post_drain_producer_episode);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let retry_barrier = command_tx
-            .serve_barrier()
-            .expect("inspect post-drain retransmission barrier")
-            .expect("post-drain retransmission owns a fresh barrier");
-        assert_eq!(retry_barrier.request_hash(), first_barrier.request_hash());
-        assert!(retry_barrier.scheduler_ordinal() > first_barrier.scheduler_ordinal());
-        assert_eq!(
-            retry_barrier.lifecycle_id(),
-            first_barrier.lifecycle_id(),
-            "fresh physical scheduler ownership retains immutable logical lineage"
-        );
-        assert!(
-            retry_barrier.carrier_ordinal() > first_barrier.carrier_ordinal(),
-            "a drained exact retransmission receives a fresh physical carrier position"
-        );
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(retry_barrier)
-                .expect("fresh physical occurrence owns its own bounded episode")
-        );
-        command_tx
-            .finish_serve_runtime_episode_turn(retry_barrier, false)
-            .expect("seal the retransmission occurrence independently");
-        assert!(
-            !command_tx
-                .claim_serve_runtime_episode(retry_barrier)
-                .expect("the retransmission cannot reopen its completed episode")
-        );
-        let (retry_admission, retry_commit) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(
-            retry_admission.lifecycle_id, first_admission.lifecycle_id,
-            "wire retransmission retains the logical Serve lifecycle/tombstone"
-        );
-        assert!(matches!(retry_commit, CertifiedServeCommit::Coalesced));
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire post-drain retransmission gate");
-    }
+    include!("v2_worker_selected_serve_cases_02_tests.rs");
 
     #[test]
     fn checked_serve_dequeue_persistence_failure_retains_exact_entry() {

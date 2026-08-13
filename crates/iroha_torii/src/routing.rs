@@ -45697,7 +45697,7 @@ mod query_endpoint_tests {
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Asset>::default()),
             params: QueryParams::default(),
         };
-        let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
+        let payload = crate::authorize_query_for_test(QueryRequest::Start(iter), alice_id.clone());
         let signed = payload.sign(&alice_keypair);
 
         // Execute via handler

@@ -1670,7 +1670,20 @@ available locally. Its old proposal view therefore remains admissible only as
 the bounded historical-completion class, after which the exact outstanding
 request, QC, responder signature, subject, canonical body, and DA manifest
 checks remain authoritative. Proposal chunks and every control phase stay
-view-scoped.
+view-scoped. Proposal control and chunks now enter the Rust exact-output
+corridor through one aggregate capacity/FIFO plan. A rejected plan changes no
+fanout, index, or first-send state; the recovered path returns its move-only
+body-store/output-guard-bound authority for retry, while a successful plan
+installs both fanouts together. The formal checker seals this production
+ordering and its mutation regressions. For the already-WAL-ahead recovered
+Proposal shape, that reservation now spans the exact two-child LedgerV1 fsync;
+the post-fsync tail installs Broadcast plus the independent next Sign, parks
+only Broadcast process-locally, acknowledges the worker, and commits the batch.
+The source guard now also binds a frame-exact Proposal-to-Prepare or
+Prepare-to-Commit classifier and an affine cold reducer replay which must
+reproduce both children. The complete two-carrier census splice and Proposal
+chunk reconstruction remain required refinements.
+The deductive model is unchanged.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence

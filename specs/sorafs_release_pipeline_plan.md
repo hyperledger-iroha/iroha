@@ -356,7 +356,8 @@ external-evidence requirement.
 
 ## SBOM & Vulnerability Scanning
 
-- The committed SoraFS CLI gate covers formatting, Clippy, shell syntax checks,
+- The committed SoraFS CLI gate is fail-closed on repository source growth:
+  `ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py` before any Cargo command. It then covers formatting, Clippy, shell syntax checks,
   the `sorafs_reference.h`/`reference_ffi.rs` header-contract guard, and focused
   tests. The release workflow generates one source dependency SBOM at the gate
   and a separate Syft SPDX JSON SBOM from each Linux, macOS, and Windows binary
@@ -375,7 +376,7 @@ external-evidence requirement.
   verification receipt. Public promotion
   still requires a clean hosted run and the deployment/package canaries; source
   configuration alone is not release evidence.
-- The five-target CLI archive path is source-complete, but its hosted-run
+- The five-target CLI archive implementation is present, but a candidate is not source-complete until the strict source-file budget gate passes. Its hosted-run
   artifacts, authenticated external software Ed25519 manifest signature and
   reviewed fingerprint,
   GitHub OIDC/Sigstore attestations, registry publication/withdrawal receipts,

@@ -76,6 +76,106 @@ impl LifecycleWorkRegistryHolder {
             .prepare_recovered_decision_apply_dispatch(coordinator, lease)
     }
 
+    /// Return whether one recovered Broadcast declares a paired next Vote.
+    pub(super) fn recovered_lifecycle_signed_broadcast_declares_next_vote(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+    ) -> bool {
+        self.registry
+            .recovered_lifecycle_signed_broadcast_declares_next_vote(coordinator, broadcast_ordinal)
+    }
+
+    /// Return the paired next-Vote ordinal retained by one Ready Broadcast.
+    pub(super) fn recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+    ) -> Option<u128> {
+        self.registry
+            .recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
+                coordinator,
+                broadcast_ordinal,
+            )
+    }
+
+    /// Attest one recovered signed Broadcast as a durable Ready refanout source.
+    pub(super) fn attest_ready_recovered_lifecycle_signed_broadcast(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<(), &'static str> {
+        self.registry
+            .attest_ready_recovered_lifecycle_signed_broadcast(coordinator, ordinal)
+    }
+
+    /// Attest one adjacent signed-Broadcast and next-WAL-Vote pair.
+    pub(super) fn attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+        next_sign_ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
+                coordinator,
+                broadcast_ordinal,
+                next_sign_ordinal,
+            )
+    }
+
+    /// Project one claimed recovered Broadcast into its refanout authority.
+    pub(super) fn project_claimed_recovered_lifecycle_signed_broadcast_output(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+    ) -> Option<super::wal_recovery::RecoveredLifecycleSignedBroadcastOutputAuthorityV1> {
+        self.registry
+            .project_claimed_recovered_lifecycle_signed_broadcast_output(coordinator, lease)
+    }
+
+    /// Attest one Ready recovered Sign without exposing its concrete carrier.
+    pub(super) fn attest_ready_recovered_lifecycle_sign(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_recovered_lifecycle_sign(coordinator, ordinal)
+    }
+
+    /// Project one claimed recovered Sign into its dedicated worker task.
+    pub(super) fn prepare_recovered_lifecycle_sign_dispatch(
+        &mut self,
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+    ) -> Result<
+        super::work_registry::PreparedRecoveredLifecycleSignDispatch<'_>,
+        super::work_registry::RecoveredLifecycleSignDispatchProjectionErrorV1,
+    > {
+        self.registry
+            .prepare_recovered_lifecycle_sign_dispatch(coordinator, lease)
+    }
+
+    /// Attest one exact Ready recovered Decision Fetch.
+    pub(super) fn attest_ready_recovered_decision_fetch(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
+        super::work_registry::ReadyRecoveredDecisionFetchAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_recovered_decision_fetch(coordinator, ordinal)
+    }
+
     /// Bind one guarded worker completion to the exact claimed Apply carrier.
     pub(super) fn prepare_recovered_decision_apply_terminal_transition(
         &self,

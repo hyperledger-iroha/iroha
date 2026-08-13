@@ -1215,7 +1215,7 @@ async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
             "/v1/sorafs/capacity/por-verdict",
             axum::routing::post(handler_post_sorafs_capacity_por_verdict).layer(operator_layer),
         )
-        .with_state(app);
+        .with_state(app.clone());
     let body = br#"{"proof_b64":"not-base64%%"}"#.to_vec();
     let remote =
         axum::extract::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 19_999));

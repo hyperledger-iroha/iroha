@@ -1345,3 +1345,105 @@
             );
         }
     }
+
+    #[test]
+    fn recovered_next_wal_vote_completion_stays_closed_and_attests_its_ready_pair() {
+        let replay = include_str!("../v2_lifecycle_replay_authority.rs");
+        let closed = replay
+            .split_once(
+                "struct RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1",
+            )
+            .expect("next-WAL Vote signed successor is closed")
+            .1
+            .split_once("/// Canonical structural evidence for a recovered ProposalIntent")
+            .expect("closed signed successor has a bounded surface")
+            .0;
+        for required in [
+            "effect: AdapterEffect",
+            "pending: PendingRuntimeEffectBinding",
+            "candidate: CandidateAdmission",
+            "RecoveredLifecycleSignBroadcastProjectionPermitV1",
+        ] {
+            assert!(closed.contains(required), "closed projection omitted {required}");
+        }
+        let oracle = replay
+            .split_once("fn project_authenticated_signed_broadcast(")
+            .expect("next-WAL Vote has one signed successor oracle")
+            .1
+            .split_once("/// Recheck a closed signed child")
+            .expect("signed successor oracle stays bounded")
+            .0;
+        for required in [
+            "self.is_exact(verified)",
+            "verified.verify_consensus_message(message)",
+            ".project_signed_broadcast_successor(&self.seal.effect, &broadcast)",
+            "exact_signed_broadcast_successor_candidate(verified, &broadcast, &pending)",
+        ] {
+            assert!(oracle.contains(required), "signed oracle omitted {required}");
+        }
+
+        let wal = include_str!("../v2_lifecycle_wal_recovery.rs");
+        for seam in [
+            "fn project_recovered_next_wal_vote_signed_broadcast(",
+            "fn project_recovered_next_wal_vote_signed_broadcast_and_sign(",
+        ] {
+            let body = wal
+                .split_once(seam)
+                .unwrap_or_else(|| panic!("WAL recovery omitted {seam}"))
+                .1
+                .split_once("\n}")
+                .expect("WAL seam has one bounded body")
+                .0;
+            assert!(body.contains("parent.project_authenticated_signed_broadcast"));
+            assert!(body.contains("RecoveredLifecycleSignBroadcastProjectionPermitV1::new()"));
+            assert!(body.contains("cold_proposal_output: None"));
+        }
+
+        let registry = include_str!("../v2_lifecycle_work_registry.rs");
+        let single = registry
+            .split_once("fn prepare_recovered_lifecycle_sign_broadcast_successor")
+            .expect("single successor preparation exists")
+            .1
+            .split_once("/// Seal the exact Broadcast-and-next-WAL-Sign pair")
+            .expect("single successor preparation stays bounded")
+            .0;
+        let combined = registry
+            .split_once("fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor")
+            .expect("combined successor preparation exists")
+            .1
+            .split_once(
+                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor",
+            )
+            .expect("combined successor preparation stays bounded")
+            .0;
+        assert!(single.contains("DurableRecoveredLifecycleNextWalVoteSign(sign)"));
+        assert!(single.contains("project_recovered_next_wal_vote_signed_broadcast("));
+        assert!(combined.contains("DurableRecoveredLifecycleNextWalVoteSign(sign)"));
+        assert!(combined.contains(
+            "project_recovered_next_wal_vote_signed_broadcast_and_sign("
+        ));
+        assert!(registry.contains(
+            "DurableRecoveredLifecycleSignParentV1::NextWalVote(sign)"
+        ));
+
+        let recovery = include_str!("../v2_lifecycle_work_registry_validate_recovery.rs");
+        let pair = recovery
+            .split_once(
+                "fn attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(",
+            )
+            .expect("cold Ready pair attestation exists")
+            .1
+            .split_once("/// Project the exact claimed Broadcast")
+            .expect("cold Ready pair attestation stays bounded")
+            .0;
+        for required in [
+            "broadcast_ordinal.checked_add(1) != Some(next_sign_ordinal)",
+            "broadcast_record.owner == next_sign_record.owner",
+            "attest_ready_recovered_lifecycle_signed_broadcast(coordinator, broadcast_ordinal)",
+            "attest_ready_recovered_lifecycle_sign(coordinator, next_sign_ordinal)",
+            "DurableRecoveredLifecycleNextWalVoteSign(next_sign)",
+            "next_sign.matches_current_ready_record(",
+        ] {
+            assert!(pair.contains(required), "pair attestation omitted {required}");
+        }
+    }

@@ -325,8 +325,12 @@
             },
             predicate: None,
         }
-        .into_request(iroha_test_samples::ALICE_ID.clone())
+        .into_request()
         .expect("iterable request should build");
+        let request = crate::authorize_query_for_test(
+            request,
+            iroha_test_samples::ALICE_ID.clone(),
+        );
 
         let request = fanout_route_scan_query_request(&request);
         let iroha_data_model::query::QueryRequest::Start(start) = request.request else {
@@ -358,8 +362,12 @@
             },
             predicate: None,
         }
-        .into_request(iroha_test_samples::ALICE_ID.clone())
+        .into_request()
         .expect("iterable request should build");
+        let request = crate::authorize_query_for_test(
+            request,
+            iroha_test_samples::ALICE_ID.clone(),
+        );
 
         let request = fanout_route_scan_query_request(&request);
         let iroha_data_model::query::QueryRequest::Start(start) = request.request else {
