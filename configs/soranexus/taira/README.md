@@ -4,6 +4,37 @@ Taira is the Sora Nexus public testnet. This directory
 contains the repo-shipped bootstrap bundle for a public, stake-elected NPoS
 deployment.
 
+## Topology model
+
+Taira keeps three independent topology layers:
+
+- A **dataspace** is a physical security, execution, and storage boundary backed
+  by its own server/validator cohort. A catalog entry is valid only when that
+  distinct deployment exists; a workload name alone must not create one.
+- A **lane** is a logical execution and routing stream inside exactly one
+  dataspace. Several lanes may share the same physical dataspace.
+- A **namespace** is an independently governed naming scope that is bound to a
+  dataspace. Reusing a word in a namespace and a lane alias does not merge
+  either identity with the dataspace.
+
+The canonical Taira mapping is:
+
+| Lane | Owning dataspace |
+|------|------------------|
+| `core` | `universal` |
+| `governance` | `universal` |
+| `zk` | `universal` |
+| `dpn` | `dpn` |
+| `external-poc` | `is` |
+| `boi-mobile` | `is2` |
+| `cbsi` | `cbsi` |
+
+Consequently the physical dataspace catalog is exactly `universal`, `dpn`,
+`is`, `is2`, and `cbsi`. `governance` and `zk` are workload lanes in the
+`universal` dataspace, not physical dataspaces. Namespace bindings such as
+`boi` in `boi.is2` remain namespace-to-dataspace bindings and do not add a
+lane or dataspace.
+
 ## Universal offline capability and BOI dataspaces
 
 Offline cash is an application/device protocol, not a Taira deployment mode.
@@ -15,10 +46,10 @@ invalid material referenced by a particular top-up or redemption operation is
 reported as that transaction's validation result.
 
 The checked-in profile contains both BOI dataspaces: `is` for the scenario
-browser and `is2` for the mobile wallet. Their internal routing containers do
-not change this capability contract. The mobile product may expose offline UI
-while the scenario browser does not; both use the same universally capable
-validator fleet.
+browser and `is2` for the mobile wallet. Their logical lanes do not change this
+capability contract. The mobile product may expose offline UI while the
+scenario browser does not; validators in either physical cohort run the same
+universally capable Iroha software.
 
 ## Network identity
 
@@ -787,8 +818,8 @@ lowercase digest recorded by the finalized `manifest.norito.sha256`.
 
 Build a fresh Taira reset from the ordinary signed genesis and validator bundle
 workflow. `render_taira_validator_bundle.py` rewrites the checked-in peer-1
-baseline with the complete `trusted_peers` / `trusted_peers_pop` roster, both
-static dataspace definitions, and the operator-provided runtime credentials.
+baseline with the complete `trusted_peers` / `trusted_peers_pop` roster, the
+five-dataspace catalog, and the operator-provided runtime credentials.
 It rejects the retired offline enrollment fields in secrets rather than
 turning them into node configuration. Use
 `scripts/prepare_taira_empty_reset_bundle.py` to clone an admitted source bundle
@@ -803,17 +834,22 @@ release, and balance bindings when the operation is submitted. A hosted Torii
 command-submitter key is an application-service credential, not a validator
 capability switch.
 
-Before cutover, prove that all four validators run the identical admitted
-binary and configuration, share the expected `is` and `is2` catalogs, and
-advance one common committed chain. Health checks use only that ordinary node
-and consensus evidence. Mobile QR/NFC/Nearby acceptance remains an app/device
-release test and never changes validator admission.
+Before cutover, prove that every validator runs the admitted binary and the
+same lane-to-dataspace mapping, and that each non-universal dataspace is backed
+by its declared distinct server/validator cohort and storage boundary. A
+shared catalog or repeated lane-manifest roster is not evidence of a separate
+physical dataspace. Health checks use ordinary node and consensus evidence.
+Mobile QR/NFC/Nearby acceptance remains an app/device release test and never
+changes validator admission.
 
 ## Private profiles
 
-Application-specific private-dataspace profiles should live outside this repo.
-When you need one, keep the profile in your own deployment repository and pass
-it to the renderer explicitly:
+The canonical catalog and lane mapping live in this repository; runtime host
+allocations, credentials, and application-specific private-dataspace profiles
+do not. Keep each physical dataspace profile in the deployment repository and
+pass it to the renderer explicitly. Do not reuse a lane alias as the dataspace
+identity and do not claim a distinct dataspace without a distinct deployed
+cohort:
 
 ```bash
 python3 scripts/render_taira_validator_bundle.py \

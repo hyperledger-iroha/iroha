@@ -5,6 +5,27 @@ Last updated: 2026-08-13
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Nexus topology model closure
+
+- Move physical validator/server membership, replication, privacy, DA, and
+  governance ownership into a dataspace-level manifest. The current V1 runtime
+  still projects several of these fields through lane configuration and lane
+  manifests; until that migration lands, enforce that every lane in one
+  dataspace has an identical projection of its owning dataspace's roster and
+  security policy.
+- Replace overloaded account-route strings with typed namespace and dataspace
+  match fields. Preserve `MusubiNamespaceBindingV1` as an explicit
+  namespace-to-home-dataspace binding and stop inferring either identity from a
+  shared textual suffix.
+- Before a Taira release claims `dpn`, `is`, `is2`, or `cbsi` as a live physical
+  dataspace, archive deployment evidence for its distinct validator/server
+  cohort, storage boundary, and dataspace manifest. A catalog entry or repeated
+  lane-manifest roster is insufficient evidence.
+- Expose each dataspace manifest's canonical validator-to-`PeerId`/Torii
+  bindings in operator status so rollout validation can prove disjoint machine
+  cohorts directly. The V1 gate can compare manifest validator-account rosters
+  and quorum projections, but account identities alone are not host evidence.
+
 ## Build-efficiency closeout
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline and the

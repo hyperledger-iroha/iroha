@@ -133,6 +133,8 @@ sorafs_bps = 4000
 soranet_spool_bps = 500
 soravpn_spool_bps = 500
 
+# Lanes are logical workload streams. Their `dataspace` binding names the
+# physical validator/storage boundary that owns the lane.
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
@@ -144,34 +146,22 @@ metadata = {}
 index = 1
 alias = "governance"
 description = "Governance & parliament traffic"
-dataspace = "governance"
+dataspace = "universal"
 metadata = {}
 
 [[nexus.lane_catalog]]
 index = 2
 alias = "zk"
 description = "Zero-knowledge attachments"
-dataspace = "zk"
+dataspace = "universal"
 metadata = {}
 
+# Physical data spaces only. Namespace, governance-module, and workload names
+# must not be promoted into this catalog.
 [[nexus.dataspace_catalog]]
 alias = "universal"
 id = 0
-description = "Single-lane data space"
-fault_tolerance = 1
-
-[[nexus.dataspace_catalog]]
-alias = "governance"
-id = 1
-manifest_hash = "0100000000000000000000000000000000000000000000000000000000000000"
-description = "Governance proposals & manifests"
-fault_tolerance = 1
-
-[[nexus.dataspace_catalog]]
-alias = "zk"
-id = 2
-manifest_hash = "0200000000000000000000000000000000000000000000000000000000000000"
-description = "Zero-knowledge proofs and attachments"
+description = "Shared public data space for core, governance, and zero-knowledge lanes"
 fault_tolerance = 1
 
 [nexus.routing_policy]
@@ -180,17 +170,17 @@ default_dataspace = "universal"
 
 [[nexus.routing_policy.rules]]
 lane = 1
-dataspace = "governance"
+dataspace = "universal"
 [nexus.routing_policy.rules.matcher]
 instruction = "governance"
-description = "Route governance instructions to the governance lane"
+description = "Route governance instructions to the governance lane in the universal data space"
 
 [[nexus.routing_policy.rules]]
 lane = 2
-dataspace = "zk"
+dataspace = "universal"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
-description = "Route contract deployments to the zk lane for proof tracking"
+description = "Route contract deployments to the zk lane in the universal data space"
 
 [nexus.fusion]
 floor_teu = 4000
