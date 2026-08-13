@@ -370,7 +370,8 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             assert f"`{operation.operation_id}`" in runbook
     assert "operator decisions, not digital signatures" in runbook
     assert "operator decisions; they are not signatures" in liveness
-    assert "integration remains pending" in liveness
+    assert "independently replay the four records" in liveness
+    assert "does not by itself close a release gate" in liveness
 
     with pytest.raises(TypeError):
         module.APPROVAL_OPERATION_PLANS[

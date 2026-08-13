@@ -45,6 +45,8 @@ from blake3 import blake3
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
+    SorafsOrderbookSubmissionAmbiguousError, SorafsOrderbookSubmissionIdentity,
+    SorafsOrderbookSubmissionReceipt, SorafsOrderbookSubmissionReceiptPayload,
     MultisigResponse,
     NetworkTimeRttBucket,
     NetworkTimeSample,
@@ -12643,7 +12645,8 @@ class _ContractCallBatchPlan:
 
 
 __all__ = [
-    "ToriiClient",
+    "ToriiClient", "SorafsOrderbookSubmissionAmbiguousError", "SorafsOrderbookSubmissionIdentity",
+    "SorafsOrderbookSubmissionReceipt", "SorafsOrderbookSubmissionReceiptPayload",
     "ContractCallIntent",
     "create_torii_client",
     "TransactionStatusError",
@@ -14460,100 +14463,12 @@ class ToriiClient(
             context="sorafs orderbook receipts response",
         )
 
-    def submit_sorafs_orderbook_order(
-        self,
-        signed_transaction: Any,
-        *,
-        headers: Optional[Mapping[str, str]] = None,
-        expected_receipt_signer: Optional[str] = None,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        """Submit a caller-signed native transaction containing one order ISI."""
+    def _sorafs_orderbook_native_verifier(self) -> ModuleType: return _require_crypto()
 
-        return self._submit_sorafs_orderbook_transaction(
-            "/v1/sorafs/orderbook/orders",
-            signed_transaction,
-            route="order",
-            headers=headers,
-            expected_network_id=self._require_local_signing_context(
-                "submit_sorafs_orderbook_order"
-            ).network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            timeout=timeout,
-            context="submit_sorafs_orderbook_order",
-        )
-
-    def submit_sorafs_orderbook_cancel(
-        self,
-        signed_transaction: Any,
-        *,
-        headers: Optional[Mapping[str, str]] = None,
-        expected_receipt_signer: Optional[str] = None,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        """Submit a caller-signed native transaction containing one cancel ISI."""
-
-        return self._submit_sorafs_orderbook_transaction(
-            "/v1/sorafs/orderbook/cancel",
-            signed_transaction,
-            route="cancel",
-            headers=headers,
-            expected_network_id=self._require_local_signing_context(
-                "submit_sorafs_orderbook_cancel"
-            ).network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            timeout=timeout,
-            context="submit_sorafs_orderbook_cancel",
-        )
-
-    def submit_sorafs_orderbook_receipt(
-        self,
-        signed_transaction: Any,
-        *,
-        headers: Optional[Mapping[str, str]] = None,
-        expected_receipt_signer: Optional[str] = None,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        """Submit a caller-signed native transaction containing one receipt ISI."""
-
-        return self._submit_sorafs_orderbook_transaction(
-            "/v1/sorafs/orderbook/receipts",
-            signed_transaction,
-            route="receipt",
-            headers=headers,
-            expected_network_id=self._require_local_signing_context(
-                "submit_sorafs_orderbook_receipt"
-            ).network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            timeout=timeout,
-            context="submit_sorafs_orderbook_receipt",
-        )
-
-    def _submit_sorafs_orderbook_transaction(
-        self,
-        path: str,
-        signed_transaction: Any,
-        *,
-        route: str,
-        headers: Optional[Mapping[str, str]],
-        expected_network_id: Any,
-        expected_receipt_signer: Optional[str],
-        timeout: Optional[float],
-        context: str,
-    ) -> Dict[str, Any]:
-        return super()._submit_sorafs_orderbook_transaction(
-            path,
-            signed_transaction,
-            route=route,
-            headers=headers,
-            expected_network_id=expected_network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            context=context,
-            timeout=timeout,
-        )
-
-    def _sorafs_orderbook_native_verifier(self) -> ModuleType:
-        return _require_crypto()
+    def _sorafs_orderbook_expected_network_id(self, value: Any, context: str) -> NetworkId:
+        if value is not None: raise ValueError(f"{context} derives network identity from local_signing_context")
+        return self._require_local_signing_context(context).network_id
+    def _sorafs_orderbook_expected_chain_discriminant(self, context: str) -> int: del context; return self._chain_discriminant
 
     def list_sorafs_orderbook_events(
         self,

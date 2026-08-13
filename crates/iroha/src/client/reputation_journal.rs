@@ -465,34 +465,6 @@ mod tests {
 
         let mut invalid_policy = policy.clone();
         invalid_policy.revision = 0;
-        assert!(
-            client
-                .try_build_sorafs_reputation_journal_authority_policy_transaction(
-                    invalid_policy,
-                    fee(),
-                    Metadata::default(),
-                )
-                .is_err()
-        );
-        assert!(
-            client
-                .try_build_sorafs_reputation_journal_por_entry_transaction(
-                    canonical_token,
-                    fee(),
-                    Metadata::default(),
-                )
-                .is_err()
-        );
-        assert!(
-            client
-                .try_build_sorafs_reputation_journal_stream_token_entry_transaction(
-                    canonical_por.clone(),
-                    fee(),
-                    Metadata::default(),
-                )
-                .is_err()
-        );
-
         let other = AccountId::new(
             KeyPair::try_random()
                 .expect("key pair")
@@ -500,27 +472,47 @@ mod tests {
                 .clone(),
         );
         let wrong_authority = por_entry(&other, &policy);
-        assert!(
+        let mut malformed = canonical_por.clone();
+        malformed.event_id = Default::default();
+        for result in [
+            client
+                .try_build_sorafs_reputation_journal_authority_policy_transaction(
+                    invalid_policy,
+                    fee(),
+                    Metadata::default(),
+                )
+                .map(drop),
+            client
+                .try_build_sorafs_reputation_journal_por_entry_transaction(
+                    canonical_token,
+                    fee(),
+                    Metadata::default(),
+                )
+                .map(drop),
+            client
+                .try_build_sorafs_reputation_journal_stream_token_entry_transaction(
+                    canonical_por.clone(),
+                    fee(),
+                    Metadata::default(),
+                )
+                .map(drop),
             client
                 .try_build_sorafs_reputation_journal_por_entry_transaction(
                     wrong_authority,
                     fee(),
                     Metadata::default(),
                 )
-                .is_err()
-        );
-
-        let mut malformed = canonical_por;
-        malformed.event_id = Default::default();
-        assert!(
+                .map(drop),
             client
                 .try_build_sorafs_reputation_journal_por_entry_transaction(
                     malformed,
                     fee(),
                     Metadata::default(),
                 )
-                .is_err()
-        );
+                .map(drop),
+        ] {
+            assert!(result.is_err());
+        }
     }
 
     fn norito_response(response: &QueryResponse) -> HttpResponse<Vec<u8>> {
@@ -799,35 +791,17 @@ mod tests {
         };
 
         with_mock_http(responder, || {
-            assert!(
-                client
-                    .query_sorafs_reputation_journal_event_by_source_id(
-                        ReputationJournalSourceIdV1::ZERO,
-                        None,
-                    )
-                    .is_err()
-            );
             let invalid_finalized = ReputationJournalFinalizedCursorV1 {
                 height: 0,
                 block_hash: [0; 32],
                 finalized_at_unix_ms: 0,
             };
-            assert!(
-                client
-                    .query_sorafs_reputation_journal_events(Some(invalid_finalized), None, 1)
-                    .is_err()
-            );
             let invalid_after = ReputationJournalFinalizedEventCursorV1 {
                 sequence: 0,
                 block_height: 0,
                 block_hash: [0; 32],
                 event_index: 0,
             };
-            assert!(
-                client
-                    .query_sorafs_reputation_journal_events(None, Some(invalid_after), 1)
-                    .is_err()
-            );
             let finalized = ReputationJournalFinalizedCursorV1 {
                 height: 7,
                 block_hash: [0x71; 32],
@@ -839,21 +813,29 @@ mod tests {
                 block_hash: [0x72; 32],
                 event_index: 0,
             };
-            assert!(
+            for result in [
+                client
+                    .query_sorafs_reputation_journal_event_by_source_id(
+                        ReputationJournalSourceIdV1::ZERO,
+                        None,
+                    )
+                    .map(drop),
+                client
+                    .query_sorafs_reputation_journal_events(Some(invalid_finalized), None, 1)
+                    .map(drop),
+                client
+                    .query_sorafs_reputation_journal_events(None, Some(invalid_after), 1)
+                    .map(drop),
                 client
                     .query_sorafs_reputation_journal_events(
                         Some(finalized),
                         Some(cursor_beyond_finality),
                         1,
                     )
-                    .is_err()
-            );
-            assert!(
+                    .map(drop),
                 client
                     .query_sorafs_reputation_journal_events(None, None, 0)
-                    .is_err()
-            );
-            assert!(
+                    .map(drop),
                 client
                     .query_sorafs_reputation_journal_events(
                         None,
@@ -862,8 +844,10 @@ mod tests {
                             .expect("limit fits u32")
                             + 1,
                     )
-                    .is_err()
-            );
+                    .map(drop),
+            ] {
+                assert!(result.is_err());
+            }
         });
         assert!(sends.lock().expect("sends").is_empty());
     }

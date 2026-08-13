@@ -655,9 +655,9 @@ pub use v2_core::{
 };
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
-// TODO: Remove the dead-code allowance when the staged coordinator is wired
-// into the production services. The replacement is intentionally implemented
-// and tested as a pure reducer before any existing scheduler authority moves.
+// TODO: Remove this allowance only in the separate complete scheduler switch;
+// the generic coordinator remains staged and unwired.
+pub(crate) mod v2_first_release_recovery;
 #[allow(dead_code)]
 pub(crate) mod v2_lifecycle_coordinator;
 pub(crate) mod v2_lifecycle_recovery;

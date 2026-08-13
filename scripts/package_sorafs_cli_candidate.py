@@ -18,6 +18,11 @@ import tarfile
 import tempfile
 from typing import BinaryIO, NamedTuple
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 and earlier use the pinned backport.
+    import tomli as tomllib
+
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -35,9 +40,14 @@ TARGET_SUFFIXES = {
 }
 MAX_FILE_COUNT = 2_048
 MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
+MAX_VERSION_MAP_BYTES = 64 * 1024
 SMOKE_TIMEOUT_SECONDS = 30
 MAX_SMOKE_OUTPUT_BYTES = 1024 * 1024
-VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,127}\Z")
+VERSION_RE = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z"
+)
 SIGNER_BINARY = "sorafs_external_software_signer"
 BROKER_ALIAS = "libexec/iroha-runtime-provider-broker-v1"
 WINDOWS_SIGNER_POLICY = "WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md"
@@ -227,6 +237,14 @@ def _scan_candidate(input_dir: Path, *, version: str, target: str) -> list[FileR
                 _fail(f"candidate entry `{relative}` must be a regular file")
             if entry_stat.st_nlink != 1:
                 _fail(f"candidate entry `{relative}` must have exactly one hard link")
+            if (
+                relative == "version-map.toml"
+                and entry_stat.st_size > MAX_VERSION_MAP_BYTES
+            ):
+                _fail(
+                    "candidate version-map.toml exceeds the byte ceiling of "
+                    f"{MAX_VERSION_MAP_BYTES}"
+                )
             if len(records) >= MAX_FILE_COUNT:
                 _fail(f"candidate file count exceeds the ceiling of {MAX_FILE_COUNT}")
             total_bytes += entry_stat.st_size
@@ -319,6 +337,75 @@ def _scan_candidate(input_dir: Path, *, version: str, target: str) -> list[FileR
         if records_by_path[SIGNER_BINARY].sha256 != records_by_path[BROKER_ALIAS].sha256:
             _fail("runtime-provider broker alias is not byte-identical to the signer")
     return records
+
+
+def _validate_version_map(
+    input_dir: Path, records: list[FileRecord], *, version: str
+) -> None:
+    """Require the bounded embedded version map to bind the candidate version."""
+
+    record = next(
+        record for record in records if record.relative == "version-map.toml"
+    )
+    source = input_dir / "version-map.toml"
+    try:
+        descriptor = _open_read_no_follow(source)
+    except OSError:
+        _fail("candidate version-map.toml could not be opened safely")
+    try:
+        opened_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(opened_stat.st_mode):
+            _fail("candidate version-map.toml changed type before validation")
+        if (
+            opened_stat.st_dev,
+            opened_stat.st_ino,
+            opened_stat.st_size,
+            opened_stat.st_mtime_ns,
+        ) != (
+            record.device,
+            record.inode,
+            record.size,
+            record.mtime_ns,
+        ):
+            _fail("candidate version-map.toml changed before validation")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read(MAX_VERSION_MAP_BYTES + 1)
+        final_stat = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        len(payload) != record.size
+        or len(payload) > MAX_VERSION_MAP_BYTES
+        or hashlib.sha256(payload).hexdigest() != record.sha256
+        or (
+            final_stat.st_dev,
+            final_stat.st_ino,
+            final_stat.st_size,
+            final_stat.st_mtime_ns,
+        )
+        != (
+            record.device,
+            record.inode,
+            record.size,
+            record.mtime_ns,
+        )
+    ):
+        _fail("candidate version-map.toml changed during validation")
+
+    try:
+        document = tomllib.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        _fail("candidate version-map.toml must be valid UTF-8 TOML")
+    if "release_version" not in document:
+        _fail("candidate version-map.toml must declare top-level release_version")
+    release_version = document["release_version"]
+    if not isinstance(release_version, str):
+        _fail("candidate version-map.toml top-level release_version must be a string")
+    if release_version != version:
+        _fail(
+            "candidate version-map.toml top-level release_version does not match "
+            "candidate --version"
+        )
 
 
 def _manifest_bytes(
@@ -637,15 +724,11 @@ def package_candidate(
     target: str,
 ) -> dict[str, object]:
     if not VERSION_RE.fullmatch(version):
-        _fail("release version is not a canonical package-name component")
+        _fail("release version must be canonical SemVer")
     if target not in TARGET_SUFFIXES:
         _fail(f"unsupported release target `{target}`")
 
     _reject_symlink_components(output_dir, label="candidate output directory")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _reject_symlink_components(output_dir, label="candidate output directory")
-    if not output_dir.is_dir():
-        _fail(f"candidate output directory `{output_dir}` must be a directory")
     input_resolved = _resolved_identity(input_dir, label="candidate input directory")
     output_resolved = _resolved_identity(output_dir, label="candidate output directory")
     common = Path(os.path.commonpath((input_resolved, output_resolved)))
@@ -653,6 +736,17 @@ def package_candidate(
         _fail("candidate input and output directories must not overlap")
 
     records = _scan_candidate(input_dir, version=version, target=target)
+    _validate_version_map(input_dir, records, version=version)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_components(output_dir, label="candidate output directory")
+    if not output_dir.is_dir():
+        _fail(f"candidate output directory `{output_dir}` must be a directory")
+    output_resolved = _resolved_identity(output_dir, label="candidate output directory")
+    common = Path(os.path.commonpath((input_resolved, output_resolved)))
+    if common in {input_resolved, output_resolved}:
+        _fail("candidate input and output directories must not overlap")
+
     manifest_bytes = _manifest_bytes(records, version=version, target=target)
     package_name = f"sorafs-cli-{version}-{target}"
     archive_path = output_dir / f"{package_name}.tar.gz"

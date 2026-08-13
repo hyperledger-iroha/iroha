@@ -1,3 +1,7 @@
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+};
+
 #[test]
 fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
     let fixture = Fixture::new();
@@ -1273,7 +1277,7 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
 
 #[test]
 fn local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1367,7 +1371,7 @@ fn local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1488,7 +1492,7 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
 
     for outside in [
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2.rs"),
         include_str!("../v2_runtime.rs"),
         include_str!("../v2_effects.rs"),
@@ -1502,7 +1506,7 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
         assert!(!outside.contains("CertifiedServeReplayEvidenceV1"));
         assert!(!outside.contains("CertifiedServeProducerTurnReplayEvidenceV1"));
     }
-    let registry = include_str!("../v2_lifecycle_work_registry.rs")
+    let registry = reviewed_lifecycle_work_registry_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("registry production prefix is bounded");
@@ -1588,7 +1592,7 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
     for outside in [
         include_str!("../v2.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_lifecycle_open.rs"),
         include_str!("../v2_lifecycle_settlement.rs"),
         include_str!("../v2_effects.rs"),
@@ -1746,7 +1750,7 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
 
 #[test]
 fn certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1855,7 +1859,7 @@ fn certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed() {
 
     for caller in [
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -2008,7 +2012,7 @@ fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_
 
 #[test]
 fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2082,7 +2086,7 @@ fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
 
     for caller in [
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -2094,7 +2098,7 @@ fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
 
 #[test]
 fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2196,7 +2200,7 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
         );
     }
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
@@ -2211,7 +2215,7 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
 
 #[test]
 fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2366,7 +2370,7 @@ fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2428,7 +2432,7 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("runtime has one production prefix");
-    let work_registry = include_str!("../v2_lifecycle_work_registry.rs")
+    let work_registry = reviewed_lifecycle_work_registry_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("work registry has one production prefix");
@@ -2501,7 +2505,7 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
     );
     assert!(!adapter.contains("RecoveredWalFrameIdentity::for_test"));
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),

@@ -53,6 +53,7 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+import sorafs_software_signer_evidence as software_signer_evidence  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     PLAN_RENDERED_PATH_ERROR,
     emit_runner_error_block,
@@ -162,6 +163,7 @@ COMMAND_PATH_FLAGS = frozenset(
         "--topology-qualification-envelope",
         "--resilience-qualification-summary",
         "--l1-lane-evidence-inventory",
+        "--foundational-prerequisite-signer-verifier",
     }
 )
 PLAN_TOPOLOGY_QUALIFICATION_FIELDS = AUTHENTICATED_TOPOLOGY_BINDING_FIELDS | frozenset(
@@ -837,6 +839,31 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors,
             path="production readiness runner foundational signer public key",
         )
+    verifier_paths = (
+        []
+        if args.foundational_signer_verifier is None
+        else [args.foundational_signer_verifier]
+    )
+    if not verifier_paths:
+        errors.append(
+            "production readiness runner requires a foundational signer receipt verifier"
+        )
+    errors.extend(
+        require_existing_files(
+            verifier_paths,
+            "--foundational-prerequisite-signer-verifier",
+        )
+    )
+    if args.foundational_signer_verifier_sha256 is None:
+        errors.append(
+            "production readiness runner requires a foundational signer verifier SHA-256"
+        )
+    else:
+        software_signer_evidence.parse_reviewed_verifier_sha256(
+            args.foundational_signer_verifier_sha256,
+            errors,
+            label="production readiness runner foundational signer verifier SHA-256",
+        )
     resilience_signer_public_key: bytes | None = None
     if args.resilience_qualification_signer_public_key_hex is None:
         errors.append(
@@ -1010,6 +1037,20 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
                 [
                     "--foundational-prerequisite-signer-public-key-hex",
                     args.foundational_signer_public_key_hex,
+                ]
+            )
+        if args.foundational_signer_verifier is not None:
+            command.extend(
+                [
+                    "--foundational-prerequisite-signer-verifier",
+                    str(args.foundational_signer_verifier),
+                ]
+            )
+        if args.foundational_signer_verifier_sha256 is not None:
+            command.extend(
+                [
+                    "--foundational-prerequisite-signer-verifier-sha256",
+                    args.foundational_signer_verifier_sha256,
                 ]
             )
         if args.foundational_release_sequence is not None:
@@ -1537,6 +1578,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "SFM-1, SF-1, SF-2/SF-2c, SF-3, SF-4, SF-5b, SF-6, and SF-8a."
         ),
     )
+    software_signer_evidence.add_foundational_receipt_verifier_arguments(parser)
     parser.add_argument("--now-unix", type=positive_int_arg)
     parser.add_argument(
         "--max-summary-artifact-age-secs",

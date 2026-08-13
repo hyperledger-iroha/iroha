@@ -142,11 +142,16 @@ import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authentica
 import { createVpnSchema } from "./vpnSchema.js";
 import {
   assertSorafsOrderbookFixedHeaders,
+  createSorafsOrderbookSubmissionDeadline,
   prepareSorafsOrderbookSubmission,
+  SorafsOrderbookSubmissionAmbiguousError,
+  sorafsOrderbookHeaderFingerprint,
   SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+  validateSorafsOrderbookSubmissionTransport,
   validateSorafsOrderbookSubmissionHeaders,
   verifySorafsOrderbookSubmissionReceipt,
 } from "./sorafsOrderbookSubmission.js";
+export { SorafsOrderbookSubmissionAmbiguousError };
 
 const DEFAULT_PAGE_SIZE = 100;
 const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
@@ -1426,14 +1431,19 @@ function sortJsonForErrorMessage(value) {
  * exposing them to a signer.
  */
 export class LocalSigningContext {
-  #networkId;
+  #networkId; #chainDiscriminant;
 
   /**
    * @param {import("./networkId.js").NetworkId} networkId Exact NetworkId expected in every draft.
+   * @param {number} [chainDiscriminant=753] Exact I105 deployment discriminant.
    */
-  constructor(networkId) {
+  constructor(networkId, chainDiscriminant = 753) {
     networkIdBytes(networkId, "LocalSigningContext.networkId");
-    this.#networkId = networkId;
+    if (!Number.isInteger(chainDiscriminant)
+      || chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
+      throw new TypeError("LocalSigningContext.chainDiscriminant must fit in u16");
+    }
+    this.#networkId = networkId; this.#chainDiscriminant = chainDiscriminant;
     Object.freeze(this);
   }
 
@@ -1441,6 +1451,8 @@ export class LocalSigningContext {
   get networkId() {
     return this.#networkId;
   }
+
+  /** @returns {number} */ get chainDiscriminant() { return this.#chainDiscriminant; }
 }
 
 /**
@@ -1513,11 +1525,12 @@ export class ToriiClient {
       enumerable: false,
     });
     Object.defineProperty(this, "_canonicalRequestAuth", { value: ToriiClient._normalizeCanonicalAuth(opts.canonicalRequestAuth, "ToriiClient options.canonicalRequestAuth"), writable: false });
-    this._baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    this._fetch = opts.fetchImpl ?? opts.fetch ?? globalThis.fetch;
-    if (typeof this._fetch !== "function") {
+    const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+    const fetchImpl = opts.fetchImpl ?? opts.fetch ?? globalThis.fetch;
+    if (typeof fetchImpl !== "function") {
       throw new Error("fetch implementation is required");
     }
+    Object.defineProperties(this, { _baseUrl: { value: normalizedBaseUrl }, _fetch: { value: fetchImpl } });
     if (
       opts.__nativeBinding !== undefined &&
       (opts.__nativeBinding === null || typeof opts.__nativeBinding !== "object")
@@ -3782,8 +3795,8 @@ export class ToriiClient {
    * Submit a caller-signed transaction containing exactly one
    * `SubmitSorafsOrderbookOrder` instruction.
    * @param {Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} signedTransaction
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<unknown>}
+   * @param {{expectedReceiptSigner: string, signal?: AbortSignal}} options
+   * @returns {Promise<SorafsOrderbookSubmissionReceipt>}
    */
   async submitSorafsOrderbookOrder(signedTransaction, options = {}) {
     return this._submitSorafsOrderbookTransaction(
@@ -3799,8 +3812,8 @@ export class ToriiClient {
    * Submit a caller-signed transaction containing exactly one
    * `CancelSorafsOrderbookOrder` instruction.
    * @param {Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} signedTransaction
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<unknown>}
+   * @param {{expectedReceiptSigner: string, signal?: AbortSignal}} options
+   * @returns {Promise<SorafsOrderbookSubmissionReceipt>}
    */
   async submitSorafsOrderbookCancel(signedTransaction, options = {}) {
     return this._submitSorafsOrderbookTransaction(
@@ -3816,8 +3829,8 @@ export class ToriiClient {
    * Submit a caller-signed transaction containing exactly one
    * `RecordSorafsOrderbookSettlementReceipt` instruction.
    * @param {Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} signedTransaction
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<unknown>}
+   * @param {{expectedReceiptSigner: string, signal?: AbortSignal}} options
+   * @returns {Promise<SorafsOrderbookSubmissionReceipt>}
    */
   async submitSorafsOrderbookReceipt(signedTransaction, options = {}) {
     return this._submitSorafsOrderbookTransaction(
@@ -5780,8 +5793,8 @@ export class ToriiClient {
     };
   }
 
-  async _ensureDataModelValidation() {
-    return ensureNodeDataModelCompatibility(this, () => this.getNodeCapabilities({ canonicalAuth: this._canonicalRequestAuth }));
+  async _ensureDataModelValidation(signal) {
+    return ensureNodeDataModelCompatibility(this, () => this.getNodeCapabilities({ canonicalAuth: this._canonicalRequestAuth, signal }));
   }
 
   /**
@@ -11345,65 +11358,52 @@ export class ToriiClient {
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
-    const normalized = requirePlainObjectOption(options, `${context} options`);
-    assertSupportedOptionKeys(
-      normalized,
-      new Set(["signal", "expectedReceiptSigner"]),
-      `${context} options`,
-    );
-    const { signal } = normalizeSignalOption(normalized, context);
-    const expectedReceiptSigner = normalized.expectedReceiptSigner;
-    if (!(this._localSigningContext instanceof LocalSigningContext)) {
+    const normalized = requirePlainObjectOption(options, `${context} options`); assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
+    const { signal } = normalizeSignalOption(normalized, context); if (!(this._localSigningContext instanceof LocalSigningContext)) {
       throw new TypeError(`${context} requires ToriiClient options.localSigningContext`);
     }
+    const request = this._request.bind(this); const validateDataModel = this._ensureDataModelValidation.bind(this);
+    validateSorafsOrderbookSubmissionTransport(this._baseUrl, this._allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
     assertSorafsOrderbookFixedHeaders(this._config.defaultHeaders, `${context} defaultHeaders`);
-    const native = resolveOptionalNativeBinding(this._nativeBinding);
+    const fixedHeaders = { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO, "Accept-Encoding": "identity" }; const requestHeaders = this._createHeaders(fixedHeaders); const headerFingerprint = sorafsOrderbookHeaderFingerprint(requestHeaders);
     const prepared = prepareSorafsOrderbookSubmission({
-      route,
-      signedTransaction: Buffer.from(toBuffer(signedTransaction)),
-      expectedNetworkIdBytes: networkIdBytes(
-        this._localSigningContext.networkId,
-        `${context}.networkId`,
-      ),
-      expectedReceiptSigner,
-      native,
-      context,
+      route, signedTransaction,
+      expectedNetworkIdBytes: networkIdBytes(this._localSigningContext.networkId, `${context}.networkId`),
+      expectedChainDiscriminant: this._localSigningContext.chainDiscriminant,
+      expectedReceiptSigner: normalized.expectedReceiptSigner,
+      native: resolveOptionalNativeBinding(this._nativeBinding), context,
     });
-    throwIfAborted(signal);
-    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
-    throwIfAborted(signal);
-    const response = await this._request("POST", path, {
-      headers: {
-        "Content-Type": APPLICATION_NORITO,
-        Accept: APPLICATION_NORITO,
-        "Accept-Encoding": "identity",
-      },
-      body: prepared.body,
-      disableRetries: true,
-      redirect: "error",
-      signal,
-    });
-    await this._expectStatus(response, [202], { signal });
-    validateSorafsOrderbookSubmissionHeaders(
-      {
-        contentType: this._getHeader(response, "content-type"),
-        contentEncoding: this._getHeader(response, "content-encoding"),
-        txHash: this._getHeader(response, "x-iroha-transaction-hash"),
-        entrypointHash: this._getHeader(response, "x-iroha-entrypoint-hash"),
-        signedTransactionHash: this._getHeader(
-          response,
-          "x-iroha-signed-transaction-hash",
-        ),
-      },
-      prepared.identity,
-    );
-    const { bytes } = await this._readBoundedResponseBytes(
-      response,
-      SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
-      `${context} receipt`,
-      { signal },
-    );
-    return verifySorafsOrderbookSubmissionReceipt(Buffer.from(bytes), prepared);
+    const operation = createSorafsOrderbookSubmissionDeadline(signal, this._config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted });
+    try {
+      throwIfAborted(operation.signal);
+      await waitForPromiseWithSignal(validateDataModel(operation.signal), operation.signal);
+      throwIfAborted(operation.signal);
+      assertSorafsOrderbookFixedHeaders(this._config.defaultHeaders, `${context} defaultHeaders`);
+      if (sorafsOrderbookHeaderFingerprint(this._createHeaders(fixedHeaders)) !== headerFingerprint) {
+        throw new TypeError(`${context} effective request headers changed during preflight`);
+      }
+      let response;
+      try {
+        response = await waitForResponseWithSignal(request("POST", path, {
+          headers: requestHeaders,
+          body: prepared.body, disableRetries: true, redirect: "error", signal: operation.signal,
+        }), operation.signal, context);
+        if (responseStatusWithoutUserGetter(response) !== 202) throw new Error(`${context} expected HTTP status 202`);
+        validateSorafsOrderbookSubmissionHeaders({
+          contentType: this._getHeader(response, "content-type"), contentEncoding: this._getHeader(response, "content-encoding"),
+          txHash: this._getHeader(response, "x-iroha-transaction-hash"), entrypointHash: this._getHeader(response, "x-iroha-entrypoint-hash"),
+          signedTransactionHash: this._getHeader(response, "x-iroha-signed-transaction-hash"),
+        }, prepared.identity);
+        const { bytes } = await this._readBoundedResponseBytes(response,
+          SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1, `${context} receipt`, { signal: operation.signal });
+        return verifySorafsOrderbookSubmissionReceipt(Buffer.from(bytes), prepared);
+      } catch {
+        if (response !== undefined) cancelResponseBodyBestEffort(response, `${context} outcome is ambiguous`);
+        throw new SorafsOrderbookSubmissionAmbiguousError(route, prepared.identity);
+      }
+    } finally {
+      operation.dispose();
+    }
   }
 
   /**
@@ -11886,6 +11886,9 @@ export class ToriiClient {
     }
     if (signalIsAborted(signal)) {
       rejectResponse(bodyReadAbortError(signal, context));
+    }
+    if (contentLength !== null && Number(contentLength) !== byteLength) {
+      rejectResponse(new TypeError(`${context} Content-Length does not match its body`));
     }
     return { bytes, body };
   }
@@ -18258,6 +18261,8 @@ function waitForPromiseWithSignal(promise, signal) {
     );
   });
 }
+
+function waitForResponseWithSignal(promise, signal, context) { const awaited = waitForPromiseWithSignal(promise, signal); Promise.resolve(promise).then((response) => { if (signalIsAborted(signal)) cancelResponseBodyBestEffort(response, `${context} late response`); }, () => {}); return awaited; }
 
 const CONNECT_SID_BYTES = 32;
 const BASE64URL_BODY_PATTERN = /^[A-Za-z0-9_-]+$/;

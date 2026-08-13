@@ -16598,9 +16598,7 @@ impl NodeHandle {
             Ok(Ok(_)) | Ok(Err(ProviderIngestLocalStorageErrorV1::Permanent)) => {
                 Err(ProviderIngestLocalStorageErrorV1::Permanent)
             }
-            Ok(Err(ProviderIngestLocalStorageErrorV1::Quarantined)) => {
-                Err(ProviderIngestLocalStorageErrorV1::Quarantined)
-            }
+            Ok(Err(error @ ProviderIngestLocalStorageErrorV1::Quarantined)) => Err(error),
             Ok(Err(ProviderIngestLocalStorageErrorV1::Retryable)) => {
                 Err(ProviderIngestLocalStorageErrorV1::Retryable)
             }

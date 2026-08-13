@@ -22,6 +22,7 @@ SPEC.loader.exec_module(MODULE)
 
 import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
 import sorafs_l1_lane_inventory_test_support as INVENTORY_SUPPORT  # noqa: E402
+import sorafs_foundational_receipt_test_support as RECEIPT_SUPPORT  # noqa: E402
 from sorafs_resilience_test_support import (  # noqa: E402
     DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
     public_key_from_seed as ed25519_public_key_from_seed,
@@ -184,9 +185,7 @@ def test_reference_sdk_supply_chain_inventory_contracts_are_schema_closed() -> N
     )
 
 
-FOUNDATIONAL_SIGNER_PUBLIC_KEY = ed25519_public_key_from_seed(
-    FOUNDATIONAL_SIGNING_SEED
-)
+FOUNDATIONAL_SIGNER_PUBLIC_KEY = ed25519_public_key_from_seed(FOUNDATIONAL_SIGNING_SEED)
 ORIGINAL_VERIFY_ED25519 = MODULE.verify_ed25519
 FOUNDATIONAL_SIGNATURE_VERIFICATION_CACHE: dict[
     tuple[bytes, bytes, bytes], bool
@@ -213,22 +212,15 @@ def cached_verify_ed25519(
 MODULE.verify_ed25519 = cached_verify_ed25519
 
 
-def resign_foundational_summary(
-    payload: dict,
-    *,
-    seed: bytes = FOUNDATIONAL_SIGNING_SEED,
-) -> None:
+def resign_foundational_summary(payload: dict, *, seed: bytes = FOUNDATIONAL_SIGNING_SEED) -> None:
     """Refresh the test envelope fingerprint and signature after a mutation."""
 
     public_key = ed25519_public_key_from_seed(seed)
-    payload.setdefault("signature", {})[
-        "public_key_fingerprint_sha256"
-    ] = hashlib.sha256(public_key).hexdigest()
+    payload.setdefault("signature", {})["public_key_fingerprint_sha256"] = hashlib.sha256(public_key).hexdigest()
     payload["signature"]["signature_hex"] = "00" * 64
-    payload["signature"]["signature_hex"] = ed25519_sign(
-        seed,
-        MODULE.foundational_signing_payload(payload),
-    ).hex()
+    payload["signature"]["signature_hex"] = ed25519_sign(seed, MODULE.foundational_signing_payload(payload)).hex()
+    if "signer_receipt_bundle" in payload:
+        RECEIPT_SUPPORT.refresh_bundle(payload)
 
 
 def foundational_summary(
@@ -348,22 +340,23 @@ def write_foundational_summary(root: Path, payload: dict | None = None) -> Path:
             if payload.get("l1_lane_evidence_inventory_sha256") != inventory_sha256:
                 payload["l1_lane_evidence_inventory_sha256"] = inventory_sha256
                 resign_foundational_summary(payload)
-        write_json(
-            path,
-            (
-                foundational_summary(
-                    lane_summary_sha256=lane_summary_digests(root),
-                    l1_lane_evidence_inventory_sha256=inventory_sha256,
-                )
-                if payload is None
-                else payload
-            ),
+        payload = payload or foundational_summary(
+            lane_summary_sha256=lane_summary_digests(root),
+            l1_lane_evidence_inventory_sha256=inventory_sha256,
         )
+        RECEIPT_SUPPORT.attach_bundle(payload, root)
+        write_json(path, payload)
     return path
 
-def foundational_cli_args() -> list[str]:
+def receipt_verifier(root: Path) -> Path:
+    path = root / RECEIPT_SUPPORT.VERIFIER_FILENAME
+    return path if path.exists() else RECEIPT_SUPPORT.write_verifier(root, foundational_summary()["signature"])
+
+
+def foundational_cli_args(root: Path) -> list[str]:
     """Return the reviewed trust/continuity arguments for fixture envelopes."""
 
+    verifier = receipt_verifier(root)
     return [
         "--foundational-prerequisite-signer-public-key-hex",
         FOUNDATIONAL_SIGNER_PUBLIC_KEY.hex(),
@@ -371,6 +364,10 @@ def foundational_cli_args() -> list[str]:
         str(FOUNDATIONAL_RELEASE_SEQUENCE),
         "--foundational-prerequisite-previous-envelope-sha256",
         FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
+        "--foundational-prerequisite-signer-verifier",
+        str(verifier),
+        "--foundational-prerequisite-signer-verifier-sha256",
+        hashlib.sha256(verifier.read_bytes()).hexdigest(),
     ]
 
 
@@ -467,6 +464,9 @@ def production_validation_options(root: Path | None = None, **overrides: object)
         "resilience_qualification": RESILIENCE_QUALIFICATION,
     }
     if root is not None:
+        verifier = receipt_verifier(root)
+        values["foundational_signer_verifier"] = verifier
+        values["foundational_signer_verifier_sha256"] = hashlib.sha256(verifier.read_bytes()).hexdigest()
         inventory, lanes, topology = lane_inventory_fixture(root)
         values["l1_lane_evidence_inventory"] = (
             INVENTORY_SUPPORT.verified_inventory(
@@ -1224,7 +1224,7 @@ def run_gate(root: Path, *extra: str) -> int:
             DEPLOYMENT_ID,
             "--environment",
             ENVIRONMENT,
-            *foundational_cli_args(),
+            *foundational_cli_args(root),
             *extra,
         ]
     )
@@ -1301,7 +1301,7 @@ def test_aggregate_preflight_rejects_untrusted_resilience_attachment(
         DEPLOYMENT_ID,
         "--environment",
         ENVIRONMENT,
-        *foundational_cli_args(),
+        *foundational_cli_args(tmp_path),
     ]
     resilience_path = tmp_path / "l1-resilience-qualification.summary"
     if case == "missing":
@@ -1996,7 +1996,7 @@ def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
                 "--environment",
                 ENVIRONMENT,
                 *qualification_args,
-                *foundational_cli_args(),
+                *foundational_cli_args(summary_root),
                 "--summary-out",
                 str(summary),
             ]
@@ -2067,7 +2067,7 @@ def test_explicit_lane_summary_path_uses_safe_basename(tmp_path: Path) -> None:
                 "--environment",
                 ENVIRONMENT,
                 *topology_cli_args(tmp_path),
-                *foundational_cli_args(),
+                *foundational_cli_args(tmp_path),
                 "--summary-out",
                 str(summary),
             ]

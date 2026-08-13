@@ -33,7 +33,7 @@ use crate::{
         CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
         CertifiedMergeSidecarStreamEpochV1,
     },
-    sumeragi::LaneRelayMessage,
+    sumeragi::{LaneRelayMessage, v2_effects::v2_payload_is_terminal_reducer_control},
 };
 
 include!("tests/v2_runner_unsealed_00.rs");

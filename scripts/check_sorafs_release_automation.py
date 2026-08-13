@@ -49,8 +49,9 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "executes all three binaries from each clean extraction",
         "`scripts/package_sorafs_cli_candidate.py` assembles the whole platform",
         "exactly the five expected target-triple checksum manifests",
-        "The five-target CLI archive path is source-complete",
+        "The five-target CLI archive implementation is present, but a candidate is not source-complete",
         "build, publish, and clean-install all six",
+        "`ci/check_sorafs_cli_release.sh` runs `python3 scripts/check_source_file_budget.py` before any Cargo command",
         "`specs/sorafs/runbooks/release_rollback_yank.md`",
         "`sorafs-release-authentication` environment",
         "`scripts/release_manifest_signing.py verify`",
@@ -514,6 +515,10 @@ RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
         *POP_BROKER_RETIRED_SECRET_MARKERS,
     ),
 }
+SORAFS_CLI_RELEASE_GATE_SCRIPT = "ci/check_sorafs_cli_release.sh"
+SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND = (
+    "python3 scripts/check_source_file_budget.py"
+)
 SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
     {
         ".github/workflows/sorafs-cli-release.yml",
@@ -538,12 +543,66 @@ SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
         "scripts/taira_constants.py",
         "scripts/tests/check_sorafs_release_automation_test.py",
         "scripts/tests/sorafs_evidence_json_test.py",
+        "scripts/tests/sorafs_foundational_receipt_test_support.py",
         "scripts/tests/sorafs_resilience_test_support.py",
         "scripts/tests/sorafs_response_args_test.py",
         "scripts/tests/sorafs_topology_qualification_test.py",
         "scripts/requirements.txt",
         "scripts/examples/sorafs_l1_topology_qualification_envelope.md",
         "specs/sorafs/l1_deployment_qualification.md",
+    }
+)
+SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS = frozenset(
+    {
+        "ci/source_file_budget.json",
+        "scripts/check_source_file_budget.py",
+    }
+)
+SORAFS_CLI_RESERVE_TRIGGER_PATHS = frozenset(
+    {
+        ".github/workflows/sorafs-cli-release.yml",
+        "ci/check_sorafs_cli_release.sh",
+        "crates/iroha/src/client.rs",
+        "crates/iroha/src/client/reserve.rs",
+        "crates/iroha/src/http_default.rs",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
+    }
+)
+SORAFS_CLI_REPAIR_TRIGGER_PATHS = frozenset(
+    {
+        ".github/workflows/sorafs-cli-release.yml",
+        "ci/check_sorafs_cli_release.sh",
+        "crates/iroha/src/client.rs",
+        "crates/iroha/src/client/repair.rs",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
+    }
+)
+SORAFS_CLI_REDIRECT_TRIGGER_PATHS = frozenset(
+    {
+        ".github/workflows/sorafs-cli-release.yml",
+        "ci/check_sorafs_cli_release.sh",
+        "crates/iroha_cli/src/commands/sorafs.rs",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
+        "xtask/src/sorafs.rs",
+    }
+)
+SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS = frozenset(
+    {
+        ".github/workflows/sorafs-cli-release.yml",
+        "ci/check_sorafs_cli_release.sh",
+        "crates/iroha_config/**",
+        "crates/iroha_crypto/**",
+        "crates/iroha_data_model/**",
+        "crates/irohad/Cargo.toml",
+        "crates/irohad/src/lib.rs",
+        "crates/irohad/src/main.rs",
+        "crates/irohad/src/sorafs_provider_ingest_runtime.rs",
+        "crates/irohad/src/sorafs_provider_ingest_runtime/tests.rs",
+        "crates/irohad/src/sorafs_provider_ingest_runtime/tests/**",
+        "crates/irohad/src/sorafs_provider_ingest_runtime/**",
+        "crates/sorafs_node/**",
+        "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
     }
 )
 SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS = frozenset(
@@ -554,6 +613,37 @@ SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS = frozenset(
         "specs/sdk/swift/index.md",
     }
 )
+SORAFS_CLI_RELEASE_VERSION_TRIGGER_PATHS = frozenset(
+    {
+        ".github/workflows/sorafs-cli-release.yml",
+        "ci/check_sorafs_cli_release.sh",
+        "crates/sorafs_car/**",
+        "crates/sorafs_manifest/**",
+        "crates/sorafs_orchestrator/**",
+        "release/version-map.toml",
+        "scripts/check_sorafs_release_version_map.py",
+        "scripts/tests/check_sorafs_release_version_map_test.py",
+    }
+)
+SORAFS_CLI_LOCK_TRIGGER_PATHS = frozenset(
+    {
+        ".github/workflows/sorafs-cli-release.yml",
+        ".gitignore",
+        "Cargo.lock",
+        "ci/check_sorafs_cli_release.sh",
+        "scripts/tests/check_sorafs_release_automation_test.py",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
+    }
+)
+RELEASE_VERSION_MAP_CONTRACT_MARKERS: dict[str, tuple[str, ...]] = {
+    "scripts/check_sorafs_release_version_map.py": (
+        'RELEASE_PACKAGE_IDS = frozenset(\n    {"sorafs-car", "sorafs-manifest", "sorafs-orchestrator"}\n)',
+        "release_version must match every CLI release package version",
+    ),
+    "scripts/tests/check_sorafs_release_version_map_test.py": (
+        "test_release_version_must_match_every_cli_release_package",
+    ),
+}
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
@@ -579,6 +669,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/check_workflow_action_pins.py",
         *RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS,
         '- "Dockerfile"',
+        '- "ci/source_file_budget.json"',
         '- "scripts/build_release_bundle.sh"',
         '- "scripts/build_release_image.sh"',
         '- "scripts/build_release_oci_archive.py"',
@@ -587,6 +678,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/capture_release_command.py"',
         '- "scripts/copy_release_file.py"',
         '- "scripts/copy_release_tree.py"',
+        '- "scripts/check_source_file_budget.py"',
         '- "scripts/generate_release_manifest.py"',
         '- "scripts/generate_sorafs_cli_release_manifest.py"',
         '- "scripts/release_artifact_contract.py"',
@@ -605,6 +697,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/sorafs_reference_sdk_supply_chain_test.py"',
         '- "scripts/tests/sorafs_topology_qualification_test.py"',
         '- "scripts/tests/sorafs_evidence_json_test.py"',
+        '- "scripts/tests/sorafs_foundational_receipt_test_support.py"',
         '- "scripts/tests/sorafs_response_args_test.py"',
         '- "scripts/examples/sorafs_l1_topology_qualification_envelope.md"',
         '- "specs/sorafs/l1_deployment_qualification.md"',
@@ -1402,6 +1495,60 @@ def _pull_request_paths(source: str) -> frozenset[str] | None:
     return frozenset(entries)
 
 
+def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
+    """Require the source-file budget to fail closed before any Cargo work."""
+
+    relative = SORAFS_CLI_RELEASE_GATE_SCRIPT
+    path = _require_regular_repo_file(root, relative)
+    try:
+        source = _read_bytes_no_follow(path).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{relative}: release gate must be UTF-8") from error
+
+    errors: list[str] = []
+    budget_commands = tuple(
+        re.finditer(
+            rf"(?m)^{re.escape(SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND)}$",
+            source,
+        )
+    )
+    if len(budget_commands) != 1:
+        errors.append(
+            f"{relative}: source-file budget command must appear exactly once "
+            "as a standalone fail-closed command"
+        )
+        return errors
+
+    budget_command = budget_commands[0]
+    strict_mode = re.search(r"(?m)^set -euo pipefail$", source)
+    if strict_mode is None or strict_mode.start() > budget_command.start():
+        errors.append(
+            f"{relative}: strict shell mode must precede the source-file budget "
+            "command"
+        )
+    if re.search(
+        r"(?m)^\s*set (?:\+e|\+o errexit)\s*$",
+        source[: budget_command.start()],
+    ):
+        errors.append(
+            f"{relative}: source-file budget command must not run with errexit "
+            "disabled"
+        )
+
+    first_cargo_command = re.search(r"(?m)^\s*cargo(?:\s|$)", source)
+    if first_cargo_command is None:
+        errors.append(
+            f"{relative}: release gate must contain a Cargo command after the "
+            "source-file budget command"
+        )
+    elif first_cargo_command.start() < budget_command.start():
+        errors.append(
+            f"{relative}: source-file budget command must run before every Cargo "
+            "command"
+        )
+    return errors
+
+
 def _validate_workflow_source(relative: str, source: str) -> list[str]:
     """Return deterministic contract errors for one workflow source."""
 
@@ -1431,6 +1578,49 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: pull_request.paths omits topology-envelope "
                 f"dependency trigger(s): {', '.join(missing_triggers)}"
             )
+        missing_source_budget_triggers = sorted(
+            SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS
+            - (pull_request_paths or frozenset())
+        )
+        if missing_source_budget_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits source-file budget "
+                f"contract trigger(s): {', '.join(missing_source_budget_triggers)}"
+            )
+        missing_reserve_triggers = sorted(
+            SORAFS_CLI_RESERVE_TRIGGER_PATHS - (pull_request_paths or frozenset())
+        )
+        if missing_reserve_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits reserve-client "
+                f"contract trigger(s): {', '.join(missing_reserve_triggers)}"
+            )
+        missing_repair_triggers = sorted(
+            SORAFS_CLI_REPAIR_TRIGGER_PATHS - (pull_request_paths or frozenset())
+        )
+        if missing_repair_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits repair-client "
+                f"contract trigger(s): {', '.join(missing_repair_triggers)}"
+            )
+        missing_redirect_triggers = sorted(
+            SORAFS_CLI_REDIRECT_TRIGGER_PATHS - (pull_request_paths or frozenset())
+        )
+        if missing_redirect_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits redirect no-follow "
+                f"contract trigger(s): {', '.join(missing_redirect_triggers)}"
+            )
+        missing_provider_ingest_triggers = sorted(
+            SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS
+            - (pull_request_paths or frozenset())
+        )
+        if missing_provider_ingest_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits provider-ingest "
+                "crash/restart contract trigger(s): "
+                f"{', '.join(missing_provider_ingest_triggers)}"
+            )
         missing_version_map_triggers = sorted(
             SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS
             - (pull_request_paths or frozenset())
@@ -1439,6 +1629,23 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(
                 f"{relative}: pull_request.paths omits Swift version-map "
                 f"dependency trigger(s): {', '.join(missing_version_map_triggers)}"
+            )
+        missing_release_version_triggers = sorted(
+            SORAFS_CLI_RELEASE_VERSION_TRIGGER_PATHS
+            - (pull_request_paths or frozenset())
+        )
+        if missing_release_version_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits CLI release-version "
+                f"contract trigger(s): {', '.join(missing_release_version_triggers)}"
+            )
+        missing_lock_triggers = sorted(
+            SORAFS_CLI_LOCK_TRIGGER_PATHS - (pull_request_paths or frozenset())
+        )
+        if missing_lock_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits workspace lock "
+                f"contract trigger(s): {', '.join(missing_lock_triggers)}"
             )
 
     if relative.endswith("sorafs-orchestrator-sdk.yml"):
@@ -1568,20 +1775,28 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
         )
         if release_gate_job is None:
             errors.append(f"{relative}: missing release gate job")
-        elif (
-            release_gate_job.count(
-                "python3 scripts/check_sorafs_release_version_map.py"
-            )
-            != 2
-            or "cmp version-map-summary.first.json version-map-summary.replay.json"
-            not in release_gate_job
-            or "cp version-map-summary.first.json version-map-summary.json"
-            not in release_gate_job
-        ):
-            errors.append(
-                f"{relative}: version map must be validated exactly twice with "
-                "byte-identical summaries before its release version is consumed"
-            )
+        else:
+            if release_gate_job.count(
+                f"run: bash {SORAFS_CLI_RELEASE_GATE_SCRIPT}"
+            ) != 1:
+                errors.append(
+                    f"{relative}: release-gate job must run the strict CLI release "
+                    "gate exactly once"
+                )
+            if (
+                release_gate_job.count(
+                    "python3 scripts/check_sorafs_release_version_map.py"
+                )
+                != 2
+                or "cmp version-map-summary.first.json version-map-summary.replay.json"
+                not in release_gate_job
+                or "cp version-map-summary.first.json version-map-summary.json"
+                not in release_gate_job
+            ):
+                errors.append(
+                    f"{relative}: version map must be validated exactly twice with "
+                    "byte-identical summaries before its release version is consumed"
+                )
         if prepare_job is None:
             errors.append(f"{relative}: missing foundational-manifest preparation job")
         else:
@@ -2267,6 +2482,21 @@ def validate_release_automation(root: Path) -> dict[str, Any]:
             raise ValueError(f"{relative}: workflow must be UTF-8") from error
         errors.extend(_validate_workflow_source(relative, source))
         validated.append(relative)
+    errors.extend(_validate_sorafs_cli_release_gate(root))
+    for relative, markers in sorted(RELEASE_VERSION_MAP_CONTRACT_MARKERS.items()):
+        path = _require_regular_repo_file(root, relative)
+        try:
+            source = _read_bytes_no_follow(path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{relative}: release-version contract source must be UTF-8"
+            ) from error
+        for marker in markers:
+            if marker not in source:
+                errors.append(
+                    f"{relative}: missing CLI release-version contract marker "
+                    f"`{marker}`"
+                )
     for relative, markers in sorted(RELEASE_DOCUMENTS.items()):
         path = _require_regular_repo_file(root, relative)
         try:

@@ -1665,9 +1665,8 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
   );
 });
 
-test("NexusAppClient separates Torii canonical and signed-wire receipt hashes", async () => {
+test("NexusAppClient reconciles all Torii External receipt hash aliases", async () => {
   const canonicalHash = fixtureSignedTransactionHashHex;
-  const signedWireHash = "d".repeat(64);
   const finalizer = {
     signedTransaction: fixtureSignedTransaction,
     hashHex: canonicalHash,
@@ -1675,6 +1674,7 @@ test("NexusAppClient separates Torii canonical and signed-wire receipt hashes", 
   for (const submission of [
     { hashHex: canonicalHash, tx_hash: "d".repeat(64) },
     { hashHex: canonicalHash, payload: { entrypoint_hash: "d".repeat(64) } },
+    { hashHex: canonicalHash, payload: { signed_transaction_hash: "d".repeat(64) } },
     {
       payload: {
         tx_hash: canonicalHash,
@@ -1713,7 +1713,7 @@ test("NexusAppClient separates Torii canonical and signed-wire receipt hashes", 
     payload: {
       tx_hash: canonicalHash,
       entrypoint_hash: canonicalHash,
-      signed_transaction_hash: signedWireHash,
+      signed_transaction_hash: canonicalHash,
     },
   });
   const receipt = await equivalent.client.finalizeAndSubmit(
@@ -1723,8 +1723,8 @@ test("NexusAppClient separates Torii canonical and signed-wire receipt hashes", 
   assert.equal(receipt.signedTransactionHashHex, canonicalHash);
   assert.equal(
     receipt.submission.payload.signed_transaction_hash,
-    signedWireHash,
-    "the raw Torii receipt must retain its distinct inner signed-wire identity",
+    canonicalHash,
+    "the raw Torii receipt must retain the authoritative signed identity",
   );
   assert.equal(receipt.status.hash, canonicalHash);
   assert.deepEqual(equivalent.calls, { finalized: 1, submitted: 1, waited: 1 });

@@ -301,6 +301,29 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchErrorV1 {
     ReservedOwnerMismatch,
 }
 
+/// Nonmutating class of Ready work visible to the unified Completion driver.
+///
+/// `PassThrough` covers ordinary/stateful rows and mixed I/O classes whose
+/// exact capacity ranks cannot yet be frozen atomically. `Invalid` is reserved
+/// for a broken Ready-index bijection or an already faulted owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProductionCompletionReadyWorkV1 {
+    /// No Ready lifecycle record exists.
+    None,
+    /// One exact recovered Decision Apply may use its fixed dispatcher.
+    RecoveredDecisionApply,
+    /// One exact recovered Sign may use its fixed dispatcher.
+    RecoveredLifecycleSign,
+    /// One exact recovered Decision Fetch may use its fixed dispatcher.
+    RecoveredDecisionFetch,
+    /// A recovered Broadcast has a full-census refanout transaction.
+    RecoveredLifecycleBroadcast,
+    /// The ordinary/stateful owner, or a future composite census, must run.
+    PassThrough,
+    /// Coordinator state is not safe to classify without restart.
+    Invalid,
+}
+
 /// Phase-A outcome for one selected recovered Decision Fetch response.
 #[must_use = "capacity wait or queued durable persistence must remain owner-visible"]
 pub(crate) enum ProductionRecoveredDecisionFetchPersistenceV1 {
@@ -345,6 +368,17 @@ pub(crate) struct PreparedProductionIngressCapacityWait {
     selector: PreparedLifecycleIngressSelector,
 }
 
+/// Consuming classification of one retained production ingress capacity wait.
+#[must_use = "pending capacity ownership must be reparked or retried exactly once"]
+pub(crate) enum ProductionIngressCapacityRetry {
+    /// No release occurred; the complete wait remains owned.
+    Pending(PreparedProductionIngressCapacityWait),
+    /// A real release occurred and yielded the unchanged prepared selector.
+    Released(PreparedLifecycleIngressSelector),
+    /// The mode or exact service generation changed incompatibly.
+    RestartRequired,
+}
+
 impl PreparedProductionIngressCapacityWait {
     /// Classify the exact retained service generation without exposing it.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -361,6 +395,38 @@ impl PreparedProductionIngressCapacityWait {
             }
             LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
                 ProductionIngressCapacityStatus::RestartRequired
+            }
+        }
+    }
+
+    /// Consume this wait only after checking the exact executor and service.
+    ///
+    /// The retained selector has no getter. A real release is the sole branch
+    /// which yields it for another Phase-A attempt; pending ownership returns
+    /// whole, while terminal/foreign generations require cold recovery.
+    pub(crate) fn retry(
+        self,
+        services: &ProductionV2Services,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+    ) -> ProductionIngressCapacityRetry {
+        if self.mode != executor.lifecycle_mode_rank_snapshot() {
+            return ProductionIngressCapacityRetry::RestartRequired;
+        }
+        match self.wait.status(services) {
+            LifecycleIoCapacityWaitStatus::SamePending => {
+                ProductionIngressCapacityRetry::Pending(self)
+            }
+            LifecycleIoCapacityWaitStatus::Released => {
+                let Self {
+                    mode: _,
+                    wait: _,
+                    selector,
+                } = self;
+                ProductionIngressCapacityRetry::Released(selector)
+            }
+            LifecycleIoCapacityWaitStatus::GenerationExhausted
+            | LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
+                ProductionIngressCapacityRetry::RestartRequired
             }
         }
     }
@@ -584,6 +650,91 @@ fn direct_registry_scheduler_inputs(
 }
 
 impl ProductionLifecycleOwnerV1 {
+    /// Classify Ready work without claiming a lease or reserving capacity.
+    ///
+    /// Broadcast refanout already authenticates its complete supported mixed
+    /// census. Apply, Sign, and Fetch currently have per-class capacity cuts,
+    /// so only an exact single Ready row can enter those fixed dispatchers.
+    /// Stateful Serve/Producer and other ordinary rows pass through rather than
+    /// turning legal coexistence into `InvalidReadyCensus`.
+    pub(crate) fn classify_completion_ready_work(
+        &self,
+    ) -> ProductionCompletionReadyWorkV1 {
+        if self.coordinator.fault.is_some() {
+            return ProductionCompletionReadyWorkV1::Invalid;
+        }
+        if self.coordinator.active_lease.is_some() {
+            return ProductionCompletionReadyWorkV1::PassThrough;
+        }
+        let exact_ready = self
+            .coordinator
+            .records
+            .iter()
+            .filter_map(|(ordinal, record)| {
+                matches!(record.state, LifecycleState::Ready).then_some(*ordinal)
+            })
+            .collect::<BTreeSet<_>>();
+        if exact_ready != self.coordinator.ready_index {
+            return ProductionCompletionReadyWorkV1::Invalid;
+        }
+        if exact_ready.is_empty() {
+            return ProductionCompletionReadyWorkV1::None;
+        }
+        let classes = exact_ready
+            .iter()
+            .filter_map(|ordinal| self.coordinator.records.get(ordinal))
+            .map(|record| record.work_class)
+            .collect::<Vec<_>>();
+        if classes.iter().any(|class| {
+            matches!(
+                class,
+                LifecycleWorkClass::Store
+                    | LifecycleWorkClass::Validate
+                    | LifecycleWorkClass::EnterView
+                    | LifecycleWorkClass::EquivocationReport
+                    | LifecycleWorkClass::InvalidBodyReport
+                    | LifecycleWorkClass::CertifiedServe
+                    | LifecycleWorkClass::ProducerTurn
+            )
+        }) {
+            return ProductionCompletionReadyWorkV1::PassThrough;
+        }
+        if classes
+            .iter()
+            .any(|class| *class == LifecycleWorkClass::Broadcast)
+        {
+            return ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast;
+        }
+        if classes.len() != 1 {
+            // TODO: Freeze one composite service/output capacity census across
+            // mixed Apply/Sign/Fetch rows, plan from those exact debts, and
+            // consume only the selected reservation. Per-class reservations
+            // cannot be safely combined or re-probed after selection.
+            return ProductionCompletionReadyWorkV1::PassThrough;
+        }
+        match classes[0] {
+            LifecycleWorkClass::Apply => {
+                ProductionCompletionReadyWorkV1::RecoveredDecisionApply
+            }
+            LifecycleWorkClass::SignVote
+            | LifecycleWorkClass::SignProposal
+            | LifecycleWorkClass::SignTimeout => {
+                ProductionCompletionReadyWorkV1::RecoveredLifecycleSign
+            }
+            LifecycleWorkClass::Fetch => {
+                ProductionCompletionReadyWorkV1::RecoveredDecisionFetch
+            }
+            LifecycleWorkClass::Store
+            | LifecycleWorkClass::Validate
+            | LifecycleWorkClass::Broadcast
+            | LifecycleWorkClass::EnterView
+            | LifecycleWorkClass::EquivocationReport
+            | LifecycleWorkClass::InvalidBodyReport
+            | LifecycleWorkClass::CertifiedServe
+            | LifecycleWorkClass::ProducerTurn => ProductionCompletionReadyWorkV1::PassThrough,
+        }
+    }
+
     /// Plan one turn from the complete directly-owned production Ready census.
     ///
     /// No snapshot or raw rank row leaves the owner. Unsupported carriers fail
@@ -644,7 +795,7 @@ impl ProductionLifecycleOwnerV1 {
         self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
     }
 
-    fn dispatch_recovered_decision_apply_with_runner_debt(
+    pub(super) fn dispatch_recovered_decision_apply_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         executor: &V2EffectExecutor<SerializedV2Runtime>,
@@ -811,7 +962,7 @@ impl ProductionLifecycleOwnerV1 {
         self.dispatch_recovered_lifecycle_sign_with_runner_debt(services, executor, runner.debt())
     }
 
-    fn dispatch_recovered_lifecycle_sign_with_runner_debt(
+    pub(super) fn dispatch_recovered_lifecycle_sign_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         executor: &V2EffectExecutor<SerializedV2Runtime>,
@@ -921,13 +1072,12 @@ impl ProductionLifecycleOwnerV1 {
                 lease
             }
             super::TurnPlan::Execute(lease) => {
-                let rolled_back = lease.output_reservation().map_or_else(
-                    || self.coordinator.rollback_unpublished_turn(&lease),
-                    |reservation| {
-                        self.coordinator
-                            .rollback_unpublished_reserved_turn(&lease, reservation.class())
-                    },
-                );
+                let rolled_back = if let Some(output_reservation) = lease.output_reservation() {
+                    self.coordinator
+                        .rollback_unpublished_reserved_turn(&lease, output_reservation.class())
+                } else {
+                    self.coordinator.rollback_unpublished_turn(&lease)
+                };
                 assert!(
                     rolled_back,
                     "unexpected recovered Sign plan must restore its unpublished claim"
@@ -1015,7 +1165,7 @@ impl ProductionLifecycleOwnerV1 {
         self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
     }
 
-    fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
+    pub(super) fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         runner_debt: u64,
@@ -1386,7 +1536,7 @@ impl ProductionLifecycleOwnerV1 {
         self.dispatch_recovered_decision_fetch_with_runner_debt(services, executor, runner.debt())
     }
 
-    fn dispatch_recovered_decision_fetch_with_runner_debt(
+    pub(super) fn dispatch_recovered_decision_fetch_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
@@ -1608,7 +1758,7 @@ impl ProductionLifecycleOwnerV1 {
     }
 
     #[allow(clippy::result_large_err)]
-    fn persist_recovered_decision_fetch_response_after_runner(
+    pub(super) fn persist_recovered_decision_fetch_response_after_runner(
         &mut self,
         services: &ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
@@ -2393,12 +2543,10 @@ impl ProductionLifecycleOwnerV1 {
         else {
             return false;
         };
-        if self
+        if !self
             .registry
             .registry_for_test_mut()
-            .entries
-            .remove(&address)
-            .is_none()
+            .remove_exact_for_test(address)
         {
             return false;
         }

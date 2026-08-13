@@ -990,58 +990,6 @@ def test_sorafs_orderbook_read_helpers_validate_options_and_cache_status() -> No
     assert session.calls[0]["headers"]["If-None-Match"] == '"same"'
 
 
-def test_sorafs_orderbook_submit_helpers_forward_signed_transactions() -> None:
-    payloads = _sample_sorafs_orderbook_payloads()
-    session = RecordingSession()
-    for _ in range(3):
-        session.queue(StubResponse(status_code=202, payload=payloads["submission_receipt"]))
-    client = ToriiClient("http://node.test", session=session)
-
-    order_result = client.submit_sorafs_orderbook_order(
-        b"\x01\x02\x03",
-        headers={"X-Trace": "order-submit"},
-    )
-    assert order_result == payloads["submission_receipt"]
-    order_call = session.calls[0]
-    assert order_call["method"] == "POST"
-    assert order_call["url"].endswith("/v1/sorafs/orderbook/orders")
-    assert order_call["data"] == b"\x01\x02\x03"
-    assert order_call["headers"]["Accept"] == "application/json"
-    assert order_call["headers"]["Content-Type"] == "application/x-norito"
-    assert order_call["headers"]["X-Trace"] == "order-submit"
-    assert "X-Iroha-Account" not in order_call["headers"]
-    assert "X-Iroha-Signature" not in order_call["headers"]
-
-    cancel_result = client.submit_sorafs_orderbook_cancel(memoryview(b"\x04\x05"))
-    assert cancel_result == payloads["submission_receipt"]
-    assert session.calls[1]["url"].endswith("/v1/sorafs/orderbook/cancel")
-    assert session.calls[1]["data"] == b"\x04\x05"
-
-    receipt_result = client.submit_sorafs_orderbook_receipt(bytearray([6]))
-    assert receipt_result == payloads["submission_receipt"]
-    assert session.calls[2]["url"].endswith("/v1/sorafs/orderbook/receipts")
-    assert session.calls[2]["data"] == b"\x06"
-
-
-def test_sorafs_orderbook_submit_helpers_validate_inputs() -> None:
-    client = ToriiClient("http://node.test", session=RecordingSession())
-
-    with pytest.raises(TypeError, match="bytes-like canonical versioned SignedTransaction"):
-        client.submit_sorafs_orderbook_order([1, 2, 3])
-    with pytest.raises(ValueError, match="must not be empty"):
-        client.submit_sorafs_orderbook_receipt(b"")
-    with pytest.raises(TypeError, match="headers must be a mapping"):
-        client.submit_sorafs_orderbook_cancel(
-            b"\x01",
-            headers="not-a-mapping",  # type: ignore[arg-type]
-        )
-    with pytest.raises(ValueError, match="fixed media type"):
-        client.submit_sorafs_orderbook_cancel(
-            b"\x01",
-            headers={"Content-Type": "application/octet-stream"},
-        )
-
-
 @pytest.mark.parametrize(
     ("parser", "payload_key", "retired_field"),
     [

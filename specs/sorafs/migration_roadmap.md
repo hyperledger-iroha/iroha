@@ -129,9 +129,12 @@ python3 scripts/run_sorafs_production_readiness.py \
 
 `scripts/examples/sorafs_production_readiness_collection.args.example` lists the
 17 lane-specific summary flags and the complete foundational trust/continuity
-surface. Its public values are shape-only examples and must be replaced from the
-reviewed release record. Review the schema-closed dry-run plan before executing
-the second command. Promotion is allowed only when the resulting aggregate
+surface, including the independently reviewed foundational receipt-verifier
+path and SHA-256. The verifier is runtime trust and does not expand the exact
+22-input evidence replay set. The example's public values are shape-only and
+must be replaced from the reviewed release record. Review the schema-closed
+dry-run plan before executing the second command. Promotion is allowed only
+when the resulting aggregate
 reports `status=ready`, `summary_file_count=17`,
 `recognized_summary_count=17`, every required row is present, every lane has
 the same deployment ID and final environment, all artifact fingerprints and

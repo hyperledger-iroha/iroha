@@ -75,6 +75,9 @@ use super::{
         certified_body_request_is_superseded_after_decision,
         network_ingress_is_certified_fence_escape, v2_ingress_head_can_drain,
     },
+    v2_first_release_recovery::{
+        CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
+    },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery, GlobalBodyLockOutcome,
         HistoricalRecoveryServiceOutcome, LaneApplicationEvidenceRepairPlanning,
@@ -83,9 +86,6 @@ use super::{
         apply_lane_application_evidence_repair,
         persist_canonical_historical_recovery_payload_custody,
         plan_lane_application_evidence_repair, require_validator_storage_platform,
-    },
-    v2_lifecycle_coordinator::{
-        CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
     },
     v2_lifecycle_recovery::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,

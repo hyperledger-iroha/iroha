@@ -125,6 +125,8 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "connectNoritoBridgeAbiVersion",
   "noritoEncodeInstruction",
   "noritoDecodeInstruction",
+  "inspectSorafsOrderbookSubmissionV1",
+  "verifySorafsOrderbookSubmissionReceiptV1",
   "compileKotodama",
   "privacyCompiledProfileCatalogV1",
   "privacyExact12CapabilityManifestJsonV1",

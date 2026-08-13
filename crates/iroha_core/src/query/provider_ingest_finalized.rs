@@ -274,9 +274,8 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
 }
 
 /// Exact finalized identity of one archived committed view.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
-)]
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveKeyV1 {
     /// Exact genesis-derived network containing the committed state.
     pub network_id: NetworkId,
@@ -355,8 +354,7 @@ pub struct ProviderIngestFinalizedArchivedOrderV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication-order record.
     pub replication_order: ReplicationOrderRecord,
-    /// Consensus-authenticated Musubi archive binding, absent for generic
-    /// non-Musubi replication orders.
+    /// Consensus-authenticated Musubi archive binding, absent for generic non-Musubi replication orders.
     pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
 }
 
@@ -546,17 +544,15 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication order.
     pub replication_order: ReplicationOrderRecord,
-    /// Consensus-authenticated Musubi archive binding, absent for generic
-    /// non-Musubi replication orders.
+    /// Consensus-authenticated Musubi archive binding, absent for generic non-Musubi replication orders.
     pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
     /// Current authoritative completion epoch, when completion is admissible.
     pub completion_epoch: Option<u64>,
 }
 
 /// Context-bound exclusive cursor for provider-indexed archive pages.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
-)]
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveCursorV1 {
     /// Exact finalized key whose immutable snapshot is being paged.
     pub key: ProviderIngestFinalizedArchiveKeyV1,

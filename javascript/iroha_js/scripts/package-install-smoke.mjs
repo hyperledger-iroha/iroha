@@ -93,6 +93,8 @@ export function validatePackPaths(metadata) {
     "dist/kotodamaCompiler/index.js",
     "dist/nexusApp.js",
     "dist/privacyCapabilities.js",
+    "dist/sorafsOrderbookSubmission.js",
+    "dist/sorafsOrderbookSubmission.d.ts",
     "nexus-app.d.ts",
     "recipes/iso_bridge_builder.mjs",
     "recipes/nexus_app_transfer.mjs",

@@ -1,6 +1,7 @@
 """Contract tests for the aggregate Sumeragi v2 release receipt."""
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import io
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shlex
 import shutil
 import stat
 import subprocess
@@ -43,6 +45,24 @@ from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
 )
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
+BOOTSTRAP_COMPONENT_FILES = (
+    ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release_receipt_replay.py",
+)
+RECEIPT_VALIDATOR_COMPONENT_FILES = tuple(
+    ROOT_DIR / relative
+    for relative in release_receipt_writer_components(ROOT_DIR)
+)
+APPROVAL_CONTRACT = (
+    ROOT_DIR / "scripts" / "sumeragi_v2_release_approval_contract.py"
+)
+APPROVAL_EVIDENCE_ROOT_ID = "fixture-release-evidence-root"
+APPROVAL_DURATIONS = (900, 901, 902, 903)
+APPROVAL_CLASS_IDS = (
+    "offline-toolchain-sdk",
+    "formal-proof-tools",
+    "network-scale-soak",
+    "final-bootstrap-publication",
+)
 IDENTITY_ARCHIVE_IDS = {
     "cargo_lock": "release-identity.cargo-lock.v1",
     "git": "release-identity.git.v1",
@@ -52,6 +72,329 @@ IDENTITY_ARCHIVE_IDS = {
     "ssh_revocation": "release-identity.ssh-revocation.v1",
     "verify_transcript": "release-identity.verify-transcript.v1",
 }
+
+FIXTURE_TOOL_PROBE_OPERATION_IDS = {
+    "awk": "release-tool.awk-program.v1",
+    "basename": "release-tool.basename-path.v1",
+    "cargo": "release-tool.cargo-version.v1",
+    "cargo-verus": "release-tool.cargo-verus-help.v1",
+    "cat": "release-tool.cat-file.v1",
+    "chmod": "release-tool.chmod-mode.v1",
+    "cmp": "release-tool.cmp-different-quiet.v1",
+    "cp": "release-tool.cp-file.v1",
+    "cut": "release-tool.cut-byte.v1",
+    "diff": "release-tool.diff-different-brief.v1",
+    "dirname": "release-tool.dirname-path.v1",
+    "env": "release-tool.env-closed.v1",
+    "find": "release-tool.find-file.v1",
+    "git-index-pack": "release-tool.git-index-pack-empty.v1",
+    "git-upload-pack": "release-tool.git-upload-pack-missing.v1",
+    "grep": "release-tool.grep-exact.v1",
+    "java": "release-tool.java-version.v1",
+    "ln": "release-tool.ln-hardlink.v1",
+    "ls": "release-tool.ls-entry.v1",
+    "mkdir": "release-tool.mkdir-directory.v1",
+    "mkfifo": "release-tool.mkfifo-fifo.v1",
+    "mktemp": "release-tool.mktemp-file.v1",
+    "mv": "release-tool.mv-file.v1",
+    "node": "release-tool.node-exec-path.v1",
+    "openssl": "release-tool.openssl-sha256.v1",
+    "rm": "release-tool.rm-file.v1",
+    "rmdir": "release-tool.rmdir-directory.v1",
+    "rustc": "release-tool.rustc-version.v1",
+    "sed": "release-tool.sed-first-line.v1",
+    "sh": "release-tool.sh-builtin-output.v1",
+    ("shasum" if sys.platform == "darwin" else "sha256sum"): (
+        "release-tool.shasum-empty.v1"
+        if sys.platform == "darwin"
+        else "release-tool.sha256sum-empty.v1"
+    ),
+    "sleep": "release-tool.sleep-duration.v1",
+    "swift": "release-tool.swift-version.v1",
+    "tail": "release-tool.tail-last-line.v1",
+    "tee": "release-tool.tee-file.v1",
+    "tlapm": "release-tool.tlapm-version.v1",
+    "tr": "release-tool.tr-byte.v1",
+    "uname": "release-tool.uname-system.v1",
+    "verus": "release-tool.verus-version.v1",
+    "wc": "release-tool.wc-empty.v1",
+    "xargs": "release-tool.xargs-protected-shell.v1",
+}
+assert len(FIXTURE_TOOL_PROBE_OPERATION_IDS) == 41
+
+
+def _load_approval_component(path: Path) -> object:
+    name = "sumeragi_release_receipt_approval_fixture"
+    module = ModuleType(name)
+    module.__file__ = str(path)
+    module.__package__ = ""
+    sys.modules[name] = module
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    return module
+
+
+def _bootstrap_approval_fixture(
+    *,
+    module: object,
+    identity: dict[str, object],
+    tool_manifest_sha256: str,
+    trust_dir: Path,
+    evidence_dir: Path,
+) -> tuple[dict[str, Path], dict[str, object]]:
+    expectations = module.build_release_approval_expectations(
+        candidate_oid=identity["head_commit"],
+        candidate_tree=identity["head_tree"],
+        protected_tool_manifest_sha256=tool_manifest_sha256,
+        evidence_root_id=APPROVAL_EVIDENCE_ROOT_ID,
+        offline_toolchain_sdk_duration_seconds=APPROVAL_DURATIONS[0],
+        formal_proof_tools_duration_seconds=APPROVAL_DURATIONS[1],
+        network_scale_soak_duration_seconds=APPROVAL_DURATIONS[2],
+        final_bootstrap_publication_duration_seconds=APPROVAL_DURATIONS[3],
+    )
+    paths: dict[object, Path] = {}
+    archives: dict[str, Path] = {}
+    for ordinal, approval_class in enumerate(module.APPROVAL_CLASS_ORDER):
+        expectation = expectations[approval_class]
+        class_id = approval_class.value
+        value = {
+            "approval_id": f"fixture-approval-{ordinal}-{class_id}",
+            "approved_at": f"2026-08-{ordinal + 1:02d}T01:02:03Z",
+            "candidate_oid": expectation.candidate_oid,
+            "candidate_tree": expectation.candidate_tree,
+            "class_id": class_id,
+            "evidence_root_id": expectation.evidence_root_id,
+            "expected_duration_seconds": expectation.expected_duration_seconds,
+            "format": module.APPROVAL_FORMAT,
+            "operations": [item.value() for item in expectation.operations],
+            "profile": expectation.profile,
+            "protected_tool_manifest_sha256": (
+                expectation.protected_tool_manifest_sha256
+            ),
+            "schema_version": module.APPROVAL_SCHEMA_VERSION,
+        }
+        data = canonical_json(value)
+        label = "approval_" + class_id.replace("-", "_")
+        source = trust_dir / label
+        if source.exists():
+            source.chmod(0o600)
+        source.write_bytes(data)
+        source.chmod(0o400)
+        archive = evidence_dir / f"{class_id}.approval.v1.json"
+        if archive.exists():
+            archive.chmod(0o600)
+        archive.write_bytes(data)
+        archive.chmod(0o400)
+        archives[label] = archive
+        paths[approval_class] = archive
+    approvals = module.load_protected_release_approval_set(
+        paths, expectations=expectations, expected_owner_uid=os.getuid()
+    )
+    class_records: dict[str, object] = {}
+    for approval in approvals:
+        class_id = approval.class_id.value
+        sanitized = approval.sanitized_archive()
+        name = f"{class_id}.approval-attestation.v1.json"
+        path = evidence_dir / name
+        if path.exists():
+            path.chmod(0o600)
+        path.write_bytes(sanitized.canonical_bytes)
+        path.chmod(0o400)
+        class_records[class_id] = {
+            "archive_id": module.APPROVAL_ARCHIVE_IDS[approval.class_id],
+            "archive_name": name,
+            "mode": "0400",
+            "sha256": sanitized.sha256,
+            "size_bytes": path.stat().st_size,
+        }
+    sanitized_set = module.sanitized_release_approval_set_archive(approvals)
+    set_name = "release-approval-set-attestation.v1.json"
+    set_path = evidence_dir / set_name
+    if set_path.exists():
+        set_path.chmod(0o600)
+    set_path.write_bytes(sanitized_set.canonical_bytes)
+    set_path.chmod(0o400)
+    marker = {
+        "format": module.APPROVAL_SET_ARCHIVE_FORMAT,
+        "schema_version": 1,
+        "candidate_oid": identity["head_commit"],
+        "candidate_tree": identity["head_tree"],
+        "protected_tool_manifest_sha256": tool_manifest_sha256,
+        "evidence_root_id": APPROVAL_EVIDENCE_ROOT_ID,
+        "expected_duration_seconds": dict(zip(APPROVAL_CLASS_IDS, APPROVAL_DURATIONS)),
+        "operation_plan_sha256": {
+            approval_class.value: digest
+            for approval_class, digest in module.APPROVAL_OPERATION_PLAN_SHA256.items()
+        },
+        "class_attestations": class_records,
+        "set_attestation": {
+            "archive_id": "release-approval.set-attestation.v1",
+            "archive_name": set_name,
+            "mode": "0400",
+            "sha256": sanitized_set.sha256,
+            "size_bytes": set_path.stat().st_size,
+        },
+    }
+    return archives, marker
+
+
+def fixture_tool_probe_result(
+    manifest: dict[str, object], *, archive_id_prefix: str
+) -> dict[str, object]:
+    """Build the synthetic path-free result emitted by the fixture helper."""
+
+    tools = manifest["tools"]
+    assert isinstance(tools, dict)
+    assert set(tools) == set(FIXTURE_TOOL_PROBE_OPERATION_IDS)
+    empty_sha256 = hashlib.sha256(b"").hexdigest()
+    records: dict[str, object] = {}
+    for name in sorted(tools):
+        source = tools[name]
+        assert isinstance(source, dict)
+        path = Path(source["path"])
+        operation_id = FIXTURE_TOOL_PROBE_OPERATION_IDS[name]
+        invocation_sha256 = hashlib.sha256(
+            canonical_json(
+                {
+                    "operation_id": operation_id,
+                    "schema_version": 1,
+                    "tool": name,
+                }
+            )
+        ).hexdigest()
+        postcondition_sha256 = hashlib.sha256(
+            canonical_json(
+                {
+                    "exit_status": (
+                        128
+                        if name in {"git-index-pack", "git-upload-pack"}
+                        else 1
+                        if name in {"cmp", "diff"}
+                        else 0
+                    ),
+                    "operation_id": operation_id,
+                    "schema_version": 1,
+                }
+            )
+        ).hexdigest()
+        records[name] = {
+            "archive_id": f"{archive_id_prefix}.{name}.v1",
+            "exit_status": (
+                128
+                if name in {"git-index-pack", "git-upload-pack"}
+                else 1
+                if name in {"cmp", "diff"}
+                else 0
+            ),
+            "invocation_sha256": invocation_sha256,
+            "mode": "0500",
+            "operation_id": operation_id,
+            "postcondition_sha256": postcondition_sha256,
+            "sha256": sha256(path),
+            "size_bytes": path.stat().st_size,
+            "stderr_sha256": empty_sha256,
+            "stderr_size_bytes": 0,
+            "stdout_sha256": empty_sha256,
+            "stdout_size_bytes": 0,
+        }
+    contract = {
+        "operation_ids": FIXTURE_TOOL_PROBE_OPERATION_IDS,
+        "schema_version": 1,
+    }
+    return {
+        "format": "iroha-sumeragi-v2-release-tool-functional-probes",
+        "host_family": "darwin" if sys.platform == "darwin" else "linux",
+        "probe_contract_sha256": hashlib.sha256(
+            canonical_json(contract)
+        ).hexdigest(),
+        "schema_version": 1,
+        "tool_count": 41,
+        "tools": records,
+    }
+
+
+def fixture_tool_probe_helper_source() -> bytes:
+    """Return a Python-only probe fixture which never launches a tool engine."""
+
+    operation_ids = json.dumps(
+        FIXTURE_TOOL_PROBE_OPERATION_IDS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f'''#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+OPERATION_IDS = {operation_ids}
+
+def canonical(value):
+    return (json.dumps(value, allow_nan=False, ensure_ascii=True,
+                       separators=(",", ":"), sort_keys=True) + "\\n").encode("ascii")
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--tool-manifest", type=Path, required=True)
+parser.add_argument("--expected-tool-manifest-sha256", required=True)
+parser.add_argument("--probe-root", type=Path, required=True)
+args = parser.parse_args()
+data = args.tool_manifest.read_bytes()
+if hashlib.sha256(data).hexdigest() != args.expected_tool_manifest_sha256:
+    raise SystemExit(21)
+manifest = json.loads(data.decode("ascii"))
+tools = manifest.get("tools")
+if set(manifest) != {{"schema_version", "tools"}} or manifest["schema_version"] != 1:
+    raise SystemExit(22)
+if not isinstance(tools, dict) or set(tools) != set(OPERATION_IDS) or len(tools) != 41:
+    raise SystemExit(23)
+empty = hashlib.sha256(b"").hexdigest()
+records = {{}}
+for name in sorted(tools):
+    source = tools[name]
+    if set(source) != {{"archive_id", "path", "sha256"}}:
+        raise SystemExit(24)
+    path = Path(source["path"])
+    metadata = path.stat()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if (not path.is_absolute() or not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o500
+            or digest != source["sha256"]):
+        raise SystemExit(25)
+    operation_id = OPERATION_IDS[name]
+    status = 128 if name in {{"git-index-pack", "git-upload-pack"}} else 1 if name in {{"cmp", "diff"}} else 0
+    records[name] = {{
+        "archive_id": source["archive_id"],
+        "exit_status": status,
+        "invocation_sha256": hashlib.sha256(canonical({{
+            "operation_id": operation_id, "schema_version": 1, "tool": name,
+        }})).hexdigest(),
+        "mode": "0500",
+        "operation_id": operation_id,
+        "postcondition_sha256": hashlib.sha256(canonical({{
+            "exit_status": status, "operation_id": operation_id, "schema_version": 1,
+        }})).hexdigest(),
+        "sha256": digest,
+        "size_bytes": metadata.st_size,
+        "stderr_sha256": empty,
+        "stderr_size_bytes": 0,
+        "stdout_sha256": empty,
+        "stdout_size_bytes": 0,
+    }}
+value = {{
+    "format": "iroha-sumeragi-v2-release-tool-functional-probes",
+    "host_family": "darwin" if sys.platform == "darwin" else "linux",
+    "probe_contract_sha256": hashlib.sha256(canonical({{
+        "operation_ids": OPERATION_IDS, "schema_version": 1,
+    }})).hexdigest(),
+    "schema_version": 1,
+    "tool_count": 41,
+    "tools": records,
+}}
+sys.stdout.buffer.write(canonical(value))
+'''.encode("ascii")
 
 
 def sanitized_identity_artifact(
@@ -77,6 +420,7 @@ def sanitized_operation(
         "stderr_size_bytes": len(stderr),
     }
 RELEASE_RECEIPT_TEST_COMPONENT_FILES = (
+    "sumeragi_v2_release_receipt_identity_replay_cases.py",
     "sumeragi_v2_release_receipt_bootstrap_archive_cases.py",
     "sumeragi_v2_release_receipt_sdk_source_closure_cases.py",
     "sumeragi_v2_release_receipt_supervision_cases.py",
@@ -90,6 +434,28 @@ def _execute_test_component(filename: str) -> None:
         raise RuntimeError(f"release-receipt test component is unavailable: {path}")
     source = path.read_text(encoding="utf-8")
     exec(compile(source, str(path), "exec"), globals())
+
+
+def _execute_test_component_function(filename: str, function_name: str) -> None:
+    """Execute one exact component-owned function at its canonical order point."""
+
+    path = Path(__file__).with_name(filename)
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"release-receipt test component is unavailable: {path}")
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ]
+    if len(functions) != 1:
+        raise RuntimeError(
+            f"release-receipt component function must be unique: {function_name}"
+        )
+    selected = ast.Module(body=functions, type_ignores=[])
+    exec(compile(selected, str(path), "exec"), globals())
 def fixture_writer(tmp_path: Path) -> Path:
     project = tmp_path / "writer-project"
     scripts = project / "scripts"
@@ -223,16 +589,29 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "d6f00da22fd0a17d07615d8892a2680124d267f5c3174c9a538792c5f9f1cd32"
+        "54fdb6bca310890d4d5c195925ddafafb74c89ec7b33ce4cd339846177b5bdb4"
     )
+    python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
+    python_launcher = (
+        "#!/bin/sh\n"
+        "if test \"$#\" = 4 && test \"$1\" = -I && test \"$2\" = -S "
+        "&& test \"$3\" = -c && test \"$4\" = "
+        + shlex.quote(python_probe_code)
+        + "; then printf '%s\\n' \"$0\"; exit 0; fi\n"
+        "exec "
+        + shlex.quote(sys.executable)
+        + " \"$@\"\n"
+    ).encode("utf-8")
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
-        ("python", b"#!/bin/sh\nexit 0\n", 0o500),
+        ("python", python_launcher, 0o500),
         ("bash", b"#!/bin/sh\nexit 0\n", 0o500),
         ("manifest_helper", b"# fixture manifest helper\n", 0o400),
         ("identity_verifier", b"# fixture identity verifier\n", 0o400),
         ("receipt_validator", b"# fixture receipt validator\n", 0o400),
         ("runtime_helper", b"# fixture protected runtime helper\n", 0o400),
+        ("tool_probe_helper", fixture_tool_probe_helper_source(), 0o400),
+        ("approval_contract", APPROVAL_CONTRACT.read_bytes(), 0o400),
         (
             "sdk_dependency_bundle_manifest",
             sdk_source_manifest_data,
@@ -251,6 +630,10 @@ def make_bootstrap_evidence(
     receipt_validator_support.chmod(0o400)
     synthetic_sources["receipt_validator_support"] = receipt_validator_support
     runner_tool_data = {
+        name: b"#!/bin/sh\nexit 97\n"
+        for name in FIXTURE_TOOL_PROBE_OPERATION_IDS
+    }
+    runner_tool_data.update({
         "chmod": b"#!/bin/sh\nexit 0\n",
         "cargo": (
             b"#!/bin/sh\n"
@@ -264,7 +647,7 @@ def make_bootstrap_evidence(
             + RUSTC_VERSION_OUTPUT
             + b"RUSTC_VERSION\n"
         ),
-    }
+    })
     runner_tool_sources: dict[str, Path] = {}
     for name, data in runner_tool_data.items():
         source = trust_dir / f"runner-{name}"
@@ -296,6 +679,39 @@ def make_bootstrap_evidence(
         alias = evidence_dir / "runner-bin" / name
         alias.symlink_to(Path("..") / "runner-tools" / name)
         runner_tool_aliases[name] = alias
+    runner_tool_probe_manifest_value = {
+        "schema_version": 1,
+        "tools": {
+            name: {
+                "archive_id": f"release-runner-tool.{name}.v1",
+                "path": str((evidence_dir / "runner-tools" / name).resolve()),
+                "sha256": sha256(evidence_dir / "runner-tools" / name),
+            }
+            for name in sorted(runner_tool_sources)
+        },
+    }
+    runner_tool_probe_manifest = evidence_dir / "runner-tool-probe-manifest.json"
+    runner_tool_probe_manifest.write_bytes(
+        canonical_json(runner_tool_probe_manifest_value)
+    )
+    runner_tool_probe_manifest.chmod(0o400)
+    runner_tool_probe_value = fixture_tool_probe_result(
+        runner_tool_probe_manifest_value,
+        archive_id_prefix="release-runner-tool",
+    )
+    runner_tool_probe_result = evidence_dir / "runner-tool-probes.json"
+    runner_tool_probe_result.write_bytes(canonical_json(runner_tool_probe_value))
+    runner_tool_probe_result.chmod(0o400)
+    approval_module = _load_approval_component(
+        synthetic_sources["approval_contract"]
+    )
+    approval_archives, release_approvals = _bootstrap_approval_fixture(
+        module=approval_module,
+        identity=identity,
+        tool_manifest_sha256=sha256(runner_tool_manifest),
+        trust_dir=trust_dir,
+        evidence_dir=evidence_dir,
+    )
     trusted_sources = {
         "allowed_signers": signature_allowed_signers,
         "bash": synthetic_sources["bash"],
@@ -309,6 +725,12 @@ def make_bootstrap_evidence(
             "receipt_validator_support"
         ],
         "runtime_helper": synthetic_sources["runtime_helper"],
+        "tool_probe_helper": synthetic_sources["tool_probe_helper"],
+        "approval_contract": synthetic_sources["approval_contract"],
+        **{
+            label: trust_dir / label
+            for label in approval_archives
+        },
         "sdk_dependency_bundle_manifest": synthetic_sources[
             "sdk_dependency_bundle_manifest"
         ],
@@ -330,6 +752,20 @@ def make_bootstrap_evidence(
             0o400,
         ),
         "runtime_helper": ("copy-release-runtime.py", 0o400),
+        "tool_probe_helper": ("probe-release-tools.py", 0o400),
+        "approval_contract": ("release-approval-contract.py", 0o400),
+        "approval_offline_toolchain_sdk": (
+            "offline-toolchain-sdk.approval.v1.json", 0o400
+        ),
+        "approval_formal_proof_tools": (
+            "formal-proof-tools.approval.v1.json", 0o400
+        ),
+        "approval_network_scale_soak": (
+            "network-scale-soak.approval.v1.json", 0o400
+        ),
+        "approval_final_bootstrap_publication": (
+            "final-bootstrap-publication.approval.v1.json", 0o400
+        ),
         "sdk_dependency_bundle_manifest": (
             "sdk-dependency-bundle-manifest.json",
             0o400,
@@ -343,6 +779,8 @@ def make_bootstrap_evidence(
     for label, source in trusted_sources.items():
         archive_name, archive_mode = trusted_names[label]
         archive = evidence_dir / archive_name
+        if archive.exists():
+            archive.chmod(0o600)
         archive.write_bytes(source.read_bytes())
         archive.chmod(archive_mode)
         trusted_archives[label] = archive
@@ -353,6 +791,37 @@ def make_bootstrap_evidence(
             "sha256": sha256(source),
             "size_bytes": source.stat().st_size,
         }
+    bootstrap_components: dict[str, object] = {}
+    for source in BOOTSTRAP_COMPONENT_FILES:
+        archive = evidence_dir / source.name
+        archive.write_bytes(source.read_bytes())
+        archive.chmod(0o400)
+        bootstrap_components[source.name] = {
+            "archive_id": (
+                "release-bootstrap.bootstrap-component.v1:" + source.name
+            ),
+            "archive_name": source.name,
+            "mode": "0400",
+            "sha256": sha256(source),
+            "size_bytes": source.stat().st_size,
+        }
+    trusted_records["bootstrap"]["components"] = bootstrap_components
+    receipt_components: dict[str, object] = {}
+    for source in RECEIPT_VALIDATOR_COMPONENT_FILES:
+        archive = evidence_dir / source.name
+        archive.write_bytes(source.read_bytes())
+        archive.chmod(0o400)
+        receipt_components[source.name] = {
+            "archive_id": (
+                "release-bootstrap.receipt-validator-component.v1:"
+                + source.name
+            ),
+            "archive_name": source.name,
+            "mode": "0400",
+            "sha256": sha256(source),
+            "size_bytes": source.stat().st_size,
+        }
+    trusted_records["receipt_validator"]["components"] = receipt_components
 
     bootstrap_identity = evidence_dir / "candidate-identity.json"
     bootstrap_identity.write_bytes(identity_bytes)
@@ -581,6 +1050,12 @@ def make_bootstrap_evidence(
         "SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": sha256(
             trusted_archives["runtime_helper"]
         ),
+        "SUMERAGI_V2_RELEASE_TOOL_PROBE_HELPER": str(
+            trusted_archives["tool_probe_helper"]
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256": sha256(
+            trusted_archives["tool_probe_helper"]
+        ),
         "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(trusted_archives["ssh_keygen"]),
         "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": sha256(trusted_archives["git"]),
         "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": sha256(
@@ -622,6 +1097,12 @@ def make_bootstrap_evidence(
         ),
         "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": sha256(
             trusted_archives["runtime_helper"]
+        ),
+        "IROHA_RELEASE_TOOL_PROBE_HELPER": str(
+            trusted_archives["tool_probe_helper"]
+        ),
+        "IROHA_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256": sha256(
+            trusted_archives["tool_probe_helper"]
         ),
         "IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST": str(
             trusted_archives["sdk_dependency_bundle_manifest"]
@@ -669,6 +1150,7 @@ def make_bootstrap_evidence(
         "candidate_identity": identity,
         "candidate_identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
         "trusted_inputs": trusted_records,
+        "release_approvals": release_approvals,
         "identity_verification": identity_verification,
         "runner": {
             "archive_id": "release-candidate.runner.v1",
@@ -736,6 +1218,25 @@ def make_bootstrap_evidence(
                     f"{trusted_archives['python']}\n".encode()
                 ),
             },
+            "runner_tool_closure": {
+                "manifest": {
+                    "archive_id": (
+                        "release-bootstrap.runner-tool-probe-manifest.v1"
+                    ),
+                    "archive_name": "runner-tool-probe-manifest.json",
+                    "mode": "0400",
+                    "sha256": sha256(runner_tool_probe_manifest),
+                    "size_bytes": runner_tool_probe_manifest.stat().st_size,
+                },
+                "result": {
+                    "archive_id": "release-bootstrap.runner-tool-probes.v1",
+                    "archive_name": "runner-tool-probes.json",
+                    "mode": "0400",
+                    "sha256": sha256(runner_tool_probe_result),
+                    "size_bytes": runner_tool_probe_result.stat().st_size,
+                },
+                "value": runner_tool_probe_value,
+            },
         },
     }
     completion = evidence_dir / "BOOTSTRAP_COMPLETED.json"
@@ -761,7 +1262,56 @@ def make_bootstrap_evidence(
         "bootstrap_identity_revocation": identity_paths["ssh_revocation"],
         "bootstrap_runner_cargo": evidence_dir / "runner-tools" / "cargo",
         "bootstrap_runner_rustc": evidence_dir / "runner-tools" / "rustc",
+        "bootstrap_runner_tool_probe_manifest": runner_tool_probe_manifest,
+        "bootstrap_runner_tool_probe_result": runner_tool_probe_result,
     }
+
+
+def make_runtime_tool_probe_evidence(
+    invocation_root: Path, bootstrap: dict[str, Path | str]
+) -> dict[str, object]:
+    """Copy the synthetic 41-tool closure and bind its path-free result."""
+
+    evidence_dir = bootstrap["bootstrap_evidence_dir"]
+    assert isinstance(evidence_dir, Path)
+    runtime_root = invocation_root / "runtime"
+    runtime_bin = runtime_root / "bin"
+    runtime_bin.mkdir(parents=True, mode=0o700)
+    runtime_bin.chmod(0o700)
+    runtime_tools: dict[str, Path] = {}
+    for name in sorted(FIXTURE_TOOL_PROBE_OPERATION_IDS):
+        source = evidence_dir / "runner-tools" / name
+        destination = runtime_bin / name
+        shutil.copyfile(source, destination)
+        destination.chmod(0o500)
+        runtime_tools[name] = destination
+    manifest_value = {
+        "schema_version": 1,
+        "tools": {
+            name: {
+                "archive_id": f"release-runtime-tool.{name}.v1",
+                "path": str(path.resolve()),
+                "sha256": sha256(path),
+            }
+            for name, path in sorted(runtime_tools.items())
+        },
+    }
+    manifest = invocation_root / "runtime-tool-probe-manifest.json"
+    manifest.write_bytes(canonical_json(manifest_value))
+    manifest.chmod(0o400)
+    result_value = fixture_tool_probe_result(
+        manifest_value,
+        archive_id_prefix="release-runtime-tool",
+    )
+    result = invocation_root / "runtime-tool-probe-result.json"
+    result.write_bytes(canonical_json(result_value))
+    result.chmod(0o400)
+    return {
+        "runtime_tool_probe_manifest": manifest,
+        "runtime_tool_probe_result": result,
+        "runtime_tool_probe_tools": runtime_tools,
+    }
+
 
 def make_scaling_evidence(
     tmp_path: Path, *, head: str, sealed_manifest: str
@@ -1972,6 +2522,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     release_invocation_root = tmp_path / "release-invocation"
     release_invocation_root.mkdir(mode=0o700)
     release_invocation_root.chmod(0o700)
+    runtime_tool_probes = make_runtime_tool_probe_evidence(
+        release_invocation_root, bootstrap
+    )
     release_root = release_invocation_root / "source"
     release_root.mkdir()
     (release_root / "Cargo.lock").write_bytes(lock_bytes)
@@ -2778,6 +3331,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         **g4p,
         **g12,
         **sdk_dependencies,
+        **runtime_tool_probes,
         "candidate": candidate,
         "sealed": sealed,
         "release_root": release_root,
@@ -2857,7 +3411,9 @@ def run_writer(
     *,
     use_supplied_output: bool = False,
     verify_existing: bool = False,
+    replay_existing: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    assert not (verify_existing and replay_existing)
     if not use_supplied_output:
         output = terminal_output_path(evidence)
     if not output.parent.exists():
@@ -2881,7 +3437,7 @@ def run_writer(
     ):
         destination = repository_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not verify_existing or not destination.exists():
+        if not (verify_existing or replay_existing) or not destination.exists():
             shutil.copy2(source_root / relative, destination)
     arguments = [
             sys.executable,
@@ -2960,6 +3516,10 @@ def run_writer(
             str(evidence["sdk_dependency_input_inventory"]),
             "--sdk-dependency-final-work-inventory",
             str(evidence["sdk_dependency_final_work_inventory"]),
+            "--runtime-tool-probe-manifest",
+            str(evidence["runtime_tool_probe_manifest"]),
+            "--runtime-tool-probe-result",
+            str(evidence["runtime_tool_probe_result"]),
             "--expected-scaling-trial-harness-sha256",
             str(evidence["expected_scaling_trial_harness_sha256"]),
             "--expected-scaling-configuration-sha256",
@@ -2977,6 +3537,8 @@ def run_writer(
         arguments.extend(("--verify-existing", "--validation-ack",
             str(repository_root.parent / "receipt-validation-ack.json"),
             "--source-manifest-sha256", str(evidence["sealed_manifest"])))
+    elif replay_existing:
+        arguments.append("--replay-existing")
     runner_environment = evidence["bootstrap_runner_environment"]
     assert isinstance(runner_environment, dict)
     execution_environment = dict(runner_environment)
@@ -3092,6 +3654,56 @@ def rebind_bootstrap_runner_tool(
     manifest_source.write_bytes(canonical_json(manifest_value))
     manifest_source.chmod(0o400)
 
+    probe_manifest = evidence["bootstrap_runner_tool_probe_manifest"]
+    probe_result = evidence["bootstrap_runner_tool_probe_result"]
+    runtime_manifest = evidence["runtime_tool_probe_manifest"]
+    runtime_result = evidence["runtime_tool_probe_result"]
+    runtime_tools = evidence["runtime_tool_probe_tools"]
+    assert isinstance(probe_manifest, Path)
+    assert isinstance(probe_result, Path)
+    assert isinstance(runtime_manifest, Path)
+    assert isinstance(runtime_result, Path)
+    assert isinstance(runtime_tools, dict)
+    runtime_tool = runtime_tools[name]
+    assert isinstance(runtime_tool, Path)
+    runtime_tool.chmod(0o700)
+    runtime_tool.write_bytes(tool.read_bytes())
+    runtime_tool.chmod(0o500)
+
+    probe_manifest_value = json.loads(probe_manifest.read_text(encoding="ascii"))
+    probe_manifest_value["tools"][name]["sha256"] = sha256(tool)
+    rewrite_json(probe_manifest, probe_manifest_value)
+    probe_value = fixture_tool_probe_result(
+        probe_manifest_value,
+        archive_id_prefix="release-runner-tool",
+    )
+    rewrite_json(probe_result, probe_value)
+
+    runtime_manifest_value = json.loads(
+        runtime_manifest.read_text(encoding="ascii")
+    )
+    runtime_manifest_value["tools"][name]["sha256"] = sha256(runtime_tool)
+    rewrite_json(runtime_manifest, runtime_manifest_value)
+    runtime_value = fixture_tool_probe_result(
+        runtime_manifest_value,
+        archive_id_prefix="release-runtime-tool",
+    )
+    rewrite_json(runtime_result, runtime_value)
+
+    current_marker = json.loads(
+        Path(evidence["bootstrap_completion"]).read_text(encoding="utf-8")
+    )
+    approval_module = _load_approval_component(
+        evidence_dir / "release-approval-contract.py"
+    )
+    approval_archives, release_approvals = _bootstrap_approval_fixture(
+        module=approval_module,
+        identity=current_marker["candidate_identity"],
+        tool_manifest_sha256=sha256(manifest_source),
+        trust_dir=evidence_dir.parent / "bootstrap-trust",
+        evidence_dir=evidence_dir,
+    )
+
     def mutate(value: dict[str, object]) -> None:
         runner = value["runner"]
         trusted_inputs = value["trusted_inputs"]
@@ -3107,6 +3719,25 @@ def rebind_bootstrap_runner_tool(
         tool_record["size_bytes"] = tool.stat().st_size
         manifest_record["sha256"] = sha256(manifest_source)
         manifest_record["size_bytes"] = manifest_source.stat().st_size
+        value["release_approvals"] = release_approvals
+        for label, archive in approval_archives.items():
+            approval_record = trusted_inputs[label]
+            assert isinstance(approval_record, dict)
+            approval_record["sha256"] = sha256(archive)
+            approval_record["size_bytes"] = archive.stat().st_size
+        probes = value["trusted_execution_probes"]
+        assert isinstance(probes, dict)
+        closure = probes["runner_tool_closure"]
+        assert isinstance(closure, dict)
+        probe_manifest_record = closure["manifest"]
+        probe_result_record = closure["result"]
+        assert isinstance(probe_manifest_record, dict)
+        assert isinstance(probe_result_record, dict)
+        probe_manifest_record["sha256"] = sha256(probe_manifest)
+        probe_manifest_record["size_bytes"] = probe_manifest.stat().st_size
+        probe_result_record["sha256"] = sha256(probe_result)
+        probe_result_record["size_bytes"] = probe_result.stat().st_size
+        closure["value"] = probe_value
 
     mutate_bootstrap_marker(evidence, mutate)
 
@@ -3247,589 +3878,12 @@ def rebind_scaling_identity(
         regenerate_scaling_report(evidence)
 
 
-def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    output = terminal_output_path(evidence)
-    result = run_writer(evidence, output, writer)
+_execute_test_component_function(
+    "sumeragi_v2_release_receipt_terminal_publication_cases.py",
+    "test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact",
+)
 
-    assert result.returncode == 0, result.stderr
-    receipt = json.loads(output.read_text(encoding="utf-8"))
-    assert receipt["result"] == "release-complete"
-    assert receipt["identity"] == {
-        "head_commit": evidence["head"],
-        "head_tree": evidence["tree"],
-        "index_tree": evidence["tree"],
-        "cargo_lock_sha256": evidence["lock"],
-        "candidate_source_manifest_sha256": evidence["candidate_manifest"],
-        "sealed_source_manifest_sha256": evidence["sealed_manifest"],
-    }
-    assert receipt["authentication"]["schema_version"] == 2
-    release_authentication = receipt["authentication"]["release_identity"]
-    bootstrap_authentication = receipt["authentication"]["bootstrap"]
-    assert release_authentication["signature_format"] == "ssh"
-    assert release_authentication["verification_status"] == "G"
-    assert release_authentication["candidate_commit_oid"] == evidence["head"]
-    assert release_authentication["signer_fingerprint"] == evidence[
-        "expected_signer_fingerprint"
-    ]
-    assert release_authentication["allowed_signers_principal"] == evidence[
-        "signer_principal"
-    ]
-    assert release_authentication["replay"]["performed"] is True
-    assert release_authentication["trust_policy"] == {
-        "git_sha256": evidence["expected_git_sha256"],
-        "ssh_keygen_sha256": evidence["expected_ssh_keygen_sha256"],
-        "allowed_signers_sha256": evidence["expected_allowed_signers_sha256"],
-        "revocation_sha256": evidence["expected_revocation_sha256"],
-        "signer_fingerprint": evidence["expected_signer_fingerprint"],
-    }
-    assert bootstrap_authentication["completion_sha256"] == evidence[
-        "expected_bootstrap_completion_sha256"
-    ]
-    assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-            "d6f00da22fd0a17d07615d8892a2680124d267f5c3174c9a538792c5f9f1cd32"
-    )
-    assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
-    bootstrap_completion = evidence["bootstrap_completion"]
-    assert isinstance(bootstrap_completion, Path)
-    assert receipt["evidence"]["bootstrap"]["completion"] == {
-        "archive_id": "release-bootstrap.completion.v2",
-        "mode": "0400",
-        "sha256": sha256(bootstrap_completion),
-        "size_bytes": bootstrap_completion.stat().st_size,
-    }
-    sdk_dependencies = receipt["evidence"]["sdk_dependencies"]
-    sdk_manifest = (
-        Path(evidence["bootstrap_evidence_dir"])
-        / "sdk-dependency-bundle-manifest.json"
-    )
-    assert sdk_dependencies == {
-        "schema_version": 1,
-        "source_disclosure": "withheld",
-        "source_manifest_sha256": sha256(sdk_manifest),
-        "source_state_sha256": "e" * 64,
-        "archive": {
-            "archive_id": "release-sdk-dependencies.bundle.v1",
-            "archive_name": "sdk-dependency-bundle.tar",
-            "mode": "0400",
-            "sha256": sha256(Path(evidence["sdk_dependency_archive"])),
-            "size_bytes": Path(evidence["sdk_dependency_archive"]).stat().st_size,
-        },
-        "input_inventory": {
-            "archive_id": "release-sdk-dependencies.input-inventory.v1",
-            "archive_name": "sdk-dependency-input.json",
-            "mode": "0400",
-            "sha256": sha256(Path(evidence["sdk_dependency_input_inventory"])),
-            "size_bytes": Path(
-                evidence["sdk_dependency_input_inventory"]
-            ).stat().st_size,
-        },
-        "final_work_inventory": {
-            "archive_id": "release-sdk-dependencies.work-final.v1",
-            "archive_name": "sdk-dependency-work-final.json",
-            "mode": "0400",
-            "sha256": sha256(
-                Path(evidence["sdk_dependency_final_work_inventory"])
-            ),
-            "size_bytes": Path(
-                evidence["sdk_dependency_final_work_inventory"]
-            ).stat().st_size,
-        },
-    }
-    assert "path" not in json.dumps(sdk_dependencies)
-    assert str(Path(evidence["sdk_dependency_archive"]).parent) not in json.dumps(
-        sdk_dependencies
-    )
-    assert "/operator/" not in output.read_text(encoding="utf-8")
 
-    module = load_writer_module()
-    sdk_inventory_document = json.loads(
-        Path(evidence["sdk_dependency_input_inventory"]).read_text(
-            encoding="utf-8"
-        )
-    )
-    sdk_records, sdk_by_path, _ = module._sdk_inventory_records(
-        sdk_inventory_document["records"],
-        "fixture SDK inventory",
-        root_mode="0500",
-    )
-    sdk_bindings = module._sdk_binding_contract(
-        sdk_inventory_document["bindings"], sdk_by_path
-    )
-    private_attack_root = tmp_path / "sdk-private-manifest-attacks"
-    private_attack_root.mkdir(mode=0o700)
-
-    def reject_private_manifest(
-        document: dict[str, object], expected: str,
-    ) -> None:
-        path = private_attack_root / f"manifest-{len(tuple(private_attack_root.iterdir()))}.json"
-        path.write_bytes(canonical_json(document))
-        path.chmod(0o400)
-        with pytest.raises(module.ReceiptError, match=expected):
-            module._sdk_validate_private_source_manifest(
-                path=path,
-                expected_sha256=sha256(path),
-                archive_records=sdk_records,
-                bindings=sdk_bindings,
-                expected_git_sha256=evidence["expected_git_sha256"],
-            )
-
-    missing_node_member = json.loads(sdk_manifest.read_text(encoding="utf-8"))
-    node_inventory = missing_node_member["node"]["node_modules_inventory"]
-    node_inventory["records"] = [
-        record for record in node_inventory["records"]
-        if record["path"] != "fixture/index.js"
-    ]
-    node_inventory["record_count"] = len(node_inventory["records"])
-    node_inventory["file_bytes"] = sum(
-        record.get("size", 0) for record in node_inventory["records"]
-    )
-    node_inventory["records_sha256"] = hashlib.sha256(
-        json.dumps(
-            node_inventory["records"],
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    reject_private_manifest(missing_node_member, "retained archive subtree")
-
-    dirty_swift_member = json.loads(sdk_manifest.read_text(encoding="utf-8"))
-    swift_inventory = dirty_swift_member["swiftpm"]["cache_inventory"]
-    for record in swift_inventory["records"]:
-        if record["path"] == "checkouts/fixture/Sources/Fixture.swift":
-            record["sha256"] = "f" * 64
-    swift_inventory["records_sha256"] = hashlib.sha256(
-        json.dumps(
-            swift_inventory["records"],
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    reject_private_manifest(dirty_swift_member, "retained archive subtree")
-
-    wrong_gradle_key = json.loads(sdk_manifest.read_text(encoding="utf-8"))
-    wrong_gradle_key["gradle"]["wrapper_cache_key"] = "0" * 24
-    reject_private_manifest(wrong_gradle_key, "private source bindings")
-    signature_artifacts = {
-        "release_signature_attestation": "signature_attestation",
-        "release_signature_transcript": "signature_transcript",
-        "release_signature_raw_commit": "signature_raw_commit",
-        "release_signature_cargo_lock": "signature_cargo_lock",
-        "release_signature_allowed_signers": "signature_allowed_signers",
-        "release_signature_revocation": "signature_revocation",
-        "release_signature_git": "signature_git",
-        "release_signature_ssh_keygen": "signature_ssh_keygen",
-    }
-    for receipt_name, fixture_name in signature_artifacts.items():
-        fixture_path = evidence[fixture_name]
-        assert isinstance(fixture_path, Path)
-        expected_mode = "0500" if fixture_name in {
-            "signature_git",
-            "signature_ssh_keygen",
-        } else "0400"
-        assert receipt["evidence"][receipt_name] == {
-            "path": str(fixture_path.resolve()),
-            "sha256": sha256(fixture_path),
-            "size_bytes": fixture_path.stat().st_size,
-            "mode": expected_mode,
-            "owner_uid": os.geteuid(),
-            "nlink": 1,
-        }
-    expected_artifacts = {
-        "corridor_completion": "corridor_completion",
-        "corridor_summary": "corridor_summary",
-        "corridor_production_inventory": "corridor_required",
-        "g_unit_focused_test_inventory": "corridor_g_unit",
-        "formal_completion": "formal_completion",
-        "formal_gate_log": "formal_log",
-        "formal_proof_coverage": "formal_ledger",
-        "formal_proof_evidence": "formal_evidence",
-        "formal_verus_evidence": "formal_verus_evidence",
-        "formal_verus_log": "formal_verus_log",
-        "formal_multilane_apalache_evidence": (
-            "formal_multilane_apalache_evidence"
-        ),
-        "formal_cross_tool_evidence": "formal_cross_tool_evidence",
-        "formal_production_trace_extraction_evidence": (
-            "formal_production_trace_extraction_evidence"
-        ),
-        "formal_harness_lock": "formal_harness_lock",
-        "formal_toolchain": "formal_toolchain",
-        "formal_tlaps_resource_jsonl": "formal_tlaps_resource_jsonl",
-        "formal_tlaps_resource_summary": "formal_tlaps_resource_summary",
-        "seed_matrix_completion": "seed_completion",
-        "seed_matrix_summary": "seed_summary",
-        "seed_matrix_localnet_manifest_index": "seed_localnet_manifest_index",
-        "chaos_completion": "chaos_completion",
-        "chaos_log": "chaos_log",
-        "taira_completion": "taira_completion",
-        "taira_evidence": "taira_evidence",
-        "taira_run_log": "taira_log",
-    }
-    for receipt_name, fixture_name in expected_artifacts.items():
-        fixture_path = evidence[fixture_name]
-        assert isinstance(fixture_path, Path)
-        assert receipt["evidence"][receipt_name] == {
-            "path": str(fixture_path.resolve()),
-            "sha256": sha256(fixture_path),
-        }
-    seed_logs = evidence["seed_logs"]
-    assert isinstance(seed_logs, list)
-    assert receipt["evidence"]["seed_matrix_run_logs"] == [
-        {"path": str(path.resolve()), "sha256": sha256(path)} for path in seed_logs
-    ]
-    seed_localnet_manifests = evidence["seed_localnet_manifests"]
-    assert isinstance(seed_localnet_manifests, list)
-    assert receipt["evidence"]["seed_matrix_localnet_manifests"] == [
-        {"path": str(path.resolve()), "sha256": sha256(path)}
-        for path in seed_localnet_manifests
-    ]
-    corridor_logs = evidence["corridor_logs"]
-    assert isinstance(corridor_logs, list)
-    assert receipt["evidence"]["corridor_logs"] == [
-        {"path": str(path.resolve()), "sha256": sha256(path)}
-        for path in corridor_logs
-    ]
-    diagnostics_legs = {
-        Path(artifact["path"]).stem.split("-", 1)[1]
-        for artifact in receipt["evidence"]["corridor_logs"]
-        if "-sumeragi-diagnostics-" in Path(artifact["path"]).name
-    }
-    assert diagnostics_legs == {
-        "sumeragi-diagnostics-rust",
-        "sumeragi-diagnostics-python",
-        "sumeragi-diagnostics-javascript",
-        "sumeragi-diagnostics-swift",
-        "sumeragi-diagnostics-kotlin",
-        "sumeragi-diagnostics-java",
-    }
-    proof_fidelity_logs = [
-        artifact
-        for artifact in receipt["evidence"]["corridor_logs"]
-        if artifact["path"].endswith("-preflight-proof-fidelity.log")
-    ]
-    assert len(proof_fidelity_logs) == 1
-    scaling_preflight_logs = [
-        artifact
-        for artifact in receipt["evidence"]["corridor_logs"]
-        if artifact["path"].endswith("-preflight-multilane-scaling.log")
-    ]
-    assert len(scaling_preflight_logs) == 1
-
-    prebuilt = receipt["evidence"]["prebuilt_binary_bundle"]
-    prebuilt_manifest = evidence["prebuilt_manifest"]
-    prebuilt_binaries = evidence["prebuilt_binaries"]
-    prebuilt_bundle = evidence["prebuilt_bundle"]
-    assert isinstance(prebuilt_manifest, Path)
-    assert isinstance(prebuilt_binaries, list)
-    assert isinstance(prebuilt_bundle, Path)
-    assert prebuilt["schema_version"] == 3
-    assert prebuilt["manifest"] == {
-        "archive_id": "release-prebuilt.manifest.v2",
-        "sha256": sha256(prebuilt_manifest),
-        "size_bytes": prebuilt_manifest.stat().st_size,
-        "mode": "0400",
-    }
-    assert prebuilt["source_manifest_sha256"] == evidence["sealed_manifest"]
-    assert prebuilt["cargo_lock_sha256"] == evidence["lock"]
-    assert prebuilt["archive_id"] == (
-        f"release-prebuilt.bundle.v1:{prebuilt_bundle.name}"
-    )
-    assert prebuilt["host_triple"] == PREBUILT_HOST_TRIPLE
-    assert prebuilt["target_triple"] == PREBUILT_HOST_TRIPLE
-    assert prebuilt["profile"] == "release"
-    assert prebuilt["version_transcripts"] == {
-        "cargo": {
-            "operation_id": "cargo.version.v1",
-            "tool_archive_id": "release-runner-tool.cargo.v1",
-            "sha256": hashlib.sha256(CARGO_VERSION_OUTPUT).hexdigest(),
-            "size_bytes": len(CARGO_VERSION_OUTPUT),
-        },
-        "rustc": {
-            "operation_id": "rustc.version.v1",
-            "tool_archive_id": "release-runner-tool.rustc.v1",
-            "sha256": hashlib.sha256(RUSTC_VERSION_OUTPUT).hexdigest(),
-            "size_bytes": len(RUSTC_VERSION_OUTPUT),
-        },
-    }
-    assert prebuilt["binaries"] == [
-        {
-            "role": role,
-            "relative_path": relative,
-            "archive_id": f"release-prebuilt.binary.{role}.v1",
-            "sha256": sha256(path),
-            "size_bytes": path.stat().st_size,
-            "mode": "0500",
-        }
-        for (role, relative), path in zip(
-            (
-                ("irohad", "release/iroha3d"),
-                (
-                    "irohad_message_control",
-                    "message-control/release/iroha3d",
-                ),
-                ("iroha", "release/iroha"),
-                ("kagami", "release/kagami"),
-            ),
-            prebuilt_binaries,
-        )
-    ]
-
-    scaling_root = evidence["scaling_root"]
-    assert isinstance(scaling_root, Path)
-    scaling_bundle = receipt["evidence"]["multilane_scaling_bundle"]
-    scaling_paths = sorted(
-        path for path in scaling_root.rglob("*") if path.is_file()
-    )
-    assert scaling_bundle["archive_id"] == "release-scaling.bundle.v1"
-    assert scaling_bundle["file_count"] == len(scaling_paths)
-    assert scaling_bundle["total_size_bytes"] == sum(
-        path.stat().st_size for path in scaling_paths
-    )
-    assert [record["relative_path"] for record in scaling_bundle["files"]] == [
-        path.relative_to(scaling_root).as_posix() for path in scaling_paths
-    ]
-    for record, path in zip(scaling_bundle["files"], scaling_paths):
-        assert record == {
-            "archive_id": (
-                "release-scaling.file.v1:"
-                + path.relative_to(scaling_root).as_posix()
-            ),
-            "relative_path": path.relative_to(scaling_root).as_posix(),
-            "sha256": sha256(path),
-            "size_bytes": path.stat().st_size,
-            "mode": f"{path.stat().st_mode & 0o7777:04o}",
-        }
-    release_root = evidence["release_root"]
-    assert isinstance(release_root, Path)
-    expected_retained_tooling = []
-    for role, source_path in (
-        ("localnet", "scripts/deploy_localnet.sh"),
-        ("load_generator", "scripts/tx_load.py"),
-        ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
-    ):
-        retained_path = release_root / source_path
-        expected_retained_tooling.append(
-            {
-                "role": role,
-                "archive_id": f"release-scaling.retained-tool.{role}.v1",
-                "sha256": sha256(retained_path),
-                "size_bytes": retained_path.stat().st_size,
-                "mode": f"{retained_path.stat().st_mode & 0o7777:04o}",
-            }
-        )
-    assert receipt["evidence"]["multilane_scaling_trust_anchors"] == {
-        "trial_harness_sha256": evidence[
-            "expected_scaling_trial_harness_sha256"
-        ],
-        "configuration_sha256": evidence[
-            "expected_scaling_configuration_sha256"
-        ],
-        "irohad_sha256": evidence["expected_scaling_irohad_sha256"],
-        "iroha_cli_sha256": evidence["expected_scaling_iroha_cli_sha256"],
-        "retained_tooling": expected_retained_tooling,
-    }
-
-    g4p = receipt["evidence"]["g4p_multilane"]
-    assert g4p["schema_version"] == 1
-    g4p_logs = evidence["g4p_logs"]
-    assert isinstance(g4p_logs, list)
-    g4p_expected = {
-        "completion": evidence["g4p_completion"],
-        "run_summary": evidence["g4p_summary"],
-    }
-    for receipt_name, path in g4p_expected.items():
-        assert isinstance(path, Path)
-        assert g4p[receipt_name] == {
-            "path": str(path.resolve()),
-            "sha256": sha256(path),
-            "size_bytes": path.stat().st_size,
-            "mode": f"{path.stat().st_mode & 0o7777:04o}",
-            "owner_uid": os.geteuid(),
-            "nlink": 1,
-        }
-    assert [record["path"] for record in g4p["run_logs"]] == [
-        str(path.resolve()) for path in g4p_logs
-    ]
-
-    g12 = receipt["evidence"]["g12_cross_dataspace"]
-    g12_seed_logs = evidence["g12_seed_logs"]
-    assert isinstance(g12_seed_logs, list)
-    g12_expected = {
-        "seed_completion": evidence["g12_seed_completion"],
-        "seed_summary": evidence["g12_seed_summary"],
-        "fault_soak_completion": evidence["g12_soak_completion"],
-        "fault_soak_log": evidence["g12_soak_log"],
-    }
-    for receipt_name, path in g12_expected.items():
-        assert isinstance(path, Path)
-        assert g12[receipt_name] == {
-            "path": str(path.resolve()),
-            "sha256": sha256(path),
-            "size_bytes": path.stat().st_size,
-            "mode": f"{path.stat().st_mode & 0o7777:04o}",
-            "owner_uid": os.geteuid(),
-            "nlink": 1,
-        }
-    assert [record["path"] for record in g12["seed_run_logs"]] == [
-        str(path.resolve()) for path in g12_seed_logs
-    ]
-
-    module = load_writer_module()
-    candidate = evidence["candidate"]
-    sealed = evidence["sealed"]
-    assert isinstance(candidate, Path)
-    assert isinstance(sealed, Path)
-    candidate_contract = module._capture_path_contract(
-        candidate,
-        "fixture candidate identity",
-        expected_sha256=sha256(candidate),
-    )
-    sealed_contract = module._capture_path_contract(
-        sealed,
-        "fixture sealed identity",
-        expected_sha256=sha256(sealed),
-    )
-    contracts = module._snapshot_receipt_inputs(
-        receipt,
-        candidate_identity=candidate_contract,
-        sealed_identity=sealed_contract,
-        scaling_root=scaling_root,
-        bootstrap_evidence_root=evidence["bootstrap_evidence_dir"],
-        candidate_root=evidence["bootstrap_candidate_root"],
-        release_root=release_root,
-        bootstrap_runtime_contracts=[],
-    )
-    directory_paths = {
-        contract.path
-        for contract in contracts
-        if isinstance(contract, module.DirectoryContract)
-    }
-
-    family_specs = (
-        (
-            "corridor_completion",
-            (
-                "corridor_completion",
-                "corridor_summary",
-                "corridor_production_inventory",
-                "g_unit_focused_test_inventory",
-                "corridor_logs",
-            ),
-        ),
-        (
-            "formal_completion",
-            (
-                "formal_completion",
-                "formal_gate_log",
-                "formal_proof_coverage",
-                "formal_proof_evidence",
-                "formal_verus_evidence",
-                "formal_verus_log",
-                "formal_multilane_apalache_evidence",
-                "formal_cross_tool_evidence",
-                "formal_production_trace_extraction_evidence",
-                "formal_harness_lock",
-                "formal_toolchain",
-                "formal_tlaps_resource_jsonl",
-                "formal_tlaps_resource_summary",
-            ),
-        ),
-        (
-            "seed_matrix_completion",
-            (
-                "seed_matrix_completion",
-                "seed_matrix_summary",
-                "seed_matrix_run_logs",
-                "seed_matrix_localnet_manifest_index",
-                "seed_matrix_localnet_manifests",
-            ),
-        ),
-        ("chaos_completion", ("chaos_completion", "chaos_log")),
-        (
-            "taira_completion",
-            ("taira_completion", "taira_evidence", "taira_run_log"),
-        ),
-    )
-
-    def artifact_paths(value: object) -> list[Path]:
-        paths: list[Path] = []
-        if isinstance(value, dict):
-            if isinstance(value.get("path"), str) and isinstance(
-                value.get("sha256"), str
-            ):
-                paths.append(Path(value["path"]))
-            for child in value.values():
-                paths.extend(artifact_paths(child))
-        elif isinstance(value, list):
-            for child in value:
-                paths.extend(artifact_paths(child))
-        return paths
-
-    family_roots: set[Path] = set()
-    expected_family_directories: set[Path] = set()
-    for completion_key, member_keys in family_specs:
-        root = Path(receipt["evidence"][completion_key]["path"]).parent
-        family_roots.add(root)
-        expected_family_directories.add(root)
-        for member_key in member_keys:
-            for path in artifact_paths(receipt["evidence"][member_key]):
-                parent = path.parent
-                while True:
-                    expected_family_directories.add(parent)
-                    if parent == root:
-                        break
-                    parent = parent.parent
-    actual_family_directories = {
-        path
-        for path in directory_paths
-        if any(path == root or root in path.parents for root in family_roots)
-    }
-    assert actual_family_directories == expected_family_directories
-
-    corridor_root = Path(
-        receipt["evidence"]["corridor_completion"]["path"]
-    ).parent
-    corridor_metadata = corridor_root.stat()
-    real_fsync = module.os.fsync
-
-    def fail_corridor_root_fsync(descriptor: int) -> None:
-        metadata = os.fstat(descriptor)
-        if (metadata.st_dev, metadata.st_ino) == (
-            corridor_metadata.st_dev,
-            corridor_metadata.st_ino,
-        ):
-            raise OSError("fixture corridor root fsync failure")
-        real_fsync(descriptor)
-
-    unpublished = output.with_name("UNPUBLISHED.json")
-    monkeypatch.setattr(module.os, "fsync", fail_corridor_root_fsync)
-    with pytest.raises(module.ReceiptError, match="fsync failed"):
-        module._fsync_receipt_inputs(contracts)
-    assert not unpublished.exists()
-
-    replacement_identity = candidate.with_name("candidate-replacement.json")
-    replacement_identity.write_bytes(candidate.read_bytes())
-    os.replace(replacement_identity, candidate)
-    with pytest.raises(
-        module.ReceiptError, match="changed after semantic validation"
-    ):
-        module._snapshot_receipt_inputs(
-            receipt,
-            candidate_identity=candidate_contract,
-            sealed_identity=sealed_contract,
-            scaling_root=scaling_root,
-            bootstrap_evidence_root=evidence["bootstrap_evidence_dir"],
-            candidate_root=evidence["bootstrap_candidate_root"],
-            release_root=release_root,
-            bootstrap_runtime_contracts=[],
-        )
 
 
 @pytest.mark.parametrize("mutation", ("unknown", "duplicate", "reordered"))
@@ -5041,1523 +5095,6 @@ def test_verify_existing_rejects_terminal_receipt_semantic_drift(
     assert "existing terminal receipt" in verified.stderr
 
 
-@pytest.mark.parametrize(
-    ("path", "replacement"),
-    [
-        (("schema_version",), 2),
-        (("format",), "other-attestation"),
-        (("candidate", "commit_oid"), "9" * 40),
-        (("candidate", "tree_oid"), "8" * 40),
-        (("candidate", "source_manifest_sha256"), "0" * 64),
-        (("candidate", "cargo_lock_sha256"), "1" * 64),
-        (("candidate", "release_identity_sha256"), "2" * 64),
-        (("archives", "raw_commit", "archive_id"), "other-commit"),
-        (("archives", "raw_commit", "mode"), "0401"),
-        (("archives", "raw_commit", "sha256"), "3" * 64),
-        (("archives", "raw_commit", "size_bytes"), 0),
-        (("archives", "git", "archive_id"), "other-git"),
-        (("archives", "git", "mode"), "0501"),
-        (("archives", "git", "sha256"), "4" * 64),
-        (("archives", "git", "size_bytes"), False),
-        (("archives", "ssh_revocation", "archive_id"), "other-revocation"),
-        (("archives", "ssh_revocation", "mode"), "0401"),
-        (("archives", "ssh_revocation", "sha256"), "5" * 64),
-        (("archives", "ssh_revocation", "size_bytes"), False),
-    ],
-)
-def test_receipt_rejects_tampered_signature_attestation_fields(
-    tmp_path: Path, path: tuple[str, ...], replacement: object
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    mutate_attestation(
-        evidence, lambda value: set_nested(value, path, replacement)
-    )
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "release" in result.stderr.lower()
-    assert not (tmp_path / "receipt.json").exists()
-
-
-@pytest.mark.parametrize("artifact_name", ["signature_attestation", "signature_transcript"])
-def test_receipt_rejects_noncanonical_signature_json(
-    tmp_path: Path, artifact_name: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    artifact = evidence[artifact_name]
-    assert isinstance(artifact, Path)
-    value = json.loads(artifact.read_text(encoding="utf-8"))
-    artifact.chmod(0o600)
-    artifact.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    artifact.chmod(0o400)
-    if artifact_name == "signature_transcript":
-        attestation = evidence["signature_attestation"]
-        assert isinstance(attestation, Path)
-        attestation_value = json.loads(attestation.read_text(encoding="utf-8"))
-        attestation_value["archives"]["verify_transcript"] = (
-            sanitized_identity_artifact(artifact, 0o400, "verify_transcript")
-        )
-        rewrite_json(attestation, attestation_value)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "canonical UTF-8 JSON" in result.stderr
-
-
-def test_receipt_rejects_noncanonical_candidate_identity_bytes(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    candidate = evidence["candidate"]
-    assert isinstance(candidate, Path)
-    value = json.loads(candidate.read_text(encoding="utf-8"))
-    candidate.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "candidate identity is not canonical UTF-8 JSON" in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("mutation", "error_fragment"),
-    [
-        ("non-ssh", "non-SSH signature format"),
-        ("malformed-armor", "malformed SSH signature armor"),
-        ("wrong-tree", "tree does not match"),
-        ("duplicate-trailer", "exact terminal Sumeragi v2 release trailer block"),
-    ],
-)
-def test_raw_commit_validator_rejects_adversarial_signed_object_shapes(
-    tmp_path: Path, mutation: str, error_fragment: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    raw_path = evidence["signature_raw_commit"]
-    candidate_path = evidence["candidate"]
-    assert isinstance(raw_path, Path)
-    assert isinstance(candidate_path, Path)
-    raw = raw_path.read_bytes()
-    identity = json.loads(candidate_path.read_text(encoding="utf-8"))
-    if mutation == "non-ssh":
-        raw = raw.replace(b"SSH SIGNATURE", b"PGP SIGNATURE")
-    elif mutation == "malformed-armor":
-        raw = re.sub(rb"(?m)^ [A-Za-z0-9+/=]+$", b" ***", raw, count=1)
-    elif mutation == "wrong-tree":
-        raw = raw.replace(b"tree " + b"2" * 40, b"tree " + b"3" * 40)
-    elif mutation == "duplicate-trailer":
-        raw = raw.replace(
-            b"Sumeragi v2 release fixture\n\n",
-            b"Sumeragi v2 release fixture\n"
-            b"Sumeragi-V2-Release-Identity-Version: 1\n\n",
-        )
-    else:
-        raise AssertionError(mutation)
-    framed = b"commit " + str(len(raw)).encode("ascii") + b"\0" + raw
-    identity["head_commit"] = hashlib.sha1(
-        framed, usedforsecurity=False
-    ).hexdigest()
-    symbols = runpy.run_path(str(SCRIPT))
-
-    with pytest.raises(symbols["ReceiptError"], match=error_fragment):
-        symbols["_validate_raw_commit"](raw, identity)
-
-
-def test_allowed_signers_policy_accepts_one_unbounded_active_line() -> None:
-    symbols = runpy.run_path(str(SCRIPT))
-
-    symbols["_validate_allowed_signers_policy"](
-        b"# release trust root\n\n"
-        b"release@example.test ssh-ed25519 AAAAC3NzaFixtureKey\n"
-    )
-
-
-@pytest.mark.parametrize(
-    ("policy", "error_fragment"),
-    [
-        (
-            b"first@example.test ssh-ed25519 AAAAC3NzaFirst\n"
-            b"second@example.test ssh-ed25519 AAAAC3NzaSecond\n",
-            "exactly one active line",
-        ),
-        (
-            b'release@example.test valid-after="20260101Z" '
-            b"ssh-ed25519 AAAAC3NzaFixtureKey\n",
-            "time-bounded",
-        ),
-        (
-            b'release@example.test valid-before="20270101Z" '
-            b"ssh-ed25519 AAAAC3NzaFixtureKey\n",
-            "time-bounded",
-        ),
-    ],
-)
-def test_allowed_signers_policy_rejects_multiple_or_time_bounded_lines(
-    policy: bytes, error_fragment: str
-) -> None:
-    symbols = runpy.run_path(str(SCRIPT))
-
-    with pytest.raises(symbols["ReceiptError"], match=error_fragment):
-        symbols["_validate_allowed_signers_policy"](policy)
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement"),
-    [
-        ("expected_git_sha256", "0" * 64),
-        ("expected_ssh_keygen_sha256", "1" * 64),
-        ("expected_allowed_signers_sha256", "2" * 64),
-        ("expected_revocation_sha256", "3" * 64),
-        ("expected_signer_fingerprint", "SHA256:" + "B" * 43),
-    ],
-)
-def test_receipt_rejects_wrong_out_of_band_signature_policy(
-    tmp_path: Path, field: str, replacement: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    evidence[field] = replacement
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert not (tmp_path / "receipt.json").exists()
-
-
-@pytest.mark.parametrize(
-    "artifact_name",
-    [
-        "signature_attestation",
-        "signature_transcript",
-        "signature_raw_commit",
-        "signature_cargo_lock",
-        "signature_allowed_signers",
-        "signature_revocation",
-        "signature_git",
-        "signature_ssh_keygen",
-    ],
-)
-def test_receipt_rejects_signature_archive_mode_drift(
-    tmp_path: Path, artifact_name: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    artifact = evidence[artifact_name]
-    assert isinstance(artifact, Path)
-    artifact.chmod(0o600)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "exact mode" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "artifact_name",
-    [
-        "signature_raw_commit",
-        "signature_cargo_lock",
-        "signature_allowed_signers",
-        "signature_revocation",
-        "signature_git",
-        "signature_ssh_keygen",
-    ],
-)
-def test_receipt_rejects_signature_archive_content_drift(
-    tmp_path: Path, artifact_name: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    artifact = evidence[artifact_name]
-    assert isinstance(artifact, Path)
-    tool = artifact_name in {"signature_git", "signature_ssh_keygen"}
-    artifact.chmod(0o700 if tool else 0o600)
-    artifact.write_bytes(artifact.read_bytes() + b"tamper\n")
-    artifact.chmod(0o500 if tool else 0o400)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert not (tmp_path / "receipt.json").exists()
-
-
-def test_receipt_rejects_nonprivate_signature_archive_directory(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    directory = evidence["signature_dir"]
-    assert isinstance(directory, Path)
-    directory.chmod(0o755)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "exact mode 0700" in result.stderr
-
-
-def test_receipt_rejects_signature_archive_wrong_name(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    attestation = evidence["signature_attestation"]
-    assert isinstance(attestation, Path)
-    renamed = attestation.with_name("attestation.json")
-    attestation.rename(renamed)
-    evidence["signature_attestation"] = renamed
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "wrong exact name" in result.stderr
-
-
-def test_receipt_rejects_signature_archives_split_across_directories(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    revocation = evidence["signature_revocation"]
-    assert isinstance(revocation, Path)
-    other = tmp_path / "other-private"
-    other.mkdir(mode=0o700)
-    moved = other / revocation.name
-    revocation.rename(moved)
-    evidence["signature_revocation"] = moved
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "do not share one directory" in result.stderr
-
-
-def test_receipt_rejects_signature_archive_symlink(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    raw_commit = evidence["signature_raw_commit"]
-    assert isinstance(raw_commit, Path)
-    real = raw_commit.with_name("raw-commit-real")
-    raw_commit.rename(real)
-    raw_commit.symlink_to(real.name)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "resolved and non-symlinked" in result.stderr
-
-
-def test_receipt_rejects_hardlinked_signature_archives(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    allowed = evidence["signature_allowed_signers"]
-    revocation = evidence["signature_revocation"]
-    assert isinstance(allowed, Path)
-    assert isinstance(revocation, Path)
-    revocation.unlink()
-    os.link(allowed, revocation)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "singly linked" in result.stderr
-
-
-def test_receipt_rejects_signature_directory_inside_release_root(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    root = evidence["release_root"]
-    assert isinstance(root, Path)
-    nested = root / "release-identity"
-    nested.mkdir(mode=0o700)
-    nested.chmod(0o700)
-    evidence["signature_dir"] = nested
-    for key in (
-        "signature_attestation",
-        "signature_transcript",
-        "signature_raw_commit",
-        "signature_cargo_lock",
-        "signature_allowed_signers",
-        "signature_revocation",
-        "signature_git",
-        "signature_ssh_keygen",
-    ):
-        old_path = evidence[key]
-        assert isinstance(old_path, Path)
-        moved = nested / old_path.name
-        old_path.rename(moved)
-        evidence[key] = moved
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "sealed release root must be external to the bootstrap archive" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        "schema-version",
-        "format",
-        "archive-id",
-        "candidate-oid",
-        "extra-top-level",
-        "extra-operation",
-        "verify-operation-id",
-        "verify-failed",
-        "verify-stdout-digest",
-        "verify-stderr-size",
-        "show-operation-id",
-        "show-size",
-        "show-digest",
-        "show-bad-status",
-        "probe-operation-id",
-        "probe-status",
-        "probe-digest",
-    ],
-)
-def test_receipt_rejects_tampered_signature_transcript(
-    tmp_path: Path, mutation: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-
-    def apply(value: dict[str, object]) -> None:
-        if mutation == "schema-version":
-            value["schema_version"] = 2
-        elif mutation == "format":
-            value["format"] = "other-transcript"
-        elif mutation == "archive-id":
-            value["archive_ids"]["raw_commit"] = "other-commit"
-        elif mutation == "candidate-oid":
-            value["candidate_commit_oid"] = "9" * 40
-        elif mutation == "extra-top-level":
-            value["source_path"] = str(evidence["signature_dir"])
-        elif mutation == "extra-operation":
-            value["operations"]["verify_commit"]["argv"] = ["git"]
-        elif mutation == "verify-operation-id":
-            value["operations"]["verify_commit"]["operation_id"] = "other"
-        elif mutation == "verify-failed":
-            value["operations"]["verify_commit"]["exit_status"] = 1
-        elif mutation == "verify-stdout-digest":
-            value["operations"]["verify_commit"]["stdout_sha256"] = "6" * 64
-        elif mutation == "verify-stderr-size":
-            value["operations"]["verify_commit"]["stderr_size_bytes"] += 1
-        elif mutation == "show-operation-id":
-            value["operations"]["show_signature_metadata"]["operation_id"] = "other"
-        elif mutation == "show-size":
-            value["operations"]["show_signature_metadata"]["stdout_size_bytes"] += 1
-        elif mutation == "show-digest":
-            value["operations"]["show_signature_metadata"]["stdout_sha256"] = "7" * 64
-        elif mutation == "show-bad-status":
-            bad = (
-                f"B\0{evidence['expected_signer_fingerprint']}\0\0"
-                f"{evidence['signer_principal']}\0\n"
-            ).encode()
-            value["operations"]["show_signature_metadata"].update(
-                sanitized_operation("git.show-signature-metadata.ssh.v1", 0, bad, b"")
-            )
-        elif mutation == "probe-operation-id":
-            value["operations"]["ssh_keygen_usage"]["operation_id"] = "other"
-        elif mutation == "probe-status":
-            value["operations"]["ssh_keygen_usage"]["exit_status"] = 0
-        elif mutation == "probe-digest":
-            value["operations"]["ssh_keygen_usage"]["stderr_sha256"] = "8" * 64
-        else:
-            raise AssertionError(mutation)
-
-    mutate_transcript(evidence, apply)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert not (tmp_path / "receipt.json").exists()
-
-
-@pytest.mark.parametrize(
-    "failure",
-    ["verify-failure", "metadata-change", "raw-commit-change", "top-level-change"],
-)
-def test_receipt_replays_archived_git_and_rejects_runtime_divergence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure: str,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    git_path = evidence["signature_git"]
-    assert isinstance(git_path, Path)
-    source = git_path.read_text(encoding="utf-8")
-    if failure == "verify-failure":
-        source = source.replace(
-            "'Good fixture SSH signature' >&2 ;;",
-            "'Good fixture SSH signature' >&2; exit 73 ;;",
-        )
-    elif failure == "metadata-change":
-        source = source.replace("SHA256:" + "A" * 43, "SHA256:" + "B" * 43)
-    elif failure == "raw-commit-change":
-        source = source.replace(
-            "Sumeragi v2 release fixture", "Sumeragi v2 changed release fixture"
-        )
-    elif failure == "top-level-change":
-        other_root = tmp_path / "other-root"
-        other_root.mkdir()
-        source = source.replace(
-            "'rev-parse --show-toplevel') pwd -P ;;",
-            f"'rev-parse --show-toplevel') printf '%s\\n' '{other_root}' ;;",
-        )
-    else:
-        raise AssertionError(failure)
-    rebind_git_archive(evidence, source)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "archived Git" in result.stderr or "signature replay" in result.stderr
-
-    if failure == "verify-failure":
-        module = load_writer_module()
-        environment = module._closed_replay_environment(tmp_path)
-        real_popen = module.subprocess.Popen
-        for swap_kind in ("file", "ancestor"):
-            swap_root = tmp_path / f"execution-swap-{swap_kind}"
-            trusted_directory = swap_root / "trusted"
-            trusted_directory.mkdir(parents=True)
-            trusted = trusted_directory / "tool"
-            trusted.write_text(
-                "#!/bin/sh\nprintf 'trusted\\n'\n", encoding="utf-8"
-            )
-            trusted.chmod(0o500)
-            contract = module._bounded_path_contract(
-                trusted,
-                "fixture trusted executable",
-                maximum_bytes=4096,
-                allowed_owners={os.geteuid()},
-                executable=True,
-            )
-            if swap_kind == "file":
-                malicious = trusted_directory / "malicious"
-                malicious.write_text(
-                    "#!/bin/sh\nprintf 'malicious\\n'\n", encoding="utf-8"
-                )
-                malicious.chmod(0o500)
-                saved = trusted_directory / "trusted.saved"
-
-                def swapping_popen(
-                    *args: object, **kwargs: object
-                ) -> subprocess.Popen[bytes]:
-                    trusted.rename(saved)
-                    malicious.rename(trusted)
-                    process = real_popen(*args, **kwargs)
-                    process.wait(timeout=5)
-                    trusted.rename(malicious)
-                    saved.rename(trusted)
-                    return process
-
-            else:
-                malicious_directory = swap_root / "malicious"
-                malicious_directory.mkdir()
-                malicious = malicious_directory / "tool"
-                malicious.write_text(
-                    "#!/bin/sh\nprintf 'malicious\\n'\n", encoding="utf-8"
-                )
-                malicious.chmod(0o500)
-                saved = swap_root / "trusted.saved"
-
-                def swapping_popen(
-                    *args: object, **kwargs: object
-                ) -> subprocess.Popen[bytes]:
-                    trusted_directory.rename(saved)
-                    malicious_directory.rename(trusted_directory)
-                    process = real_popen(*args, **kwargs)
-                    process.wait(timeout=5)
-                    trusted_directory.rename(malicious_directory)
-                    saved.rename(trusted_directory)
-                    return process
-
-            monkeypatch.setattr(module.subprocess, "Popen", swapping_popen)
-            with pytest.raises(
-                module.ReceiptError,
-                match="changed (?:while pinned|during process execution)",
-            ):
-                module._run_bounded_replay(
-                    trusted,
-                    [],
-                    cwd=tmp_path,
-                    environment=environment,
-                    name="fixture swapped executable",
-                    executable_contract=contract,
-                )
-            monkeypatch.setattr(module.subprocess, "Popen", real_popen)
-def test_receipt_rejects_fully_rebound_cross_policy_allowed_signers(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    allowed = evidence["signature_allowed_signers"]
-    transcript_path = evidence["signature_transcript"]
-    attestation_path = evidence["signature_attestation"]
-    assert isinstance(allowed, Path)
-    assert isinstance(transcript_path, Path)
-    assert isinstance(attestation_path, Path)
-    allowed.chmod(0o600)
-    allowed.write_text(
-        "attacker@example.test ssh-ed25519 AAAAC3NzaAttacker\n", encoding="utf-8"
-    )
-    allowed.chmod(0o400)
-    forged_digest = sha256(allowed)
-    attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-    attestation["archives"]["ssh_allowed_signers"] = (
-        sanitized_identity_artifact(allowed, 0o400, "ssh_allowed_signers")
-    )
-    rewrite_json(attestation_path, attestation)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "out-of-band digest" in result.stderr
-
-
-def test_receipt_accepts_transcript_published_by_chaos_launcher(
-    tmp_path: Path,
-) -> None:
-    release_root = tmp_path / "release"
-    release_root.mkdir()
-    evidence = make_evidence(release_root)
-    chaos_symbols = runpy.run_path(
-        str(ROOT_DIR / "pytests" / "scripts" / "sumeragi_v2_chaos_release_test.py")
-    )
-    launcher_root = tmp_path / "launcher"
-    launcher_root.mkdir()
-    launcher, env, chaos_evidence = chaos_symbols["_fixture"](
-        launcher_root,
-        manifest=evidence["sealed_manifest"],
-        head=evidence["head"],
-        tree=evidence["tree"],
-        lock=evidence["lock"],
-    )
-
-    launch_result = chaos_symbols["_run"](launcher, env)
-
-    assert launch_result.returncode == 0, launch_result.stderr
-    invocations = list(chaos_evidence.glob("invocation.*"))
-    assert len(invocations) == 1
-    evidence["chaos_completion"] = invocations[0] / "COMPLETED.tsv"
-    evidence["chaos_log"] = invocations[0] / "chaos-100k.log"
-    writer = fixture_writer(tmp_path / "writer")
-    output = terminal_output_path(evidence)
-
-    receipt_result = run_writer(evidence, output, writer)
-
-    assert receipt_result.returncode == 0, receipt_result.stderr
-    assert json.loads(output.read_text(encoding="utf-8"))["result"] == "release-complete"
-
-
-@pytest.mark.parametrize(
-    "completion_name",
-    [
-        "corridor_completion",
-        "formal_completion",
-        "seed_completion",
-        "taira_completion",
-    ],
-)
-def test_receipt_rejects_cross_source_completion(
-    tmp_path: Path, completion_name: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    completion = evidence[completion_name]
-    assert isinstance(completion, Path)
-    completion.write_text(
-        completion.read_text(encoding="utf-8").replace("b" * 64, "c" * 64),
-        encoding="utf-8",
-    )
-    output = tmp_path / "RELEASE_COMPLETED.json"
-    output.write_text("previous valid receipt\n", encoding="utf-8")
-
-    result = run_writer(evidence, output, writer)
-
-    assert result.returncode == 1
-    assert (
-        "not bound" in result.stderr
-        or "exact release matrix" in result.stderr
-        or "exact release preflight" in result.stderr
-    )
-    assert output.read_text(encoding="utf-8") == "previous valid receipt\n"
-
-
-@pytest.mark.parametrize(
-    ("artifact_name", "error_fragment"),
-    [
-        ("formal_log", "formal gate log digest mismatch"),
-        ("formal_ledger", "formal proof ledger digest mismatch"),
-        ("formal_evidence", "formal proof evidence digest mismatch"),
-        ("formal_verus_evidence", "formal Verus evidence digest mismatch"),
-        ("formal_verus_log", "formal Verus log digest mismatch"),
-        (
-            "formal_multilane_apalache_evidence",
-            "formal multilane Apalache evidence digest mismatch",
-        ),
-        (
-            "formal_production_trace_extraction_evidence",
-            "formal production trace-extraction evidence digest mismatch",
-        ),
-        ("formal_toolchain", "formal toolchain digest mismatch"),
-        ("formal_tlaps_resource_jsonl", "TLAPS resource samples digest mismatch"),
-        ("formal_tlaps_resource_summary", "TLAPS resource summary digest mismatch"),
-        ("formal_verus_tool", "formal verus tool digest mismatch"),
-        ("corridor_summary", "corridor summary digest mismatch"),
-        ("corridor_required", "corridor production inventory digest mismatch"),
-        ("corridor_g_unit", "corridor G-UNIT inventory digest mismatch"),
-        ("corridor_log", "corridor log 0 digest mismatch"),
-        (
-            "corridor_cargo_tool",
-            "bootstrap runner tool cargo integrity binding is wrong",
-        ),
-        ("seed_summary", "summary digest mismatch"),
-        ("seed_log", "seed run log 17 digest mismatch"),
-        (
-            "seed_localnet_manifest_index",
-            "seed localnet manifest index digest mismatch",
-        ),
-        ("seed_localnet_manifest", "seed localnet manifest 17 digest mismatch"),
-        (
-            "seed_localnet_file",
-            "seed localnet manifest 17 does not match retained content",
-        ),
-        ("chaos_log", "log digest mismatch"),
-        ("taira_evidence", "evidence digest mismatch"),
-    ],
-)
-def test_receipt_rejects_artifact_changed_after_completion(
-    tmp_path: Path, artifact_name: str, error_fragment: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    artifact = evidence[artifact_name]
-    assert isinstance(artifact, Path)
-    original_mode = stat.S_IMODE(artifact.stat().st_mode)
-    artifact.chmod(original_mode | stat.S_IWUSR)
-    artifact.write_text("tampered after completion\n", encoding="utf-8")
-    artifact.chmod(original_mode)
-    output = tmp_path / "RELEASE_COMPLETED.json"
-
-    result = run_writer(evidence, output, writer)
-
-    assert result.returncode == 1
-    assert error_fragment in result.stderr
-    assert not output.exists()
-
-
-def test_receipt_rejects_candidate_and_sealed_git_identity_mismatch(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    candidate_path = evidence["candidate"]
-    assert isinstance(candidate_path, Path)
-    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
-    candidate["head_commit"] = "9" * 40
-    candidate_path.write_bytes(canonical_json(candidate))
-    output = tmp_path / "RELEASE_COMPLETED.json"
-
-    result = run_writer(evidence, output, writer)
-
-    assert result.returncode == 1
-    assert "disagree on head_commit" in result.stderr
-    assert not output.exists()
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement"),
-    [
-        ("head_commit", "9" * 40),
-        ("head_tree", "8" * 40),
-        ("cargo_lock_sha256", "7" * 64),
-    ],
-)
-def test_receipt_rejects_seed_exact_identity_mismatch(
-    tmp_path: Path, field: str, replacement: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    completion = evidence["seed_completion"]
-    assert isinstance(completion, Path)
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields[field] = replacement
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "exact release matrix" in result.stderr
-
-
-@pytest.mark.parametrize("field", ["completed_runs", "expected_runs"])
-def test_receipt_rejects_stale_four_scenario_seed_count(
-    tmp_path: Path, field: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    completion = evidence["seed_completion"]
-    assert isinstance(completion, Path)
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields[field] = "128"
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "exact release matrix" in result.stderr
-
-
-def test_receipt_rejects_legacy_seed_completion_without_localnet_manifests(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    completion = evidence["seed_completion"]
-    assert isinstance(completion, Path)
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields = {
-        name: value
-        for name, value in fields.items()
-        if not name.startswith("localnet_manifest")
-    }
-    fields["schema_version"] = "1"
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "seed completion fields do not match its completion schema" in result.stderr
-
-
-def test_receipt_rejects_seed_localnet_manifest_path_escape(
-    tmp_path: Path,
-) -> None:
-    for mutation, expected_error in (
-        ("completion", "seed localnet manifest index row 17 is not canonical"),
-        ("symlink-parent", "seed localnet manifest 0 escaped its archive"),
-    ):
-        case_root = tmp_path / mutation
-        case_root.mkdir()
-        evidence = make_evidence(case_root)
-        writer = fixture_writer(case_root)
-        completion = evidence["seed_completion"]
-        assert isinstance(completion, Path)
-        if mutation == "completion":
-            fields = dict(
-                line.split("\t", 1)
-                for line in completion.read_text(encoding="utf-8").splitlines()
-            )
-            fields["localnet_manifest_017_path"] = "../escaped-localnet.tsv"
-            write_tsv(completion, fields)
-        else:
-            manifest = evidence["seed_localnet_manifest"]
-            assert isinstance(manifest, Path)
-            manifest_directory = manifest.parent
-            escaped_directory = case_root / "escaped-localnet-manifests"
-            manifest_directory.rename(escaped_directory)
-            manifest_directory.symlink_to(escaped_directory, target_is_directory=True)
-
-        result = run_writer(evidence, case_root / "receipt.json", writer)
-
-        assert result.returncode == 1
-        assert expected_error in result.stderr
-
-
-def test_receipt_rejects_symlink_in_retained_seed_localnet(tmp_path: Path) -> None:
-    for mutation, expected_error in (
-        ("entry", "contains a symlink"),
-        ("parent", "root must be a resolved real directory"),
-    ):
-        case_root = tmp_path / mutation
-        case_root.mkdir()
-        evidence = make_evidence(case_root)
-        writer = fixture_writer(case_root)
-        localnet = evidence["seed_localnet"]
-        assert isinstance(localnet, Path)
-        if mutation == "entry":
-            outside = case_root / "outside-localnet"
-            outside.write_text("outside\n", encoding="utf-8")
-            (localnet / "escape").symlink_to(outside)
-            expected_index = 17
-        else:
-            localnets_directory = localnet.parent
-            escaped_directory = case_root / "escaped-localnets"
-            localnets_directory.rename(escaped_directory)
-            localnets_directory.symlink_to(escaped_directory, target_is_directory=True)
-            expected_index = 0
-
-        result = run_writer(evidence, case_root / "receipt.json", writer)
-
-        assert result.returncode == 1
-        assert (
-            f"seed retained localnet {expected_index} is unsafe or unstable"
-            in result.stderr
-        )
-        assert expected_error in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement"),
-    [
-        ("head_commit", "9" * 40),
-        ("head_tree", "8" * 40),
-        ("cargo_lock_sha256", "7" * 64),
-    ],
-)
-def test_receipt_rejects_taira_exact_identity_mismatch(
-    tmp_path: Path, field: str, replacement: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    completion = evidence["taira_completion"]
-    assert isinstance(completion, Path)
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields[field] = replacement
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "exact release identity" in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement"),
-    [
-        ("cargo_version", "cargo 9.99.9 (forged 2099-01-01)"),
-        ("rustc_version", "rustc 9.99.9 (forged 2099-01-01)"),
-    ],
-)
-def test_receipt_rejects_noncanonical_rust_tool_version(
-    tmp_path: Path, field: str, replacement: str
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    completion = evidence["corridor_completion"]
-    assert isinstance(completion, Path)
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields[field] = replacement
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "rust-toolchain.toml" in result.stderr
-
-    tool = field.removesuffix("_version")
-    fixture_key = f"corridor_{tool}_tool"
-    for case_name, mutate_bytes in (
-        ("same-bytes-different-path", False),
-        ("exact-output-different-bytes", True),
-    ):
-        case_root = tmp_path / case_name
-        case_root.mkdir()
-        cross_bound = make_evidence(case_root)
-        cross_writer = fixture_writer(case_root)
-        source = cross_bound[fixture_key]
-        cross_completion = cross_bound["corridor_completion"]
-        assert isinstance(source, Path)
-        assert isinstance(cross_completion, Path)
-        alternate = case_root / f"alternate-{tool}"
-        alternate.write_bytes(source.read_bytes())
-        if mutate_bytes:
-            alternate.write_bytes(
-                alternate.read_bytes()
-                + b"# distinct executable with the same accepted output\n"
-            )
-        alternate.chmod(0o500)
-        cross_fields = read_tsv_fields(cross_completion)
-        cross_fields[f"{tool}_path"] = str(alternate.resolve())
-        cross_fields[f"{tool}_sha256"] = sha256(alternate)
-        write_tsv(cross_completion, cross_fields)
-
-        cross_result = run_writer(
-            cross_bound,
-            case_root / "receipt.json",
-            cross_writer,
-        )
-
-        assert cross_result.returncode == 1
-        assert (
-            f"corridor {tool} is not the authenticated bootstrap runner tool"
-            in cross_result.stderr
-        )
-
-
-def test_receipt_rejects_rehashed_missing_corridor_leg(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    summary = evidence["corridor_summary"]
-    completion = evidence["corridor_completion"]
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    lines = summary.read_text(encoding="utf-8").splitlines()
-    summary.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "must contain every exact release leg" in result.stderr
-
-
-def test_receipt_rejects_rehashed_noncanonical_g_unit_inventory(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    inventory = evidence["corridor_g_unit"]
-    completion = evidence["corridor_completion"]
-    assert isinstance(inventory, Path)
-    assert isinstance(completion, Path)
-    lines = inventory.read_text(encoding="utf-8").splitlines()
-    row = lines[1].split("\t")
-    row[2] = "native_amx::tests::forged_g_unit_identity"
-    lines[1] = "\t".join(row)
-    inventory.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["g_unit_inventory_sha256"] = sha256(inventory)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "corridor G-UNIT inventory row 0 is not canonical" in result.stderr
-
-
-def test_receipt_rejects_rehashed_g_unit_log_missing_named_test(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    logs = evidence["corridor_logs"]
-    summary = evidence["corridor_summary"]
-    completion = evidence["corridor_completion"]
-    assert isinstance(logs, list)
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    log = logs[0]
-    first_result = next(
-        line
-        for line in log.read_text(encoding="utf-8").splitlines()
-        if line.startswith("test ") and line.endswith(" ... ok")
-    )
-    log.write_text(
-        log.read_text(encoding="utf-8").replace(first_result + "\n", "", 1),
-        encoding="utf-8",
-    )
-    summary_lines = summary.read_text(encoding="utf-8").splitlines()
-    row = summary_lines[1].split("\t")
-    row[7] = sha256(log)
-    summary_lines[1] = "\t".join(row)
-    summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "G-UNIT leg g-unit-iroha-core lacks one required passing test" in result.stderr
-
-
-def test_receipt_rejects_missing_or_altered_source_sealed_full_suite_leg(
-    tmp_path: Path,
-) -> None:
-    for mutation in ("missing", "altered-command"):
-        case_root = tmp_path / mutation
-        case_root.mkdir()
-        evidence = make_evidence(case_root)
-        writer = fixture_writer(case_root)
-        summary = evidence["corridor_summary"]
-        completion = evidence["corridor_completion"]
-        assert isinstance(summary, Path)
-        assert isinstance(completion, Path)
-        lines = summary.read_text(encoding="utf-8").splitlines()
-        row_index = next(
-            index
-            for index, line in enumerate(lines[1:], 1)
-            if "\tsource-sealed-workspace-tests\t" in line
-        )
-        if mutation == "missing":
-            del lines[row_index]
-        else:
-            row = lines[row_index].split("\t")
-            row[9] = "cargo test --workspace"
-            lines[row_index] = "\t".join(row)
-        summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        fields = dict(
-            line.split("\t", 1)
-            for line in completion.read_text(encoding="utf-8").splitlines()
-        )
-        fields["summary_sha256"] = sha256(summary)
-        write_tsv(completion, fields)
-
-        result = run_writer(evidence, case_root / "receipt.json", writer)
-
-        assert result.returncode == 1
-        assert (
-            "must contain every exact release leg" in result.stderr
-            or "is not the exact release leg" in result.stderr
-        )
-
-
-def test_receipt_rejects_rehashed_malformed_corridor_log(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    log = evidence["corridor_log"]
-    summary = evidence["corridor_summary"]
-    completion = evidence["corridor_completion"]
-    assert isinstance(log, Path)
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    log.write_text("fabricated pass without Cargo semantics\n", encoding="utf-8")
-    lines = summary.read_text(encoding="utf-8").splitlines()
-    row = lines[1].split("\t")
-    row[7] = sha256(log)
-    lines[1] = "\t".join(row)
-    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "ambiguous Cargo transcript" in result.stderr
-
-
-def test_receipt_rejects_sumeragi_diagnostics_rust_log_missing_named_test(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    summary = evidence["corridor_summary"]
-    completion = evidence["corridor_completion"]
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    summary_lines = summary.read_text(encoding="utf-8").splitlines()
-    row_index = next(
-        index
-        for index, line in enumerate(summary_lines[1:], 1)
-        if "\tsumeragi-diagnostics-rust\t" in line
-    )
-    row = summary_lines[row_index].split("\t")
-    log = summary.parent / row[8]
-    log_lines = log.read_text(encoding="utf-8").splitlines()
-    named_test_index = next(
-        index
-        for index, line in enumerate(log_lines)
-        if line.startswith("test client::tests::get_sumeragi_")
-    )
-    del log_lines[named_test_index]
-    log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
-    row[7] = sha256(log)
-    summary_lines[row_index] = "\t".join(row)
-    summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
-    completion_fields = read_tsv_fields(completion)
-    completion_fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, completion_fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert (
-        "corridor exact Cargo leg sumeragi-diagnostics-rust lacks its named test"
-        in result.stderr
-    )
-
-
-def test_receipt_rejects_sumeragi_diagnostics_suite_source_drift(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    release_root = evidence["release_root"]
-    assert isinstance(release_root, Path)
-    source = release_root / "ci/run_sumeragi_v2_sdk_diagnostics.sh"
-    source.write_bytes(source.read_bytes() + b"\n# forged post-harness source drift\n")
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert (
-        "corridor Sumeragi v2 SDK diagnostics python leg is not bound to the "
-        "exact suite sources" in result.stderr
-    )
-
-
-def test_hand_invoked_writer_rejects_fake_machine_completion_artifacts(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    output = tmp_path / "RELEASE_COMPLETED.json"
-
-    result = run_writer(evidence, output, SCRIPT)
-
-    assert result.returncode == 1
-    assert (
-        "archived formal ledger has an invalid cross-tool evidence requirement"
-        in result.stderr
-    )
-    assert not output.exists()
-
-
-def test_receipt_rejects_rehashed_seed_log_without_required_semantics(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    run_log = evidence["seed_log"]
-    summary = evidence["seed_summary"]
-    completion = evidence["seed_completion"]
-    assert isinstance(run_log, Path)
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    run_log.write_text("forged success without libtest semantics\n", encoding="utf-8")
-    lines = summary.read_text(encoding="utf-8").splitlines()
-    row = lines[18].split("\t")
-    row[7] = sha256(run_log)
-    lines[18] = "\t".join(row)
-    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "does not prove its one exact passing scenario" in result.stderr
-
-
-def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    run_log = evidence["seed_log"]
-    summary = evidence["seed_summary"]
-    completion = evidence["seed_completion"]
-    assert isinstance(run_log, Path)
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    run_log.write_text(
-        run_log.read_text(encoding="utf-8").replace(
-            "deterministic network seed = ", "deterministic network seed = wrong-"
-        ),
-        encoding="utf-8",
-    )
-    lines = summary.read_text(encoding="utf-8").splitlines()
-    row = lines[18].split("\t")
-    row[7] = sha256(run_log)
-    lines[18] = "\t".join(row)
-    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "does not prove its one exact passing scenario" in result.stderr
-
-    command_root = tmp_path / "hidden-start-retry"
-    command_root.mkdir()
-    command_evidence = make_evidence(command_root)
-    command_writer = fixture_writer(command_root)
-    command_summary = command_evidence["seed_summary"]
-    command_completion = command_evidence["seed_completion"]
-    assert isinstance(command_summary, Path)
-    assert isinstance(command_completion, Path)
-    command_lines = command_summary.read_text(encoding="utf-8").splitlines()
-    command_row = command_lines[18].split("\t")
-    command_row[10] = command_row[10].replace(
-        "IROHA_TEST_NETWORK_START_ATTEMPTS=1",
-        "IROHA_TEST_NETWORK_START_ATTEMPTS=2",
-    )
-    command_lines[18] = "\t".join(command_row)
-    command_summary.write_text(
-        "\n".join(command_lines) + "\n", encoding="utf-8"
-    )
-    command_fields = dict(
-        line.split("\t", 1)
-        for line in command_completion.read_text(encoding="utf-8").splitlines()
-    )
-    command_fields["summary_sha256"] = sha256(command_summary)
-    write_tsv(command_completion, command_fields)
-
-    command_result = run_writer(
-        command_evidence, command_root / "receipt.json", command_writer
-    )
-
-    assert command_result.returncode == 1
-    assert (
-        "seed summary row 17 is not the exact release run" in command_result.stderr
-    )
-
-
-@pytest.mark.parametrize(
-    ("pattern", "replacement"),
-    (
-        (
-            r"CARGO_TARGET_DIR=[^ ]+",
-            "CARGO_TARGET_DIR=/tmp/escaped-cargo-target",
-        ),
-        (r"IROHA_TEST_SKIP_BUILD=1", "IROHA_TEST_SKIP_BUILD=0"),
-        (
-            r"IROHA_TEST_ALLOW_REENTRANT_BUILD=0",
-            "IROHA_TEST_ALLOW_REENTRANT_BUILD=1",
-        ),
-        (r"cargo test --locked --offline", "cargo test --locked"),
-        (
-            r"IROHA_TEST_TARGET_DIR=[^ ]+",
-            "IROHA_TEST_TARGET_DIR=/tmp/escaped-program-target",
-        ),
-        (
-            r"TEST_NETWORK_BIN_IROHAD=[^ ]+",
-            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-iroha3d",
-        ),
-    ),
-)
-def test_receipt_rejects_nested_or_unbound_seed_replay(
-    tmp_path: Path,
-    pattern: str,
-    replacement: str,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    summary = evidence["seed_summary"]
-    completion = evidence["seed_completion"]
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-
-    lines = summary.read_text(encoding="utf-8").splitlines()
-    row = lines[18].split("\t")
-    mutated, replacement_count = re.subn(pattern, replacement, row[10], count=1)
-    assert replacement_count == 1
-    row[10] = mutated
-    lines[18] = "\t".join(row)
-    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    completion_fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    completion_fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, completion_fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "seed summary row 17 is not the exact release run" in result.stderr
-
-
-def test_receipt_rejects_seed_replay_prebuilt_manifest_drift(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    summary = evidence["seed_summary"]
-    completion = evidence["seed_completion"]
-    manifest = evidence["prebuilt_manifest"]
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    assert isinstance(manifest, Path)
-
-    lines = summary.read_text(encoding="utf-8").splitlines()
-    row = lines[18].split("\t")
-    expected = f"IROHA_RELEASE_PREBUILT_MANIFEST_SHA256={sha256(manifest)}"
-    mutated, replacement_count = re.subn(
-        re.escape(expected),
-        f"IROHA_RELEASE_PREBUILT_MANIFEST_SHA256={'0' * 64}",
-        row[10],
-        count=1,
-    )
-    assert replacement_count == 1
-    row[10] = mutated
-    lines[18] = "\t".join(row)
-    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    completion_fields = read_tsv_fields(completion)
-    completion_fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, completion_fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "seed summary row 17 is not the exact release run" in result.stderr
-
-
-def test_receipt_rejects_rehashed_chaos_log_without_required_semantics(
-    tmp_path: Path,
-) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    chaos_log = evidence["chaos_log"]
-    completion = evidence["chaos_completion"]
-    assert isinstance(chaos_log, Path)
-    assert isinstance(completion, Path)
-    chaos_log.write_text("forged 100000-height success\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["log_sha256"] = sha256(chaos_log)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "does not prove its one exact passing release test" in result.stderr
-
-    duplicate_root = tmp_path / "duplicate-marker"
-    duplicate_root.mkdir()
-    duplicate_evidence = make_evidence(duplicate_root)
-    duplicate_writer = fixture_writer(duplicate_root)
-    duplicate_log = duplicate_evidence["chaos_log"]
-    duplicate_completion = duplicate_evidence["chaos_completion"]
-    assert isinstance(duplicate_log, Path)
-    assert isinstance(duplicate_completion, Path)
-    duplicate_log.write_text(
-        duplicate_log.read_text(encoding="utf-8") + CHAOS_MARKER + "\n",
-        encoding="utf-8",
-    )
-    duplicate_fields = dict(
-        line.split("\t", 1)
-        for line in duplicate_completion.read_text(encoding="utf-8").splitlines()
-    )
-    duplicate_fields["log_sha256"] = sha256(duplicate_log)
-    write_tsv(duplicate_completion, duplicate_fields)
-
-    duplicate_result = run_writer(
-        duplicate_evidence, duplicate_root / "receipt.json", duplicate_writer
-    )
-
-    assert duplicate_result.returncode == 1
-    assert "does not prove its one exact passing release test" in (
-        duplicate_result.stderr
-    )
-
-    counter_root = tmp_path / "wrong-counter"
-    counter_root.mkdir()
-    counter_evidence = make_evidence(counter_root)
-    counter_writer = fixture_writer(counter_root)
-    counter_completion = counter_evidence["chaos_completion"]
-    assert isinstance(counter_completion, Path)
-    counter_fields = dict(
-        line.split("\t", 1)
-        for line in counter_completion.read_text(encoding="utf-8").splitlines()
-    )
-    counter_fields["wal_append_restarts"] = "315"
-    write_tsv(counter_completion, counter_fields)
-
-    counter_result = run_writer(
-        counter_evidence, counter_root / "receipt.json", counter_writer
-    )
-
-    assert counter_result.returncode == 1
-    assert "does not match the exact release identity and reducer schedule" in (
-        counter_result.stderr
-    )
-
-
-def test_receipt_rejects_seed_summary_row_with_extra_column(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    summary = evidence["seed_summary"]
-    completion = evidence["seed_completion"]
-    assert isinstance(summary, Path)
-    assert isinstance(completion, Path)
-    lines = summary.read_text(encoding="utf-8").splitlines()
-    lines[1] += "\tforged-extra-column"
-    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["summary_sha256"] = sha256(summary)
-    write_tsv(completion, fields)
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "extra or missing columns" in result.stderr
-
-
-def test_receipt_revalidates_archived_taira_semantics(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    taira_log = evidence["taira_log"]
-    completion = evidence["taira_completion"]
-    assert isinstance(taira_log, Path)
-    assert isinstance(completion, Path)
-    original_log = taira_log.read_bytes()
-    taira_log.write_text(
-        "running 1 test\n"
-        "test forged_taira_soak ... ok\n\n"
-        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
-        "42 filtered out; finished in 86400.01s\n",
-        encoding="utf-8",
-    )
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["log_sha256"] = sha256(taira_log)
-    write_tsv(completion, fields)
-
-    malformed_result = run_writer(evidence, tmp_path / "malformed-receipt.json", writer)
-
-    assert malformed_result.returncode == 1
-    assert "Taira log does not prove its one exact passing soak" in malformed_result.stderr
-
-    taira_log.write_bytes(original_log)
-    fields["log_sha256"] = sha256(taira_log)
-    write_tsv(completion, fields)
-    (writer.parent / "check_taira_v2_soak_evidence.py").write_text(
-        "raise SystemExit(72)\n", encoding="utf-8"
-    )
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "archived Taira evidence failed release validation" in result.stderr
 
 
 for _release_receipt_test_component in RELEASE_RECEIPT_TEST_COMPONENT_FILES:

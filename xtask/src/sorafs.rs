@@ -2796,7 +2796,7 @@ fn probe_headers_via_http(request: &GatewayProbeRequest) -> Result<ProbeResponse
         .map_err(|err| format!("invalid gateway URL `{}`: {err}", request.url))?;
     let host = url.host_str().map(|h| h.to_ascii_lowercase());
 
-    let mut builder = Client::builder();
+    let mut builder = Client::builder().redirect(reqwest::redirect::Policy::none());
     if let Some(timeout) = request.timeout_secs {
         builder = builder.timeout(Duration::from_secs(timeout));
     }
@@ -10689,6 +10689,14 @@ mod tests {
         );
     }
 
+    fn finding(ok: bool, name: &str, detail: &str) -> ProbeFinding {
+        ProbeFinding {
+            ok,
+            name: name.into(),
+            detail: detail.into(),
+        }
+    }
+
     #[test]
     fn gateway_probe_report_includes_failure_summary() {
         let gar_info = GatewayProbeGarInfo {
@@ -10707,17 +10715,10 @@ mod tests {
                 path: PathBuf::from("headers.txt"),
             },
         };
+        let gar_detail = "host `gw.example.com` authorised by GAR";
         let findings = vec![
-            ProbeFinding {
-                ok: false,
-                name: "HTTP status".into(),
-                detail: "503 HTTP probe via capture".into(),
-            },
-            ProbeFinding {
-                ok: true,
-                name: "GAR host pattern".into(),
-                detail: "host `gw.example.com` authorised by GAR".into(),
-            },
+            finding(false, "HTTP status", "503 HTTP probe via capture"),
+            finding(true, "GAR host pattern", gar_detail),
         ];
 
         let report = build_probe_report_value(
@@ -10747,15 +10748,42 @@ mod tests {
     }
 
     #[test]
-    fn drill_log_helper_appends_rows() {
+    fn gateway_probe_rejects_cross_origin_head_and_get_redirects() {
+        for (method, status) in [("HEAD", 302_u16), ("GET", 307_u16)] {
+            let target = std::net::TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
+            target.set_nonblocking(true).expect("nonblocking target");
+            let location = format!("http://{}/substituted", target.local_addr().unwrap());
+            let origin = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe origin");
+            let origin_addr = origin.local_addr().expect("probe origin address");
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = origin.accept().expect("accept probe request");
+                let response = format!("HTTP/1.1 {status} X\r\nLocation: {location}\r\n\r\n");
+                std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
+            });
+            let response = probe_headers_via_http(&GatewayProbeRequest {
+                url: format!("http://{origin_addr}/probe"),
+                method: method.into(),
+                timeout_secs: Some(1),
+                extra_headers: Vec::new(),
+            })
+            .expect("receive the original redirect response");
+            server.join().expect("redirect origin finished");
+            assert_eq!(response.status, status, "{method} redirect must surface");
+            let error = target.accept().expect_err("redirect target contacted");
+            assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        }
+    }
+
+    #[test]
+    fn gateway_probe_operational_artifacts_include_summary_details() {
         let temp = tempfile::tempdir().expect("tempdir");
         let log_path = temp.path().join("drill-log.md");
         let gar_path = temp.path().join("gar.jws");
-        let findings = vec![ProbeFinding {
-            ok: false,
-            name: "HTTP status".into(),
-            detail: "500 HTTP probe via https://gw.example".into(),
-        }];
+        let failure_detail = "500 HTTP probe via https://gw.example";
+        let findings = vec![
+            finding(false, "HTTP status", failure_detail),
+            finding(true, "Cache-Control", "ok"),
+        ];
         let summary = ProbeRunSummary {
             started_at: OffsetDateTime::UNIX_EPOCH,
             ended_at: OffsetDateTime::UNIX_EPOCH,
@@ -10782,35 +10810,7 @@ mod tests {
             ),
             "unexpected log contents:\n{contents}"
         );
-    }
-
-    #[test]
-    fn pagerduty_payload_includes_details() {
-        let temp = tempfile::tempdir().expect("tempdir");
         let payload_path = temp.path().join("pd.json");
-        let gar_path = temp.path().join("gar.jws");
-        let findings = vec![
-            ProbeFinding {
-                ok: false,
-                name: "HTTP status".into(),
-                detail: "500".into(),
-            },
-            ProbeFinding {
-                ok: true,
-                name: "Cache-Control".into(),
-                detail: "ok".into(),
-            },
-        ];
-        let summary = ProbeRunSummary {
-            started_at: OffsetDateTime::UNIX_EPOCH,
-            ended_at: OffsetDateTime::UNIX_EPOCH,
-            success: false,
-            source_description: "HTTP probe via https://gw.example".into(),
-            target_url: Some("https://gw.example".into()),
-            target_host: Some("gw.example".into()),
-            gar_path,
-            findings: &findings,
-        };
         let config = PagerDutyConfig {
             payload_path,
             routing_key: "rk".into(),

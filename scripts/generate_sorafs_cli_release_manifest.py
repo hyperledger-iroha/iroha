@@ -13,9 +13,15 @@ import sys
 from pathlib import Path
 from typing import BinaryIO
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 uses the pinned backport.
+    import tomli as tomllib
+
 
 SCHEMA = "sorafs.cli.release-manifest.v1"
 MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024
+MAX_VERSION_MAP_BYTES = 64 * 1024
 MAX_RELEASE_MANIFEST_BYTES = 1024 * 1024
 MAX_FILES_PER_TARGET = 1024
 MAX_ENTRIES_PER_TARGET = 2048
@@ -41,7 +47,11 @@ COMMON_TARGET_FILES = (
     "sorafs-release-vulnerabilities.sarif",
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,127}")
+VERSION_RE = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z"
+)
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 REF_RE = re.compile(r"refs/(?:heads|tags)/[A-Za-z0-9._/-]{1,240}")
@@ -99,7 +109,7 @@ def required_candidate_payload_paths(version: str, target: str) -> set[str]:
 
 def _validate_metadata(version: str, commit: str, repository: str, ref: str) -> None:
     if VERSION_RE.fullmatch(version) is None:
-        raise ManifestError("version is not a bounded release identifier")
+        raise ManifestError("version must be canonical SemVer")
     if COMMIT_RE.fullmatch(commit) is None:
         raise ManifestError("commit must be a full lowercase 40-hex Git commit")
     if REPOSITORY_RE.fullmatch(repository) is None:
@@ -310,6 +320,26 @@ def _parse_checksums(payload: bytes, target: str) -> dict[str, str]:
     return checksums
 
 
+def _validate_version_map(payload: bytes, *, version: str, target: str) -> None:
+    """Bind the exact embedded map bytes to the release manifest version."""
+
+    try:
+        document = tomllib.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ManifestError(
+            f"version-map.toml for {target} must be valid UTF-8 TOML"
+        ) from exc
+    release_version = document.get("release_version")
+    if not isinstance(release_version, str):
+        raise ManifestError(
+            f"version-map.toml for {target} must declare a string release_version"
+        )
+    if release_version != version:
+        raise ManifestError(
+            f"version-map.toml for {target} does not match the release manifest version"
+        )
+
+
 def build_manifest(
     artifacts_dir: Path,
     *,
@@ -387,10 +417,17 @@ def build_manifest(
 
         file_hashes: dict[str, tuple[str, int]] = {}
         for relative, path in relative_files.items():
-            digest, size = _hash_regular(
-                path,
-                f"candidate file {directory_name}/{relative}",
-            )
+            label = f"candidate file {directory_name}/{relative}"
+            if relative == "version-map.toml":
+                version_map = _read_bounded_regular(
+                    path,
+                    label,
+                    MAX_VERSION_MAP_BYTES,
+                )
+                _validate_version_map(version_map, version=version, target=target)
+                digest, size = hashlib.sha256(version_map).hexdigest(), len(version_map)
+            else:
+                digest, size = _hash_regular(path, label)
             if size == 0:
                 raise ManifestError(
                     f"candidate file {directory_name}/{relative} must not be empty"

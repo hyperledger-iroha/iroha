@@ -1714,7 +1714,6 @@ async fn handle_tools_call_batch(
             }));
             continue;
         };
-
         let Some(name) = call_obj.get("name").and_then(Value::as_str) else {
             results.push(norito::json!({
                 "error": {
@@ -1734,7 +1733,6 @@ async fn handle_tools_call_batch(
         let mut call_params = Map::new();
         call_params.insert("name".into(), Value::String(name.to_owned()));
         call_params.insert("arguments".into(), Value::Object(args));
-
         let response = handle_tools_call(None, app.clone(), inbound_headers, &call_params).await;
         if let Some(result) = response.get("result") {
             let result_value = result.clone();
@@ -1755,7 +1753,9 @@ async fn handle_tools_call_batch(
 
     jsonrpc_result_response(id, norito::json!({ "results": results }))
 }
-
+fn mcp_tool_response(result: Result<Value, String>) -> Value {
+    result.map_or_else(mcp_tool_error, mcp_tool_success)
+}
 fn mcp_tool_success(structured: Value) -> Value {
     let status = structured.get("status").and_then(Value::as_u64);
     let is_http_error = status.is_some_and(|code| code >= 400);

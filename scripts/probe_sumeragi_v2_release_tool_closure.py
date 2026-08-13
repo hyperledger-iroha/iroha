@@ -265,7 +265,7 @@ def _snapshot_tool(path: Path, name: str) -> ToolSnapshot:
         or stat.S_ISLNK(parent.st_mode)
         or not stat.S_ISDIR(parent.st_mode)
         or parent.st_uid != os.geteuid()
-        or stat.S_IMODE(parent.st_mode) != 0o700
+        or stat.S_IMODE(parent.st_mode) not in {0o500, 0o700}
         or resolved != path
         or stat.S_ISLNK(before.st_mode)
         or not stat.S_ISREG(before.st_mode)

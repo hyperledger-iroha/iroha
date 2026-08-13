@@ -23,6 +23,8 @@ def _copy_workflows(target: Path) -> None:
         *automation.REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS,
         *automation.NATIVE_GOVERNANCE_SDK_CONTRACTS,
         *automation.RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS,
+        *automation.RELEASE_VERSION_MAP_CONTRACT_MARKERS,
+        automation.SORAFS_CLI_RELEASE_GATE_SCRIPT,
         automation.PACKAGE_RELEASE_SMOKE_SCRIPT,
     ):
         source = REPO_ROOT / relative
@@ -66,6 +68,184 @@ def test_topology_envelope_dependency_triggers_are_mandatory(
 
 @pytest.mark.parametrize(
     "relative",
+    sorted(automation.SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS),
+)
+def test_source_file_budget_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits source-file budget contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    (
+        (
+            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
+            "true",
+            "source-file budget command must appear exactly once",
+        ),
+        (
+            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
+            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND} || true",
+            "source-file budget command must appear exactly once",
+        ),
+        (
+            "set -euo pipefail",
+            "set -uo pipefail",
+            "strict shell mode must precede",
+        ),
+        (
+            automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND,
+            "cargo fmt --all -- --check\n"
+            f"{automation.SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND}",
+            "source-file budget command must run before every Cargo command",
+        ),
+    ),
+)
+def test_source_file_budget_release_gate_fails_closed_before_cargo(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    drifted = source.replace(old, new, 1)
+    assert drifted != source
+    release_gate.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_release_gate_job_must_invoke_strict_cli_gate() -> None:
+    relative = ".github/workflows/sorafs-cli-release.yml"
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    marker = f"run: bash {automation.SORAFS_CLI_RELEASE_GATE_SCRIPT}"
+    assert source.count(marker) == 1
+    drifted = source.replace(f"        {marker}", "        run: true", 1)
+    drifted += f"\n# {marker}\n"
+
+    errors = automation._validate_workflow_source(relative, drifted)
+    assert any("release-gate job must run" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_RESERVE_TRIGGER_PATHS),
+)
+def test_reserve_client_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits reserve-client contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_REPAIR_TRIGGER_PATHS),
+)
+def test_repair_client_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits repair-client contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_REDIRECT_TRIGGER_PATHS),
+)
+def test_redirect_no_follow_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits redirect no-follow contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS),
+)
+def test_provider_ingest_crash_restart_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits provider-ingest crash/restart contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_LOCK_TRIGGER_PATHS),
+)
+def test_workspace_lock_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits workspace lock contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
     sorted(automation.SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS),
 )
 def test_swift_version_map_dependency_triggers_are_mandatory(
@@ -82,6 +262,50 @@ def test_swift_version_map_dependency_triggers_are_mandatory(
         ValueError,
         match=r"pull_request\.paths omits Swift version-map dependency trigger",
     ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_RELEASE_VERSION_TRIGGER_PATHS),
+)
+def test_cli_release_version_contract_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits CLI release-version contract trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (relative, marker)
+        for relative, markers in sorted(
+            automation.RELEASE_VERSION_MAP_CONTRACT_MARKERS.items()
+        )
+        for marker in markers
+    ],
+)
+def test_cli_release_version_contract_markers_are_mandatory(
+    tmp_path: Path, relative: str, marker: str
+) -> None:
+    _copy_workflows(tmp_path)
+    source_path = tmp_path / relative
+    source = source_path.read_text(encoding="utf-8")
+    assert marker in source
+    source_path.write_text(source.replace(marker, "removed", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing CLI release-version contract marker"):
         automation.validate_release_automation(tmp_path)
 
 
@@ -540,6 +764,10 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         (
             ".github/workflows/sorafs-cli-release.yml",
             '- "scripts/tests/sorafs_evidence_json_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/sorafs_foundational_receipt_test_support.py"',
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -1902,7 +2130,22 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
     for relative in (
         "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py",
         "scripts/tests/sorafs_reference_sdk_supply_chain_test.py",
+        "scripts/tests/check_sorafs_release_version_map_test.py",
+        "cargo test --locked -p iroha --lib client::repair::tests -- --nocapture",
+        "cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture",
+        "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture",
+        'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"',
+        'cargo test --locked -p irohad --lib "${provider_ingest_test}" -- --exact --list',
+        'grep -Fxc -- "${provider_ingest_test}: test"',
+        "--exact --include-ignored --nocapture",
+        "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py",
+        'expected_cargo_lock_sha256="$(cargo_lock_sha256)"',
+        'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]',
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_provider_protocol_and_chain_repair_boundary_are_documented",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_release_http_clients_do_not_follow_redirects",
         "scripts/tests/sorafs_evidence_json_test.py",
         "scripts/tests/sorafs_response_args_test.py",
         "scripts/tests/sorafs_topology_qualification_test.py",

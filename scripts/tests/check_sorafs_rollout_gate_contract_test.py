@@ -572,7 +572,7 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "client.py",
     REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "crypto.py",
     REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "sorafs.py",
-    REPO_ROOT / "python" / "iroha_torii_client" / "client.py",
+    REPO_ROOT / "python" / "iroha_torii_client" / "client.py", REPO_ROOT / "python" / "iroha_torii_client" / "orderbook_submission.py",
     REPO_ROOT
     / "csharp"
     / "src"
@@ -8217,36 +8217,36 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     )
 
 
-def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
-    release_gate = read(REPO_ROOT / "ci" / "check_sorafs_cli_release.sh")
+def test_sorafs_release_http_clients_do_not_follow_redirects() -> None:
+    cli = read(IROHA_CLI_SORAFS_RS)
+    run_impls = ("TransparencyExplorerCanaryArgs", "TransparencyPublicationCanaryArgs", "ModerationQuarantineNotificationsDeliverArgs", "ModerationQuarantineNotificationsCanaryArgs", "ModerationQuarantineOperatorCanaryArgs")
+    assert all(".redirect(reqwest::redirect::Policy::none())" in cli.split(f"impl Run for {name}", 1)[1].split("\n}", 1)[0] for name in run_impls)
+    assert all(name in cli for name in ("fn moderation_quarantine_notifications_run_does_not_follow_cross_origin_redirects()", "fn sorafs_get_canary_runs_do_not_follow_cross_origin_redirects()"))
+    xtask = read(REPO_ROOT / "xtask" / "src" / "sorafs.rs"); probe = xtask.split("fn probe_headers_via_http(", 1)[1].split("\n}", 1)[0]
+    assert "Client::builder().redirect(reqwest::redirect::Policy::none())" in probe and "fn gateway_probe_rejects_cross_origin_head_and_get_redirects()" in xtask
 
-    assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate
+
+def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
+    release_gate = read(REPO_ROOT / "ci" / "check_sorafs_cli_release.sh"); release_workflow = read(REPO_ROOT / ".github" / "workflows" / "sorafs-cli-release.yml"); manifest = read(SCRIPTS_DIR / "generate_sorafs_cli_release_manifest.py"); manifest_test = read(SCRIPTS_DIR / "tests" / "generate_sorafs_cli_release_manifest_test.py"); candidate_packager = read(SCRIPTS_DIR / "package_sorafs_cli_candidate.py"); candidate_packager_test = read(SCRIPTS_DIR / "tests" / "package_sorafs_cli_candidate_test.py"); provider_ingest_test = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests" / "quarantine_restart.rs"); provider_ingest_parent = read(REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime" / "tests.rs"); provider_ingest_contract = read(SCRIPTS_DIR / "tests" / "check_sorafs_provider_ingest_runtime_contract_test.py")
+
+    assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate and 'echo "[sorafs-release] source-file budget check"' in release_gate
     assert "python3 -m pytest -q \\" in release_gate
-    assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate
-    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate
-    assert (
-        "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate
-    )
+    assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate and "def _validate_version_map(" in candidate_packager and "canonical SemVer" in candidate_packager and all(name in candidate_packager_test for name in ("test_candidate_packager_rejects_version_map_mismatch_without_outputs", "test_candidate_packager_rejects_noncanonical_semver_without_outputs"))
+    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and "#[tokio::test]\nasync fn post_admission_quarantine_survives_restart_with_shared_chunks()" in provider_ingest_test and all(marker in provider_ingest_contract for marker in ("QUARANTINE_RESTART_SHA256", "test_quarantine_restart_proof_is_frozen_connected_and_unignored"))
+    assert "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate and "def _validate_version_map(" in manifest and "canonical SemVer" in manifest and all(name in manifest_test for name in ("test_manifest_rejects_embedded_version_map_mismatch", "test_manifest_rejects_noncanonical_semver"))
     assert "scripts/tests/package_sorafs_validate_release_test.py" in release_gate
     assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
-    assert (
-        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::"
-        "test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io"
-    ) in release_gate
-    assert (
-        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::"
-        "test_sorafs_validate_release_packager_rejects_symlink_stage_entries"
-    ) in release_gate
-    assert (
-        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::"
-        "test_sorafs_cli_release_gate_runs_helper_adversarial_tests"
-    ) in release_gate
-    assert release_gate.index("reference FFI header contract") < release_gate.index(
-        "release helper adversarial tests"
+    required = (
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_release_http_clients_do_not_follow_redirects", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests",
+        "cargo test --locked -p iroha --lib client::reserve::tests -- --nocapture", "cargo test --locked -p iroha --lib client::repair::tests -- --nocapture",
+        "cargo test --locked -p iroha --lib does_not_follow_signed_body_redirects -- --nocapture", 'provider_ingest_test="sorafs_provider_ingest_runtime::tests::quarantine_restart::post_admission_quarantine_survives_restart_with_shared_chunks"', 'cargo test --locked -p irohad --lib "${provider_ingest_test}" -- --exact --list', 'grep -Fxc -- "${provider_ingest_test}: test"', "--exact --include-ignored --nocapture",
     )
-    assert release_gate.index("release helper adversarial tests") < release_gate.index(
-        "clippy sorafs_orchestrator"
-    )
+    assert all(marker in release_gate for marker in required)
+    assert release_gate.count("python3 scripts/check_source_file_budget.py") == 1 and release_gate.index("python3 scripts/check_source_file_budget.py") < release_gate.index("cargo fmt --all -- --check") and release_gate.index("reference FFI header contract") < release_gate.index("release helper adversarial tests")
+    assert release_gate.index("release helper adversarial tests") < release_gate.index("clippy sorafs_orchestrator")
 
 
 def test_sorafs_drill_log_helpers_use_no_follow_descriptor_io() -> None:
@@ -9988,8 +9988,8 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "validate_evidence_file_for_read(path)" in helper
     assert "def evidence_read_open_flags" in helper
     assert "getattr(os, \"O_NOFOLLOW\", 0)" in helper
-    assert "os.open(path, evidence_read_open_flags())" in helper
-    assert "os.fdopen(fd, \"rb\")" in helper
+    assert "os.open(leaf, evidence_read_open_flags(), dir_fd=parent_fd)" in helper
+    assert "os.read(fd, min(CHUNK_BYTES, max_bytes + 1 - size))" in helper
     assert "os.close(fd)" in helper
     assert "evidence file exceeds" in helper
     assert "raise EvidenceFileTooLargeError(max_bytes)" in helper
@@ -18865,7 +18865,7 @@ def test_retired_por_mutation_surface_is_absent_from_production_sources_and_docs
         REPO_ROOT / "crates" / "iroha_torii" / "src" / "routing.rs",
         TORII_SORAFS_API_RS,
         REPO_ROOT / "javascript" / "iroha_js" / "src" / "toriiClient.js",
-        REPO_ROOT / "javascript" / "iroha_js" / "dist" / "toriiClient.js",
+        # The ignored dist copy is covered by the package src/dist identity gate.
         REPO_ROOT / "javascript" / "iroha_js" / "index.d.ts",
         REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "client.py",
         REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "__init__.py",
@@ -19591,7 +19591,7 @@ def test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs()
     )
     assert [phrase for phrase in required_open if phrase not in normalized] == []
     client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "repair.rs")
-    assert [marker for marker in ("mod repair;", "repair::validate_transaction_route(route, transaction)?;", "response.status() != StatusCode::OK", 'get_all("content-type")', "Some(APPLICATION_JSON)", "wrapper.len() != 2", 'Some("finalized_chain")', "RepairFinalizedStatusV1", "RepairLedgerTaskPageV1", "RepairFinalizedTaskV1", "RepairFinalizedEventPageV1", "validate_finalized_cursor", "validate_event_successor", "previous.event_index.checked_add(1)", "page.has_more != page.next_after_task_id.is_some()", "page.has_more != page.next_after.is_some()", "repair::validate_status_response(response, finalized)", "repair::validate_tasks_response(response, filter)", "repair::validate_task_response(response, &ticket_id.0, finalized)", "repair::validate_events_response(response, filter)", "repair_route_validation_accepts_every_exact_instruction", "repair_route_validation_rejects_mismatch_and_wrong_action_before_http", "repair_route_validation_rejects_non_native_and_non_singleton_before_http", "repair_read_response_binding_accepts_exact_typed_wrappers", "repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches", "repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_noncanonical_block_index_successors", "repair_read_response_binding_preserves_every_non_ok_response", "repair_read_methods_validate_every_successful_response_after_send") if marker not in client] == []
+    assert [marker for marker in ("mod repair;", "repair::validate_transaction_route(route, transaction)?;", "response.status() != StatusCode::OK", 'get_all("content-type")', "Some(APPLICATION_JSON)", "wrapper.len() != 2", 'Some("finalized_chain")', "RepairFinalizedStatusV1", "RepairLedgerTaskPageV1", "RepairFinalizedTaskV1", "RepairFinalizedEventPageV1", "validate_finalized_cursor", "validate_event_successor", "previous.event_index.checked_add(1)", "page.has_more != page.next_after_task_id.is_some()", "page.has_more != page.next_after.is_some()", "REPAIR_DEFAULT_PAGE_LIMIT_V1: u32 = 50", "limit.unwrap_or(REPAIR_DEFAULT_PAGE_LIMIT_V1)", "repair::validate_status_response(response, finalized)", "repair::validate_tasks_response(response, filter)", "repair::validate_task_response(response, &ticket_id.0, finalized)", "repair::validate_events_response(response, filter)", "repair_route_validation_accepts_every_exact_instruction", "repair_route_validation_rejects_mismatch_and_wrong_action_before_http", "repair_route_validation_rejects_non_native_and_non_singleton_before_http", "repair_read_response_binding_accepts_exact_typed_wrappers", "repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches", "repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_task_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_omitted_limit_over_torii_default", "repair_event_page_response_binding_rejects_noncanonical_block_index_successors", "repair_read_response_binding_preserves_every_non_ok_response", "repair_read_methods_validate_every_successful_response_after_send") if marker not in client] == []
 
 
 def test_repair_docs_keep_rollout_contract_markers() -> None:
@@ -21650,20 +21650,13 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
 
     required_current = (
         "The authoritative native ledger now owns policy",
-        "SetSorafsOrderbookPolicy",
-        "SubmitSorafsOrderbookOrder",
-        "CancelSorafsOrderbookOrder",
-        "MatchSorafsOrderbook",
-        "MaintainSorafsOrderbook",
-        "RecordSorafsOrderbookSettlementReceipt",
-        "partitions funded buyer custody atomically",
-        "expires orders/channels and refunds custody",
-        "settles the native lock atomically",
-        "exact matcher and settlement accounts",
-        "Typed signed-query variants expose the active policy",
-        "Page sizes are restricted to `1..=500`",
-        "finalized-chain typed projections",
-        "SSE and WebSocket event streams poll only the finalized typed event journal",
+        "SetSorafsOrderbookPolicy", "SubmitSorafsOrderbookOrder",
+        "CancelSorafsOrderbookOrder", "MatchSorafsOrderbook",
+        "MaintainSorafsOrderbook", "RecordSorafsOrderbookSettlementReceipt",
+        "partitions funded buyer custody atomically", "expires orders/channels and refunds custody",
+        "settles the native lock atomically", "exact matcher and settlement accounts",
+        "Typed signed-query variants expose the active policy", "Page sizes are restricted to `1..=500`",
+        "finalized-chain typed projections", "SSE and WebSocket event streams poll only the finalized typed event journal",
         "No residual book mirror",
         "bounded fail-closed finalized observability",
         "No local book, provider-id label, or mirror-divergence gauge exists.",
@@ -21674,10 +21667,17 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
     )
     missing = [phrase for phrase in required_current if phrase not in normalized]
 
-    assert missing == []
-    assert "does not ship an on-chain SoraFS orderbook contract" not in normalized
-    assert "Deterministic fill matching and automatic channel/lock creation and funding are not shipped." not in normalized
-    assert "durable receipt daemon and escrow custody mutation are not shipped" not in normalized
+    assert missing == [] and all(stale not in normalized for stale in ("does not ship an on-chain SoraFS orderbook contract", "Deterministic fill matching and automatic channel/lock creation and funding are not shipped.", "durable receipt daemon and escrow custody mutation are not shipped"))
+    sdk_contract = {
+        "crates/iroha_data_model/src/sorafs/orderbook_submission.rs": ("encode_wire_v1()", "canonical_framed.len()", "require_owner_authority(", "decode_and_verify_sorafs_orderbook_submission_receipt_v1"),
+        "javascript/iroha_js/src/sorafsOrderbookSubmission.js": ("SorafsOrderbookSubmissionAmbiguousError", "expectedReceiptSigner", "MAX_SIGNATURE_HEX_LENGTH", "changed at the native boundary"),
+        "javascript/iroha_js/src/toriiClient.js": ("responseStatusWithoutUserGetter(response) !== 202", "_readBoundedResponseBytes(", "x-iroha-signed-transaction-hash"),
+        "python/iroha_torii_client/orderbook_submission.py": ("SorafsOrderbookSubmissionAmbiguousError", "_HTTP_ADAPTER_SEND(", "stream=True", "require_orderbook_https_base_url", "Transfer-Encoding"),
+        "python/iroha_torii_client/tests/orderbook_submission_test.py": ("test_redirect_body_is_never_consumed_by_the_one_shot_adapter_path", "test_noncanonical_or_insecure_base_url_fails_before_http"),
+        "scripts/check_native_sdk_abi22_artifact.py": ("inspectSorafsOrderbookSubmissionV1", "verify_sorafs_orderbook_submission_receipt_v1"),
+    }
+    assert all(marker in read(REPO_ROOT / path) for path, markers in sdk_contract.items() for marker in markers)
+    status = read(REPO_ROOT / "status.md"); assert status.index("SoraFS orderbook signed-submit SDK hard cut") < status.index("SoraFS orderbook submit SDK helpers")
 
 
 def test_orderbook_docs_keep_rollout_contract_markers() -> None:
@@ -26558,13 +26558,13 @@ def test_unshipped_gateway_load_live_surface_is_not_exposed() -> None:
 def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     plan = re.sub(r"\s+", " ", read(SORAFS_RELEASE_PIPELINE_PLAN))
     roadmap_source = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
-    checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
-    runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness.py")
-    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
-    inventory_helper = read(SCRIPTS_DIR / "sorafs_l1_lane_inventory_integration.py")
-    archive_path_helper = read(SCRIPTS_DIR / "sorafs_archive_path_components.py")
-    direct_example = read(EXAMPLES_DIR / "sorafs_production_readiness.args.example")
-    runner_example = read(EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example")
+    checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py"); contract = read(SCRIPTS_DIR / "sorafs_production_readiness_contract.py")
+    runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness.py"); runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py")
+    helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py"); signer_evidence = read(SCRIPTS_DIR / "sorafs_software_signer_evidence.py")
+    inventory_helper = read(SCRIPTS_DIR / "sorafs_l1_lane_inventory_integration.py"); receipt = read(SCRIPTS_DIR / "sorafs_software_signer_receipt.py")
+    archive_path_helper = read(SCRIPTS_DIR / "sorafs_archive_path_components.py"); builder_test = read(SCRIPTS_DIR / "tests" / "build_sorafs_foundational_prerequisite_test.py")
+    direct_example = read(EXAMPLES_DIR / "sorafs_production_readiness.args.example"); negative_runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness_negative_archive.py")
+    runner_example = read(EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example"); negative_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_negative_archive_test.py"); version_map = read(SCRIPTS_DIR / "check_sorafs_release_version_map.py"); version_map_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_release_version_map_test.py")
 
     required_markers = (
         "`scripts/check_sorafs_production_readiness.py` is the final aggregate SoraFS promotion gate",
@@ -27603,9 +27603,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_replay_manifest_is_schema_closed_digest_only" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
-    assert "--evidence-dir artifacts/sorafs/production-readiness/summaries" in direct_example
-    assert "--gateway-load-summary artifacts/sorafs/gateway-load/summary.json" in runner_example
-    assert "--dry-run" not in runner_example
+    assert "--evidence-dir artifacts/sorafs/production-readiness/summaries" in direct_example; assert "signer_receipt_bundle" in contract and 'unsigned.pop("signer_receipt_bundle", None)' in signer_evidence and "foundational prerequisite requires a signer receipt bundle" in signer_evidence
+    assert "--gateway-load-summary artifacts/sorafs/gateway-load/summary.json" in runner_example; assert all(marker in checker for marker in ("software_signer_evidence.add_foundational_receipt_verifier_arguments(parser)", "software_signer_evidence.verifier_sha256_from_args(args)", "software_signer_evidence.validate_foundational_receipt_from_options(payload, signature, options, errors)")) and all(marker in runner for marker in ("production readiness runner requires a foundational signer receipt verifier", "production readiness runner requires a foundational signer verifier SHA-256", "--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256"))
+    assert "--dry-run" not in runner_example; assert all(sum(line.split(maxsplit=1)[0] == flag for line in example.splitlines() if line.split()) == 1 for example in (direct_example, runner_example) for flag in ("--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256")); assert '"""Return the exact ordered 22-input promotion replay set."""' in runner and "len(MODULE.production_input_paths(MODULE.parse_args(complete_args(tmp_path)))) == 22" in runner_test; assert all(marker in negative_runner for marker in ("_snapshot_foundational_verifier", "_install_foundational_verifier", "_require_foundational_verifier_unchanged", "--foundational-prerequisite-signer-verifier", "--foundational-prerequisite-signer-verifier-sha256")) and "test_foundational_verifier_is_staged_and_forwarded_outside_inventory" in negative_test; assert all(marker in receipt for marker in ("MAX_RECEIPT_VERIFIER_DIAGNOSTIC_BYTES", "RECEIPT_VERIFIER_TIMEOUT_SECS", "RECEIPT_VERIFIER_CLEANUP_TIMEOUT_SECS", "_run_bounded_verifier", "selectors.DefaultSelector()", 'start_new_session=os.name == "posix"', "umask=0o077", "os.killpg(process.pid, signal.SIGKILL)", "os.read(", "external software signer receipt verification failed", "external software signer receipt verifier could not run")) and all(marker in builder_test for marker in ("test_receipt_verifier_rejects_bounded_payload_free_diagnostics", "test_receipt_verifier_hard_timeout_reaps_process", "test_receipt_verifier_timeout_kills_inherited_pipe_descendant")); assert all(marker in version_map for marker in ("RELEASE_PACKAGE_IDS = frozenset(", '"sorafs-car"', '"sorafs-manifest"', '"sorafs-orchestrator"', "release_version must match every CLI release package version")) and "test_release_version_must_match_every_cli_release_package" in version_map_test
 
 
 def test_sorafs_production_readiness_aggregate_covers_every_lane_checker() -> None:
@@ -27691,8 +27691,8 @@ def test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence() -
         "The reserve lane is release-ready only when these tests, the full workspace and SDK gates, the four-validator deployment exercise, security review, disaster recovery rehearsal, and signed aggregate readiness evidence all pass.",
     )
     assert [phrase for phrase in required_contract if phrase not in normalized] == []
-    client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "reserve.rs")
-    assert all(marker in client for marker in ("mod reserve;", "reserve::validate_transaction_route(route, transaction)?;", "reserve_route_validation_accepts_every_exact_instruction", "reserve_route_validation_rejects_wrong_kind_and_identifiers_before_http", "reserve_route_validation_rejects_wrong_type_non_native_and_non_singleton_before_http"))
+    client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "reserve.rs") + read(IROHA_CLIENT_RS.parent / "http_default.rs")
+    assert all(marker in client for marker in ("mod reserve;", "reserve::validate_transaction_route(route, transaction)?;", "finalized_json_request(", '"Accept-Encoding", "identity"', ".max_response_bytes(RESERVE_JSON_RESPONSE_MAX_BYTES_V1)", "reserve_route_validation_accepts_every_exact_instruction", "reserve_route_validation_rejects_wrong_kind_and_identifiers_before_http", "reserve_route_validation_rejects_wrong_type_non_native_and_non_singleton_before_http", "reserve_read_response_binding_accepts_exact_typed_records_and_pages", "reserve_event_response_binding_accepts_exact_successors", "reserve_page_response_binding_separates_json_transport_and_norito_bounds", "reserve_read_response_binding_rejects_media_wrapper_finality_and_detail_mismatch", "reserve_read_response_binding_rejects_typed_semantic_mutants", "reserve_page_response_binding_rejects_bounds_order_exclusivity_and_continuation", "reserve_event_response_binding_rejects_gaps_finality_and_bad_continuations", "reserve_malformed_filters_fail_before_http_and_non_ok_is_unchanged", "reserve_read_requests_pin_identity_json_and_transport_bound", "owned_http_client_does_not_follow_signed_body_redirects", "owned_async_http_client_does_not_follow_signed_body_redirects"))
 
 
 def test_reserve_rent_docs_do_not_reopen_process_local_authority() -> None:

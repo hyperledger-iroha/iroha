@@ -752,6 +752,7 @@ The release evidence scripts have focused Python coverage in:
 
 ## Rollout Status
 Implemented locally:
+- Strict Node and Python SoraFS orderbook submit helpers now require a caller-signed canonical transaction, expected network context, and an expected Torii receipt signer before HTTP. Native ABI-22 inspectors enforce exact route/singleton/network/signature/owner bindings and derive the three authoritative identities; the response path accepts only one bounded `202 application/x-norito` receipt with all three exact raw-lowercase identity headers, verifies the pinned signer and receipt signature, and reports every post-dispatch failure as an ambiguous outcome that must be reconciled rather than retried. The source tests and required-symbol probes are wired into existing SDK lanes, but native artifacts have not been rebuilt or qualified.
 - Reference validation APIs for adverts, admission envelopes, admission
   renewals/revocations, orders, signed orders, orderbook payloads, PoR, PDP,
   PoTR, repair, governance nodes, governance DAG blocks and signed-head chains,

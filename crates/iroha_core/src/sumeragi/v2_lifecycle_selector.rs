@@ -280,7 +280,7 @@ impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
     }
 
     /// Match the exact selected physical ingress occurrence.
-    pub(in crate::sumeragi) const fn matches_ingress_identity(
+    pub(in crate::sumeragi) fn matches_ingress_identity(
         &self,
         identity: PendingFairIngressIdentity,
     ) -> bool {
@@ -2325,7 +2325,7 @@ impl LifecycleCoordinator {
     }
 }
 
-impl V2EffectExecutor<SerializedV2Runtime> {
+impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     /// Consume one exact recovered response family into its dedicated body-store command.
     pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_body_persistence(
         &self,
@@ -2573,9 +2573,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         ingress: &FairV2Ingress,
     ) -> Result<Option<PreparedLifecycleIngressSelector>, LifecycleIngressSelectorError> {
         let terminal_subject = self
-            .local_proposal_directive()
-            .map_err(|error| LifecycleIngressSelectorError::ExecutorState(Box::new(error)))?
-            .decided_subject();
+            .lifecycle_terminal_subject()
+            .map_err(|error| LifecycleIngressSelectorError::ExecutorState(Box::new(error)))?;
         let Some(cut) = ingress
             .capture_next_lifecycle_queue_cut(|occurrence| {
                 v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)

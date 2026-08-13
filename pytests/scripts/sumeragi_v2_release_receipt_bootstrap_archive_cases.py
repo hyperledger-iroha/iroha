@@ -157,6 +157,21 @@ def _fixture_validator_values(
         "--expected-revocation-sha256": ("text", "4" * 64),
         "--expected-signer-fingerprint": ("text", expected_signer_fingerprint),
         "--scaling-evidence-manifest": ("path", str(scaling_evidence_manifest)),
+        "--sdk-dependency-archive": (
+            "path", str(source.parent / "sdk-dependency-bundle.tar")
+        ),
+        "--sdk-dependency-input-inventory": (
+            "path", str(source.parent / "sdk-dependency-input.json")
+        ),
+        "--sdk-dependency-final-work-inventory": (
+            "path", str(source.parent / "sdk-dependency-work-final.json")
+        ),
+        "--runtime-tool-probe-manifest": (
+            "path", str(source.parent / "runtime-tool-probe-manifest.json")
+        ),
+        "--runtime-tool-probe-result": (
+            "path", str(source.parent / "runtime-tool-probe-result.json")
+        ),
         "--expected-scaling-trial-harness-sha256": (
             "text", scaling_digests["trial_harness"]
         ),
@@ -759,12 +774,15 @@ def exercise_private_pr_outer_lifecycle(runner: Path, tmp_path: Path) -> None:
 
     host_python = Path(sys.executable).resolve(strict=True)
     helper = runner.with_name("copy_sumeragi_v2_release_cargo_cache.py")
+    runner_support = runner.with_name("run_sumeragi_v2_release_gates_support.sh")
     shutil.copy2(runner, scripts / runner.name)
     shutil.copy2(helper, scripts / helper.name)
+    shutil.copy2(runner_support, scripts / runner_support.name)
     (candidate / "Cargo.lock").write_bytes(b"private PR fixture lock\n")
     (candidate / "Cargo.lock").chmod(0o600)
     candidate_lock = (candidate / "Cargo.lock").read_bytes()
     candidate_helper = (scripts / helper.name).read_bytes()
+    candidate_runner_support = (scripts / runner_support.name).read_bytes()
     (fixture / "caller-ancestor-marker").write_text("must remain unreachable\n", encoding="utf-8")
 
     executable(
@@ -845,6 +863,7 @@ def exercise_private_pr_outer_lifecycle(runner: Path, tmp_path: Path) -> None:
         assert child["environment"]["PATH"].startswith(str(invocation / "runtime" / "bin"))
         assert (candidate / "Cargo.lock").read_bytes() == candidate_lock
         assert (scripts / helper.name).read_bytes() == candidate_helper
+        assert (scripts / runner_support.name).read_bytes() == candidate_runner_support
     stage_failure_log = fixture / "stage-failure-root"
     stage_failure_environment = dict(environment, FAKE_PR_STAGE_COPY_FAIL="1", FAKE_PR_STAGE_FAILURE_LOG=str(stage_failure_log))
     stage_failure = subprocess.run(
@@ -864,6 +883,11 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         ("--no-local --no-hardlinks --no-checkout", 2),
         ('pr_clone_helper="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"', 1),
         ('"$release_runtime_helper"', 13),
+        ('"$release_child_bin/python3" -I -S "$release_tool_probe_helper"', 2),
+        ('--probe-root "$release_invocation_root/.runtime-tool-probe"', 1),
+        ('--probe-root "$release_invocation_root/.runtime-tool-probe-post"', 1),
+        ("--runtime-tool-probe-manifest", 1),
+        ("--runtime-tool-probe-result", 1),
         ('"$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"', 3),
         ('IROHA_RELEASE_PRIVATE_PR=1 \\', 1),
         ('HOME="$pr_host_root/home"', 1),
@@ -919,6 +943,8 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     private_fixture.chmod(0o700)
     runtime_sources = private_fixture / "sources"
     runtime_sources.mkdir(mode=0o700)
+    loose_sources = private_fixture / "loose-sources"
+    loose_sources.mkdir(mode=0o700)
 
     def executable(path: Path, output: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -951,7 +977,7 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         "shasum" if sys.platform == "darwin" else "sha256sum",
     )
     ordinary = {
-        name: executable(runtime_sources / name, f"{name} fixture 1")
+        name: executable(loose_sources / name / name, f"{name} fixture 1")
         for name in (
             "python3", "git", "ssh-keygen", "bash", "node", "tlapm",
             "git-upload-pack", "git-index-pack", *release_shell_utilities,
@@ -966,6 +992,10 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     fixture_python = ordinary["python3"]
     if framework_python:
         ordinary["python3"] = Path(sys.executable).resolve(strict=True)
+    runtime_helper = loose_sources / "runtime-helper" / "copy-release-runtime.py"
+    runtime_helper.parent.mkdir(mode=0o700)
+    runtime_helper.write_bytes(b"# protected runtime helper fixture\n")
+    runtime_helper.chmod(0o600)
     tla2tools = runtime_sources / "tla2tools.jar"
     tla2tools.write_bytes(b"jar fixture\n")
     tla2tools.chmod(0o600)
@@ -974,6 +1004,7 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     (tlapm_stdlib / "nested" / "stdlib.tla").write_bytes(b"---- MODULE Fixture ----\n")
     sources = [
         ordinary["python3"], ordinary["git"], ordinary["ssh-keygen"], ordinary["bash"],
+        runtime_helper,
         cargo, rustc, ordinary["node"], swift, ordinary["tlapm"], java,
         verus, cargo_verus, tla2tools, tlapm_stdlib,
         ordinary["git-upload-pack"], ordinary["git-index-pack"],
@@ -1704,48 +1735,16 @@ def test_receipt_rejects_bootstrap_cli_path_aliases(
 @pytest.mark.parametrize(
     ("field_path", "replacement"),
     [
+        (("runner", "invocation", "profile"), "pr"),
+        (("runner", "invocation", "operation_id"), "forged.release.v1"),
+        (("runner", "invocation", "arguments", "0"), "--pr"),
         (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_BOOTSTRAP_IDENTITY",
-            ),
-            "/tmp/aliased-candidate-identity.json",
+            ("runner", "invocation", "bash_archive_id"),
+            "release-bootstrap.forged-bash.v1",
         ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_IROHAD_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (
-            (
-                "runner",
-                "environment_without_self_digest",
-                "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
-            ),
-            "e" * 64,
-        ),
-        (("runner", "argv", "0"), "/bin/bash"),
-        (("runner", "closed_path_resolution", "git"), "/usr/bin/git"),
+        (("runner", "closed_path_resolution", "git"), "forged-bootstrap.git.v1"),
+        (("runner", "environment_sha256"), "0" * 64),
+        (("runner", "tool_directory"), "forged-runner-bin"),
     ],
 )
 def test_receipt_rejects_bootstrap_runner_aliases(

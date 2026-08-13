@@ -1,3 +1,8 @@
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    reviewed_lifecycle_ledger_source_for_test,
+    reviewed_lifecycle_work_registry_source_for_test,
+};
+
 #[test]
 fn exact_live_wal_cut_rejects_pre_persist_effect_without_appending() {
     let directory = TempDir::new().expect("temporary missing-cause WAL directory");
@@ -2340,8 +2345,8 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let runtime = include_str!("../v2_runtime.rs");
     let replay = include_str!("../v2_lifecycle_replay_authority.rs");
     let wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
-    let ledger = include_str!("../v2_lifecycle_ledger.rs");
-    let registry = include_str!("../v2_lifecycle_work_registry.rs");
+    let ledger = reviewed_lifecycle_ledger_source_for_test();
+    let registry = reviewed_lifecycle_work_registry_source_for_test();
 
     let factory_start = adapter
         .find("pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(")

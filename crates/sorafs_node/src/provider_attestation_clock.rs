@@ -783,9 +783,9 @@ pub enum MusubiProviderAttestationJournalCheckpointSealErrorV1 {
 /// URLs.
 ///
 /// Returning a valid qualification attests to the exact fixed orphan count,
-/// byte, and age ceilings exported above. TODO: qualify the provider's
-/// head-CAS/garbage-collection concurrency matrix and prove collection cannot
-/// remove the latest head's blob or its retained direct predecessor's blob.
+/// byte, and age ceilings exported above. Deployment qualification must cover
+/// the provider's head-CAS/garbage-collection concurrency matrix and demonstrate
+/// that collection retains the latest head blob and its direct predecessor.
 pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'static {
     /// Return the stable credential-free runtime identity.
     ///
@@ -1548,10 +1548,10 @@ pub enum MusubiProviderAttestationClockErrorV1 {
 /// Construction samples no caller-provided timestamp. Tests exercise the same
 /// state machine through crate-private sampled helpers; production callers can
 /// only initialize/open and request a fresh host UNIX-time sample.
-// TODO: keep daemon activation fail-closed until the supervised provider-ingest
-// layer constructs the sealed file-store runtime through its explicit
-// initialize/open paths using a production-qualified combined durability
-// provider and the crash/corruption qualification matrix has passed.
+// Daemon activation remains closed until the supervised provider-ingest layer
+// constructs the sealed file-store runtime through its explicit initialize/open
+// paths with a production-qualified combined durability provider and accepted
+// deployment crash/corruption evidence.
 pub struct MusubiProviderAttestationSealedUnixClockV1 {
     scope_digest: [u8; 32],
     seal_binding: MusubiProviderAttestationClockSealBindingV1,

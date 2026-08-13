@@ -1462,8 +1462,32 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             policy,
-            '"$IROHA_RELEASE_CARGO_BIN" "${pinned_arguments[@]}"',
-            'command cargo "${pinned_arguments[@]}"',
+            '"$IROHA_RELEASE_CARGO_BIN" "$@"',
+            'command cargo "$@"',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            '( _run_cargo_with_scoped_lock "$label" "${pinned_arguments[@]}" )',
+            '( _run_cargo_with_scoped_lock "$label" "$@" )',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            "os.rmdir(lock.name, dir_fd=root_fd)",
+            "lock.rmdir()",
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            "release_invocation_cargo_lock || return $?",
+            "return $?",
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            "&& ! release_invocation_cargo_lock; then",
+            "&& false; then",
             "shared process policy lacks exact required token",
         ),
         (

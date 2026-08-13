@@ -45697,7 +45697,7 @@ mod query_endpoint_tests {
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Asset>::default()),
             params: QueryParams::default(),
         };
-        let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
+        let payload = crate::authorize_query_for_test(QueryRequest::Start(iter), alice_id.clone());
         let signed = payload.sign(&alice_keypair);
 
         // Execute via handler
@@ -73271,7 +73271,7 @@ fn decode_query_projection_archive_payload(
         ))
     })?;
     let archive =
-        norito::decode_from_bytes::<QueryProjectionShardArchive>(&decompressed).map_err(|err| {
+        norito::decode_canonical::<QueryProjectionShardArchive>(&decompressed).map_err(|err| {
             query_projection_archive_validation_error(format!(
                 "failed to decode query projection archive payload: {err}"
             ))

@@ -7,7 +7,7 @@ use url::Url;
 
 use super::APPLICATION_JSON;
 use crate::{
-    http::{Method as HttpMethod, StatusCode},
+    http::{Method as HttpMethod, RequestBuilder as _, StatusCode},
     http_default::DefaultRequestBuilder,
 };
 

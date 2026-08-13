@@ -3,9 +3,10 @@
 
 An approval is an operator decision record, not a digital signature and not a
 claim about the approver's cryptographic identity.  This module authenticates
-the protected local file contract and its exact canonical contents.  A later
-bootstrap integration must compare those contents with the exact invocation it
-will run and retain the separately administered operator handoff.
+the protected local file contract and its exact canonical contents.  The
+bootstrap, standalone validator, and receipt writer compare those contents
+with the exact planned invocation and retain the separately administered
+operator handoff.
 
 Raw approval bytes may contain the exact candidate-relative command arguments.
 The sanitized archive projection never contains those arguments or a source
@@ -851,11 +852,9 @@ APPROVAL_OPERATION_PLAN_SHA256: Mapping[ReleaseApprovalClass, str] = (
     )
 )
 
-# Integration is deliberately staged: this standalone component is complete,
-# while these protected consumers must adopt the exact APIs below before an
-# approval can enter release evidence.  Keeping the requirement here lets the
-# existing receipt selector surface source-bind the handoff without claiming
-# that an unmodified consumer already performs it.
+# Keep the required protected consumer APIs and actions source-bound here so
+# focused contract tests detect any consumer that stops independently loading,
+# binding, sanitizing, or replaying the four approval records.
 APPROVAL_REQUIRED_CONSUMER_APIS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "scripts/bootstrap_sumeragi_v2_release.py": (

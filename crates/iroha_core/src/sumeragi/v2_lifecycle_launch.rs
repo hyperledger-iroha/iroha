@@ -13,6 +13,19 @@ use iroha_data_model::{
 };
 use thiserror::Error;
 
+#[path = "v2_lifecycle_turn_driver.rs"]
+mod turn_driver;
+
+#[cfg(test)]
+#[path = "v2_lifecycle_turn_driver_tests.rs"]
+mod turn_driver_tests;
+
+pub(in crate::sumeragi) use turn_driver::{
+    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
+    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionRecoveredLifecycleSignCompletionSelectionV1,
+};
+
 use super::{
     PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
     ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
@@ -45,13 +58,12 @@ use crate::{
             KuraReplicaAdvertRefreshOwner, PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
-            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleProposalExactOutputCaptureV1,
-            V2CleanupSupervisor,
+            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
+            RecoveredLifecycleProposalExactOutputCaptureV1, V2CleanupSupervisor,
         },
     },
 };
 
-#[cfg(not(test))]
 use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
 use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
@@ -238,6 +250,9 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     owner: ProductionLifecycleOwnerV1,
     executor: V2EffectExecutor<SerializedV2Runtime>,
     services: ProductionV2Services,
+    // Guarded completion/retry owners drop only after their exact service has
+    // stopped, so their fail-stop queue identities remain representable.
+    recovered_decision_apply_deferred: Option<RetainedRecoveredDecisionApplyDeferredV1>,
     // Dedicated persisted Fetch completion drops after services have stopped
     // its worker, while retaining the queue Arc and fail-stop guard.
     recovered_decision_fetch_body_completion:
@@ -245,6 +260,9 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     // Services drop before this completion and stop the worker. This guard then
     // drops while its own retained queue Arc still represents the exact owner.
     recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
+    // The wait retains the exact selector and service-generation fence. It is
+    // never split back into a caller-selected ordinal or raw queue witness.
+    recovered_ingress_capacity_wait: Option<super::PreparedProductionIngressCapacityWait>,
     #[allow(dead_code)]
     completion_observer_activation: Option<ProductionV2CompletionObserverActivationPermitV1>,
     // Rust drops fields in declaration order. Keep this last so the service
@@ -821,7 +839,9 @@ impl LaunchedProductionLifecycleV1 {
             Ok(preview) => preview,
             Err(_) => return ProductionRecoveredLifecycleSignBroadcastPreparationV1::Retry,
         };
-        if preview.shape() != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast {
+        if preview.shape()
+            != crate::sumeragi::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast
+        {
             return ProductionRecoveredLifecycleSignBroadcastPreparationV1::Retry;
         }
         drop(preview);
@@ -879,7 +899,9 @@ impl LaunchedProductionLifecycleV1 {
             Ok(preview) => preview,
             Err(_) => restart!(),
         };
-        if preview.shape() != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast {
+        if preview.shape()
+            != crate::sumeragi::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast
+        {
             drop(preview);
             restart!();
         }
@@ -1078,7 +1100,7 @@ impl LaunchedProductionLifecycleV1 {
             Err(_) => restart!(),
         };
         if preview.shape()
-            != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+            != crate::sumeragi::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
         {
             drop(body);
             drop(preview);
@@ -1226,7 +1248,7 @@ impl LaunchedProductionLifecycleV1 {
             Err(_) => restart!(),
         };
         if preview.shape()
-            != super::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+            != crate::sumeragi::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
         {
             drop(body);
             drop(preview);
@@ -1418,15 +1440,31 @@ impl LaunchedProductionLifecycleV1 {
         ProductionRecoveredDecisionApplyCompletionV1,
         ProductionRecoveredDecisionApplyCompletionErrorV1,
     > {
-        let owner = &mut self.owner;
-        let executor = &mut self.executor;
-        let services = &mut self.services;
-        let drain = services
+        let drain = self
+            .services
             .drain_recovered_decision_apply_completion()
             .map_err(|_| ProductionRecoveredDecisionApplyCompletionErrorV1::Owner)?;
         let Some(completion) = drain.into_completion() else {
             return Ok(ProductionRecoveredDecisionApplyCompletionV1::None);
         };
+        self.settle_recovered_decision_apply_completion_owner(completion, lane_work)
+    }
+
+    /// Settle one already-classified recovered Apply completion.
+    ///
+    /// The unified Completion driver is the only production caller which can
+    /// supply this guarded token without probing the physical FIFO again.
+    fn settle_recovered_decision_apply_completion_owner(
+        &mut self,
+        completion: PreparedRecoveredDecisionApplyCompletionV1,
+        lane_work: &mut V2LaneWorkAdapter,
+    ) -> Result<
+        ProductionRecoveredDecisionApplyCompletionV1,
+        ProductionRecoveredDecisionApplyCompletionErrorV1,
+    > {
+        let owner = &mut self.owner;
+        let executor = &mut self.executor;
+        let services = &mut self.services;
 
         macro_rules! restart {
             ($failure:expr) => {{
@@ -1830,7 +1868,9 @@ impl ActivatedProductionLifecycleV1 {
                 .launched
                 .recovered_decision_fetch_body_completion
                 .is_some()
+            || self.launched.recovered_decision_apply_deferred.is_some()
             || self.launched.recovered_lifecycle_sign_completion.is_some()
+            || self.launched.recovered_ingress_capacity_wait.is_some()
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -1861,16 +1901,22 @@ impl ActivatedProductionLifecycleV1 {
             owner,
             executor,
             services,
+            recovered_decision_apply_deferred,
             recovered_decision_fetch_body_completion,
             recovered_lifecycle_sign_completion,
+            recovered_ingress_capacity_wait,
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
+        debug_assert!(recovered_decision_apply_deferred.is_none());
         debug_assert!(recovered_decision_fetch_body_completion.is_none());
         debug_assert!(recovered_lifecycle_sign_completion.is_none());
+        debug_assert!(recovered_ingress_capacity_wait.is_none());
         debug_assert!(completion_observer_activation.is_none());
+        drop(recovered_decision_apply_deferred);
         drop(recovered_decision_fetch_body_completion);
         drop(recovered_lifecycle_sign_completion);
+        drop(recovered_ingress_capacity_wait);
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 
@@ -1928,17 +1974,23 @@ impl ActivatedProductionLifecycleV1 {
             owner,
             executor,
             services,
+            recovered_decision_apply_deferred,
             recovered_decision_fetch_body_completion,
             recovered_lifecycle_sign_completion,
+            recovered_ingress_capacity_wait,
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
+        assert!(recovered_decision_apply_deferred.is_none());
         assert!(recovered_decision_fetch_body_completion.is_none());
         assert!(recovered_lifecycle_sign_completion.is_none());
+        assert!(recovered_ingress_capacity_wait.is_none());
         assert!(completion_observer_activation.is_none());
         drop(executor);
+        drop(recovered_decision_apply_deferred);
         drop(recovered_decision_fetch_body_completion);
         drop(recovered_lifecycle_sign_completion);
+        drop(recovered_ingress_capacity_wait);
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
         ProductionLifecyclePostOutputHandoffV1 {
@@ -2344,8 +2396,10 @@ impl ProductionLifecycleOwnerV1 {
             owner: self,
             executor,
             services,
+            recovered_decision_apply_deferred: None,
             recovered_decision_fetch_body_completion: None,
             recovered_lifecycle_sign_completion: None,
+            recovered_ingress_capacity_wait: None,
             completion_observer_activation: Some(
                 ProductionV2CompletionObserverActivationPermitV1 {
                     _seal: ProductionV2CompletionObserverActivationPermitSealV1,
@@ -2362,6 +2416,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test;
 
     #[test]
     fn launch_local_identity_requires_the_bound_key_and_exact_roster_position() {
@@ -2630,11 +2685,13 @@ mod tests {
         let finalized_output_source = include_str!("v2_runner/finalized_output_rollover.rs");
         let runner_tests_source = include_str!("v2_runner_tests.rs");
         let coordinator_source = include_str!("v2_lifecycle_coordinator.rs");
-        let ledger_source = include_str!("v2_lifecycle_ledger.rs");
+        let ledger_source = reviewed_lifecycle_ledger_source_for_test();
         let payload_store_source = include_str!("v2_certified_serve_payload_store.rs");
         let lifecycle_open_source = include_str!("v2_lifecycle_open.rs");
-        let registry_validate_source =
-            include_str!("v2_lifecycle_work_registry_validate_recovery.rs");
+        let registry_validate_source = concat!(
+            include_str!("v2_lifecycle_work_registry_validate_recovery.rs"),
+            include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs")
+        );
         let lifecycle_startup_test_source =
             include_str!("tests/v2_adapter_04b_lifecycle_startup.rs");
         let bound_launch = ledger_source

@@ -2770,6 +2770,14 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
         &self.repair
     }
 
+    /// Match one validation to the retained concrete Validate-to-Sign pair.
+    pub(super) fn concrete_pair_matches_validation(
+        &self,
+        validated: &ValidatedBodyReceipt,
+    ) -> bool {
+        self.repair.concrete_pair_matches_validation(validated)
+    }
+
     /// Borrow only the recovered Sign effect retained by this durable repair.
     ///
     /// This narrow view exists solely so the closed concrete-registry carrier

@@ -11,7 +11,7 @@ use iroha_core::{
     },
     state::State,
 };
-use iroha_data_model::prelude::{AccountId, ChainId};
+use iroha_data_model::prelude::AccountId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use parking_lot::RwLock;
 use tokio::task;
@@ -63,7 +63,6 @@ impl QueuedSoracloudRuntimeMutationSink {
     /// launcher's fallible signature so feature selection cannot bypass its
     /// signer checks.
     pub(crate) fn new(
-        _chain_id: Arc<ChainId>,
         _queue: Arc<Queue>,
         _state: Arc<State>,
         _signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,

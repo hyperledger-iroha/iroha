@@ -289,6 +289,86 @@ def test_candidate_packager_rejects_unexpected_release_inventory(
         _package(input_dir, tmp_path / "out")
 
 
+def test_candidate_packager_rejects_version_map_mismatch_without_outputs(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir)
+    (input_dir / "version-map.toml").write_text(
+        'release_version = "1.2.3-rc.2"\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(
+        candidate.CandidateError, match="does not match candidate --version"
+    ):
+        _package(input_dir, output_dir)
+
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("version", ("01.2.3", "1.2", "release-1.2.3"))
+def test_candidate_packager_rejects_noncanonical_semver_without_outputs(
+    tmp_path: Path, version: str
+) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir)
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(candidate.CandidateError, match="canonical SemVer"):
+        candidate.package_candidate(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            version=version,
+            target=LINUX_TARGET,
+        )
+
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    (
+        ('release_version = "unterminated\n', "valid UTF-8 TOML"),
+        ("schema_version = 1\n", "must declare top-level release_version"),
+        ("release_version = 123\n", "release_version must be a string"),
+        (
+            f'release_version = "{VERSION}"\nrelease_version = "{VERSION}"\n',
+            "valid UTF-8 TOML",
+        ),
+    ),
+    ids=("malformed", "missing", "non-string", "duplicate"),
+)
+def test_candidate_packager_rejects_invalid_version_map_without_outputs(
+    tmp_path: Path, payload: str, message: str
+) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir)
+    (input_dir / "version-map.toml").write_text(payload, encoding="utf-8")
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(candidate.CandidateError, match=message):
+        _package(input_dir, output_dir)
+
+    assert not output_dir.exists()
+
+
+def test_candidate_packager_rejects_oversized_version_map_without_outputs(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir)
+    (input_dir / "version-map.toml").write_bytes(
+        b"#" * (candidate.MAX_VERSION_MAP_BYTES + 1)
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(candidate.CandidateError, match="exceeds the byte ceiling"):
+        _package(input_dir, output_dir)
+
+    assert not output_dir.exists()
+
+
 def test_candidate_packager_fails_before_publication_when_clean_smoke_fails(
     tmp_path: Path,
 ) -> None:

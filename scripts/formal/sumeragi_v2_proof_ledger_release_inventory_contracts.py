@@ -1449,15 +1449,22 @@ def _production_liveness_release_inventory_errors(
         '    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \\\n'
         '    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256"',
         '--g4p-completion "$multilane_four_peer_completion_path" \\\n'
-        '  --g12-seed-completion "$nexus_cross_completion_path" \\\n'
-        '  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
-        '  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \\\n'
-        '  --expected-scaling-trial-harness-sha256 \\\n'
-        '    "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \\\n'
-        '  --expected-scaling-configuration-sha256 \\\n'
-        '    "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
-        '  --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
-        '  --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256"',
+        '      --g12-seed-completion "$nexus_cross_completion_path" \\\n'
+        '      --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
+        '      --scaling-evidence-manifest "$release_scaling_evidence_manifest" \\\n'
+        '      --sdk-dependency-archive "$release_sdk_archive" \\\n'
+        '      --sdk-dependency-input-inventory "$release_sdk_inventory" \\\n'
+        '      --sdk-dependency-final-work-inventory \\\n'
+        '        "$release_sdk_work_final_inventory" \\\n'
+        '      --runtime-tool-probe-manifest \\\n'
+        '        "$release_runtime_tool_probe_manifest" \\\n'
+        '      --runtime-tool-probe-result "$release_runtime_tool_probe_result" \\\n'
+        '      --expected-scaling-trial-harness-sha256 \\\n'
+        '        "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \\\n'
+        '      --expected-scaling-configuration-sha256 \\\n'
+        '        "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
+        '      --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
+        '      --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256"',
     )
     for fragment in scaling_release_fragments:
         if source.count(fragment) != 1:
@@ -1542,6 +1549,7 @@ def _production_liveness_release_inventory_errors(
         else:
             assignments: dict[str, list[Any]] = {
                 "_RELEASE_RECEIPT_COMPONENT_FILES": [],
+                "_RELEASE_RECEIPT_COMPONENT_SHA256": [],
                 "_PRODUCTION_TEST_COUNT": [],
                 "_PRODUCTION_MODULES": [],
                 "_DATA_MODEL_PRODUCTION_MODULES": [],
@@ -1593,6 +1601,8 @@ def _production_liveness_release_inventory_errors(
             expected_receipt_components = (
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py",
                 "write_sumeragi_v2_release_receipt_corridor_log.py",
+                "write_sumeragi_v2_release_receipt_gate_evidence.py",
+                "write_sumeragi_v2_release_receipt_publication.py",
             )
             if assignments["_RELEASE_RECEIPT_COMPONENT_FILES"] != [
                 expected_receipt_components
@@ -1601,6 +1611,27 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: release receipt component manifest must equal "
                     f"{expected_receipt_components!r}"
                 )
+            expected_receipt_component_sha256 = {
+                "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
+                    "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+                ),
+                "write_sumeragi_v2_release_receipt_corridor_log.py": (
+                    "f5c4e3bf8d8a86890abba38f559058df676e5a311aacead265ce0f999d6395bd"
+                ),
+                "write_sumeragi_v2_release_receipt_gate_evidence.py": (
+                    "0cc7e2a43479fb27305974559c331d4494df161cfc7c75fe9c51f324b09e058a"
+                ),
+                "write_sumeragi_v2_release_receipt_publication.py": (
+                    "f75a5f2df901408d028605ab11b09f01a77853ecd27deb10a6cdfbd08dda5bed"
+                ),
+            }
+            if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
+                expected_receipt_component_sha256
+            ]:
+                errors.append(
+                    f"{receipt_path}: release receipt component digests must equal "
+                    f"{expected_receipt_component_sha256!r}"
+                )
             expected_component_symbols = {
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
                     "_validate_multilane_apalache_evidence",
@@ -1608,6 +1639,8 @@ def _production_liveness_release_inventory_errors(
                     "_formal_artifacts",
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
+                    "_receipt_validation_invocation_value_sha256",
+                    "_receipt_validation_invocation_binding",
                     "_cargo_cache_relative_path",
                     "_cargo_cache_final_relative_path",
                     "_cargo_cache_octal_mode",
@@ -1628,6 +1661,65 @@ def _production_liveness_release_inventory_errors(
                     "_receipt_validation_ack",
                     "_owned_unlink_name",
                     "_corridor_legs",
+                ),
+                "write_sumeragi_v2_release_receipt_gate_evidence.py": (
+                    "_canonical_production_tests",
+                    "_canonical_g_unit_rows",
+                    "_g_unit_leg_command",
+                    "_production_module_command",
+                    "_load_identity",
+                    "_load_tsv",
+                    "_require_fields",
+                    "_artifact",
+                    "_tlaps_resource_int",
+                    "_tlaps_resource_float",
+                    "_tlaps_resource_timestamp",
+                    "_validate_tlaps_resource_evidence",
+                    "_prebuilt_directory_inventory",
+                    "_prebuilt_version_transcripts",
+                    "_prebuilt_binary_bundle",
+                    "_corridor_artifacts",
+                    "_seed_run_logs",
+                    "_seed_localnet_manifests",
+                    "_scan_scaling_bundle",
+                    "_capture_scaling_bundle",
+                    "_load_scaling_json",
+                    "_scaling_ref_path",
+                    "_path_contract_artifact",
+                    "_sdk_relative_path",
+                    "_sdk_inventory_records",
+                    "_sdk_source_inventory",
+                    "_sdk_source_path",
+                    "_sdk_project_source_records",
+                    "_sdk_validate_private_source_manifest",
+                    "_sdk_binding_contract",
+                    "_sdk_validate_control_files",
+                    "_sdk_validate_tar",
+                    "_sdk_public_archive",
+                    "_validate_sdk_dependency_evidence",
+                    "_validate_scaling_evidence",
+                    "_read_g12_snapshot",
+                    "_decode_g12_tsv",
+                    "_g12_completion_fields",
+                    "_validate_g12_log",
+                    "_require_g12_directory_inventory",
+                    "_validate_g4p_log",
+                    "_validate_g4p_evidence",
+                    "_validate_g12_evidence",
+                    "_runtime_tool_probe_evidence",
+                ),
+                "write_sumeragi_v2_release_receipt_publication.py": (
+                    "build_receipt",
+                    "_iter_artifact_records",
+                    "_capture_path_contract",
+                    "_snapshot_receipt_inputs",
+                    "_capture_directory_contract",
+                    "_revalidate_receipt_inputs",
+                    "_fsync_receipt_inputs",
+                    "_existing_receipt_contract",
+                    "_complete_write",
+                    "_publish_terminal_receipt",
+                    "main",
                 ),
             }
             expected_parent_component_symbols = frozenset(
@@ -1675,6 +1767,12 @@ def _production_liveness_release_inventory_errors(
                         f"{component_path}: release receipt component symbols must "
                         f"equal {expected_component_symbols[component_name]!r}"
                     )
+                component_sha256 = hashlib.sha256(component_path.read_bytes()).hexdigest()
+                if component_sha256 != expected_receipt_component_sha256[component_name]:
+                    errors.append(
+                        f"{component_path}: release receipt component SHA-256 must "
+                        f"equal {expected_receipt_component_sha256[component_name]}"
+                    )
             expected_receipt_route = (
                 "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
                 "        return (\n"
@@ -1687,6 +1785,140 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: production data-model receipt legs must execute "
                     "against the iroha_data_model library"
                 )
+
+    bootstrap_path = repo_root / "scripts" / "bootstrap_sumeragi_v2_release.py"
+    expected_bootstrap_components = (
+        "bootstrap_sumeragi_v2_release_receipt_replay.py",
+    )
+    expected_bootstrap_component_sha256 = {
+        "bootstrap_sumeragi_v2_release_receipt_replay.py": (
+            "d652f4c4c24b0d333ed76c1f07ff657d9fdd9c843f3082f18f4e63504d1019e7"
+        ),
+    }
+    expected_bootstrap_component_symbols = {
+        "bootstrap_sumeragi_v2_release_receipt_replay.py": (
+            "_validate_terminal_release_evidence",
+            "_retained_release_layout",
+            "_receipt_validation_failure",
+            "_remove_completed_runner_log",
+            "_prune_receipt_validation_failure",
+            "_validate_terminal_receipt",
+            "_fsync_file_snapshot",
+            "_validate_retained_source",
+            "_receipt_artifact_path",
+            "_receipt_nested_artifact_path",
+            "_receipt_scaling_manifest_path",
+            "_run_protected_receipt_validator",
+            "_validate_command_record",
+            "_validate_sanitized_operation",
+            "_validate_raw_commit",
+            "_validate_legacy_identity_evidence",
+            "_validate_identity_evidence",
+            "_validate_private_identity_provenance",
+            "_artifact_record",
+            "_load_release_approval_contract",
+            "_approval_duration_values",
+            "_approval_expectations",
+            "_load_bound_release_approvals",
+            "_approval_archive_record",
+            "_replay_release_approval_evidence",
+        ),
+    }
+    if bootstrap_path.is_symlink() or not bootstrap_path.is_file():
+        errors.append(
+            f"{bootstrap_path}: release bootstrap must be a regular non-symlink file"
+        )
+    else:
+        try:
+            bootstrap_source = bootstrap_path.read_text(encoding="utf-8")
+            bootstrap_tree = ast.parse(bootstrap_source, filename=str(bootstrap_path))
+        except (OSError, UnicodeDecodeError, SyntaxError) as error:
+            errors.append(f"{bootstrap_path}: release bootstrap is invalid: {error}")
+        else:
+            bootstrap_assignments: dict[str, list[Any]] = {
+                "_BOOTSTRAP_COMPONENT_FILES": [],
+                "_BOOTSTRAP_COMPONENT_SHA256": [],
+            }
+            for statement in bootstrap_tree.body:
+                if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+                    continue
+                target = statement.targets[0]
+                if (
+                    not isinstance(target, ast.Name)
+                    or target.id not in bootstrap_assignments
+                ):
+                    continue
+                try:
+                    bootstrap_assignments[target.id].append(
+                        ast.literal_eval(statement.value)
+                    )
+                except (TypeError, ValueError, SyntaxError):
+                    bootstrap_assignments[target.id].append(None)
+            if bootstrap_assignments["_BOOTSTRAP_COMPONENT_FILES"] != [
+                expected_bootstrap_components
+            ]:
+                errors.append(
+                    f"{bootstrap_path}: release bootstrap component manifest must "
+                    f"equal {expected_bootstrap_components!r}"
+                )
+            if bootstrap_assignments["_BOOTSTRAP_COMPONENT_SHA256"] != [
+                expected_bootstrap_component_sha256
+            ]:
+                errors.append(
+                    f"{bootstrap_path}: release bootstrap component digests must "
+                    f"equal {expected_bootstrap_component_sha256!r}"
+                )
+            expected_parent_bootstrap_symbols = frozenset(
+                symbol
+                for symbols in expected_bootstrap_component_symbols.values()
+                for symbol in symbols
+            )
+            parent_bootstrap_symbols = tuple(
+                statement.name
+                for statement in bootstrap_tree.body
+                if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and statement.name in expected_parent_bootstrap_symbols
+            )
+            if parent_bootstrap_symbols:
+                errors.append(
+                    f"{bootstrap_path}: receipt-replay bootstrap functions must "
+                    "remain isolated in the declared component"
+                )
+            for component_name in expected_bootstrap_components:
+                component_path = bootstrap_path.with_name(component_name)
+                if component_path.is_symlink() or not component_path.is_file():
+                    errors.append(
+                        f"{component_path}: release bootstrap component must be a "
+                        "regular non-symlink file"
+                    )
+                    continue
+                try:
+                    component_tree = ast.parse(
+                        component_path.read_text(encoding="utf-8"),
+                        filename=str(component_path),
+                    )
+                except (OSError, UnicodeDecodeError, SyntaxError) as error:
+                    errors.append(
+                        f"{component_path}: release bootstrap component is invalid: "
+                        f"{error}"
+                    )
+                    continue
+                component_symbols = tuple(
+                    statement.name
+                    for statement in component_tree.body
+                    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
+                if component_symbols != expected_bootstrap_component_symbols[component_name]:
+                    errors.append(
+                        f"{component_path}: release bootstrap component symbols must "
+                        f"equal {expected_bootstrap_component_symbols[component_name]!r}"
+                    )
+                component_sha256 = hashlib.sha256(component_path.read_bytes()).hexdigest()
+                if component_sha256 != expected_bootstrap_component_sha256[component_name]:
+                    errors.append(
+                        f"{component_path}: release bootstrap component SHA-256 must "
+                        f"equal {expected_bootstrap_component_sha256[component_name]}"
+                    )
 
     for assignment in (
         'required_data_model_status_test="block::consensus_v2::tests::'

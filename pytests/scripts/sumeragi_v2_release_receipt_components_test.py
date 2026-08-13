@@ -47,6 +47,8 @@ def test_run_writer_copies_declared_components_and_fails_closed(
     assert receipt_components == (
         Path("scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"),
         Path("scripts/write_sumeragi_v2_release_receipt_corridor_log.py"),
+        Path("scripts/write_sumeragi_v2_release_receipt_gate_evidence.py"),
+        Path("scripts/write_sumeragi_v2_release_receipt_publication.py"),
     )
     receipt_component = source_root / receipt_components[0]
     receipt_component_bytes = receipt_component.read_bytes()
@@ -70,6 +72,16 @@ def test_run_writer_copies_declared_components_and_fails_closed(
     assert "release receipt component is unavailable" in substituted.stderr
     receipt_component.unlink()
     receipt_component.write_bytes(receipt_component_bytes)
+
+    digest_bound = source_root / receipt_components[2]
+    digest_bound_bytes = digest_bound.read_bytes()
+    digest_bound.write_bytes(digest_bound_bytes + b"\n# substituted\n")
+    wrong_digest = receipt.run_writer(
+        evidence, receipt.terminal_output_path(evidence), writer
+    )
+    assert wrong_digest.returncode != 0
+    assert "release receipt component has the wrong digest" in wrong_digest.stderr
+    digest_bound.write_bytes(digest_bound_bytes)
 
     component.unlink()
     with pytest.raises(

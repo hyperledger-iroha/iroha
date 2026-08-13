@@ -1012,9 +1012,9 @@ The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 its grouped and diagnostics suite-source manifests hash to
-`1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
+`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
 and
-`7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`;
+`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
@@ -1092,9 +1092,9 @@ The remaining work is evidence-driven and must stay in order:
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
   grouped/diagnostics suite-source manifest SHA-256 values
-  `1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
+  `92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
   and
-  `7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`,
+  `c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`,
   and wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,

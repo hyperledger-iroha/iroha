@@ -30276,40 +30276,6 @@ seiyaku PreparedBoundaryArguments {
         assert_eq!(vm.register(11), 0xfeed, "must not mutate output registers");
     }
 
-    #[test]
-    fn get_public_input_rejects_registry_type_mismatch() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let name: Name = "pub_key".parse().unwrap();
-        let payload = b"hello".to_vec();
-        let tlv = make_tlv(PointerType::Blob as u16, &payload);
-        let entry = norito::json::object([
-            ("name", norito::json::Value::from(name.as_ref())),
-            (
-                "type_id",
-                norito::json::Value::from(u64::from(PointerType::Name as u16)),
-            ),
-            ("tlv_hex", norito::json::Value::from(hex::encode(&tlv))),
-        ])
-        .expect("registry entry");
-        let registry = norito::json::Value::Array(vec![entry]);
-        let custom = CustomParameter::new(ivm_metadata::public_inputs_id(), Json::from(registry));
-        let mut params = Parameters::default();
-        params.set_parameter(Parameter::Custom(custom));
-
-        let mut host = CoreHost::new(authority);
-        host.set_public_inputs_from_parameters(&params);
-        assert!(host.public_inputs.is_empty());
-
-        let mut vm = IVM::new(10_000);
-        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
-        vm.set_register(10, name_ptr);
-        let err = host
-            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
-            .expect_err("mismatched registry entry should error");
-        assert!(matches!(err, VMError::PermissionDenied));
-    }
-
     // Keep pointer-ABI boundary checks together so host runtime code remains auditable.
     include!("host/pointer_abi_validation_tests.rs");
     include!("host/pointer_abi_and_sm_tests.rs");

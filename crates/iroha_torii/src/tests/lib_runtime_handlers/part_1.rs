@@ -1504,54 +1504,6 @@ fn signed_app_headers_for_network(
     headers
 }
 
-pub(crate) fn signed_network_app_headers(
-    network_id: &NetworkId,
-    account: &AccountId,
-    key_pair: &KeyPair,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    body: &[u8],
-) -> HeaderMap {
-    static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
-        LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_millis() as u64;
-    let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let nonce = format!("lib-network-test-{timestamp_ms}-{nonce_seq}");
-    let message = crate::canonical_network_request_signature_message(
-        network_id,
-        method,
-        uri,
-        body,
-        timestamp_ms,
-        &nonce,
-    );
-    let signature = checked_torii_test_signature(
-        key_pair,
-        &message,
-        "sign exact-network Torii request fixture",
-    );
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        crate::HEADER_ACCOUNT,
-        account.to_string().parse().expect("account header"),
-    );
-    headers.insert(
-        crate::HEADER_SIGNATURE,
-        crate::signature_header_value(&signature)
-            .parse()
-            .expect("signature header"),
-    );
-    headers.insert(
-        crate::HEADER_TIMESTAMP_MS,
-        timestamp_ms.to_string().parse().expect("timestamp header"),
-    );
-    headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
-    headers
-}
-
 fn checked_torii_test_signature(
     key_pair: &KeyPair,
     message: &[u8],

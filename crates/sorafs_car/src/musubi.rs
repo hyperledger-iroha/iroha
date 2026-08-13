@@ -784,8 +784,9 @@ fn update_frame(hasher: &mut blake3::Hasher, bytes: &[u8]) -> Result<(), ()> {
 // metadata capture ceiling, a 48 MiB cumulative decoder budget, and an 18 MiB source-transcript
 // ceiling. The PoR store is dropped before bundle parsing in both entry points. Canonical
 // comparison can transiently buffer one length-delimited field up to the 2 MiB file ceiling.
-// TODO: qualify the complete process-wide 64 MiB RSS target on every supported deployment,
-// including the deployment-owned fresh-reader implementation, before promotion.
+// Whole-process RSS against the 64 MiB target remains a supported-deployment promotion
+// qualification, including the deployment-owned fresh reader. These local ceilings do not
+// establish that evidence.
 
 #[cfg(test)]
 mod tests {
