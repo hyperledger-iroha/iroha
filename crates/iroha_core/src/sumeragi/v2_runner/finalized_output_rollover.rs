@@ -84,3 +84,27 @@ fn rollover_finalized_height_outputs(
         .into_retained_merge_sidecars(exact_output_handoff, artifact, successor)
         .map_err(V2RunnerError::from)
 }
+
+/// Run the existing finalized-output handoff from the opaque lifecycle state.
+///
+/// The lifecycle module receives only the retained successor sidecars or one
+/// fail-stop diagnostic; no runner construction or lane/service parts escape.
+pub(in crate::sumeragi) fn rollover_finalized_height_outputs_for_lifecycle(
+    _permit: super::v2_lifecycle_coordinator::ProductionLifecycleOutputRolloverPermitV1,
+    lane_work: V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+    receipt: &KuraV2CommitReceipt,
+    artifact: &wire::finality::V2FinalityArtifact,
+    successor: &wire::HeightContext,
+    control_queue_capacity: usize,
+) -> Result<RetainedMergeSidecars, String> {
+    rollover_finalized_height_outputs(
+        lane_work,
+        services,
+        receipt,
+        artifact,
+        successor,
+        control_queue_capacity,
+    )
+    .map_err(|error| error.to_string())
+}

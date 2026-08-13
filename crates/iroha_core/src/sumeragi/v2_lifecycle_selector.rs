@@ -36,8 +36,9 @@ use crate::sumeragi::{
         V2BodyStoreError,
     },
     v2_effects::{
-        CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectTransportError,
-        EffectWorkId, RecoveredDecisionFetchResponseCandidateV1, V2EffectExecutor,
+        CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectExecutorError,
+        EffectTransportError, EffectWorkId, RecoveredDecisionFetchResponseCandidateV1,
+        V2EffectExecutor, v2_ingress_head_can_drain,
     },
     v2_runtime::SerializedV2Runtime,
     v2_transport::AuthenticatedCertifiedBodyResponse,
@@ -118,6 +119,8 @@ pub(crate) enum LifecycleIngressSelectorError {
         /// Typed executor validation failure.
         error: Box<EffectTransportError>,
     },
+    /// The reducer-owned terminal snapshot could not be read before selection.
+    ExecutorState(Box<EffectExecutorError>),
     /// The complete occurrence key set or cardinality was not representable.
     InvalidCensus,
 }
@@ -2551,6 +2554,56 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .capture_lifecycle_queue_cut(target_physical_ordinal)
             .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?;
         self.capture_lifecycle_ingress_selector(cut)
+    }
+
+    /// Select the next fair authenticated recovered Decision-Fetch response.
+    ///
+    /// The queue runs the same strict-then-dependency source/lane selection as
+    /// ordinary checked dequeue under its service lock. The executor supplies
+    /// the ordinary head-drain predicate and then authenticates the complete
+    /// frozen census. An ordinary, obsolete, or foreign-context winner returns
+    /// `None` for pass-through; no later recovered response may leapfrog it.
+    /// Neither selection nor classification claims, dequeues, or publishes
+    /// worker capacity.
+    // TODO: Consume this queue-owned selector only from the unified lifecycle
+    // Ingress-turn driver when the atomic runner cutover replaces raw dequeue.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(
+        &self,
+        ingress: &FairV2Ingress,
+    ) -> Result<Option<PreparedLifecycleIngressSelector>, LifecycleIngressSelectorError> {
+        let terminal_subject = self
+            .local_proposal_directive()
+            .map_err(|error| LifecycleIngressSelectorError::ExecutorState(Box::new(error)))?
+            .decided_subject();
+        let Some(cut) = ingress
+            .capture_next_lifecycle_queue_cut(|occurrence| {
+                v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)
+            })
+            .map_err(|_| LifecycleIngressSelectorError::QueueCutCapture)?
+        else {
+            return Ok(None);
+        };
+        let prepared = self.capture_lifecycle_ingress_selector(cut)?;
+        if prepared.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
+            || !matches!(
+                prepared.io_target,
+                PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence
+            )
+        {
+            return Ok(None);
+        }
+        if prepared
+            .selected_claimed_response_family()
+            .ok()
+            .and_then(|family| family.candidate.recovered())
+            .is_none()
+        {
+            return Err(LifecycleIngressSelectorError::CandidateRevalidationDrift {
+                ordinal: prepared.selected_identity().physical_admission_ordinal(),
+            });
+        }
+        Ok(Some(prepared))
     }
 
     /// Classify every exact pre-cut fair-ingress occurrence without mutation.

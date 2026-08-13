@@ -921,6 +921,23 @@ pub(crate) enum CertifiedServePayloadRecoveryError {
     DuplicateRequestHash,
 }
 
+/// Failure while refreshing the exact live Serve census for height retirement.
+#[derive(Debug, Error)]
+pub(in crate::sumeragi) enum CertifiedServeRetirementAuthenticationErrorV1 {
+    /// The caller did not retain the exact launched service/store authority.
+    #[error("Certified-Serve retirement used a foreign lifecycle service owner")]
+    ForeignServiceOwner,
+    /// The live coordinator, ledger, admission waits, and payload cut drifted.
+    #[error("Certified-Serve retirement census is not an exact live lifecycle cut")]
+    InvalidLifecycleCensus,
+    /// The retained open store changed behind its sole process owner.
+    #[error(transparent)]
+    Store(#[from] CertifiedServePayloadStoreError),
+    /// Current durable payloads failed verified retirement authentication.
+    #[error(transparent)]
+    Recovery(#[from] CertifiedServePayloadRecoveryError),
+}
+
 /// Failure while opening or advancing the Certified-Serve payload store.
 #[derive(Debug, Error)]
 pub(crate) enum CertifiedServePayloadStoreError {
@@ -1144,6 +1161,40 @@ impl CertifiedServePayloadStoreV1 {
     /// Project a comparison-only seal before moving this exact store.
     pub(crate) fn instance_identity(&self) -> CertifiedServePayloadStoreInstanceIdentity {
         CertifiedServePayloadStoreInstanceIdentity(Arc::clone(&self.identity))
+    }
+
+    /// Reauthenticate the current exact directory for lifecycle finalization.
+    ///
+    /// Unlike the immutable startup cut, this bounded scan observes mutations
+    /// made by live Certified-Serve admission and terminal settlement. The
+    /// launch-private permit proves the exact service and store remain coheld
+    /// after ingress closure and output handoff. The in-memory index must equal
+    /// the strict no-symlink directory census before any payload is trusted.
+    pub(in crate::sumeragi) fn authenticate_current_for_lifecycle_retirement(
+        &self,
+        _permit: super::v2_lifecycle_coordinator::ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        verified: &VerifiedHeightContext,
+        local_signer: &KeyPair,
+    ) -> Result<
+        AuthenticatedCertifiedServePayloadRecoveryCut,
+        CertifiedServeRetirementAuthenticationErrorV1,
+    > {
+        if verified.context() != &self.context {
+            return Err(CertifiedServePayloadRecoveryError::ForeignContext.into());
+        }
+        let payloads = self.reload_payload_census_strict()?;
+        if payloads.keys().copied().collect::<BTreeSet<_>>() != self.indexed {
+            return Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch.into());
+        }
+        let authenticated = CertifiedServePayloadRecoveryCut {
+            context_id: self.context.id(),
+            height: self.context.height,
+            payloads,
+        }
+        .authenticate_for_complete_tip_retirement(verified, local_signer)
+        .map_err(CertifiedServeRetirementAuthenticationErrorV1::from)?;
+        self.validate_authenticated_cut(&authenticated)?;
+        Ok(authenticated)
     }
 
     /// Compare this opened payload owner with one sealed lifecycle root.
@@ -3103,6 +3154,21 @@ mod tests {
         store
             .persist_negative(pending.id(), outcome)
             .expect("persist typed negative");
+        let live_retirement = store
+            .authenticate_current_for_lifecycle_retirement(
+                crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleServeRetirementAuthenticationPermitV1::for_test(),
+                &verified,
+                &keys[0],
+            )
+            .expect("refresh the exact live retirement-only payload census");
+        assert!(matches!(
+            live_retirement
+                .get(pending.id())
+                .expect("live retirement cut contains the new terminal")
+                .state(),
+            AuthenticatedRecoveredCertifiedServePayloadState::Negative(recovered)
+                if *recovered == outcome
+        ));
         drop(store);
 
         let (_store, recovery) =

@@ -1017,7 +1017,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
                     "payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?",
                     "reconcile_complete_tip_serve_retirement(",
-                    ".stage_complete_tip_all_row_retirement(serve_reconciliation)?",
+                    ".stage_finalized_height_all_row_retirement(serve_reconciliation)?",
                     ".persist_exact_successor(&terminal.ledger, &retired)?",
                     "successor.open_initialized_or_descendant(retired.high_water())?",
                     "RetiredRecoveredCompleteTipActivationAuthorityV1",
@@ -1105,6 +1105,10 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "let launched = owner.launch(inputs)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
                     "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: super::launch::LaunchedProductionLifecycleV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
+                    "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
+                    "fn activate( self, now: std::time::Instant, runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1, )",
+                    "let Self { launched, retirement, } = self",
+                    "launched.activate_recovered_complete_tip(now, runner, retirement)",
                 ),
             )
             reject_tokens(
@@ -1143,7 +1147,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "CompleteTip exact H+1 launched seal",
                 ledger_source,
                 "LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
-                3,
+                4,
             )
 
         adapter_path, adapter_source = load(
@@ -1276,6 +1280,63 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "assert!(authenticated_roots < kura_binding)",
                 ),
             )
+            activation_behavior = _require_rust_item(
+                adapter_path,
+                adapter_source,
+                "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout",
+                errors,
+            )
+            if activation_behavior is not None:
+                require_order(
+                    adapter_path,
+                    "production lifecycle activation behavior",
+                    activation_behavior.source,
+                    (
+                        "let launched = owner.launch(launch_inputs)",
+                        "assert!(crate::sumeragi::status::v2_status().is_none())",
+                        "let activation = super::super::v2_runner::ProductionLifecycleRunnerActivationV1::current_height_for_test(",
+                        "let activated = launched.activate(Instant::now(), activation)",
+                        "assert!(ingress_ready.load(Ordering::Acquire))",
+                        "assert!(leader_wire_ingress.state.lock().open)",
+                        ".retire_lifecycle_stores_for_test(finality_receipt)",
+                        "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+                        "assert!(!ingress_ready.load(Ordering::Acquire))",
+                        "assert!(!leader_wire_ingress.state.lock().open)",
+                    ),
+                )
+            finalization_behavior = _require_rust_item(
+                adapter_path,
+                adapter_source,
+                "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+                errors,
+            )
+            if finalization_behavior is not None:
+                require_order(
+                    adapter_path,
+                    "production lifecycle finalization behavior",
+                    finalization_behavior.source,
+                    (
+                        "let _status_guard = crate::sumeragi::status::rbc_status_test_guard()",
+                        "Algorithm::Ed25519",
+                        "TransactionBuilder::new_genesis(",
+                        "block_builder.set_da_proof_policies(Some(proof_policy_bundle))",
+                        ".try_build_with_signature(0, genesis_key.private_key())",
+                        "BlockSignaturePolicy::GenesisAuthority(",
+                        "WalRecordV2::Decision(decision)",
+                        "let owner = result.unwrap_or_else",
+                        "let mut lane_work = super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(",
+                        "let mut launched = owner.launch(launch_inputs)",
+                        ".dispatch_recovered_decision_apply(",
+                        "launched.settle_recovered_decision_apply_completion(&mut lane_work)",
+                        "let activated = launched.activate(Instant::now(), activation)",
+                        ".into_finalized_rollover(&mut runner)",
+                        "let (receipt, artifact) = finalized.finality()",
+                        ".retain_merge_sidecars_for_global_view(",
+                        ".rollover_outputs(&mut runner, lane_work, &successor, 64)",
+                        ".retire_lifecycle_stores()",
+                        "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+                    ),
+                )
             for literal in (
                 '"a caller-promoted marker cannot enter production quarantine"',
                 '"pre-promoted marker rejection must precede lifecycle-store creation"',
@@ -1425,6 +1486,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         selector_path, selector_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
         )
+        ingress_position_path, ingress_position_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs"
+        )
         body_pipeline_path, body_pipeline_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs"
         )
@@ -1445,6 +1509,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         )
         runner_dependency_path, runner_dependency_source = load(
             "crates/iroha_core/src/sumeragi/v2_runner.rs"
+        )
+        finalized_output_path, finalized_output_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs"
+        )
+        lifecycle_startup_test_path, lifecycle_startup_test_source = load(
+            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"
         )
         state_path, state_source = load("crates/iroha_core/src/state.rs")
         apply_path, apply_source = load(
@@ -1467,6 +1537,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             and transport_source
             and lifecycle_open_source
             and runner_dependency_source
+            and finalized_output_source
+            and lifecycle_startup_test_source
             and state_source
             and apply_source
         ):
@@ -1502,6 +1574,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "ProductionV2Services::start_with_apply_service(",
                     "ProductionLifecycleApplyServiceLaunchPermitV1",
                     "apply_service,",
+                    "services.certified_serve_ingress_gate()",
+                    "leader_wire_ingress_binding.bind_certified_serve(certified_serve_gate)",
                 ),
             )
             runner_dependency_permit = region(
@@ -1535,6 +1609,295 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "pub fn mint_for_recovered_runner(",
                     "impl Clone for RecoveredLifecycleOwnerFactoryDependencyPermitV1",
                     "fn into_parts(",
+                ),
+            )
+            lifecycle_activation = region(
+                launch_path,
+                launch_source,
+                "one-shot lifecycle activation transaction",
+                "fn activate_with(",
+                "\n}\n\nimpl ActivatedProductionLifecycleV1",
+            )
+            require_order(
+                launch_path,
+                "one-shot lifecycle activation transaction",
+                lifecycle_activation,
+                (
+                    "begin_fail_stop_operation()",
+                    "self.executor.arm_live_clocks(now)",
+                    "self.executor.successor_activation_status_snapshot()",
+                    "self.completion_observer_activation.take()",
+                    "self.services.activate_effect_completion_observer(observer)",
+                    "publication.open_and_publish( &self.leader_wire_ingress_binding.ingress, status, )?",
+                    "activation.complete()",
+                    "ActivatedProductionLifecycleV1 { runner_activation, launched: self, }",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "one-shot lifecycle activation transaction",
+                lifecycle_activation,
+                (
+                    "set_v2_status",
+                    "into_parts",
+                    "into_owner",
+                    "into_executor",
+                    "into_services",
+                ),
+            )
+            activated_owner = region(
+                launch_path,
+                launch_source,
+                "opaque activated lifecycle owner",
+                "struct ActivatedProductionLifecycleV1",
+                "enum ProductionLifecycleActivationPublicationV1",
+            )
+            require_tokens(
+                launch_path,
+                "opaque activated lifecycle owner",
+                activated_owner,
+                (
+                    "runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1",
+                    "launched: LaunchedProductionLifecycleV1",
+                ),
+            )
+            require_order(
+                launch_path,
+                "opaque activated lifecycle owner drop order",
+                activated_owner,
+                (
+                    "runner_activation: super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1",
+                    "launched: LaunchedProductionLifecycleV1",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "opaque activated lifecycle owner",
+                activated_owner,
+                (
+                    "pub launched:",
+                    "pub(crate) launched:",
+                    "pub(in crate::sumeragi) launched:",
+                    "pub runner_activation:",
+                    "pub(crate) runner_activation:",
+                    "pub(in crate::sumeragi) runner_activation:",
+                    "impl Clone for ActivatedProductionLifecycleV1",
+                    "impl Copy for ActivatedProductionLifecycleV1",
+                ),
+            )
+            activated_runner_borrow = region(
+                launch_path,
+                launch_source,
+                "borrow-bound activated lifecycle owner",
+                "impl ActivatedProductionLifecycleV1",
+                "impl ProductionLifecycleOwnerV1",
+            )
+            require_tokens(
+                launch_path,
+                "borrow-bound activated lifecycle owner",
+                activated_runner_borrow,
+                (
+                    "fn with_runner_runtime<R>(",
+                    "_runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1",
+                    "&mut self.launched.owner",
+                    "&mut self.launched.executor",
+                    "&mut self.launched.services",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "borrow-bound activated lifecycle owner",
+                activated_runner_borrow,
+                (
+                    "into_parts",
+                    "into_owner",
+                    "into_executor",
+                    "into_services",
+                    "pub launched:",
+                    "pub(crate) launched:",
+                ),
+            )
+            ordinary_runner_activation = region(
+                runner_dependency_path,
+                runner_dependency_source,
+                "runner-owned lifecycle activation authority",
+                "struct ProductionLifecycleRunnerActivationV1",
+                "struct ProductionLifecycleCompleteTipRunnerActivationV1",
+            )
+            require_order(
+                runner_dependency_path,
+                "runner-owned lifecycle activation authority",
+                ordinary_runner_activation,
+                (
+                    "self.ingress_ready.store(false, Ordering::Release)",
+                    "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+                    "self.block_ingress.close()",
+                    "self.block_ingress.open()",
+                    "let publication = match self.status",
+                    "self.block_ingress.close()",
+                    "self.ingress_ready.store(true, Ordering::Release)",
+                ),
+            )
+            require_tokens(
+                runner_dependency_path,
+                "runner-owned lifecycle activation status classes",
+                ordinary_runner_activation,
+                (
+                    "_seal: ProductionLifecycleRunnerActivationSealV1",
+                    "struct ProductionLifecycleRunnerActivationSealV1",
+                    "impl Drop for ProductionLifecycleRunnerActivationSealV1",
+                    "fn current_height(",
+                    "fn applied(",
+                    "fn snapshot_bootstrap(",
+                    "status: ProductionLifecycleRunnerStatusAuthorityV1",
+                    "CurrentHeight",
+                    "Applied",
+                    "SnapshotBootstrap",
+                    "status::set_v2_status(successor)",
+                    "status::activate_v2_successor_height(",
+                    "status::activate_snapshot_bootstrap_v2_height(",
+                    "ProductionLifecycleActivatedRunnerAuthorityV1 { _seal: ProductionLifecycleActivatedRunnerAuthoritySealV1, ingress_ready: self.ingress_ready, block_ingress: self.block_ingress, }",
+                ),
+            )
+            reject_tokens(
+                runner_dependency_path,
+                "runner-owned lifecycle activation status classes",
+                ordinary_runner_activation,
+                (
+                    "impl Clone for ProductionLifecycleRunnerActivationV1",
+                    "impl Copy for ProductionLifecycleRunnerActivationV1",
+                    "pub(in crate::sumeragi) fn current_height(",
+                    "pub(crate) fn current_height(",
+                    "pub fn current_height(",
+                    "pub(in crate::sumeragi) fn applied(",
+                    "pub(in crate::sumeragi) fn snapshot_bootstrap(",
+                    "fn into_parts(",
+                ),
+            )
+            complete_tip_runner_activation = region(
+                runner_dependency_path,
+                runner_dependency_source,
+                "runner-owned CompleteTip lifecycle activation authority",
+                "struct ProductionLifecycleCompleteTipRunnerActivationV1",
+                "struct ProductionLifecycleActivatedRunnerAuthorityV1",
+            )
+            require_order(
+                runner_dependency_path,
+                "runner-owned CompleteTip lifecycle activation authority",
+                complete_tip_runner_activation,
+                (
+                    "self.ingress_ready.store(false, Ordering::Release)",
+                    "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+                    "self.block_ingress.close()",
+                    "retirement.authorizes_successor_status(&successor)",
+                    "self.block_ingress.close()",
+                    "self.block_ingress.open()",
+                    "status::activate_recovered_complete_tip_v2_height(retirement, successor)",
+                    "self.block_ingress.close()",
+                    "self.ingress_ready.store(true, Ordering::Release)",
+                ),
+            )
+            require_tokens(
+                runner_dependency_path,
+                "runner-owned CompleteTip lifecycle activation seal",
+                complete_tip_runner_activation,
+                (
+                    "_seal: ProductionLifecycleCompleteTipRunnerActivationSealV1",
+                    "struct ProductionLifecycleCompleteTipRunnerActivationSealV1",
+                    "impl Drop for ProductionLifecycleCompleteTipRunnerActivationSealV1",
+                    "fn mint_for_recovered_runner(",
+                    "ProductionLifecycleActivatedRunnerAuthorityV1 { _seal: ProductionLifecycleActivatedRunnerAuthoritySealV1, ingress_ready: self.ingress_ready, block_ingress: self.block_ingress, }",
+                ),
+            )
+            reject_tokens(
+                runner_dependency_path,
+                "runner-owned CompleteTip lifecycle activation seal",
+                complete_tip_runner_activation,
+                (
+                    "impl Clone for ProductionLifecycleCompleteTipRunnerActivationV1",
+                    "impl Copy for ProductionLifecycleCompleteTipRunnerActivationV1",
+                    "pub(in crate::sumeragi) fn mint_for_recovered_runner(",
+                    "pub(crate) fn mint_for_recovered_runner(",
+                    "pub fn mint_for_recovered_runner(",
+                    "fn into_parts(",
+                ),
+            )
+            activated_runner_authority = region(
+                runner_dependency_path,
+                runner_dependency_source,
+                "activated runner readiness and ingress authority",
+                "struct ProductionLifecycleActivatedRunnerAuthorityV1",
+                "struct ProductionLifecycleActiveRunnerBorrowV1",
+            )
+            require_tokens(
+                runner_dependency_path,
+                "activated runner readiness and ingress authority",
+                activated_runner_authority,
+                (
+                    "_seal: ProductionLifecycleActivatedRunnerAuthoritySealV1",
+                    "ingress_ready: Arc<AtomicBool>",
+                    "block_ingress: Arc<FairV2Ingress>",
+                    "impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1",
+                    "fn retire(",
+                    "self.ingress_ready.store(false, Ordering::Release)",
+                    "self.block_ingress.close()",
+                    "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
+                    "impl Drop for ProductionLifecycleActivatedRunnerAuthorityV1",
+                ),
+            )
+            reject_tokens(
+                runner_dependency_path,
+                "activated runner readiness and ingress authority",
+                activated_runner_authority,
+                (
+                    "impl Clone for ProductionLifecycleActivatedRunnerAuthorityV1",
+                    "impl Copy for ProductionLifecycleActivatedRunnerAuthorityV1",
+                    "fn into_parts(",
+                    "pub ingress_ready:",
+                    "pub block_ingress:",
+                ),
+            )
+            require_token_count(
+                runner_dependency_path,
+                "activated runner readiness retirement",
+                activated_runner_authority,
+                "self.ingress_ready.store(false, Ordering::Release)",
+                2,
+            )
+            require_token_count(
+                runner_dependency_path,
+                "activated runner ingress retirement",
+                activated_runner_authority,
+                "self.block_ingress.close()",
+                2,
+            )
+            active_runner_borrow = region(
+                runner_dependency_path,
+                runner_dependency_source,
+                "runner-owned active lifecycle borrow key",
+                "struct ProductionLifecycleActiveRunnerBorrowV1",
+                "/// Cadence-derived process-local deadline",
+            )
+            require_tokens(
+                runner_dependency_path,
+                "runner-owned active lifecycle borrow key",
+                active_runner_borrow,
+                (
+                    "_seal: ProductionLifecycleActiveRunnerBorrowSealV1",
+                    "fn mint_for_recovered_runner() -> Self",
+                    "impl Drop for ProductionLifecycleActiveRunnerBorrowSealV1",
+                ),
+            )
+            reject_tokens(
+                runner_dependency_path,
+                "runner-owned active lifecycle borrow key",
+                active_runner_borrow,
+                (
+                    "pub(in crate::sumeragi) fn mint_for_recovered_runner",
+                    "pub(crate) fn mint_for_recovered_runner",
+                    "pub fn mint_for_recovered_runner",
+                    "fn into_parts(",
+                    "impl Clone for ProductionLifecycleActiveRunnerBorrowV1",
                 ),
             )
             require_tokens(
@@ -1675,8 +2038,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 launch_source,
                 (
                     "struct ProductionLeaderWireIngressBindingV1",
+                    "certified_serve_gate: Option<CertifiedServeIngressGate>",
+                    "fn bind_certified_serve(",
+                    "self.ingress.bind_certified_serve_gate(gate.clone())",
                     "self.ingress.close()",
                     "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+                    "self.ingress.unbind_height_ingress_gates( certified_serve_gate, leader_wire_gate, )",
                     "impl Drop for ProductionLeaderWireIngressBindingV1",
                     "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
                 ),
@@ -2069,6 +2436,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 (
                     "fn recovered_timeout_signature_preview_is_exact_and_drop_inert()",
                     "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
+                    "output.prepare_wal_append_permit().is_none()",
                 ),
             )
             next_vote_service_join = region(
@@ -2113,6 +2481,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "service.consume_for_executor(",
                     "runtime.prepare_recovered_lifecycle_sign_completion(completion)",
                     "preview.project_broadcast_and_sign_body_lookup(",
+                    "preview.prepare_proposal_prepare_wal_body_lookup(",
                     "authenticate_recovered_lifecycle_next_vote_body_catalogs(",
                     "Ok((preview, body))",
                 ),
@@ -2179,7 +2548,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 (
                     "self.combined_authority_minted",
                     "body_authority.consume_for_adapter(",
+                    "self.persisted_prepare_wal.is_some()",
+                    "core::mem::swap(&mut self.adapter.reducer, &mut self.next_reducer)",
+                    "core::mem::swap(&mut self.adapter.registry, &mut self.next_registry)",
                     "self.adapter.authenticate_recovered_lifecycle_next_vote(",
+                    "core::mem::swap(&mut self.adapter.registry, &mut self.next_registry)",
+                    "core::mem::swap(&mut self.adapter.reducer, &mut self.next_reducer)",
                     "self.combined_authority_minted = true",
                     "RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {",
                 ),
@@ -2229,13 +2603,77 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 proposal_output_projection,
                 (
                     "self.proposal_output_authority_minted",
-                    "self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
+                    "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign | RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
+                    "self.prepared_prepare_wal.is_none()",
                     "payload.manifest() == &signed.manifest",
                     "self.next_vote_body_store_identity.as_ref()",
                     "self.next_vote_output_guard.as_ref()",
                     "self.proposal_output_authority_minted = true",
                     "RecoveredLifecycleProposalExactOutputAuthorityV1 {",
                 ),
+            )
+            proposal_prepare_wal_preflight = region(
+                adapter_path,
+                adapter_source,
+                "pre-WAL initial Proposal continuation",
+                "pub(in crate::sumeragi) fn prepare_proposal_prepare_wal_body_lookup(",
+                "/// Append and fsync the preflighted initial Proposal `PrepareIntent`.",
+            )
+            require_order(
+                adapter_path,
+                "pre-WAL initial Proposal continuation",
+                proposal_prepare_wal_preflight,
+                (
+                    "RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
+                    "self.pending_prepare.as_ref().cloned()",
+                    "expected_wal_sequence.checked_add(1) != Some(entry.id().get())",
+                    "encode_wal_entry(&entry, self.adapter.aggregator.as_ref())",
+                    "next_reducer.step(persisted_event.clone())",
+                    "message: reducer::SignableMessage::Vote(vote)",
+                    "RecoveredLifecycleNextVoteBodyLookupV1::from_adapter_preview(",
+                    "self.next_vote_body_store_identity = Some(body_store_identity)",
+                    "self.prepared_prepare_wal = Some(PreparedRecoveredLifecycleProposalPrepareWalV1 {",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "mutation-free initial Proposal WAL preflight",
+                proposal_prepare_wal_preflight,
+                (".wal.append(", "self.adapter.reducer =", "self.adapter.registry ="),
+            )
+            proposal_prepare_wal_append = region(
+                adapter_path,
+                adapter_source,
+                "fail-stop initial Proposal WAL append",
+                "pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(",
+                "/// Project an inert exact-body lookup for the reducer-produced next Vote.",
+            )
+            require_order(
+                adapter_path,
+                "fail-stop initial Proposal WAL append",
+                proposal_prepare_wal_append,
+                (
+                    "self.proposal_output_authority_minted",
+                    "self.next_vote_body_store_identity.is_none()",
+                    "self.next_vote_output_guard.is_none()",
+                    "permit.authorizes(",
+                    "self.adapter.pending_persistence_id = Some(persistence_id)",
+                    "permit.cross_wal_attempt_boundary()",
+                    "self.adapter.wal.append(&encoded_wal_payload)",
+                    "LiveWalFrameIdentity::from_append_receipt(frame, receipt, persistence_id)",
+                    "PendingRuntimeEffectBinding::from_exact_live_wal_append(",
+                    "SealedLiveWalPersistedEffectV1::from_exact_live_append(",
+                    "self.next_reducer = next_reducer",
+                    "self.next_sign = Some(sign_effect)",
+                    "self.pending_prepare = None",
+                    "self.persisted_prepare_wal = Some(RecoveredLifecycleProposalPrepareWalContinuationV1 {",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "initial Proposal WAL ambiguity closes the adapter",
+                proposal_prepare_wal_append,
+                ("self.adapter.fail_closed = true", "WalFrameIdentityMismatch"),
             )
             proposal_batch_preflight = region(
                 worker_path,
@@ -2320,6 +2758,33 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>",
                     "batch: Option<PendingExactOutputBatchPlan>",
                     "authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>",
+                    "wal_append: RecoveredLifecycleProposalPrepareWalAppendSealV1",
+                ),
+            )
+            proposal_wal_append_seal = region(
+                worker_path,
+                worker_source,
+                "reservation-bound initial Proposal WAL append authority",
+                "struct RecoveredLifecycleProposalPrepareWalAppendSealV1 {",
+                "#[cfg_attr(not(test), allow(dead_code))]\nimpl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
+            )
+            require_order(
+                worker_path,
+                "reservation-bound initial Proposal WAL append authority",
+                proposal_wal_append_seal,
+                (
+                    "dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1",
+                    "body_store_identity: V2BodyStoreInstanceIdentity",
+                    "output_guard: Arc<ConsensusOutputGuard>",
+                    "attempted: bool",
+                    "pub(in crate::sumeragi) struct RecoveredLifecycleProposalPrepareWalAppendPermitV1<'reservation>",
+                    "seal: &'reservation mut RecoveredLifecycleProposalPrepareWalAppendSealV1",
+                    "!self.seal.attempted",
+                    "self.seal.dispatch_key == dispatch_key",
+                    ".same_instance(body_store_identity)",
+                    "Arc::ptr_eq(&self.seal.output_guard, output_guard)",
+                    "pub(in crate::sumeragi) fn cross_wal_attempt_boundary(self)",
+                    "self.seal.attempted = true",
                 ),
             )
             proposal_reservation_impl = region(
@@ -2328,6 +2793,16 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "sealed recovered Proposal reservation methods",
                 "impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
                 "/// Result of reserving exact output for one recovered Decision Fetch request.",
+            )
+            require_order(
+                worker_path,
+                "armed Proposal reservation lends WAL authority without parts",
+                proposal_reservation_impl,
+                (
+                    "pub(in crate::sumeragi) fn prepare_wal_append_permit(",
+                    "self.operation.is_some()\n            && self.pending.is_some()\n            && self.batch.is_some()\n            && self.authority.is_some()\n            && !self.wal_append.attempted",
+                    "seal: &mut self.wal_append",
+                ),
             )
             proposal_reservation_abort = region(
                 worker_path,
@@ -2341,6 +2816,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "retry-safe recovered Proposal reservation abort",
                 proposal_reservation_abort,
                 (
+                    "assert!(\n            !self.wal_append.attempted",
                     "drop(self.pending.take())",
                     "drop(self.batch.take())",
                     ".complete()",
@@ -2393,6 +2869,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "Arc::ptr_eq(&self.output_guard, &authority_output_guard)",
                     "message.validate_version()",
                     "proposal.validate(&self.context)",
+                    "let wal_append = RecoveredLifecycleProposalPrepareWalAppendSealV1 {",
+                    "body_store_identity: body_store_identity.clone()",
+                    "output_guard: Arc::clone(&authority_output_guard)",
                     "RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(",
                     "payload.into_parts()",
                     "manifest.validate(&self.context)",
@@ -2410,6 +2889,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(retry_authority)",
                     "RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(",
                     "authority: Some(retry_authority)",
+                    "wal_append",
                 ),
             )
             require_token_count(
@@ -2858,9 +3338,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "next_sign: Some(_)",
                     "combined_authority_minted: true",
                     "proposal_output_authority_minted: true",
+                    "persisted_prepare_wal",
                     "outbound_payload: Some(_)",
+                    "adapter.pending_persistence_id = None",
                     "adapter.reducer = next_reducer",
                     "adapter.registry = next_registry",
+                    "adapter.record_reducer_outcome(&persisted_event",
                 ),
             )
             combined_vote_adapter_commit = region(
@@ -2949,7 +3432,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 launch_source,
                 "restart-closed recovered Vote Broadcast-and-next-Sign settlement",
                 "pub(in crate::sumeragi) fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
-                "/// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.",
+                "/// Fsync an initial Proposal `PrepareIntent`, then publish both successors.",
             )
             require_order(
                 launch_path,
@@ -2987,6 +3470,61 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 launch_path,
                 "infallible recovered Vote two-child post-fsync tail",
                 recovered_vote_two_child_tail,
+                ("return", "Result", "is_err", "?"),
+            )
+            recovered_proposal_prepare_wal_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed initial Proposal PrepareIntent settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_prepare_wal(",
+                "/// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.",
+            )
+            require_order(
+                launch_path,
+                "restart-closed initial Proposal PrepareIntent settlement",
+                recovered_proposal_prepare_wal_settlement,
+                (
+                    "recovered_lifecycle_sign_completion.take()",
+                    "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
+                    "RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
+                    "preview.project_proposal_exact_output_authority()",
+                    "capture_recovered_lifecycle_proposal_exact_output(output_authority)",
+                    "output.prepare_wal_append_permit()",
+                    "preview.append_recovered_lifecycle_proposal_prepare_wal(wal_permit)",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
+                    "prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "completion.acknowledge_after_publication()",
+                    "output.commit_after_publication()",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "initial Proposal capacity remains pre-WAL retryable",
+                recovered_proposal_prepare_wal_settlement,
+                (
+                    "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
+                    "*recovered_lifecycle_sign_completion = Some(completion)",
+                    "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "post-WAL initial Proposal never releases fail-stop output",
+                recovered_proposal_prepare_wal_settlement.split(
+                    "append_recovered_lifecycle_proposal_prepare_wal(wal_permit)", 1
+                )[-1],
+                ("output.abort_before_publication()",),
+            )
+            recovered_proposal_prepare_wal_tail = recovered_proposal_prepare_wal_settlement.split(
+                "transition.commit_after_publication();", 1
+            )[-1]
+            reject_tokens(
+                launch_path,
+                "infallible initial Proposal post-Ledger tail",
+                recovered_proposal_prepare_wal_tail,
                 ("return", "Result", "is_err", "?"),
             )
             recovered_proposal_two_child_settlement = region(
@@ -3553,6 +4091,144 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "target.matches_recovered_decision_fetch_key(task.dispatch_key())",
                 ),
             )
+            recovered_fetch_next_selector = region(
+                selector_path,
+                selector_source,
+                "queue-owned recovered Decision Fetch selector",
+                "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
+                "/// Classify every exact pre-cut fair-ingress occurrence without mutation.",
+            )
+            require_order(
+                selector_path,
+                "queue-owned recovered Decision Fetch selector",
+                recovered_fetch_next_selector,
+                (
+                    "self.local_proposal_directive()",
+                    "capture_next_lifecycle_queue_cut(",
+                    "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
+                    "self.capture_lifecycle_ingress_selector(cut)",
+                    "prepared.queue_witness.selected_disposition()",
+                    "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
+                    ".selected_claimed_response_family()",
+                ),
+            )
+            reject_tokens(
+                selector_path,
+                "queue-owned recovered Decision Fetch selector",
+                recovered_fetch_next_selector,
+                (
+                    "target_physical_ordinal:",
+                    "prepare_lifecycle_ingress_selector(",
+                    "try_recv",
+                    "commit_exact_dequeue",
+                ),
+            )
+            recovered_fetch_queue_cut = region(
+                ingress_position_path,
+                ingress_position_source,
+                "queue-owned recovered Decision Fetch fair cut",
+                "pub(super) fn capture_next_lifecycle_queue_cut(",
+                "fn capture_lifecycle_queue_cut_for(",
+            )
+            require_tokens(
+                ingress_position_path,
+                "queue-owned recovered Decision Fetch fair cut",
+                recovered_fetch_queue_cut,
+                (
+                    "LifecycleQueueCutTarget::NextAdmissible",
+                    "predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool",
+                    "Result<Option<FairIngressQueueCut<'_>>, FairIngressQueueCutError>",
+                ),
+            )
+            recovered_fetch_fair_selection = region(
+                ingress_position_path,
+                ingress_position_source,
+                "queue-owned recovered Decision Fetch fair selection",
+                "fn select_next_admissible_ordinal(",
+                "fn mint_pending_identities(",
+            )
+            require_order(
+                ingress_position_path,
+                "queue-owned recovered Decision Fetch fair selection",
+                recovered_fetch_fair_selection,
+                (
+                    "geometry.ready_prefix.iter()",
+                    "selector.queue_gate() != occurrence.value.queue_gate",
+                    "select_fair_v2_ingress_candidate(",
+                    "occurrence.physical_admission_ordinal()",
+                    "occurrence.queue_gate()",
+                    "occurrence.is_obsolete()",
+                    "predicate(occurrence)",
+                ),
+            )
+            reject_tokens(
+                ingress_position_path,
+                "queue-owned recovered Decision Fetch fair selection",
+                recovered_fetch_fair_selection,
+                ("pop_", "remove(", "rotate_", "dequeue_selected_locked"),
+            )
+            shared_fair_selection = region(
+                sumeragi_path,
+                sumeragi_source,
+                "shared strict-then-dependency fair selection",
+                "fn select_fair_v2_ingress_candidate<T>(",
+                "fn fair_v2_ingress_queue_gate_verdict(",
+            )
+            require_order(
+                sumeragi_path,
+                "shared strict-then-dependency fair selection",
+                shared_fair_selection,
+                (
+                    "for dependency_pass in [false, true]",
+                    "for (source_index, source_candidates) in candidates.iter().enumerate()",
+                    "for candidate in source_candidates",
+                    "gate == FairV2IngressQueueGateVerdict::Blocked",
+                    "dependency != dependency_pass",
+                    "obsolete || predicate(candidate)",
+                    "return Some((source_index, ordinal, disposition))",
+                ),
+            )
+            ordinary_fair_dequeue = region(
+                sumeragi_path,
+                sumeragi_source,
+                "ordinary shared fair selection call",
+                "fn try_recv_if_at_checked_classified(",
+                "/// Commit one already selected occurrence",
+            )
+            require_tokens(
+                sumeragi_path,
+                "ordinary shared fair selection call",
+                ordinary_fair_dequeue,
+                ("select_fair_v2_ingress_candidate(",),
+            )
+            require_tokens(
+                effects_path,
+                "shared pure ingress drain predicate",
+                effects_source,
+                (
+                    "fn v2_ingress_head_can_drain(",
+                    "certified_body_request_is_superseded_after_decision(",
+                    "executor.can_admit_network_message_with_ingress_ownership(",
+                ),
+            )
+            require_tokens(
+                runner_path,
+                "ordinary runner shared ingress drain predicate",
+                runner_source,
+                ("v2_ingress_head_can_drain(inbound, executor, terminal_subject)",),
+            )
+            require_tokens(
+                effects_path,
+                "queue-owned recovered Decision Fetch selector behavior",
+                effects_source,
+                (
+                    "fn recovered_decision_fetch_fences_later_ordinary_body_coordinates()",
+                    ".prepare_next_recovered_decision_fetch_ingress_selector(&ingress)",
+                    "a later recovered response cannot leapfrog the ordinary fair winner",
+                    "the queue-owned selector chooses the next fair exact family occurrence",
+                    "queue-owned selector discovery cannot dequeue or renumber ingress",
+                ),
+            )
             recovered_fetch_claim = region(
                 effects_path,
                 effects_source,
@@ -3887,6 +4563,317 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "fn run_complete_tip_retirement_release_regressions()",
                     "ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work()",
                     "ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner()",
+                ),
+            )
+            current_retirement_census = region(
+                payload_store_path,
+                payload_store_source,
+                "live Serve retirement directory authentication",
+                "fn authenticate_current_for_lifecycle_retirement(",
+                "/// Compare this opened payload owner",
+            )
+            require_order(
+                payload_store_path,
+                "live Serve retirement directory authentication",
+                current_retirement_census,
+                (
+                    "verified.context() != &self.context",
+                    "self.reload_payload_census_strict()?",
+                    "payloads.keys().copied().collect::<BTreeSet<_>>() != self.indexed",
+                    "CertifiedServePayloadRecoveryCut {",
+                    ".authenticate_for_complete_tip_retirement(verified, local_signer)",
+                    "self.validate_authenticated_cut(&authenticated)?",
+                    "Ok(authenticated)",
+                ),
+            )
+            live_serve_join = region(
+                lifecycle_open_path,
+                lifecycle_open_source,
+                "live finalization Serve ledger/admission-wait join",
+                "fn authenticate_live_finalization_serve_census(",
+                "/// Seal the final post-mutation Serve cut",
+            )
+            require_order(
+                lifecycle_open_path,
+                "live finalization Serve ledger/admission-wait join",
+                live_serve_join,
+                (
+                    "LifecycleLedgerV1::from_coordinator(coordinator)",
+                    "authenticate_complete_tip_serve_census(ledger, recovered)?",
+                    "WaitSource::Capacity(class)",
+                    "receipt.exactly_matches_pending(payload.request())",
+                    "prepare_certified_serve_admission(",
+                    "candidate != waiting.candidate",
+                    "owned != recovered_ids",
+                    "Ok(retained)",
+                ),
+            )
+            launch_serve_refresh = region(
+                launch_path,
+                launch_source,
+                "launched live Serve retirement refresh",
+                "fn refresh_live_serve_retirement_cut(",
+                "/// Cross the ordinary/current/snapshot live-height boundary",
+            )
+            require_order(
+                launch_path,
+                "launched live Serve retirement refresh",
+                launch_serve_refresh,
+                (
+                    "_retired_ingress: &ProductionLifecycleRetiredIngressPermitV1",
+                    "exactly_covers_finalization_work(&self.coordinator)",
+                    "authenticate_current_lifecycle_serve_retirement(",
+                    "LifecycleLedgerV1::from_coordinator(&self.coordinator)",
+                    "authenticate_live_finalization_serve_census(",
+                    "self.serve_payloads = refreshed",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "launched live Serve retirement refresh",
+                launch_serve_refresh,
+                (
+                    "CertifiedServePayloadStoreV1::open(",
+                    "KeyPair::from_private_key",
+                    "impl Clone for ProductionLifecycleServeRetirementAuthenticationPermitV1",
+                ),
+            )
+            fixture_retirement = region(
+                launch_path,
+                launch_source,
+                "consuming activated Serve retirement fixture",
+                "fn retire_lifecycle_stores_for_test(",
+                "/// Borrow the live owner/runtime/service triple",
+            )
+            require_order(
+                launch_path,
+                "consuming activated Serve retirement fixture",
+                fixture_retirement,
+                (
+                    "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
+                    "launched.leader_wire_ingress_binding.retire()",
+                    "seal_empty_exact_output_for_lifecycle_retirement_test()",
+                    "refresh_live_serve_retirement_cut(&launched.services, &retired_ingress)",
+                    ".retire_lifecycle_stores()",
+                ),
+            )
+            activated_finalization = region(
+                launch_path,
+                launch_source,
+                "activated lifecycle finalization",
+                "fn into_finalized_rollover(",
+                "/// Exercise the exact empty-output post-handoff retirement transaction",
+            )
+            require_order(
+                launch_path,
+                "activated lifecycle finalization",
+                activated_finalization,
+                (
+                    "executor.ready_to_finish()",
+                    "exactly_covers_finalization_work",
+                    "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
+                    "launched.leader_wire_ingress_binding.retire()",
+                    "executor.into_finalized_parts()",
+                    "begin_fail_stop_operation()",
+                    "runtime.into_driver().finish_height(&receipt, &artifact)",
+                    "operation.complete()",
+                    "FinalizedProductionLifecycleRolloverV1 {",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "activated lifecycle finalization quiescence",
+                activated_finalization,
+                (
+                    "recovered_decision_fetch_body_completion.is_some()",
+                    "recovered_lifecycle_sign_completion.is_some()",
+                    "completion_observer_activation.is_some()",
+                    "ProductionLifecycleFinalizationErrorV1::NotReady",
+                    "finalized.into_wal_retirement_warning()",
+                ),
+            )
+            output_rollover = region(
+                launch_path,
+                launch_source,
+                "typed lifecycle finalized-output rollover",
+                "impl FinalizedProductionLifecycleRolloverV1",
+                "impl ProductionLifecyclePostOutputHandoffV1",
+            )
+            require_order(
+                launch_path,
+                "typed lifecycle finalized-output rollover",
+                output_rollover,
+                (
+                    "rollover_finalized_height_outputs_for_lifecycle(",
+                    "ProductionLifecycleOutputRolloverPermitV1 {",
+                    "refresh_live_serve_retirement_cut(&services, &retired_ingress)",
+                    "ProductionLifecyclePostOutputHandoffV1 {",
+                ),
+            )
+            require_tokens(
+                finalized_output_path,
+                "sealed runner finalized-output reuse",
+                finalized_output_source,
+                (
+                    "fn rollover_finalized_height_outputs_for_lifecycle(",
+                    "_permit: super::v2_lifecycle_coordinator::ProductionLifecycleOutputRolloverPermitV1",
+                    "rollover_finalized_height_outputs(",
+                ),
+            )
+            store_retirement = region(
+                launch_path,
+                launch_source,
+                "post-output lifecycle-store retirement",
+                "impl ProductionLifecyclePostOutputHandoffV1",
+                "impl ProductionLifecycleCleanupReadyV1",
+            )
+            require_order(
+                launch_path,
+                "post-output lifecycle-store retirement",
+                store_retirement,
+                (
+                    "begin_fail_stop_operation()",
+                    "retire_authenticated_cut(serve_payloads, &retained_serve_payloads)",
+                    "reconcile_complete_tip_serve_retirement(&current, refreshed)",
+                    "stage_finalized_height_all_row_retirement(reconciliation)",
+                    "persist_exact_finalization_successor(staged)",
+                    "publication.consume_owners(registry)",
+                    "operation.complete()",
+                    "ProductionLifecycleCleanupReadyV1 {",
+                ),
+            )
+            cleanup_ready = region(
+                launch_path,
+                launch_source,
+                "cleanup-ready lifecycle service teardown",
+                "impl ProductionLifecycleCleanupReadyV1",
+                "impl ProductionLifecycleOwnerV1",
+            )
+            require_order(
+                launch_path,
+                "cleanup-ready lifecycle service teardown",
+                cleanup_ready,
+                (
+                    "self.services.allow_clean_shutdown()",
+                    "self.services.finish_height(self.receipt, cleanup_timeout, supervisor)",
+                    "ProductionLifecycleFinalizationOutcomeV1 {",
+                ),
+            )
+            finalization_publication = region(
+                ledger_path,
+                ledger_source,
+                "opaque all-row finalization publication",
+                "fn persist_exact_finalization_successor(",
+                "#[cfg(test)]",
+            )
+            require_order(
+                ledger_path,
+                "opaque all-row finalization publication",
+                finalization_publication,
+                (
+                    "self,",
+                    "StagedFinalizationRetirementV1 { current, retired }",
+                    "LifecycleLedgerV1::from_coordinator(&self)? != current",
+                    "store.persist_exact_successor(&current, &retired)?",
+                    "store.load()? != retired",
+                    "coordinator: self",
+                ),
+            )
+            require_tokens(
+                ledger_path,
+                "opaque all-row finalization ownership",
+                ledger_source,
+                (
+                    "struct StagedFinalizationRetirementV1 { current: LifecycleLedgerV1, retired: LifecycleLedgerV1, }",
+                    "struct PublishedFinalizationRetirementV1 { coordinator: LifecycleCoordinator, current: LifecycleLedgerV1, retired: LifecycleLedgerV1, }",
+                    "fn consume_owners( self, mut registry: LifecycleWorkRegistryHolder, )",
+                    "registry.registry_mut().exactly_covers_finalization_work(&self.coordinator)",
+                    "drop(self.coordinator)",
+                ),
+            )
+            reject_tokens(
+                ledger_path,
+                "opaque all-row finalization ownership",
+                ledger_source,
+                (
+                    "impl Clone for StagedFinalizationRetirementV1",
+                    "impl Copy for StagedFinalizationRetirementV1",
+                    "impl Clone for PublishedFinalizationRetirementV1",
+                    "impl Copy for PublishedFinalizationRetirementV1",
+                    "pub coordinator: LifecycleCoordinator",
+                    "pub current: LifecycleLedgerV1",
+                    "pub retired: LifecycleLedgerV1",
+                ),
+            )
+            require_tokens(
+                lifecycle_startup_test_path,
+                "production lifecycle all-row finalization behavior",
+                lifecycle_startup_test_source,
+                (
+                    "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
+                    ".retire_lifecycle_stores_for_test(finality_receipt)",
+                    "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+                    "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+                    ".into_finalized_rollover(&mut runner)",
+                    "let (receipt, artifact) = finalized.finality()",
+                    ".rollover_outputs(&mut runner, lane_work, &successor, 64)",
+                    ".retire_lifecycle_stores()",
+                    "outcome.cleanup().warnings().is_empty()",
+                ),
+            )
+            finalization_registry = region(
+                registry_validate_path,
+                registry_validate_source,
+                "finalization-only recovered registry census",
+                "fn exactly_covers_finalization_work(",
+                "fn exactly_covers_ready_work_with_extra(",
+            )
+            require_tokens(
+                registry_validate_path,
+                "finalization-only recovered registry census",
+                finalization_registry,
+                (
+                    "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+                    "self.exact_recovered_wal_registry_slot()",
+                    "self.exactly_covers_ready_work_with_extra(coordinator, extra, None, true)",
+                ),
+            )
+            finalization_pair_link = region(
+                registry_validate_path,
+                registry_validate_source,
+                "finalization recovered Broadcast pair link",
+                "fn exact_optional_recovered_wal_authority(",
+                "/// Install one work value without overwriting an incumbent address.",
+            )
+            require_tokens(
+                registry_validate_path,
+                "finalization recovered Broadcast pair link",
+                finalization_pair_link,
+                (
+                    "broadcast.is_unpaired()",
+                    "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
+                ),
+            )
+            require_tokens(
+                wal_recovery_path,
+                "volatile refanned Broadcast finalization state",
+                wal_recovery_source,
+                (
+                    "fn matches_current_finalization_record(",
+                    "WaitSource::Recovery(digest)",
+                    "coordinator.observed_generation.get(&expected_source) == Some(&wait.observed_generation())",
+                    "!coordinator.ready_index.contains(&address.ordinal)",
+                ),
+            )
+            require_tokens(
+                scheduler_path,
+                "volatile refanned Broadcast finalization behavior",
+                scheduler_source,
+                (
+                    "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
+                    "finalization_registry_census_is_exact_for_test()",
+                    "finalization accepts the exact volatile refanout wait beside its Ready next Sign",
+                    "finalization must reject the corrupted exact next-Sign link",
                 ),
             )
         snapshot_authority = region(
@@ -4393,6 +5380,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             release_source = ""
     if release_source:
         for test in (
+            "sumeragi::v2::tests::production_recovered_proposal_sign_joins_exact_next_vote_body_store",
             "sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue",
             "sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts",
             "sumeragi::v2_block_sync::tests::historical_body_uses_self_contained_kura_finality_without_context_store",

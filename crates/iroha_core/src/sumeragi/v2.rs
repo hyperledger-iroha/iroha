@@ -6091,6 +6091,7 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
     /// requires cold recovery; it is never reported as a retryable error.
     pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(
         &mut self,
+        permit: super::v2_worker::RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_>,
     ) -> Result<(), AdapterError> {
         if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
             || self.prepared_prepare_wal.is_none()
@@ -6101,6 +6102,17 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             || self.adapter.fail_closed
             || self.adapter.pending_persistence_id.is_some()
         {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        if !permit.authorizes(
+            self.dispatch_key,
+            self.next_vote_body_store_identity
+                .as_ref()
+                .expect("checked Proposal body-store identity remains retained"),
+            self.next_vote_output_guard
+                .as_ref()
+                .expect("checked Proposal output guard remains retained"),
+        ) {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
         let (persist_tag, entry) = self
@@ -6140,6 +6152,7 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             .expect("checked Proposal WAL preflight remains retained");
         let persistence_id = entry.id().get();
         self.adapter.pending_persistence_id = Some(persistence_id);
+        permit.cross_wal_attempt_boundary();
         let receipt = match self.adapter.wal.append(&encoded_wal_payload) {
             Ok(receipt) => receipt,
             Err(error) => {
@@ -8063,6 +8076,15 @@ impl FinalizedV2Height {
     /// one.
     pub(crate) fn wal_retirement_warning(&self) -> Option<&str> {
         self.wal_retirement_warning.as_deref()
+    }
+
+    /// Consume the cleanup result into its retained warning.
+    ///
+    /// The lifecycle finalization type state keeps this diagnostic beside the
+    /// typed Kura receipt until output rollover has crossed its durable
+    /// handoff. It exposes no reducer, WAL, or serviced-candidate owner.
+    pub(in crate::sumeragi) fn into_wal_retirement_warning(self) -> Option<String> {
+        self.wal_retirement_warning
     }
 }
 
@@ -27982,10 +28004,7 @@ mod tests {
                 &proofs,
                 local,
                 [0xD6; 32],
-                vec![
-                    WalRecordV2::ProposalIntent(proposal.clone()),
-                    WalRecordV2::PrepareIntent(prepare.clone()),
-                ],
+                vec![WalRecordV2::ProposalIntent(proposal.clone())],
             );
         let RecoveredAdapterStartup {
             adapter: cold_adapter,
@@ -28008,8 +28027,8 @@ mod tests {
         assert_eq!(request, &SignRequest::Proposal(proposal));
         let tag = *tag;
         let request = request.clone();
-        let prepare_identity = adapter
-            .authenticate_recovered_wal_frame(&adapter.wal.recovered_records()[1])
+        let prepare_identity = cold_adapter
+            .authenticate_recovered_wal_frame(&cold_adapter.wal.recovered_records()[1])
             .expect("authenticate exact PrepareIntent frame")
             .0;
         let signature = Signature::new(
@@ -28240,7 +28259,7 @@ mod tests {
             .expect("the exact production service authenticates the next-Vote body");
         assert_eq!(
             preview.shape(),
-            RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
         );
         assert!(body_authority.exactly_matches_for_test(&validated, &body_store_identity));
         let dispatch_key = preview.dispatch_key();
@@ -28252,17 +28271,7 @@ mod tests {
                 ..
             }) if signed.manifest == manifest && signed.signature == signature
         ));
-        let next_sign = preview
-            .next_sign_effect()
-            .expect("the recovered Proposal retains its exact Prepare Sign")
-            .clone();
-        assert!(matches!(
-            &next_sign,
-            AdapterEffect::Sign {
-                request: SignRequest::Vote(vote),
-                ..
-            } if vote == &prepare
-        ));
+        assert!(preview.next_sign_effect().is_none());
         let proposal_output = preview
             .project_proposal_exact_output_authority()
             .expect("seal the signed Proposal and exact recovered payload");
@@ -28281,19 +28290,50 @@ mod tests {
                 _,
             ) => panic!("empty exact-output corridor must retain the complete Proposal batch"),
         };
-        match services
+        let mut output = match services
             .capture_recovered_lifecycle_proposal_exact_output(proposal_output)
             .expect("typed abort returns the exact retry authority")
         {
             super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(
                 reservation,
-            ) => {
-                drop(reservation.abort_before_publication());
-            }
+            ) => reservation,
             super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(
                 _,
             ) => panic!("retry against the unchanged empty corridor must remain reservable"),
-        }
+        };
+        let wal_permit = output
+            .prepare_wal_append_permit()
+            .expect("the armed Proposal output owns the initial WAL append");
+        preview
+            .append_recovered_lifecycle_proposal_prepare_wal(wal_permit)
+            .expect("fsync the preflighted PrepareIntent before child publication");
+        assert!(
+            output.prepare_wal_append_permit().is_none(),
+            "a successful WAL append irreversibly closes the retry permit"
+        );
+        assert_eq!(
+            preview.shape(),
+            RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+        );
+        assert_eq!(preview.adapter.wal.recovered_records().len(), 2);
+        assert_eq!(preview.adapter.pending_persistence_id, Some(2));
+        let appended_prepare_identity = preview
+            .adapter
+            .authenticate_recovered_wal_frame(&preview.adapter.wal.recovered_records()[1])
+            .expect("authenticate the just-fsynced PrepareIntent")
+            .0;
+        assert_eq!(appended_prepare_identity, prepare_identity);
+        let next_sign = preview
+            .next_sign_effect()
+            .expect("the fsynced PrepareIntent retains its exact Prepare Sign")
+            .clone();
+        assert!(matches!(
+            &next_sign,
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            } if vote == &prepare
+        ));
         let combined = preview
             .project_broadcast_and_sign_authority(body_authority)
             .expect("seal the exact production-authenticated successor pair");
@@ -28304,6 +28344,9 @@ mod tests {
             &next_sign,
             &validated,
         ));
+        drop(combined);
+        preview.commit_after_durable_broadcast_and_sign();
+        output.commit_after_publication();
 
         foreign_service_io.detach(&mut foreign_services);
         service_io.detach(&mut services);

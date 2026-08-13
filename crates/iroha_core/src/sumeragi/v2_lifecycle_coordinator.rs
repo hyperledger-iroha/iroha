@@ -69,9 +69,16 @@ use body_pipeline_transition::{
     durable_validate_payload_is_exact,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
+#[allow(unused_imports)]
 pub(in crate::sumeragi) use launch::{
-    LaunchedProductionLifecycleV1, ProductionLifecycleLaunchErrorV1,
-    ProductionLifecycleLaunchInputsV1, ProductionRecoveredDecisionApplyCompletionErrorV1,
+    ActivatedProductionLifecycleV1, FinalizedProductionLifecycleRolloverV1,
+    LaunchedProductionLifecycleV1, ProductionLifecycleActivationErrorV1,
+    ProductionLifecycleCleanupReadyV1, ProductionLifecycleFinalizationErrorV1,
+    ProductionLifecycleFinalizationOutcomeV1, ProductionLifecycleLaunchErrorV1,
+    ProductionLifecycleLaunchInputsV1, ProductionLifecycleOutputRolloverPermitV1,
+    ProductionLifecyclePostOutputHandoffV1,
+    ProductionLifecycleServeRetirementAuthenticationPermitV1,
+    ProductionRecoveredDecisionApplyCompletionErrorV1,
     ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
     ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
     ProductionRecoveredDecisionFetchStoreSettlementV1,

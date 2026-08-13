@@ -153,6 +153,61 @@ use super::{
 };
 use crate::kura::KuraV2CommitReceipt;
 
+/// Whether one exact fair-ingress occurrence may cross retained reducer debt.
+///
+/// This pure predicate is shared by ordinary checked dequeue and lifecycle
+/// queue selection. Current-height certified-Serve preparation remains a
+/// separate, stateful runner/service transaction after this common gate.
+pub(crate) fn v2_ingress_head_can_drain(
+    inbound: &super::InboundBlockMessage,
+    executor: &V2EffectExecutor<SerializedV2Runtime>,
+    terminal_subject: Option<wire::BlockSubject>,
+) -> bool {
+    let BlockMessage::V2(message) = inbound.message() else {
+        return true;
+    };
+    if message.validate_version().is_err() {
+        return true;
+    }
+    if terminal_subject.is_some() && v2_payload_is_terminal_reducer_control(&message.payload) {
+        return true;
+    }
+    if let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
+        && certified_body_request_is_superseded_after_decision(
+            request,
+            terminal_subject,
+            executor.context().height,
+        )
+    {
+        return true;
+    }
+    let Some(ingress_ownership) = inbound.ingress_ownership() else {
+        return true;
+    };
+    executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
+}
+
+pub(crate) fn certified_body_request_is_superseded_after_decision(
+    request: &wire::CertifiedBodyRequest,
+    terminal_subject: Option<wire::BlockSubject>,
+    active_height: wire::Height,
+) -> bool {
+    terminal_subject
+        .is_some_and(|decided| request.round.height == active_height && request.subject != decided)
+}
+
+const fn v2_payload_is_terminal_reducer_control(payload: &wire::ConsensusMessageV2Payload) -> bool {
+    matches!(
+        payload,
+        wire::ConsensusMessageV2Payload::Proposal(_)
+            | wire::ConsensusMessageV2Payload::Vote(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+            | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+    )
+}
+
 /// Return whether one authenticated envelope can retire a hung signing fence.
 ///
 /// Only a TC or a CommitQC changes the reducer incarnation strongly enough to
@@ -14062,9 +14117,10 @@ mod tests {
         v2_block_sync::{CommitCertificateAdmissionError, V2BlockSyncDiscovery},
         v2_core::Generation,
         v2_lifecycle_coordinator::{
-            CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
-            ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
-            ProductionIngressTurnPreparation, ProductionRecoveredDecisionFetchPersistenceErrorV1,
+            CertifiedFetchReadyPublicationError, LifecycleDigest, LifecycleIngressIoTargetKind,
+            LifecyclePhase, LifecycleState, ProductionIngressCapacityStatus,
+            ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
+            ProductionRecoveredDecisionFetchPersistenceErrorV1,
             ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},
@@ -24340,6 +24396,137 @@ mod tests {
                 .is_none()
         );
         assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+
+        let ingress =
+            crate::sumeragi::FairV2Ingress::new(32, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+        ingress
+            .configure_roster(
+                fixture
+                    .context
+                    .roster
+                    .iter()
+                    .map(|power| power.validator.clone()),
+            )
+            .expect("fixture roster fits the recovered selector ingress");
+        ingress.state.lock().leader_wire_context =
+            Some((fixture.context.id(), fixture.context.height));
+        ingress.open().expect("open recovered selector ingress");
+        let recovered_response = |responder: wire::ValidatorIndex| {
+            let mut response = wire::CertifiedBodyResponse {
+                request_hash,
+                manifest: fixture.manifest.clone(),
+                body: fixture.body.clone(),
+                responder,
+                signature: Vec::new(),
+            };
+            response.signature = Signature::new(
+                fixture.validator_keys[usize::try_from(responder).expect("small responder index")]
+                    .private_key(),
+                &response.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            response
+        };
+        let mut ordinary_response = recovered_response(2);
+        ordinary_response.request_hash = HashOf::from_untyped_unchecked(Hash::new(
+            b"ordinary response ahead of recovered Decision Fetch",
+        ));
+        ordinary_response.signature = Signature::new(
+            fixture.validator_keys[2].private_key(),
+            &ordinary_response.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                        ordinary_response.clone(),
+                    ),
+                )),
+                Some(fixture.context.roster[2].validator.clone()),
+            )),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let ordinary_ordinal = ingress.state.lock().last_admission_ordinal;
+        let mut first_recovered_ordinal = None;
+        for responder in [0, 1] {
+            let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(recovered_response(
+                    responder,
+                )),
+            ));
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(
+                    message,
+                    Some(
+                        fixture.context.roster
+                            [usize::try_from(responder).expect("small responder index")]
+                        .validator
+                        .clone(),
+                    ),
+                )),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            first_recovered_ordinal
+                .get_or_insert_with(|| ingress.state.lock().last_admission_ordinal);
+        }
+        let queue_depth_before_selector = ingress.len();
+        let physical_cut_before_selector = ingress.next_physical_admission_ordinal();
+        assert!(
+            executor
+                .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+                .expect("ordinary fair head is a non-fatal lifecycle pass-through")
+                .is_none(),
+            "a later recovered response cannot leapfrog the ordinary fair winner",
+        );
+        assert_eq!(ingress.len(), queue_depth_before_selector);
+        let drained_ordinary = ingress
+            .try_recv_if_checked(|_| true)
+            .expect("ordinary checked dequeue remains available")
+            .expect("ordinary winner remains queued after lifecycle pass-through");
+        assert_eq!(
+            drained_ordinary
+                .ingress_ownership()
+                .expect("ordinary response retains physical ownership")
+                .first
+                .physical_admission_ordinal,
+            ordinary_ordinal,
+        );
+        assert!(matches!(
+            drained_ordinary.message(),
+            BlockMessage::V2(message)
+                if matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)
+                        if response.request_hash == ordinary_response.request_hash
+                )
+        ));
+        let mut selected = executor
+            .prepare_next_recovered_decision_fetch_ingress_selector(&ingress)
+            .expect("queue-owned recovered response selection remains exact")
+            .expect("one recovered response family is selected");
+        assert_eq!(
+            selected.selected_cut_for_test().2,
+            first_recovered_ordinal.expect("one recovered response was enqueued"),
+            "the queue-owned selector chooses the next fair exact family occurrence",
+        );
+        let target = selected
+            .take_lifecycle_io_target()
+            .expect("the selected target remains a recovered Fetch persistence carrier");
+        assert_eq!(
+            target.kind(),
+            LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+        );
+        assert!(target.matches_recovered_decision_fetch_key(key));
+        drop(selected);
+        assert_eq!(ingress.len(), queue_depth_before_selector - 1);
+        assert_eq!(
+            ingress.next_physical_admission_ordinal(),
+            physical_cut_before_selector,
+            "queue-owned selector discovery cannot dequeue or renumber ingress",
+        );
 
         let uncertified_effect = AdapterEffect::FetchBody {
             tag: tag(0),

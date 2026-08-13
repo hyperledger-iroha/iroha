@@ -93,6 +93,10 @@ use super::{
         BodyStoreCompletion, BodyValidationCompletion, V2BodyRetirementJob, V2BodyStore,
         V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
     },
+    v2_certified_serve_payload_store::{
+        AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadStoreInstanceIdentity,
+        CertifiedServePayloadStoreV1, CertifiedServeRetirementAuthenticationErrorV1,
+    },
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
@@ -111,8 +115,10 @@ use super::{
         CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
         LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal,
         PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
-        PreparedRecoveredLifecycleSignDispatch, ProductionV2CompletionObserverActivationPermitV1,
-        RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchBodyPersistenceCompletionV1,
+        PreparedRecoveredLifecycleSignDispatch,
+        ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        ProductionV2CompletionObserverActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+        RecoveredDecisionFetchBodyPersistenceCompletionV1,
         RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
         RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
     },
@@ -16868,6 +16874,7 @@ pub(crate) struct ProductionV2Services {
     chunk_root: PathBuf,
     io: Option<V2IoHandle>,
     lifecycle_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
+    lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
     fetches: BTreeMap<EffectWorkId, FetchSession>,
     fetch_by_manifest: BTreeMap<HashOf<wire::PayloadManifest>, EffectWorkId>,
     orphan_chunks: BTreeMap<HashOf<wire::PayloadManifest>, VecDeque<BufferedPayloadChunk>>,
@@ -17083,14 +17090,74 @@ pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputReservationV
     pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     batch: Option<PendingExactOutputBatchPlan>,
     authority: Option<super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1>,
+    wal_append: RecoveredLifecycleProposalPrepareWalAppendSealV1,
+}
+
+/// Reservation-owned identity seal for the initial Proposal WAL append.
+///
+/// It is constructed only after the exact control/chunk batch owns aggregate
+/// corridor capacity.  The public borrow wrapper below prevents the WAL append
+/// from outliving or bypassing that armed reservation.
+struct RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+    dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+    body_store_identity: V2BodyStoreInstanceIdentity,
+    output_guard: Arc<ConsensusOutputGuard>,
+    attempted: bool,
+}
+
+/// Borrow-bound proof that one exact Proposal batch remains reserved.
+#[must_use = "the Proposal WAL append permit must remain tied to its output reservation"]
+pub(in crate::sumeragi) struct RecoveredLifecycleProposalPrepareWalAppendPermitV1<'reservation> {
+    seal: &'reservation mut RecoveredLifecycleProposalPrepareWalAppendSealV1,
+}
+
+impl RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_> {
+    /// Compare the preview owner without exposing any reservation constituent.
+    pub(in crate::sumeragi) fn authorizes(
+        &self,
+        dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
+        body_store_identity: &V2BodyStoreInstanceIdentity,
+        output_guard: &Arc<ConsensusOutputGuard>,
+    ) -> bool {
+        !self.seal.attempted
+            && self.seal.dispatch_key == dispatch_key
+            && self
+                .seal
+                .body_store_identity
+                .same_instance(body_store_identity)
+            && Arc::ptr_eq(&self.seal.output_guard, output_guard)
+    }
+
+    /// Irreversibly cross the retry boundary before attempting the WAL append.
+    pub(in crate::sumeragi) fn cross_wal_attempt_boundary(self) {
+        self.seal.attempted = true;
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {
+    /// Borrow the sole initial-Proposal WAL permit while this batch is armed.
+    pub(in crate::sumeragi) fn prepare_wal_append_permit(
+        &mut self,
+    ) -> Option<RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_>> {
+        (self.operation.is_some()
+            && self.pending.is_some()
+            && self.batch.is_some()
+            && self.authority.is_some()
+            && !self.wal_append.attempted)
+            .then_some(RecoveredLifecycleProposalPrepareWalAppendPermitV1 {
+                seal: &mut self.wal_append,
+            })
+    }
+
     /// Release an unchanged aggregate reservation before durable publication.
     pub(in crate::sumeragi) fn abort_before_publication(
         mut self,
     ) -> super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1 {
+        assert!(
+            !self.wal_append.attempted,
+            "an attempted Proposal WAL cut cannot return to the prepublication retry boundary"
+        );
         drop(self.pending.take());
         drop(self.batch.take());
         self.operation
@@ -17433,6 +17500,12 @@ impl ProductionV2Services {
         proposal
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
+        let wal_append = RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+            dispatch_key,
+            body_store_identity: body_store_identity.clone(),
+            output_guard: Arc::clone(&authority_output_guard),
+            attempted: false,
+        };
         let retry_authority =
             super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(
                 RecoveredLifecycleProposalExactOutputPermitV1::new(),
@@ -17523,6 +17596,7 @@ impl ProductionV2Services {
                 pending: Some(pending),
                 batch: Some(batch),
                 authority: Some(retry_authority),
+                wal_append,
             },
         ))
     }
@@ -17690,6 +17764,78 @@ impl ProductionV2Services {
                 .is_some_and(|worker_identity| worker_identity.same_instance(owner_identity))
     }
 
+    /// Return whether the service was launched beside this exact Serve store.
+    pub(in crate::sumeragi) fn matches_lifecycle_payload_store(
+        &self,
+        owner_identity: &CertifiedServePayloadStoreInstanceIdentity,
+    ) -> bool {
+        self.io.is_some()
+            && self
+                .lifecycle_payload_store_identity
+                .as_ref()
+                .is_some_and(|service_identity| service_identity.same_instance(owner_identity))
+    }
+
+    /// Refresh the exact live Certified-Serve cut for all-row retirement.
+    ///
+    /// The output-handoff seal is the irreversible prerequisite: before it is
+    /// present a live output or ingress transaction could still race this
+    /// census. The launch-private permit and both retained store identities
+    /// prevent a sibling service, signer, or reopened directory owner from
+    /// authenticating the cut.
+    pub(in crate::sumeragi) fn authenticate_current_lifecycle_serve_retirement(
+        &self,
+        permit: ProductionLifecycleServeRetirementAuthenticationPermitV1,
+        verified: &super::v2::VerifiedHeightContext,
+        payload_store: &CertifiedServePayloadStoreV1,
+        owner_body_store_identity: &V2BodyStoreInstanceIdentity,
+    ) -> Result<
+        AuthenticatedCertifiedServePayloadRecoveryCut,
+        CertifiedServeRetirementAuthenticationErrorV1,
+    > {
+        let payload_store_identity = payload_store.instance_identity();
+        let roster_position = self
+            .context
+            .roster
+            .iter()
+            .position(|entry| entry.validator == self.local_peer)
+            .and_then(|position| wire::ValidatorIndex::try_from(position).ok());
+        if self.context != *verified.context()
+            || self.validator_set_pops != verified.proofs_of_possession()
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || self
+                .local_validator
+                .is_some_and(|validator| roster_position != Some(validator))
+            || !self.matches_lifecycle_body_store(owner_body_store_identity)
+            || !self.matches_lifecycle_payload_store(&payload_store_identity)
+            || !self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(CertifiedServeRetirementAuthenticationErrorV1::ForeignServiceOwner);
+        }
+        payload_store.authenticate_current_for_lifecycle_retirement(
+            permit,
+            verified,
+            &self.key_pair,
+        )
+    }
+
+    /// Seal an empty fixture corridor before exercising retirement census joins.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn seal_empty_exact_output_for_lifecycle_retirement_test(
+        &self,
+    ) -> Result<(), String> {
+        let pending = self
+            .pending_exact_output
+            .lock()
+            .map_err(|_| "fixture exact-output corridor lock was poisoned".to_owned())?;
+        if pending.is_pending() {
+            return Err("fixture exact-output corridor still owns output".to_owned());
+        }
+        self.exact_output_handoff_owner
+            .seal()
+            .map_err(|error| error.to_string())
+    }
+
     fn recovered_lifecycle_next_vote_body_executor_permit<R: EffectRuntime>(
         &self,
         executor: &V2EffectExecutor<R>,
@@ -17747,7 +17893,6 @@ impl ProductionV2Services {
     /// launch stack. No constructor, drain, or ordinary status update can
     /// register this observer. The runner cut will consume this method only as
     /// part of its final all-or-restart activation transaction.
-    // TODO: Consume this seam in the one-shot runner activation transaction.
     #[allow(dead_code)]
     pub(in crate::sumeragi) fn activate_effect_completion_observer(
         &self,
@@ -17997,6 +18142,7 @@ impl ProductionV2Services {
             network,
             chunk_root,
             body_store,
+            None,
             state,
             kura,
             apply_service,
@@ -18031,6 +18177,7 @@ impl ProductionV2Services {
         network: IrohaNetwork,
         chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
+        payload_store_identity: CertifiedServePayloadStoreInstanceIdentity,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
         apply_service: V2ApplyService,
@@ -18063,6 +18210,7 @@ impl ProductionV2Services {
             network,
             chunk_root,
             body_store,
+            Some(payload_store_identity),
             state,
             kura,
             apply_service,
@@ -18090,6 +18238,7 @@ impl ProductionV2Services {
         network: IrohaNetwork,
         chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
+        lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
         apply_service: V2ApplyService,
@@ -18193,6 +18342,7 @@ impl ProductionV2Services {
             chunk_root: context_chunk_root,
             io: Some(io),
             lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
+            lifecycle_payload_store_identity,
             fetches: BTreeMap::new(),
             fetch_by_manifest: BTreeMap::new(),
             orphan_chunks: BTreeMap::new(),
@@ -25370,6 +25520,7 @@ pub(super) mod tests {
             chunk_root: PathBuf::new(),
             io: None,
             lifecycle_body_store_identity: None,
+            lifecycle_payload_store_identity: None,
             fetches: BTreeMap::new(),
             fetch_by_manifest: BTreeMap::new(),
             orphan_chunks: BTreeMap::new(),
@@ -26899,6 +27050,12 @@ pub(super) mod tests {
         let identity = V2BodyStore::open(directory.path(), service.context.clone())
             .expect("open armed Proposal output store")
             .instance_identity();
+        let wal_append = RecoveredLifecycleProposalPrepareWalAppendSealV1 {
+            dispatch_key,
+            body_store_identity: identity.clone(),
+            output_guard: Arc::clone(&service.output_guard),
+            attempted: false,
+        };
         let authority =
             super::super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::for_test(
                 &service.context,
@@ -26922,6 +27079,7 @@ pub(super) mod tests {
             pending: Some(pending),
             batch: None,
             authority: Some(authority),
+            wal_append,
         });
         assert!(
             service.output_guard.restart_required(),

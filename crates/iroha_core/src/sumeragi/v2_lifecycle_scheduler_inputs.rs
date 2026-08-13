@@ -1932,20 +1932,133 @@ impl ProductionLifecycleOwnerV1 {
 }
 
 #[cfg(test)]
+#[allow(dead_code)] // Whole-state equality observes these fields in the fail-closed regression.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RecoveredBroadcastSchedulerStateForTest {
+    records: BTreeMap<u128, super::LifecycleRecord>,
+    key_index: BTreeMap<super::LifecycleKey, u128>,
+    owner_index: BTreeMap<super::CausalRoot, super::OwnerId>,
+    ready_index: BTreeSet<u128>,
+    active_lease: Option<super::TurnLease>,
+    high_water: u128,
+    next_lease: Option<u128>,
+    durable_records: BTreeMap<u128, super::schema::DurableRecordMetadata>,
+    capacity_used: BTreeMap<CapacityClass, usize>,
+    capacity_generation: BTreeMap<CapacityClass, u64>,
+    observed_generation: BTreeMap<super::WaitSource, u64>,
+    producer_debts: BTreeMap<u128, u128>,
+    fault: Option<super::CoordinatorFault>,
+    declares_pair: bool,
+    paired_ordinal: Option<u128>,
+}
+
+#[cfg(test)]
 mod recovered_sign_capacity_tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
 
     use super::super::schema::SchedulerEpisode;
-    use super::{AuthenticatedSchedulerInputsFactory, authenticated_ready_row};
+    use super::{
+        AuthenticatedSchedulerInputsFactory,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
+        ProductionRecoveredLifecycleSignedBroadcastRefanoutV1, ProductionV2Services,
+        authenticated_ready_row,
+    };
     use crate::sumeragi::v2_lifecycle_coordinator::{
         CapacityClass, CausalRoot, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord,
         LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
-        OwnerId, PhysicalSlotId, PredecessorScope, SchedulerEpisodeUniverse,
-        work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        OwnerId, PhysicalSlotId, PredecessorScope, ProductionLifecycleOwnerV1,
+        SchedulerEpisodeUniverse, work_registry::ReadyRecoveredLifecycleSignAttestationV1,
     };
+    use iroha_crypto::{Hash, KeyPair};
+    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 
     fn digest(byte: u8) -> LifecycleDigest {
         LifecycleDigest::new([byte; 32])
+    }
+
+    fn worker_context(keys: &[KeyPair]) -> wire::HeightContext {
+        let roster = keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = wire::HeightContext {
+            network_id: crate::sumeragi::synthetic_network_id("v2-worker-test"),
+            protocol_version: wire::PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: wire::DualQuorum::from_roster(&roster)
+                .expect("scheduler fixture equal-vote quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
+            execution_policy_hash: Hash::new(b"test execution policy"),
+            da_layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 8,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 32,
+                max_chunk_count: 8,
+            },
+            leader_seed: [0x33; 32],
+        };
+        context.validate().expect("valid scheduler fixture context");
+        context
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn recovered_broadcast_scheduler_fixture() -> (
+        ProductionLifecycleOwnerV1,
+        ProductionV2Services,
+        crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
+        tempfile::TempDir,
+        u128,
+        u128,
+        u128,
+    ) {
+        let (mut services, keys) = crate::sumeragi::v2_worker::tests::fixture();
+        let context = worker_context(&keys);
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("scheduler fixture validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = crate::sumeragi::v2::VerifiedHeightContext::genesis(context, proofs)
+            .expect("verified scheduler fixture context");
+        let directory = tempfile::TempDir::new().expect("temporary scheduler fixture storage");
+        let (mut owner, broadcast_ordinal, paired_ordinal, unrelated_ordinal) =
+            ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+                verified,
+                &keys[0],
+                directory.path(),
+            );
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let planner_io = owner.bind_body_store_to_planner_io_for_test(
+            &mut services,
+            Arc::clone(&output_guard),
+            8,
+        );
+        (
+            owner,
+            services,
+            planner_io,
+            directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        )
     }
 
     #[test]
@@ -2010,6 +2123,144 @@ mod recovered_sign_capacity_tests {
             "every recovered signature must reserve its mandatory Broadcast slot before claim"
         );
     }
+
+    #[test]
+    fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(before.declares_pair);
+        assert_eq!(before.paired_ordinal, Some(paired_ordinal));
+        assert_eq!(broadcast_ordinal.checked_add(1), Some(paired_ordinal));
+        assert!(before.ready_index.contains(&broadcast_ordinal));
+        assert!(before.ready_index.contains(&paired_ordinal));
+        assert!(before.ready_index.contains(&unrelated_ordinal));
+
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("the complete exact pair census refans out"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: broadcast_ordinal,
+            }
+        );
+
+        let after = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(matches!(
+            after.records[&broadcast_ordinal].state,
+            LifecycleState::Waiting(_)
+        ));
+        assert_eq!(after.records[&paired_ordinal].state, LifecycleState::Ready);
+        assert_eq!(
+            after.records[&unrelated_ordinal].state,
+            LifecycleState::Ready
+        );
+        assert!(after.active_lease.is_none());
+        assert!(after.fault.is_none());
+
+        let (
+            mut bounded_owner,
+            bounded_services,
+            _bounded_planner_io,
+            _bounded_directory,
+            bounded_broadcast,
+            _bounded_pair,
+            bounded_unrelated,
+        ) = recovered_broadcast_scheduler_fixture();
+        assert!(bounded_owner.retire_unrelated_sign_for_finalization_test(bounded_unrelated));
+        assert_eq!(
+            bounded_owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
+                    &bounded_services,
+                    0,
+                )
+                .expect("the bounded finalization pair refans out"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: bounded_broadcast,
+            }
+        );
+        assert!(
+            bounded_owner.finalization_registry_census_is_exact_for_test(),
+            "finalization accepts the exact volatile refanout wait beside its Ready next Sign"
+        );
+    }
+
+    #[test]
+    fn recovered_broadcast_refanout_treats_adjacent_unlinked_sign_independently() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        assert_eq!(broadcast_ordinal.checked_add(1), Some(paired_ordinal));
+        assert!(owner.clear_recovered_broadcast_pair_link_for_test(broadcast_ordinal));
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(!before.declares_pair);
+        assert_eq!(before.paired_ordinal, None);
+
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("an adjacent unlinked Sign uses ordinary Sign attestation"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: broadcast_ordinal,
+            }
+        );
+        let after = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert_eq!(after.records[&paired_ordinal].state, LifecycleState::Ready);
+        assert_eq!(
+            after.records[&unrelated_ordinal].state,
+            LifecycleState::Ready
+        );
+        assert!(after.active_lease.is_none());
+        assert!(after.fault.is_none());
+    }
+
+    #[test]
+    fn recovered_broadcast_refanout_rejects_corrupt_retained_link_without_mutation() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        assert!(owner.corrupt_recovered_broadcast_pair_link_for_test(broadcast_ordinal));
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(before.declares_pair);
+        assert_eq!(before.paired_ordinal, None);
+        assert!(before.ready_index.contains(&broadcast_ordinal));
+        assert!(before.ready_index.contains(&paired_ordinal));
+        assert!(before.ready_index.contains(&unrelated_ordinal));
+
+        assert_eq!(
+            owner.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0),
+            Err(ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1::InvalidCarrier)
+        );
+        assert_eq!(
+            owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal),
+            before,
+            "a declared but invalid retained link must fail before coordinator mutation"
+        );
+        assert!(owner.retire_unrelated_sign_for_finalization_test(unrelated_ordinal));
+        assert!(
+            !owner.finalization_registry_census_is_exact_for_test(),
+            "finalization must reject the corrupted exact next-Sign link"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2025,6 +2276,144 @@ impl LifecycleCoordinator {
 
 #[cfg(test)]
 impl ProductionLifecycleOwnerV1 {
+    /// Build the opaque recovered Broadcast-pair census used by scheduler tests.
+    ///
+    /// The returned scalars are ordinals only; every WAL, body, signature, and
+    /// concrete-work authority remains owned by the production-shaped owner.
+    fn recovered_broadcast_pair_scheduler_fixture_for_test(
+        verified: crate::sumeragi::v2::VerifiedHeightContext,
+        local_signer: &iroha_crypto::KeyPair,
+        root: &std::path::Path,
+    ) -> (Self, u128, u128, u128) {
+        use super::{CapacityClass, schema::CapacityGeometry};
+
+        let context = super::projection::lifecycle_context(verified.context());
+        let mut coordinator = LifecycleCoordinator::new(
+            context,
+            0,
+            CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 8))),
+        );
+        let (registry, broadcast_ordinal, paired_ordinal, unrelated_ordinal) =
+            LifecycleWorkRegistryHolder::recovered_broadcast_pair_scheduler_fixture_for_test(
+                &mut coordinator,
+                &verified,
+                local_signer,
+            );
+        let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
+            root.join("body"),
+            verified.context().clone(),
+        )
+        .expect("open exact scheduler fixture body store");
+        let (payload_store, recovery) =
+            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                &root.join("serve"),
+                verified.context(),
+            )
+            .expect("open exact scheduler fixture Serve payload store");
+        let serve_payloads = recovery
+            .authenticate(&verified, local_signer, &body_store)
+            .expect("authenticate empty scheduler fixture Serve payload census");
+        (
+            Self {
+                verified,
+                coordinator,
+                registry,
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(
+                    crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+                ),
+            },
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        )
+    }
+
+    /// Clear the retained link without exposing either closed carrier.
+    fn clear_recovered_broadcast_pair_link_for_test(&mut self, broadcast_ordinal: u128) -> bool {
+        self.registry
+            .clear_recovered_broadcast_pair_link_for_test(&self.coordinator, broadcast_ordinal)
+    }
+
+    /// Corrupt the retained link digest without exposing either closed carrier.
+    fn corrupt_recovered_broadcast_pair_link_for_test(&mut self, broadcast_ordinal: u128) -> bool {
+        self.registry
+            .corrupt_recovered_broadcast_pair_link_for_test(&self.coordinator, broadcast_ordinal)
+    }
+
+    /// Snapshot only copyable/cloneable scheduler state and pair classification.
+    fn recovered_broadcast_scheduler_state_for_test(
+        &self,
+        broadcast_ordinal: u128,
+    ) -> RecoveredBroadcastSchedulerStateForTest {
+        RecoveredBroadcastSchedulerStateForTest {
+            records: self.coordinator.records.clone(),
+            key_index: self.coordinator.key_index.clone(),
+            owner_index: self.coordinator.owner_index.clone(),
+            ready_index: self.coordinator.ready_index.clone(),
+            active_lease: self.coordinator.active_lease.clone(),
+            high_water: self.coordinator.high_water,
+            next_lease: self.coordinator.next_lease,
+            durable_records: self.coordinator.durable_records.clone(),
+            capacity_used: self.coordinator.capacity_used.clone(),
+            capacity_generation: self.coordinator.capacity_generation.clone(),
+            observed_generation: self.coordinator.observed_generation.clone(),
+            producer_debts: self.coordinator.producer_debts.clone(),
+            fault: self.coordinator.fault,
+            declares_pair: self
+                .registry
+                .recovered_lifecycle_signed_broadcast_declares_next_vote(
+                    &self.coordinator,
+                    broadcast_ordinal,
+                ),
+            paired_ordinal: self
+                .registry
+                .recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
+                    &self.coordinator,
+                    broadcast_ordinal,
+                ),
+        }
+    }
+
+    /// Remove the deliberately unrelated fixture Sign from the bounded owner.
+    fn retire_unrelated_sign_for_finalization_test(&mut self, ordinal: u128) -> bool {
+        let Some(record) = self.coordinator.records.get(&ordinal) else {
+            return false;
+        };
+        let Some((&slot, _)) = record.physical_slots.first_key_value() else {
+            return false;
+        };
+        let Some(address) =
+            super::work_registry::ConcreteWorkAddress::new(record.owner, ordinal, slot)
+        else {
+            return false;
+        };
+        if self
+            .registry
+            .registry_for_test_mut()
+            .entries
+            .remove(&address)
+            .is_none()
+        {
+            return false;
+        }
+        self.coordinator
+            .finish_terminal(ordinal, super::TerminalOutcome::Cancelled)
+            .is_ok()
+    }
+
+    /// Recheck the exact finalization-only registry census without exposing it.
+    fn finalization_registry_census_is_exact_for_test(&self) -> bool {
+        self.registry
+            .registry_for_test()
+            .exactly_covers_finalization_work(&self.coordinator)
+    }
+
     /// Build one storage-owning production owner around the exact selected
     /// Fetch carrier used by the cross-module planner transaction regression.
     pub(in crate::sumeragi) fn waiting_fetch_for_ingress_test(

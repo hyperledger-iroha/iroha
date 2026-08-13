@@ -691,6 +691,63 @@ pub(super) struct LifecycleLedgerRecordV1 {
     continuation: PersistedDurableContinuationV1,
 }
 
+/// Move-only all-row finalization successor prepared from one exact frame.
+///
+/// Its fields remain private to the ledger module, so siblings cannot combine
+/// an arbitrary current frame with a caller-built terminal successor before
+/// the exact publication transaction.
+#[must_use = "staged finalization retirement must cross its exact LedgerV1 publication"]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct StagedFinalizationRetirementV1 {
+    current: LifecycleLedgerV1,
+    retired: LifecycleLedgerV1,
+}
+
+/// Move-only proof that the exact all-row finalization successor is durable.
+///
+/// The publication token retains both the pre-fsync and retired frames. Only
+/// its consuming commit may clear the concrete registry and logical
+/// coordinator, so no sibling can name a post-publication tail using raw
+/// caller-supplied ledgers.
+#[must_use = "published finalization retirement must commit its in-memory owners"]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct PublishedFinalizationRetirementV1 {
+    coordinator: LifecycleCoordinator,
+    current: LifecycleLedgerV1,
+    retired: LifecycleLedgerV1,
+}
+
+impl PublishedFinalizationRetirementV1 {
+    fn authenticates_source(&self) -> bool {
+        LifecycleLedgerV1::from_coordinator(&self.coordinator)
+            .is_ok_and(|ledger| ledger == self.current)
+    }
+
+    /// Consume the exact logical and concrete owners after durable publication.
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn consume_owners(
+        self,
+        mut registry: LifecycleWorkRegistryHolder,
+    ) {
+        assert!(self.authenticates_source());
+        assert!(
+            registry
+                .registry_mut()
+                .exactly_covers_finalization_work(&self.coordinator),
+            "published finalization must consume the preflighted concrete census",
+        );
+        assert_eq!(self.current.context(), self.retired.context());
+        assert_eq!(self.current.high_water(), self.retired.high_water());
+        assert_eq!(self.current.records().len(), self.retired.records().len());
+        assert!(self.retired.producer_debts.is_empty());
+        assert!(
+            self.retired
+                .records()
+                .iter()
+                .all(|record| record.terminal().is_some_and(|terminal| terminal.is_some()))
+        );
+        drop(registry);
+        drop(self.coordinator);
+    }
+}
+
 /// One-shot proof that decoded replay data is still enclosed by its exact
 /// opened LedgerV1 row while joining the authenticated body-store frame.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedFetchLedgerJoinPermit {
@@ -1629,17 +1686,34 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
 
 /// Opaque running H+1 lifecycle stack joined to its retired-H authority.
 ///
-/// TODO: The generic lifecycle-coordinator replacement must consume this
-/// complete wrapper while arming live clocks, opening authenticated ingress,
-/// activating the completion observer, and publishing typed successor status.
-/// The production restart bridge is deliberately narrower: it consumes the
-/// retired authority after reauthenticating the canonical ledger/status pair
-/// and neither launches nor credits this generic replacement.
+/// Its sole activation method consumes both halves, arms live clocks, activates
+/// the completion observer, and publishes H+1 only through the retained retired
+/// CompleteTip authority. The resulting generic activated owner contains no
+/// predecessor authority and cannot repeat that one-shot publication.
 #[must_use = "the launched CompleteTip successor must remain sealed until final activation"]
 #[allow(dead_code)]
 pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
     launched: super::launch::LaunchedProductionLifecycleV1,
     retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
+}
+
+impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    /// Consume the sealed H/H+1 join into one exact live-height activation.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn activate(
+        self,
+        now: std::time::Instant,
+        runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+    ) -> Result<
+        super::launch::ActivatedProductionLifecycleV1,
+        super::launch::ProductionLifecycleActivationErrorV1,
+    > {
+        let Self {
+            launched,
+            retirement,
+        } = self;
+        launched.activate_recovered_complete_tip(now, runner, retirement)
+    }
 }
 // COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END
 
@@ -1763,9 +1837,14 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             &terminal.ledger,
             refreshed_serve_payloads,
         )?;
-        let retired = terminal
+        let staged = terminal
             .ledger
-            .stage_complete_tip_all_row_retirement(serve_reconciliation)?;
+            .stage_finalized_height_all_row_retirement(serve_reconciliation)?;
+        let StagedFinalizationRetirementV1 {
+            current: staged_current,
+            retired,
+        } = staged;
+        debug_assert_eq!(staged_current, terminal.ledger);
         if !retired
             .authenticate_complete_tip_terminal_apply(&terminal.complete_tip)
             .is_ok_and(|ordinal| ordinal == terminal.apply_ordinal)
@@ -3721,7 +3800,7 @@ impl LifecycleLedgerV1 {
         })
     }
 
-    /// Stage the exact all-row tombstone successor for CompleteTip retirement.
+    /// Stage the exact all-row tombstone successor for finalized-height retirement.
     ///
     /// Existing terminal rows remain byte-for-byte unchanged. Every live
     /// Certified-Serve row must consume one payload-store-authenticated
@@ -3730,14 +3809,14 @@ impl LifecycleLedgerV1 {
     /// corresponding no-update coverage proof. Every other live row becomes a
     /// `Cancelled` tombstone without changing its immutable admission or replay
     /// material. No durable write occurs in this method.
-    fn stage_complete_tip_all_row_retirement(
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn stage_finalized_height_all_row_retirement(
         &self,
         mut serve_reconciliation: CompleteTipServeRetirementReconciliationV1,
-    ) -> Result<Self, LifecycleLedgerError> {
+    ) -> Result<StagedFinalizationRetirementV1, LifecycleLedgerError> {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
         if !serve_reconciliation.authenticates_source(self) {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip Serve retirement belongs to another ledger frame".to_owned(),
+                "finalized-height Serve retirement belongs to another ledger frame".to_owned(),
             ));
         }
 
@@ -3749,19 +3828,20 @@ impl LifecycleLedgerV1 {
             }
             let work_class = record.work_class().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
+                    "finalized-height retirement encountered an undecodable work class".to_owned(),
                 )
             })?;
             let terminal = record.terminal().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable terminal state".to_owned(),
+                    "finalized-height retirement encountered an undecodable terminal state"
+                        .to_owned(),
                 )
             })?;
 
             if work_class == LifecycleWorkClass::CertifiedServe {
                 let producer_ordinal = record.ordinal().checked_add(1).ok_or_else(|| {
                     LifecycleLedgerError::InvalidLedger(
-                        "CompleteTip Serve producer ordinal exhausted".to_owned(),
+                        "finalized-height Serve producer ordinal exhausted".to_owned(),
                     )
                 })?;
                 let producer = self
@@ -3771,7 +3851,7 @@ impl LifecycleLedgerV1 {
                     .and_then(|index| self.records.get(index))
                     .ok_or_else(|| {
                         LifecycleLedgerError::InvalidLedger(
-                            "CompleteTip Serve lost its adjacent ProducerTurn".to_owned(),
+                            "finalized-height Serve lost its adjacent ProducerTurn".to_owned(),
                         )
                     })?;
                 if producer.work_class() != Some(LifecycleWorkClass::ProducerTurn)
@@ -3779,7 +3859,8 @@ impl LifecycleLedgerV1 {
                     || producer.terminal().is_none()
                 {
                     return Err(LifecycleLedgerError::InvalidLedger(
-                        "CompleteTip Serve/ProducerTurn pair changed before retirement".to_owned(),
+                        "finalized-height Serve/ProducerTurn pair changed before retirement"
+                            .to_owned(),
                     ));
                 }
 
@@ -3792,7 +3873,7 @@ impl LifecycleLedgerV1 {
                             .take_terminal_update_for_exact_pair(record, producer)
                             .ok_or_else(|| {
                                 LifecycleLedgerError::InvalidLedger(
-                                    "live CompleteTip Serve has no exact terminal payload update"
+                                    "live finalized-height Serve has no exact terminal payload update"
                                         .to_owned(),
                                 )
                             })?;
@@ -3800,7 +3881,7 @@ impl LifecycleLedgerV1 {
                             .consume_for_exact_ledger_pair(record, producer)
                             .ok_or_else(|| {
                                 LifecycleLedgerError::InvalidLedger(
-                                    "CompleteTip Serve terminal update changed before staging"
+                                    "finalized-height Serve terminal update changed before staging"
                                         .to_owned(),
                                 )
                             })?;
@@ -3815,7 +3896,8 @@ impl LifecycleLedgerV1 {
                             TerminalOutcome::Cancelled,
                             producer.durable_payload().ok_or_else(|| {
                                 LifecycleLedgerError::InvalidLedger(
-                                    "CompleteTip ProducerTurn payload is undecodable".to_owned(),
+                                    "finalized-height ProducerTurn payload is undecodable"
+                                        .to_owned(),
                                 )
                             })?,
                             producer_replay,
@@ -3827,7 +3909,7 @@ impl LifecycleLedgerV1 {
                             .take_terminal_serve_live_producer_coverage(record, producer)
                         {
                             return Err(LifecycleLedgerError::InvalidLedger(
-                                "terminal CompleteTip Serve has no exact live ProducerTurn coverage"
+                                "terminal finalized-height Serve has no exact live ProducerTurn coverage"
                                     .to_owned(),
                             ));
                         }
@@ -3842,7 +3924,7 @@ impl LifecycleLedgerV1 {
                     }
                     (None, Some(_)) => {
                         return Err(LifecycleLedgerError::InvalidLedger(
-                            "live CompleteTip Serve has an already-terminal ProducerTurn"
+                            "live finalized-height Serve has an already-terminal ProducerTurn"
                                 .to_owned(),
                         ));
                     }
@@ -3852,7 +3934,8 @@ impl LifecycleLedgerV1 {
 
             if work_class == LifecycleWorkClass::ProducerTurn {
                 return Err(LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip ProducerTurn was not consumed by its exact Serve owner".to_owned(),
+                    "finalized-height ProducerTurn was not consumed by its exact Serve owner"
+                        .to_owned(),
                 ));
             }
             retired_records.push(if terminal.is_some() {
@@ -3864,7 +3947,7 @@ impl LifecycleLedgerV1 {
 
         if !consumed_producers.is_empty() || !serve_reconciliation.is_drained() {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip Serve retirement census was not consumed exactly once".to_owned(),
+                "finalized-height Serve retirement census was not consumed exactly once".to_owned(),
             ));
         }
         let retired = Self::new(
@@ -3882,10 +3965,14 @@ impl LifecycleLedgerV1 {
             || !retired.producer_debts.is_empty()
         {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip all-row retirement did not reach the exact quiescent frame".to_owned(),
+                "finalized-height all-row retirement did not reach the exact quiescent frame"
+                    .to_owned(),
             ));
         }
-        Ok(retired)
+        Ok(StagedFinalizationRetirementV1 {
+            current: self.clone(),
+            retired,
+        })
     }
 
     fn cancelled_record(
@@ -3893,7 +3980,7 @@ impl LifecycleLedgerV1 {
     ) -> Result<LifecycleLedgerRecordV1, LifecycleLedgerError> {
         let payload = record.durable_payload().ok_or_else(|| {
             LifecycleLedgerError::InvalidLedger(
-                "CompleteTip retirement encountered an undecodable payload".to_owned(),
+                "finalized-height retirement encountered an undecodable payload".to_owned(),
             )
         })?;
         Self::terminalized_record(
@@ -3914,20 +4001,21 @@ impl LifecycleLedgerV1 {
             || record.continuation() != Some(DurableContinuation::None)
         {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip retirement can terminalize only one live uncontinued row".to_owned(),
+                "finalized-height retirement can terminalize only one live uncontinued row"
+                    .to_owned(),
             ));
         }
         LifecycleLedgerRecordV1::new(
             record.key().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable key".to_owned(),
+                    "finalized-height retirement encountered an undecodable key".to_owned(),
                 )
             })?,
             record.owner(),
             record.ordinal(),
             record.work_class().ok_or_else(|| {
                 LifecycleLedgerError::InvalidLedger(
-                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
+                    "finalized-height retirement encountered an undecodable work class".to_owned(),
                 )
             })?,
             record.stage().ok_or_else(|| {
@@ -6537,6 +6625,43 @@ impl LifecycleCoordinator {
         let current = LifecycleLedgerV1::from_coordinator(self)?;
         let successor = LifecycleLedgerV1::from_coordinator(staged)?;
         store.persist_exact_successor(&current, &successor)
+    }
+
+    /// Fsync one all-row finalized successor against this exact live owner.
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn persist_exact_finalization_successor(
+        self,
+        staged: StagedFinalizationRetirementV1,
+    ) -> Result<PublishedFinalizationRetirementV1, LifecycleLedgerError> {
+        let StagedFinalizationRetirementV1 { current, retired } = staged;
+        let store = self.ledger_store.as_ref().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "finalized lifecycle retirement requires an attached LedgerV1 store".to_owned(),
+            )
+        })?;
+        if LifecycleLedgerV1::from_coordinator(&self)? != current
+            || current.context() != retired.context()
+            || current.high_water() != retired.high_water()
+            || current.records().len() != retired.records().len()
+            || retired
+                .records()
+                .iter()
+                .any(|record| record.terminal() == Some(None))
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "finalized lifecycle successor changed its exact live owner".to_owned(),
+            ));
+        }
+        store.persist_exact_successor(&current, &retired)?;
+        if store.load()? != retired {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "published finalization successor changed before owner commit".to_owned(),
+            ));
+        }
+        Ok(PublishedFinalizationRetirementV1 {
+            coordinator: self,
+            current,
+            retired,
+        })
     }
 
     #[cfg(test)]

@@ -8495,7 +8495,9 @@ pub(crate) fn check_production_enter_view_effective_lock_transition(
     enter_view: EnterViewProjection,
 ) -> Option<CheckedProductionTransition<(EffectiveLockTraceProjection, EnterViewProjection)>> {
     if production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
-        Some(CheckedProductionTransition::unwitnessed((trace, enter_view)))
+        Some(CheckedProductionTransition::unwitnessed((
+            trace, enter_view,
+        )))
     } else {
         None
     }

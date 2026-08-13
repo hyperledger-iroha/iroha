@@ -1821,6 +1821,18 @@ impl fmt::Debug for DurableRecoveredLifecycleSignedBroadcastWork {
 }
 
 impl DurableRecoveredLifecycleSignedBroadcastWork {
+    fn pairs_exact_next_sign(
+        &self,
+        next_address: ConcreteWorkAddress,
+        next_digest: LifecycleDigest,
+    ) -> bool {
+        self.paired_next_sign == Some((next_address, next_digest))
+    }
+
+    fn is_unpaired(&self) -> bool {
+        self.paired_next_sign.is_none()
+    }
+
     fn validates_at(
         &self,
         address: ConcreteWorkAddress,
@@ -1853,6 +1865,21 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
     ) -> bool {
         self.validates_at(address, installed_digest)
             && self.broadcast.matches_current_ready_record(
+                coordinator.active_context,
+                address,
+                installed_digest,
+                coordinator,
+            )
+    }
+
+    fn matches_current_finalization_record(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        self.validates_at(address, installed_digest)
+            && self.broadcast.matches_current_finalization_record(
                 coordinator.active_context,
                 address,
                 installed_digest,

@@ -48,6 +48,55 @@ fn recovered_lifecycle_factory_dependency_permit_retains_the_exact_local_signer(
     let expected = local_signer.public_key().clone();
     let permit = RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(local_signer);
     assert_eq!(permit.into_local_signer().public_key(), &expected);
+
+    let _guard = super::super::status::rbc_status_test_guard();
+    super::super::status::clear_v2_status();
+    let (context, _) = context();
+    let ingress_ready = Arc::new(AtomicBool::new(false));
+    let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+    ingress
+        .configure_roster(std::iter::empty())
+        .expect("configure lifecycle activation ingress");
+    let activation = ProductionLifecycleRunnerActivationV1::current_height_for_test(
+        Arc::clone(&ingress_ready),
+        Arc::clone(&ingress),
+    );
+    let activated = activation
+        .open_and_publish(&ingress, runner_status(&context))
+        .expect("current-height lifecycle activation opens and publishes exactly once");
+    assert!(ingress_ready.load(Ordering::Acquire));
+    assert_eq!(
+        super::super::status::v2_status()
+            .expect("current-height activation publishes status")
+            .height_context_id,
+        context.id()
+    );
+    drop(activated);
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+    super::super::status::clear_v2_status();
+
+    let exact_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+    exact_ingress
+        .configure_roster(std::iter::empty())
+        .expect("configure exact lifecycle activation ingress");
+    let foreign_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+    foreign_ingress
+        .configure_roster(std::iter::empty())
+        .expect("configure foreign lifecycle activation ingress");
+    let exact_ready = Arc::new(AtomicBool::new(true));
+    exact_ingress.open().expect("open the stale exact ingress");
+    let activation = ProductionLifecycleRunnerActivationV1::current_height_for_test(
+        Arc::clone(&exact_ready),
+        Arc::clone(&exact_ingress),
+    );
+    assert!(matches!(
+        activation.open_and_publish(&foreign_ingress, runner_status(&context)),
+        Err(V2RunnerError::LifecycleActivationIngressMismatch)
+    ));
+    assert!(!exact_ready.load(Ordering::Acquire));
+    assert!(!exact_ingress.state.lock().open);
+    assert!(!foreign_ingress.state.lock().open);
 }
 
 #[test]

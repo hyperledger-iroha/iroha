@@ -281,18 +281,18 @@ impl BoundSafetyWalDirectory {
                 "safety-WAL authority belongs to a different Kura instance",
             ));
         }
-        let (expected_path, directory) = authority.into_opened_directory_for(kura).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "consumed safety-WAL authority changed its Kura identity",
-            )
-        })?;
+        let (expected_path, directory) =
+            authority.into_opened_directory_for(kura).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "consumed safety-WAL authority changed its Kura identity",
+                )
+            })?;
         let canonical_path = fs::canonicalize(&expected_path)?;
         let lexical_metadata = direct_lexical_directory_metadata(&expected_path)?;
         let metadata = directory.metadata()?;
         let identity = unix_file_identity(&metadata);
-        if !metadata.is_dir() || unix_file_identity(&lexical_metadata) != identity
-        {
+        if !metadata.is_dir() || unix_file_identity(&lexical_metadata) != identity {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Kura-bound safety-WAL directory changed before WAL open",
@@ -1163,9 +1163,7 @@ impl SafetyWal {
     ) -> Result<Self, SafetyWalError> {
         let wal_name = wal_name.into();
         let mut components = Path::new(&wal_name).components();
-        if !matches!(components.next(), Some(Component::Normal(_)))
-            || components.next().is_some()
-        {
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
             return Err(SafetyWalError::Io {
                 path: PathBuf::from(wal_name),
                 source: io::Error::new(
@@ -1183,7 +1181,14 @@ impl SafetyWal {
             })?,
         );
         let path = directory.expected_path.join(&wal_name);
-        Self::open_bound(path, directory, wal_name, protocol_version, network_id, key_hash)
+        Self::open_bound(
+            path,
+            directory,
+            wal_name,
+            protocol_version,
+            network_id,
+            key_hash,
+        )
     }
 
     /// Reject production opening where descriptor-relative ancestry is unavailable.
@@ -1196,7 +1201,10 @@ impl SafetyWal {
         _network_id: [u8; HASH_LEN],
         _key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
-        let path = kura.sumeragi_v2_storage_root().join("wal").join(wal_name.into());
+        let path = kura
+            .sumeragi_v2_storage_root()
+            .join("wal")
+            .join(wal_name.into());
         Err(SafetyWalError::UnsupportedStorageBinding {
             path,
             reason: "descriptor-relative Kura-root storage is unavailable",
@@ -1241,7 +1249,14 @@ impl SafetyWal {
             .expect("safety_wal_parent rejected a missing file name")
             .to_os_string();
 
-        Self::open_bound(path, directory, wal_name, protocol_version, network_id, key_hash)
+        Self::open_bound(
+            path,
+            directory,
+            wal_name,
+            protocol_version,
+            network_id,
+            key_hash,
+        )
     }
 
     fn open_bound(

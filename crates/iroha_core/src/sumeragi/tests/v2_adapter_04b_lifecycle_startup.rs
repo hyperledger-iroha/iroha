@@ -143,12 +143,18 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         signature_policy.clone(),
         AccountId::new(local_signer.public_key().clone()),
     );
-    let factory_inputs = lifecycle_factory_inputs_for_test(
+    let state = lifecycle_factory_state_for_test(
+        Arc::clone(&kura),
+        authenticated.adapter.wire_context.network_id,
+    );
+    let factory_inputs = try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage_authority,
+        Arc::clone(&state),
         Arc::clone(&kura),
         &local_signer,
-    );
+    )
+    .unwrap_or_else(|error| panic!("bind launchable lifecycle factory inputs: {error}"));
     let body_store = quarantined_lifecycle_body_store_for_test(body_store);
     let owner = authenticated
         .open_production_lifecycle_owner_v1(
@@ -162,7 +168,137 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         .join("lifecycle-v1")
         .join(hex::encode(context.id().0.as_ref()));
     assert!(lifecycle_root.join("lifecycle-ledger-v1.norito").exists());
-    drop(owner);
+
+    let local_peer = PeerId::new(local_signer.public_key().clone());
+    let local_validator = context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == local_peer)
+        .and_then(|position| u32::try_from(position).ok())
+        .expect("canonical owner signer belongs to the verified roster");
+    let leader_wire_ingress = Arc::new(
+        crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            64,
+            512 * 1024 * 1024,
+            128 * 1024 * 1024,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        ),
+    );
+    leader_wire_ingress
+        .configure_roster_for_context(
+            context.roster.iter().map(|entry| entry.validator.clone()),
+            &context.network_id,
+            context.da_layout,
+        )
+        .expect("configure the launchable owner's exact ingress roster");
+    leader_wire_ingress.require_certified_serve_gate();
+    leader_wire_ingress.require_leader_wire_lifecycle_gate();
+    let ingress_ready = Arc::new(AtomicBool::new(false));
+    let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+    let launched_at = Instant::now();
+    let kura_replica_advert_refresh = Arc::new(
+        super::super::v2_worker::KuraReplicaAdvertRefreshOwner::from_kura(
+            kura.as_ref(),
+            launched_at,
+        )
+        .expect("bind the launchable owner's exact Kura advert source"),
+    );
+    let (exact_output_handoff_owner, _transport_owner) =
+        super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+    let launch_inputs =
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
+            launched_at,
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::default(),
+            super::super::v2_effects::EffectQueueConfig::default(),
+            local_peer,
+            Some(local_validator),
+            local_signer.clone(),
+            crate::IrohaNetwork::closed_for_tests(),
+            state,
+            Arc::clone(&kura),
+            None,
+            64,
+            64,
+            64,
+            Arc::clone(&output_guard),
+            Arc::clone(&leader_wire_ingress),
+            kura_replica_advert_refresh,
+            exact_output_handoff_owner,
+        );
+    let launched = owner
+        .launch(launch_inputs)
+        .unwrap_or_else(|error| panic!("launch exact Kura-bound lifecycle owner: {error}"));
+    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!leader_wire_ingress.state.lock().open);
+
+    let activation =
+        super::super::v2_runner::ProductionLifecycleRunnerActivationV1::current_height_for_test(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&leader_wire_ingress),
+        );
+    let activated = launched
+        .activate(Instant::now(), activation)
+        .unwrap_or_else(|error| panic!("activate exact Kura-bound lifecycle owner: {error}"));
+    assert!(ingress_ready.load(Ordering::Acquire));
+    assert!(leader_wire_ingress.state.lock().open);
+    assert_eq!(
+        crate::sumeragi::status::v2_status()
+            .expect("sealed lifecycle activation publishes status")
+            .height_context_id,
+        context.id()
+    );
+    let finality_subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"lifecycle all-row retirement block",
+        )),
+        payload_hash: iroha_crypto::Hash::new(b"lifecycle all-row retirement payload"),
+    };
+    let finality_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let finality_artifact = wire::finality::V2FinalityArtifact::new(
+        context.clone(),
+        finality_subject,
+        wire::QuorumCertificate {
+            round: finality_round,
+            proposal_round: finality_round,
+            phase: wire::GlobalPhase::Commit,
+            subject: finality_subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                iroha_crypto::Hash::new(b"lifecycle retirement pre-state"),
+                iroha_crypto::Hash::new(b"lifecycle retirement post-state"),
+                iroha_crypto::Hash::new(b"lifecycle retirement writes"),
+                0,
+                iroha_crypto::Hash::new(b"lifecycle retirement block execution"),
+            ),
+            signers: Vec::new(),
+            aggregate_signature: Vec::new(),
+        },
+        Vec::new(),
+    );
+    let finality_receipt = crate::kura::KuraV2CommitReceipt::for_test(&finality_artifact);
+    let cleanup_ready = activated
+        .retire_lifecycle_stores_for_test(finality_receipt)
+        .unwrap_or_else(|error| panic!("retire exact live lifecycle stores: {error}"));
+    let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
+    let outcome = cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor);
+    assert!(outcome.cleanup().warnings().is_empty());
+    assert!(outcome.wal_retirement_warning().is_none());
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!leader_wire_ingress.state.lock().open);
+    crate::sumeragi::status::clear_v2_status();
 
     let mismatched_kura = Kura::blank_kura_for_testing();
     let mismatched_root = mismatched_kura.sumeragi_v2_storage_root();
@@ -453,6 +589,8 @@ fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    crate::sumeragi::status::clear_v2_status();
     for (marker, persist_matching_outcome) in [(0xB1_u8, true), (0xB2_u8, false)] {
         let kura = Kura::blank_kura_for_testing();
         let storage_root = kura.sumeragi_v2_storage_root();
@@ -472,7 +610,9 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             iroha_config::parameters::actual::Queue::default(),
             events_sender.clone(),
         ));
-        let genesis_account = AccountId::new(keys[0].public_key().clone());
+        let genesis_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
+            .expect("deterministic production marker-replay genesis key");
+        let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let semantic_probe = super::super::v2_apply::V2ApplyService::new(
             Arc::clone(&state),
             Arc::clone(&queue),
@@ -489,23 +629,49 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             height: recovered_context.height,
             view: 0,
         };
-        let leader = recovered_context.leader(round.view);
-        let leader_index = usize::try_from(leader).expect("fixture leader index fits usize");
-        let header = BlockHeader::new(
+        let transaction = iroha_data_model::transaction::TransactionBuilder::new_genesis(
+            genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            format!("production recovered marker {marker:02x}"),
+        )])
+        .sign(genesis_key.private_key());
+        let creation_time_ms = (transaction.creation_time() + Duration::from_millis(1))
+            .as_millis()
+            .try_into()
+            .expect("marker-replay genesis creation time fits u64");
+        let mut header = BlockHeader::new(
             NonZeroU64::new(round.height).expect("marker-replay height is non-zero"),
             None,
             None,
             None,
-            10_000 + u64::from(marker),
+            creation_time_ms,
             round.view,
         );
-        let signature = SignatureOf::try_from_hash(keys[leader_index].private_key(), header.hash())
-            .expect("sign production marker-replay body");
-        let block = SignedBlock::presigned(
-            BlockSignature::new(u64::from(leader), signature),
-            header,
-            Vec::new(),
+        let confidential_features = {
+            let state_view = state.view();
+            let digest = crate::state::compute_confidential_feature_digest(
+                state_view.world(),
+                &state_view.zk,
+                state_view.sccp_registry.as_ref(),
+                recovered_context.height,
+            );
+            (!digest.is_empty()).then_some(digest)
+        };
+        header.set_confidential_features(confidential_features);
+        let proof_policy_bundle = crate::da::active_proof_policy_bundle_at_height(
+            &state.nexus_snapshot(),
+            recovered_context.height,
         );
+        let mut block_builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        block_builder.push_transaction(transaction);
+        block_builder.set_da_proof_policies(Some(proof_policy_bundle));
+        let block = block_builder
+            .try_build_with_signature(0, genesis_key.private_key())
+            .expect("sign canonical production marker-replay genesis")
+            .canonical_resultless_proposal();
         let canonical_wire = block
             .encode_wire()
             .expect("encode production marker-replay body");
@@ -527,7 +693,9 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         let semantic_commitment = semantic_probe
             .revalidate_recovered_candidate(&recovered_context, &block)
             .expect("derive exact production marker-replay outcome");
-        let signature_policy = super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader;
+        let signature_policy = super::super::v2_body_store::BlockSignaturePolicy::GenesisAuthority(
+            genesis_key.public_key().clone(),
+        );
         let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
             storage_root.join("bodies"),
             recovered_context.clone(),
@@ -608,12 +776,12 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     local_signer.clone(),
                 ),
                 storage,
-                state,
-                queue,
+                Arc::clone(&state),
+                Arc::clone(&queue),
                 Arc::clone(&kura),
                 None,
                 None,
-                events_sender,
+                events_sender.clone(),
             )
             .unwrap_or_else(|error| panic!("bind production marker-replay inputs: {error}"));
         let recovered_body_store = quarantined_lifecycle_body_store_for_test(
@@ -638,7 +806,173 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 panic!("matching recovered marker must enter production owner: {error}")
             });
             assert!(lifecycle_root.join("lifecycle-ledger-v1.norito").exists());
-            drop(owner);
+
+            let local_peer = PeerId::new(local_signer.public_key().clone());
+            let local_validator = recovered_context
+                .roster
+                .iter()
+                .position(|entry| entry.validator == local_peer)
+                .and_then(|position| u32::try_from(position).ok())
+                .expect("marker-replay signer belongs to the verified roster");
+            let leader_wire_ingress = Arc::new(
+                crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                    64,
+                    512 * 1024 * 1024,
+                    128 * 1024 * 1024,
+                    32 * 1024 * 1024,
+                    32 * 1024 * 1024,
+                    32 * 1024 * 1024,
+                    usize::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    None,
+                ),
+            );
+            leader_wire_ingress
+                .configure_roster_for_context(
+                    recovered_context
+                        .roster
+                        .iter()
+                        .map(|entry| entry.validator.clone()),
+                    &recovered_context.network_id,
+                    recovered_context.da_layout,
+                )
+                .expect("configure recovered-Apply lifecycle ingress");
+            leader_wire_ingress.require_certified_serve_gate();
+            leader_wire_ingress.require_leader_wire_lifecycle_gate();
+            let ingress_ready = Arc::new(AtomicBool::new(false));
+            let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+            let launched_at = Instant::now();
+            let kura_replica_advert_refresh = Arc::new(
+                super::super::v2_worker::KuraReplicaAdvertRefreshOwner::from_kura(
+                    kura.as_ref(),
+                    launched_at,
+                )
+                .expect("bind recovered-Apply Kura advert source"),
+            );
+            let (exact_output_handoff_owner, transport_owner) =
+                super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+            let mut lane_work =
+                super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(
+                    recovered_context.clone(),
+                    local_peer.clone(),
+                    local_signer.clone(),
+                    Arc::clone(&state),
+                    Arc::clone(&kura),
+                    Arc::clone(&output_guard),
+                    transport_owner,
+                )
+                .expect("open exact lifecycle lane/output owner");
+            let launch_inputs =
+                super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
+                    launched_at,
+                    Duration::from_secs(10),
+                    super::super::v2_runtime::RuntimeQueueConfig::default(),
+                    super::super::v2_effects::EffectQueueConfig::default(),
+                    local_peer,
+                    Some(local_validator),
+                    local_signer.clone(),
+                    crate::IrohaNetwork::closed_for_tests(),
+                    Arc::clone(&state),
+                    Arc::clone(&kura),
+                    None,
+                    64,
+                    64,
+                    64,
+                    Arc::clone(&output_guard),
+                    Arc::clone(&leader_wire_ingress),
+                    kura_replica_advert_refresh,
+                    exact_output_handoff_owner,
+                );
+            let mut launched = owner
+                .launch(launch_inputs)
+                .unwrap_or_else(|error| panic!("launch recovered-Apply lifecycle owner: {error}"));
+            let queued = launched
+                .dispatch_recovered_decision_apply(
+                    super::super::v2_runner::lifecycle_completion_rank_snapshot_for_test(
+                        &recovered_context,
+                    ),
+                )
+                .unwrap_or_else(|error| panic!("dispatch recovered Apply: {error:?}"));
+            assert!(matches!(
+                queued,
+                super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyDispatchV1::Queued { .. }
+            ));
+            let completion_deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match launched.settle_recovered_decision_apply_completion(&mut lane_work) {
+                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::Applied) => break,
+                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::None)
+                        if Instant::now() < completion_deadline =>
+                    {
+                        std::thread::yield_now();
+                    }
+                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::None) => {
+                        panic!("timed out waiting for recovered Apply completion")
+                    }
+                    Ok(super::super::v2_lifecycle_coordinator::ProductionRecoveredDecisionApplyCompletionV1::Deferred(_)) => {
+                        panic!("empty recovered block must not need a merge sidecar")
+                    }
+                    Err(error) => panic!("settle recovered Apply completion: {error}"),
+                }
+            }
+
+            let activation = super::super::v2_runner::ProductionLifecycleRunnerActivationV1::current_height_for_test(
+                Arc::clone(&ingress_ready),
+                Arc::clone(&leader_wire_ingress),
+            );
+            let activated = launched
+                .activate(Instant::now(), activation)
+                .unwrap_or_else(|error| {
+                    panic!("activate recovered-Apply lifecycle owner: {error}")
+                });
+            let mut runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            let finalized = activated
+                .into_finalized_rollover(&mut runner)
+                .unwrap_or_else(|error| {
+                    panic!("finalize recovered-Apply lifecycle owner: {error}")
+                });
+            let artifact = {
+                let (receipt, artifact) = finalized.finality();
+                assert_eq!(receipt.context_id(), recovered_context.id());
+                assert_eq!(receipt.block_hash(), subject.block_hash);
+                assert_eq!(artifact.subject, subject);
+                artifact.clone()
+            };
+            lane_work
+                .retain_merge_sidecars_for_global_view(
+                    artifact.commit_qc.round.view,
+                    None,
+                    Some(artifact.subject),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("retain exact recovered-Apply Decision carrier: {error}")
+                });
+            let mut successor = recovered_context.clone();
+            successor.height = successor
+                .height
+                .checked_add(1)
+                .expect("fixture successor height remains in range");
+            successor.parent_commit_qc = Some(artifact.commit_qc.clone());
+            successor
+                .validate()
+                .expect("immediate recovered-Apply successor context is valid");
+            let (post_output, retained_sidecars) = finalized
+                .rollover_outputs(&mut runner, lane_work, &successor, 64)
+                .unwrap_or_else(|error| panic!("roll over exact lifecycle output: {error}"));
+            drop(retained_sidecars);
+            let cleanup_ready = post_output
+                .retire_lifecycle_stores()
+                .unwrap_or_else(|error| panic!("retire recovered-Apply lifecycle stores: {error}"));
+            let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
+            let outcome = cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor);
+            assert!(outcome.cleanup().warnings().is_empty());
+            assert!(outcome.wal_retirement_warning().is_none());
+            assert!(!ingress_ready.load(Ordering::Acquire));
+            assert!(!leader_wire_ingress.state.lock().open);
+            crate::sumeragi::status::clear_v2_status();
         } else {
             let error = match result {
                 Ok(_owner) => panic!("a changed semantic marker outcome must fail closed"),
