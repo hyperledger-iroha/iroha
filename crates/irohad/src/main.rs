@@ -13303,7 +13303,7 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "3a7d7f8a8a20880b05d9473ee7d08492afead4a3160949ef9da9aa0e152628c7";
+        "43ec250ee2781bee657f89885a07a3d907da6e1d994ccb1e3ce21dfbae53f375";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -13503,6 +13503,15 @@ metadata = {}
             .map(|lane| lane.alias.as_str())
             .collect();
         assert_eq!(lane_aliases, ["core", "governance", "zk"]);
+        assert!(
+            config
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.dataspace_id == DataSpaceId::UNIVERSAL),
+            "the Sora profile's logical lanes must share the universal physical dataspace"
+        );
         let dataspace_aliases: Vec<_> = config
             .nexus
             .dataspace_catalog
@@ -13510,7 +13519,7 @@ metadata = {}
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal"]);
         assert!(nexus_topology_is_custom(&config.nexus));
         assert!(should_use_config_router(&config.nexus));
     }
@@ -13544,7 +13553,7 @@ metadata = {}
         let config = load_unprovisioned_profile_for_inspection(&path);
 
         assert!(config.nexus.enabled);
-        assert_eq!(config.nexus.dataspace_catalog.entries().len(), 3);
+        assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
         assert!(nexus_topology_is_custom(&config.nexus));
         assert!(should_use_config_router(&config.nexus));
         let lane_aliases: Vec<_> = config
@@ -13562,7 +13571,7 @@ metadata = {}
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal"]);
     }
 
     #[test]
@@ -13623,7 +13632,7 @@ metadata = {}
             .iter()
             .map(|entry| entry.alias.as_str())
             .collect();
-        assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+        assert_eq!(dataspace_aliases, ["universal"]);
     }
 
     #[test]

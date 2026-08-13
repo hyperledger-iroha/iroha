@@ -687,6 +687,61 @@ fn finalized_rollover_closes_ingress_before_successor_replay() {
 }
 
 #[test]
+fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
+    let _status_guard = super::super::status::rbc_status_test_guard();
+    super::super::status::clear_v2_status();
+    let configured_ingress = || {
+        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure preactivation recovery ingress");
+        ingress
+    };
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let ingress = configured_ingress();
+    let mut activation = ProductionLifecycleRunnerActivationV1::current_height_for_test(
+        Arc::clone(&ready),
+        Arc::clone(&ingress),
+    );
+    let aperture = activation
+        .open_canonical_recovery_ingress(&ingress)
+        .expect("borrow exact ordinary activation ingress");
+    assert!(ready.load(Ordering::Acquire));
+    assert!(ingress.state.lock().open);
+    assert!(std::ptr::eq(aperture.ingress(), ingress.as_ref()));
+    assert!(aperture.close_and_verify());
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+    assert!(super::super::status::v2_status().is_none());
+
+    let complete_tip_ready = Arc::new(AtomicBool::new(false));
+    let complete_tip_ingress = configured_ingress();
+    let mut complete_tip = ProductionLifecycleCompleteTipRunnerActivationV1::for_test(
+        Arc::clone(&complete_tip_ready),
+        Arc::clone(&complete_tip_ingress),
+    );
+    {
+        let aperture = complete_tip
+            .open_canonical_recovery_ingress(&complete_tip_ingress)
+            .expect("borrow exact CompleteTip activation ingress");
+        assert!(complete_tip_ready.load(Ordering::Acquire));
+        assert!(aperture.ingress().state.lock().open);
+    }
+    assert!(!complete_tip_ready.load(Ordering::Acquire));
+    assert!(!complete_tip_ingress.state.lock().open);
+    assert!(super::super::status::v2_status().is_none());
+
+    let foreign = configured_ingress();
+    assert!(matches!(
+        activation.open_canonical_recovery_ingress(&foreign),
+        Err(V2RunnerError::LifecycleActivationIngressMismatch)
+    ));
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+}
+
+#[test]
 fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff() {
     // This narrow rollover contract starts from a synthesized, internally
     // consistent Kura receipt/finality artifact. It does not exercise the

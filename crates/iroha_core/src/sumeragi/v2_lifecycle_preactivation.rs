@@ -27,6 +27,9 @@ pub(in crate::sumeragi) enum ProductionLifecyclePreActivationErrorV1 {
     /// Runner setup armed clocks reserved for the consuming activation boundary.
     #[error("launched lifecycle armed live clocks during preactivation setup")]
     ClocksAlreadyArmed,
+    /// The future activation could not lend the exact launched ingress.
+    #[error("launched lifecycle could not open its preactivation recovery ingress: {0}")]
+    RecoveryIngress(String),
     /// The reducer could not expose its exact current local-Proposal directive.
     #[error("launched lifecycle could not project its local Proposal directive: {0}")]
     LocalProposalDirective(#[source] crate::sumeragi::v2_effects::EffectExecutorError),
@@ -62,6 +65,50 @@ pub(in crate::sumeragi) enum ProductionPendingKuraApplyInstallErrorV1 {
 pub(super) struct ProductionLifecyclePreActivationFailStopScopeV1 {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
+}
+
+trait ProductionLifecycleCanonicalRecoveryActivationV1 {
+    fn open_canonical_recovery_ingress<'activation>(
+        &'activation mut self,
+        launched_ingress: &Arc<crate::sumeragi::FairV2Ingress>,
+    ) -> Result<
+        crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'activation>,
+        crate::sumeragi::v2_runner::V2RunnerError,
+    >;
+}
+
+impl ProductionLifecycleCanonicalRecoveryActivationV1
+    for crate::sumeragi::v2_runner::ProductionLifecycleRunnerActivationV1
+{
+    fn open_canonical_recovery_ingress<'activation>(
+        &'activation mut self,
+        launched_ingress: &Arc<crate::sumeragi::FairV2Ingress>,
+    ) -> Result<
+        crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'activation>,
+        crate::sumeragi::v2_runner::V2RunnerError,
+    > {
+        crate::sumeragi::v2_runner::ProductionLifecycleRunnerActivationV1::open_canonical_recovery_ingress(
+            self,
+            launched_ingress,
+        )
+    }
+}
+
+impl ProductionLifecycleCanonicalRecoveryActivationV1
+    for crate::sumeragi::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1
+{
+    fn open_canonical_recovery_ingress<'activation>(
+        &'activation mut self,
+        launched_ingress: &Arc<crate::sumeragi::FairV2Ingress>,
+    ) -> Result<
+        crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'activation>,
+        crate::sumeragi::v2_runner::V2RunnerError,
+    > {
+        crate::sumeragi::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1::open_canonical_recovery_ingress(
+            self,
+            launched_ingress,
+        )
+    }
 }
 
 impl ProductionLifecyclePreActivationFailStopScopeV1 {
@@ -154,6 +201,43 @@ impl LaunchedProductionLifecycleV1 {
         Ok(value)
     }
 
+    fn with_canonical_body_recovery_ingress_transaction<R, E, Activation>(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        activation: &mut Activation,
+        operation: impl FnOnce(
+            &crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'_>,
+            &mut crate::sumeragi::v2_effects::V2EffectExecutor<
+                crate::sumeragi::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut crate::sumeragi::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        Activation: ProductionLifecycleCanonicalRecoveryActivationV1,
+        E: From<ProductionLifecyclePreActivationErrorV1>,
+    {
+        let launched_ingress = Arc::clone(&self.leader_wire_ingress_binding.ingress);
+        self.with_runner_setup_transaction(move |executor, services| {
+            let aperture = activation
+                .open_canonical_recovery_ingress(&launched_ingress)
+                .map_err(|error| {
+                    E::from(ProductionLifecyclePreActivationErrorV1::RecoveryIngress(
+                        error.to_string(),
+                    ))
+                })?;
+            let result = operation(&aperture, executor, services);
+            if !aperture.close_and_verify() {
+                return Err(E::from(
+                    ProductionLifecyclePreActivationErrorV1::RecoveryIngress(
+                        "temporary recovery ingress did not close exactly".to_owned(),
+                    ),
+                ));
+            }
+            result
+        })
+    }
+
     /// Borrow executor and services for closed-ingress runner setup.
     ///
     /// The lifecycle owner, adapter, body store, and ingress gates remain
@@ -174,6 +258,54 @@ impl LaunchedProductionLifecycleV1 {
         E: From<ProductionLifecyclePreActivationErrorV1>,
     {
         self.with_runner_setup_transaction(operation)
+    }
+
+    /// Temporarily open the future activation's exact ingress for body recovery.
+    ///
+    /// This preserves the legacy admission boundary: normal fair ingress is
+    /// temporarily open, while the runner callback must use only the canonical
+    /// executed-body recovery predicate. The aperture closes before setup
+    /// postflight, status remains unpublished, and live clocks stay unarmed.
+    // TODO: Replace both legacy canonical-body recovery openings in
+    // `v2_runner::run_inner` with this typed aperture at the atomic lifecycle
+    // owner cutover.
+    #[allow(dead_code, clippy::type_complexity)]
+    pub(in crate::sumeragi) fn with_canonical_body_recovery_ingress<R, E>(
+        &mut self,
+        runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        activation: &mut crate::sumeragi::v2_runner::ProductionLifecycleRunnerActivationV1,
+        operation: impl FnOnce(
+            &crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'_>,
+            &mut crate::sumeragi::v2_effects::V2EffectExecutor<
+                crate::sumeragi::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut crate::sumeragi::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<ProductionLifecyclePreActivationErrorV1>,
+    {
+        self.with_canonical_body_recovery_ingress_transaction(runner, activation, operation)
+    }
+
+    /// Lend the same recovery aperture to a still-sealed CompleteTip successor.
+    #[allow(dead_code, clippy::type_complexity)]
+    pub(in crate::sumeragi) fn with_complete_tip_canonical_body_recovery_ingress<R, E>(
+        &mut self,
+        runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        activation: &mut crate::sumeragi::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        operation: impl FnOnce(
+            &crate::sumeragi::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'_>,
+            &mut crate::sumeragi::v2_effects::V2EffectExecutor<
+                crate::sumeragi::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut crate::sumeragi::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<ProductionLifecyclePreActivationErrorV1>,
+    {
+        self.with_canonical_body_recovery_ingress_transaction(runner, activation, operation)
     }
 
     /// Join one recovered local Proposal attempt to runner-local scheduling state.

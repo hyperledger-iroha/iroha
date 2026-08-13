@@ -80,11 +80,7 @@ impl ProductionLifecycleRunnerActivationV1 {
         &mut self,
         launched_ingress: &Arc<FairV2Ingress>,
     ) -> Result<ProductionLifecycleCanonicalRecoveryIngressV1<'_>, V2RunnerError> {
-        open_canonical_recovery_ingress(
-            &self.ingress_ready,
-            &self.block_ingress,
-            launched_ingress,
-        )
+        open_canonical_recovery_ingress(&self.ingress_ready, &self.block_ingress, launched_ingress)
     }
 }
 
@@ -94,10 +90,6 @@ impl ProductionLifecycleCompleteTipRunnerActivationV1 {
         &mut self,
         launched_ingress: &Arc<FairV2Ingress>,
     ) -> Result<ProductionLifecycleCanonicalRecoveryIngressV1<'_>, V2RunnerError> {
-        open_canonical_recovery_ingress(
-            &self.ingress_ready,
-            &self.block_ingress,
-            launched_ingress,
-        )
+        open_canonical_recovery_ingress(&self.ingress_ready, &self.block_ingress, launched_ingress)
     }
 }

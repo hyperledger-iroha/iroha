@@ -1698,6 +1698,27 @@ pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 
 }
 
 impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    /// Temporarily recover canonical bodies without separating retired H from H+1.
+    #[allow(dead_code, clippy::type_complexity, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn with_canonical_body_recovery_ingress<R, E>(
+        &mut self,
+        runner: &mut super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        activation: &mut super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        operation: impl FnOnce(
+            &super::super::v2_runner::ProductionLifecycleCanonicalRecoveryIngressV1<'_>,
+            &mut super::super::v2_effects::V2EffectExecutor<
+                super::super::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut super::super::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<super::launch::ProductionLifecyclePreActivationErrorV1>,
+    {
+        self.launched
+            .with_complete_tip_canonical_body_recovery_ingress(runner, activation, operation)
+    }
+
     /// Bind recovered local-Proposal ownership before consuming the H/H+1 join.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn initialize_recovered_local_proposal(

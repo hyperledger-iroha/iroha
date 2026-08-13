@@ -21,10 +21,19 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+EXPECTED_TAIRA_LANE_COUNT="${EXPECTED_TAIRA_LANE_COUNT:-7}"
+EXPECTED_UNIVERSAL_DATASPACE_ID="${EXPECTED_UNIVERSAL_DATASPACE_ID:-0}"
+EXPECTED_DPN_DATASPACE_ID="${EXPECTED_DPN_DATASPACE_ID:-10}"
 EXPECTED_IS_DATASPACE_ID="${EXPECTED_IS_DATASPACE_ID:-6647857470246403404}"
 EXPECTED_IS2_DATASPACE_ID="${EXPECTED_IS2_DATASPACE_ID:-8477022798449861195}"
+EXPECTED_CBSI_DATASPACE_ID="${EXPECTED_CBSI_DATASPACE_ID:-20}"
+EXPECTED_CORE_ROUTE_ALIAS="${EXPECTED_CORE_ROUTE_ALIAS:-core}"
+EXPECTED_GOVERNANCE_ROUTE_ALIAS="${EXPECTED_GOVERNANCE_ROUTE_ALIAS:-governance}"
+EXPECTED_ZK_ROUTE_ALIAS="${EXPECTED_ZK_ROUTE_ALIAS:-zk}"
+EXPECTED_DPN_ROUTE_ALIAS="${EXPECTED_DPN_ROUTE_ALIAS:-dpn}"
 EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"
 EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"
+EXPECTED_CBSI_ROUTE_ALIAS="${EXPECTED_CBSI_ROUTE_ALIAS:-cbsi}"
 ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
 ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
@@ -82,8 +91,15 @@ For a single public-node devex check, prefer the first-class CLI:
 The check fails unless:
   - GET /v1/mcp returns HTTP 200 with a capabilities payload
   - GET /health and GET /readyz return HTTP 200 for ordinary node readiness
-  - GET /v1/nexus/lifecycle binds the canonical `is` and `is2` dataspace IDs
-    to their checked-in routing-container aliases and publishes one catalog identity
+  - the adjacent canonical config declares exactly seven logical lanes and five
+    physical dataspaces: universal, dpn, is, is2, and cbsi; governance and zk
+    remain lanes in universal rather than becoming dataspaces
+  - GET /v1/nexus/lifecycle binds all seven lanes to those five canonical
+    dataspace IDs and publishes one catalog identity
+  - every physical dataspace publishes a non-empty, quorum-capable validator
+    roster through /status lane telemetry; lanes in one dataspace agree on the
+    roster, and no two physical dataspaces reuse the same roster. Universal's
+    projected roster must also match the frozen global consensus count/quorum.
   - POST /v1/mcp initialize returns HTTP 200
   - POST /v1/mcp notifications/initialized returns HTTP 202 with an empty body
   - POST /v1/mcp tools/list returns HTTP 200
@@ -221,6 +237,188 @@ chain = config.get("chain")
 if not isinstance(chain, str) or not chain:
     raise SystemExit("canonical Taira config is missing a top-level `chain` value")
 print(chain)
+PY
+}
+
+validate_canonical_taira_topology() {
+  python3 - \
+    "${SCRIPT_DIR}/config.toml" \
+    "$EXPECTED_TAIRA_LANE_COUNT" \
+    "$EXPECTED_UNIVERSAL_DATASPACE_ID" \
+    "$EXPECTED_DPN_DATASPACE_ID" \
+    "$EXPECTED_IS_DATASPACE_ID" \
+    "$EXPECTED_IS2_DATASPACE_ID" \
+    "$EXPECTED_CBSI_DATASPACE_ID" \
+    "$EXPECTED_CORE_ROUTE_ALIAS" \
+    "$EXPECTED_GOVERNANCE_ROUTE_ALIAS" \
+    "$EXPECTED_ZK_ROUTE_ALIAS" \
+    "$EXPECTED_DPN_ROUTE_ALIAS" \
+    "$EXPECTED_IS_ROUTE_ALIAS" \
+    "$EXPECTED_IS2_ROUTE_ALIAS" \
+    "$EXPECTED_CBSI_ROUTE_ALIAS" <<'PY'
+import pathlib
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError as error:
+        raise SystemExit(
+            "python3 must provide tomllib (Python 3.11+) or tomli to validate the canonical Taira topology"
+        ) from error
+
+(
+    config_path_raw,
+    lane_count_raw,
+    universal_id_raw,
+    dpn_id_raw,
+    is_id_raw,
+    is2_id_raw,
+    cbsi_id_raw,
+    core_alias,
+    governance_alias,
+    zk_alias,
+    dpn_alias,
+    is_alias,
+    is2_alias,
+    cbsi_alias,
+) = sys.argv[1:]
+
+config_path = pathlib.Path(config_path_raw)
+try:
+    with config_path.open("rb") as handle:
+        config = tomllib.load(handle)
+except (OSError, tomllib.TOMLDecodeError) as error:
+    raise SystemExit(f"canonical Taira config is unavailable or invalid: {error}") from error
+
+
+def fail(message):
+    raise SystemExit(f"canonical Taira lane/dataspace topology mismatch: {message}")
+
+
+try:
+    expected_lane_count = int(lane_count_raw)
+    physical_dataspaces = {
+        "universal": int(universal_id_raw),
+        "dpn": int(dpn_id_raw),
+        "is": int(is_id_raw),
+        "is2": int(is2_id_raw),
+        "cbsi": int(cbsi_id_raw),
+    }
+except ValueError as error:
+    fail(f"expected topology constants are invalid: {error}")
+
+expected_lanes = [
+    (0, core_alias, "universal", physical_dataspaces["universal"]),
+    (1, governance_alias, "universal", physical_dataspaces["universal"]),
+    (2, zk_alias, "universal", physical_dataspaces["universal"]),
+    (3, dpn_alias, "dpn", physical_dataspaces["dpn"]),
+    (4, is_alias, "is", physical_dataspaces["is"]),
+    (5, is2_alias, "is2", physical_dataspaces["is2"]),
+    (6, cbsi_alias, "cbsi", physical_dataspaces["cbsi"]),
+]
+
+if expected_lane_count != len(expected_lanes):
+    fail(
+        f"expected lane count is {expected_lane_count}, but the canonical mapping contains "
+        f"{len(expected_lanes)} lanes"
+    )
+if len(set(physical_dataspaces.values())) != len(physical_dataspaces):
+    fail("the five physical dataspaces must have distinct numeric IDs")
+
+nexus = config.get("nexus")
+if not isinstance(nexus, dict):
+    fail("missing [nexus] table")
+lane_count = nexus.get("lane_count")
+if isinstance(lane_count, bool) or lane_count != expected_lane_count:
+    fail(f"lane_count must be exactly {expected_lane_count}, observed {lane_count!r}")
+
+lane_catalog = nexus.get("lane_catalog")
+if not isinstance(lane_catalog, list):
+    fail("nexus.lane_catalog is not an array")
+if len(lane_catalog) != expected_lane_count:
+    fail(
+        f"nexus.lane_catalog must contain exactly {expected_lane_count} lanes, "
+        f"observed {len(lane_catalog)}"
+    )
+
+observed_lanes = []
+seen_lane_ids = set()
+seen_lane_aliases = set()
+for position, lane in enumerate(lane_catalog):
+    if not isinstance(lane, dict):
+        fail(f"nexus.lane_catalog[{position}] is not a table")
+    lane_id = lane.get("index")
+    alias = lane.get("alias")
+    dataspace = lane.get("dataspace")
+    if isinstance(lane_id, bool) or not isinstance(lane_id, int):
+        fail(f"nexus.lane_catalog[{position}].index is not an integer")
+    if not isinstance(alias, str) or not alias:
+        fail(f"nexus.lane_catalog[{position}].alias is empty")
+    if not isinstance(dataspace, str) or not dataspace:
+        fail(f"nexus.lane_catalog[{position}].dataspace is empty")
+    if lane_id in seen_lane_ids or alias in seen_lane_aliases:
+        fail("nexus.lane_catalog contains a duplicate lane index or alias")
+    seen_lane_ids.add(lane_id)
+    seen_lane_aliases.add(alias)
+    observed_lanes.append((lane_id, alias, dataspace, physical_dataspaces.get(dataspace)))
+if observed_lanes != expected_lanes:
+    fail(f"expected lanes {expected_lanes!r}, observed {observed_lanes!r}")
+
+dataspace_catalog = nexus.get("dataspace_catalog")
+if not isinstance(dataspace_catalog, list):
+    fail("nexus.dataspace_catalog is not an array")
+observed_dataspaces = {}
+for position, dataspace in enumerate(dataspace_catalog):
+    if not isinstance(dataspace, dict):
+        fail(f"nexus.dataspace_catalog[{position}] is not a table")
+    alias = dataspace.get("alias")
+    dataspace_id = dataspace.get("id")
+    if not isinstance(alias, str) or not alias:
+        fail(f"nexus.dataspace_catalog[{position}].alias is empty")
+    if isinstance(dataspace_id, bool) or not isinstance(dataspace_id, int):
+        fail(f"nexus.dataspace_catalog[{position}].id is not an integer")
+    if alias in observed_dataspaces:
+        fail(f"nexus.dataspace_catalog duplicates alias {alias!r}")
+    observed_dataspaces[alias] = dataspace_id
+forbidden_dataspaces = {governance_alias, zk_alias} & observed_dataspaces.keys()
+if forbidden_dataspaces:
+    fail(
+        "logical lane aliases must not be physical dataspaces: "
+        + ", ".join(sorted(forbidden_dataspaces))
+    )
+if observed_dataspaces != physical_dataspaces:
+    fail(
+        f"expected physical dataspaces {physical_dataspaces!r}, "
+        f"observed {observed_dataspaces!r}"
+    )
+
+routing_policy = nexus.get("routing_policy")
+if not isinstance(routing_policy, dict):
+    fail("missing nexus.routing_policy table")
+if routing_policy.get("default_lane") != 0:
+    fail("nexus.routing_policy.default_lane must be 0")
+if routing_policy.get("default_dataspace") != "universal":
+    fail("nexus.routing_policy.default_dataspace must be universal")
+rules = routing_policy.get("rules")
+if not isinstance(rules, list):
+    fail("nexus.routing_policy.rules is not an array")
+dataspace_by_lane = {lane_id: dataspace for lane_id, _, dataspace, _ in expected_lanes}
+for position, rule in enumerate(rules):
+    if not isinstance(rule, dict):
+        fail(f"nexus.routing_policy.rules[{position}] is not a table")
+    lane_id = rule.get("lane")
+    dataspace = rule.get("dataspace")
+    if isinstance(lane_id, bool) or lane_id not in dataspace_by_lane:
+        fail(f"nexus.routing_policy.rules[{position}] has unknown lane {lane_id!r}")
+    expected_dataspace = dataspace_by_lane[lane_id]
+    if dataspace != expected_dataspace:
+        fail(
+            f"nexus.routing_policy.rules[{position}] maps lane {lane_id} to "
+            f"{dataspace!r}, expected {expected_dataspace!r}"
+        )
 PY
 }
 
@@ -413,17 +611,31 @@ if [[ $SKIP_LOCAL -eq 1 && $SKIP_PUBLIC -eq 1 ]]; then
   exit 1
 fi
 
-for dataspace_name in EXPECTED_IS_DATASPACE_ID EXPECTED_IS2_DATASPACE_ID; do
+for dataspace_name in \
+  EXPECTED_UNIVERSAL_DATASPACE_ID \
+  EXPECTED_DPN_DATASPACE_ID \
+  EXPECTED_IS_DATASPACE_ID \
+  EXPECTED_IS2_DATASPACE_ID \
+  EXPECTED_CBSI_DATASPACE_ID; do
   dataspace_id="${!dataspace_name}"
   if [[ ! "$dataspace_id" =~ ^[0-9]+$ ]]; then
     echo "${dataspace_name} must be a non-negative integer" >&2
     exit 1
   fi
 done
-if [[ -z "$EXPECTED_IS_ROUTE_ALIAS" || -z "$EXPECTED_IS2_ROUTE_ALIAS" ]]; then
-  echo "EXPECTED_IS_ROUTE_ALIAS and EXPECTED_IS2_ROUTE_ALIAS must be non-empty" >&2
-  exit 1
-fi
+for route_alias_name in \
+  EXPECTED_CORE_ROUTE_ALIAS \
+  EXPECTED_GOVERNANCE_ROUTE_ALIAS \
+  EXPECTED_ZK_ROUTE_ALIAS \
+  EXPECTED_DPN_ROUTE_ALIAS \
+  EXPECTED_IS_ROUTE_ALIAS \
+  EXPECTED_IS2_ROUTE_ALIAS \
+  EXPECTED_CBSI_ROUTE_ALIAS; do
+  if [[ -z "${!route_alias_name}" ]]; then
+    echo "${route_alias_name} must be non-empty" >&2
+    exit 1
+  fi
+done
 
 if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
   if [[ ! "$EXPECTED_TAIRA_GIT_SHA" =~ ^[0-9A-Fa-f]{7,40}$ ]]; then
@@ -464,6 +676,9 @@ require_nonnegative_integer() {
 }
 
 validate_numeric_inputs() {
+  require_positive_integer \
+    "EXPECTED_TAIRA_LANE_COUNT" \
+    "$EXPECTED_TAIRA_LANE_COUNT"
   require_positive_integer \
     "ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
     "$ROLLOUT_CANARY_TIME_TO_LIVE_MS"
@@ -635,6 +850,8 @@ if [[ $SKIP_PUBLIC -eq 0 ]]; then
   fi
   REQUIRE_EXACT_GIT_SHA=1
 fi
+
+validate_canonical_taira_topology
 
 build_curl_resolve_args() {
   local url="$1"
@@ -1532,7 +1749,7 @@ check_ordinary_readyz() {
   fi
 }
 
-check_boi_dataspace_catalog() {
+check_taira_lane_dataspace_topology() {
   local label="$1"
   local root="$2"
   local lifecycle_url
@@ -1549,16 +1766,62 @@ check_boi_dataspace_catalog() {
   python3 - \
     "$label" \
     "$last_body" \
+    "$EXPECTED_TAIRA_LANE_COUNT" \
+    "$EXPECTED_UNIVERSAL_DATASPACE_ID" \
+    "$EXPECTED_DPN_DATASPACE_ID" \
     "$EXPECTED_IS_ROUTE_ALIAS" \
     "$EXPECTED_IS_DATASPACE_ID" \
     "$EXPECTED_IS2_ROUTE_ALIAS" \
-    "$EXPECTED_IS2_DATASPACE_ID" <<'PY'
+    "$EXPECTED_IS2_DATASPACE_ID" \
+    "$EXPECTED_CBSI_DATASPACE_ID" \
+    "$EXPECTED_CORE_ROUTE_ALIAS" \
+    "$EXPECTED_GOVERNANCE_ROUTE_ALIAS" \
+    "$EXPECTED_ZK_ROUTE_ALIAS" \
+    "$EXPECTED_DPN_ROUTE_ALIAS" \
+    "$EXPECTED_CBSI_ROUTE_ALIAS" <<'PY'
 import json
 import re
 import sys
 
-label, path, is_lane, is_id_raw, is2_lane, is2_id_raw = sys.argv[1:]
-expected = {is_lane: int(is_id_raw), is2_lane: int(is2_id_raw)}
+(
+    label,
+    path,
+    lane_count_raw,
+    universal_id_raw,
+    dpn_id_raw,
+    is_lane,
+    is_id_raw,
+    is2_lane,
+    is2_id_raw,
+    cbsi_id_raw,
+    core_lane,
+    governance_lane,
+    zk_lane,
+    dpn_lane,
+    cbsi_lane,
+) = sys.argv[1:]
+
+expected_lane_count = int(lane_count_raw)
+physical_dataspaces = {
+    "universal": int(universal_id_raw),
+    "dpn": int(dpn_id_raw),
+    "is": int(is_id_raw),
+    "is2": int(is2_id_raw),
+    "cbsi": int(cbsi_id_raw),
+}
+expected_lanes = [
+    {"id": 0, "alias": core_lane, "dataspace_id": physical_dataspaces["universal"]},
+    {
+        "id": 1,
+        "alias": governance_lane,
+        "dataspace_id": physical_dataspaces["universal"],
+    },
+    {"id": 2, "alias": zk_lane, "dataspace_id": physical_dataspaces["universal"]},
+    {"id": 3, "alias": dpn_lane, "dataspace_id": physical_dataspaces["dpn"]},
+    {"id": 4, "alias": is_lane, "dataspace_id": physical_dataspaces["is"]},
+    {"id": 5, "alias": is2_lane, "dataspace_id": physical_dataspaces["is2"]},
+    {"id": 6, "alias": cbsi_lane, "dataspace_id": physical_dataspaces["cbsi"]},
+]
 
 def reject_duplicate_keys(pairs):
     result = {}
@@ -1575,40 +1838,397 @@ except (OSError, ValueError, json.JSONDecodeError) as error:
     raise SystemExit(f"{label}: Nexus lifecycle catalog is invalid JSON: {error}") from error
 
 def fail(message):
-    raise SystemExit(f"{label}: BOI dataspace catalog mismatch: {message}")
+    raise SystemExit(f"{label}: Taira lane/dataspace topology mismatch: {message}")
 
 if not isinstance(payload, dict) or payload.get("version") != 1:
     fail("unsupported lifecycle payload")
 if payload.get("nexus_enabled") is not True:
     fail("Nexus routing is not enabled")
+lane_count = payload.get("lane_count")
+if isinstance(lane_count, bool) or lane_count != expected_lane_count:
+    fail(f"lane_count must be exactly {expected_lane_count}, observed {lane_count!r}")
 lanes = payload.get("lanes")
 if not isinstance(lanes, list):
     fail("lanes is not an array")
-observed = {}
-for lane in lanes:
+if len(lanes) != expected_lane_count:
+    fail(f"expected exactly {expected_lane_count} lane entries, observed {len(lanes)}")
+observed_lanes = []
+seen_ids = set()
+seen_aliases = set()
+for position, lane in enumerate(lanes):
     if not isinstance(lane, dict):
-        fail("lane entry is not an object")
+        fail(f"lanes[{position}] is not an object")
+    lane_id = lane.get("id")
     alias = lane.get("alias")
-    if alias in expected:
-        if alias in observed:
-            fail(f"routing container alias {alias!r} is duplicated")
-        dataspace_id = lane.get("dataspace_id")
-        if not isinstance(dataspace_id, int) or isinstance(dataspace_id, bool):
-            fail(f"routing container alias {alias!r} has an invalid dataspace_id")
-        observed[alias] = dataspace_id
-if observed != expected:
-    fail(f"expected routing identities {expected!r}, observed {observed!r}")
+    dataspace_id = lane.get("dataspace_id")
+    if not isinstance(lane_id, int) or isinstance(lane_id, bool) or lane_id < 0:
+        fail(f"lanes[{position}].id is not a non-negative integer")
+    if not isinstance(alias, str) or not alias:
+        fail(f"lanes[{position}].alias is empty")
+    if not isinstance(dataspace_id, int) or isinstance(dataspace_id, bool):
+        fail(f"lanes[{position}].dataspace_id is not an integer")
+    if lane_id in seen_ids or alias in seen_aliases:
+        fail("lifecycle contains a duplicate lane id or alias")
+    seen_ids.add(lane_id)
+    seen_aliases.add(alias)
+    observed_lanes.append({"id": lane_id, "alias": alias, "dataspace_id": dataspace_id})
+if observed_lanes != expected_lanes:
+    fail(f"expected lanes {expected_lanes!r}, observed {observed_lanes!r}")
+observed_dataspace_ids = {lane["dataspace_id"] for lane in observed_lanes}
+expected_dataspace_ids = set(physical_dataspaces.values())
+if observed_dataspace_ids != expected_dataspace_ids:
+    fail(
+        f"expected five physical dataspace IDs {sorted(expected_dataspace_ids)!r}, "
+        f"observed {sorted(observed_dataspace_ids)!r}"
+    )
 catalog_hash = payload.get("catalog_hash")
 if not isinstance(catalog_hash, str) or re.fullmatch(
     r"(?:hash:)?[0-9A-Fa-f]{64}(?:#[0-9A-Fa-f]{4})?", catalog_hash
 ) is None:
     fail("catalog_hash is not canonical")
-print(json.dumps({"catalog_hash": catalog_hash.lower(), "dataspaces": observed}, sort_keys=True))
+print(
+    json.dumps(
+        {
+            "catalog_hash": catalog_hash.lower(),
+            "lane_count": lane_count,
+            "lanes": observed_lanes,
+            "dataspaces": physical_dataspaces,
+        },
+        sort_keys=True,
+    )
+)
+PY
+}
+
+check_taira_physical_dataspace_rosters() {
+  local label="$1"
+  local status_path="$2"
+  local sumeragi_path="$3"
+  local dataspace_summary="$4"
+
+  python3 - "$label" "$status_path" "$sumeragi_path" "$dataspace_summary" <<'PY'
+import json
+import sys
+
+label, status_path, sumeragi_path, topology_raw = sys.argv[1:]
+
+
+def fail(message):
+    raise SystemExit(f"{label}: Taira physical dataspace roster mismatch: {message}")
+
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+
+def load_json(path, name):
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            return json.load(stream, object_pairs_hook=reject_duplicate_keys)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        fail(f"{name} is invalid JSON: {error}")
+
+
+def require_nonnegative_int(value, field, *, positive=False):
+    minimum = 1 if positive else 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        fail(f"{field} must be an integer >= {minimum}, observed {value!r}")
+    return value
+
+
+def canonical_roster(value, field):
+    if not isinstance(value, list):
+        fail(f"{field} is not an array")
+    members = []
+    for position, member in enumerate(value):
+        if not isinstance(member, str) or not member.strip():
+            fail(f"{field}[{position}] is not a non-empty validator identity")
+        members.append(member.strip())
+    if len(members) != len(set(members)):
+        fail(f"{field} contains duplicate validator identities")
+    return tuple(sorted(members))
+
+
+node_status = load_json(status_path, "/status")
+sumeragi = load_json(sumeragi_path, "/v1/sumeragi/status")
+try:
+    topology = json.loads(topology_raw, object_pairs_hook=reject_duplicate_keys)
+except (ValueError, json.JSONDecodeError) as error:
+    fail(f"canonical topology summary is invalid JSON: {error}")
+
+if not isinstance(node_status, dict):
+    fail("/status response is not an object")
+if not isinstance(sumeragi, dict):
+    fail("/v1/sumeragi/status response is not an object")
+if not isinstance(topology, dict):
+    fail("canonical topology summary is not an object")
+
+expected_lanes = topology.get("lanes")
+expected_dataspaces = topology.get("dataspaces")
+if not isinstance(expected_lanes, list) or not isinstance(expected_dataspaces, dict):
+    fail("canonical topology summary omitted lanes or dataspaces")
+if set(expected_dataspaces) != {"universal", "dpn", "is", "is2", "cbsi"}:
+    fail("canonical topology summary did not contain exactly five physical dataspaces")
+
+expected_by_lane = {}
+dataspace_alias_by_id = {}
+for alias, dataspace_id in expected_dataspaces.items():
+    require_nonnegative_int(dataspace_id, f"dataspaces.{alias}")
+    if dataspace_id in dataspace_alias_by_id:
+        fail(f"physical dataspaces {alias!r} and {dataspace_alias_by_id[dataspace_id]!r} share an ID")
+    dataspace_alias_by_id[dataspace_id] = alias
+for position, lane in enumerate(expected_lanes):
+    if not isinstance(lane, dict):
+        fail(f"canonical lanes[{position}] is not an object")
+    lane_id = require_nonnegative_int(lane.get("id"), f"canonical lanes[{position}].id")
+    lane_alias = lane.get("alias")
+    dataspace_id = require_nonnegative_int(
+        lane.get("dataspace_id"), f"canonical lanes[{position}].dataspace_id"
+    )
+    if not isinstance(lane_alias, str) or not lane_alias:
+        fail(f"canonical lanes[{position}].alias is empty")
+    if lane_id in expected_by_lane:
+        fail(f"canonical topology duplicates lane {lane_id}")
+    if dataspace_id not in dataspace_alias_by_id:
+        fail(f"canonical lane {lane_alias!r} references unknown dataspace {dataspace_id}")
+    expected_by_lane[lane_id] = (lane_alias, dataspace_id, dataspace_alias_by_id[dataspace_id])
+
+teu_lanes = node_status.get("teu_lane_commit")
+catalog = node_status.get("dataspace_catalog")
+if not isinstance(teu_lanes, list):
+    fail("/status.teu_lane_commit is not an array")
+if not isinstance(catalog, list):
+    fail("/status.dataspace_catalog is not an array")
+if len(teu_lanes) != len(expected_by_lane):
+    fail(
+        f"/status.teu_lane_commit must project exactly {len(expected_by_lane)} lanes, "
+        f"observed {len(teu_lanes)}"
+    )
+if len(catalog) != len(expected_by_lane):
+    fail(
+        f"/status.dataspace_catalog must project exactly {len(expected_by_lane)} lanes, "
+        f"observed {len(catalog)}"
+    )
+
+teu_by_lane = {}
+for position, lane in enumerate(teu_lanes):
+    if not isinstance(lane, dict):
+        fail(f"/status.teu_lane_commit[{position}] is not an object")
+    lane_id = require_nonnegative_int(
+        lane.get("lane_id"), f"/status.teu_lane_commit[{position}].lane_id"
+    )
+    if lane_id in teu_by_lane:
+        fail(f"/status.teu_lane_commit duplicates lane {lane_id}")
+    teu_by_lane[lane_id] = lane
+
+catalog_by_lane = {}
+for position, entry in enumerate(catalog):
+    if not isinstance(entry, dict):
+        fail(f"/status.dataspace_catalog[{position}] is not an object")
+    lane_id = require_nonnegative_int(
+        entry.get("lane_id"), f"/status.dataspace_catalog[{position}].lane_id"
+    )
+    if lane_id in catalog_by_lane:
+        fail(f"/status.dataspace_catalog duplicates lane {lane_id}")
+    catalog_by_lane[lane_id] = entry
+
+if set(teu_by_lane) != set(expected_by_lane):
+    fail(
+        f"/status.teu_lane_commit lane IDs {sorted(teu_by_lane)!r} do not match "
+        f"the canonical IDs {sorted(expected_by_lane)!r}"
+    )
+if set(catalog_by_lane) != set(expected_by_lane):
+    fail(
+        f"/status.dataspace_catalog lane IDs {sorted(catalog_by_lane)!r} do not match "
+        f"the canonical IDs {sorted(expected_by_lane)!r}"
+    )
+
+projections = {alias: [] for alias in expected_dataspaces}
+for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.items():
+    lane = teu_by_lane[lane_id]
+    entry = catalog_by_lane[lane_id]
+    if lane.get("alias") != lane_alias:
+        fail(
+            f"/status.teu_lane_commit lane {lane_id} alias {lane.get('alias')!r} "
+            f"does not match {lane_alias!r}"
+        )
+    if lane.get("dataspace_id") != dataspace_id:
+        fail(
+            f"/status.teu_lane_commit lane {lane_id} dataspace_id "
+            f"{lane.get('dataspace_id')!r} does not match {dataspace_id}"
+        )
+    if lane.get("dataspace_alias") != dataspace_alias:
+        fail(
+            f"/status.teu_lane_commit lane {lane_id} dataspace_alias "
+            f"{lane.get('dataspace_alias')!r} does not match {dataspace_alias!r}"
+        )
+    expected_catalog_fields = {
+        "lane_alias": lane_alias,
+        "dataspace_id": dataspace_id,
+        "alias": dataspace_alias,
+    }
+    for field, expected in expected_catalog_fields.items():
+        if entry.get(field) != expected:
+            fail(
+                f"/status.dataspace_catalog lane {lane_id} field {field} "
+                f"is {entry.get(field)!r}, expected {expected!r}"
+            )
+    for field in ("manifest_required", "manifest_ready"):
+        if not isinstance(lane.get(field), bool):
+            fail(f"/status.teu_lane_commit lane {lane_id} {field} is not a boolean")
+        if entry.get(field) is not lane.get(field):
+            fail(
+                f"/status.dataspace_catalog lane {lane_id} {field} does not match "
+                "/status.teu_lane_commit"
+            )
+    lane_manifest_path = lane.get("manifest_path")
+    catalog_manifest_path = entry.get("manifest_path")
+    if catalog_manifest_path != lane_manifest_path:
+        fail(
+            f"/status.dataspace_catalog lane {lane_id} manifest_path does not match "
+            "/status.teu_lane_commit"
+        )
+
+    roster = canonical_roster(
+        lane.get("manifest_validators"),
+        f"/status.teu_lane_commit lane {lane_id} manifest_validators",
+    )
+    quorum = lane.get("manifest_quorum")
+    if roster:
+        quorum = require_nonnegative_int(
+            quorum,
+            f"/status.teu_lane_commit lane {lane_id} manifest_quorum",
+            positive=True,
+        )
+        minimum_quorum = len(roster) * 2 // 3 + 1
+        if quorum < minimum_quorum or quorum > len(roster):
+            fail(
+                f"lane {lane_alias!r} manifest quorum {quorum} is invalid for "
+                f"{len(roster)} validators; expected {minimum_quorum}..{len(roster)}"
+            )
+        if lane.get("manifest_required") is not True or lane.get("manifest_ready") is not True:
+            fail(f"lane {lane_alias!r} publishes a roster without a ready required manifest")
+        if not isinstance(lane_manifest_path, str) or not lane_manifest_path.strip():
+            fail(f"lane {lane_alias!r} publishes a roster without a manifest_path")
+    elif quorum is not None:
+        fail(f"lane {lane_alias!r} publishes manifest_quorum without validators")
+    projections[dataspace_alias].append(
+        {
+            "lane_id": lane_id,
+            "lane_alias": lane_alias,
+            "members": roster,
+            "quorum": quorum,
+        }
+    )
+
+context = sumeragi.get("height_context")
+if not isinstance(context, dict):
+    fail("/v1/sumeragi/status omitted height_context")
+global_validator_count = require_nonnegative_int(
+    context.get("validator_count"),
+    "/v1/sumeragi/status.height_context.validator_count",
+    positive=True,
+)
+global_quorum = context.get("quorum")
+if not isinstance(global_quorum, dict):
+    fail("/v1/sumeragi/status.height_context.quorum is not an object")
+global_min_signers = require_nonnegative_int(
+    global_quorum.get("min_signers"),
+    "/v1/sumeragi/status.height_context.quorum.min_signers",
+    positive=True,
+)
+global_total_power = require_nonnegative_int(
+    global_quorum.get("total_power"),
+    "/v1/sumeragi/status.height_context.quorum.total_power",
+    positive=True,
+)
+minimum_global_quorum = global_validator_count * 2 // 3 + 1
+if (
+    global_min_signers < minimum_global_quorum
+    or global_min_signers > global_validator_count
+    or global_total_power < global_min_signers
+):
+    fail("frozen global validator cohort does not publish a valid quorum")
+context_id = sumeragi.get("height_context_id")
+if not isinstance(context_id, list) or not context_id or any(
+    not isinstance(item, str) or not item.strip() for item in context_id
+):
+    fail("/v1/sumeragi/status.height_context_id is not a non-empty identity array")
+
+rosters = {}
+for dataspace_alias, lane_projections in projections.items():
+    nonempty = [projection for projection in lane_projections if projection["members"]]
+    if dataspace_alias != "universal" and len(nonempty) != len(lane_projections):
+        missing = sorted(
+            projection["lane_alias"]
+            for projection in lane_projections
+            if not projection["members"]
+        )
+        fail(
+            f"physical dataspace {dataspace_alias!r} lacks a non-empty manifest "
+            f"validator roster on lane(s) {missing!r}"
+        )
+    if not nonempty:
+        fail(
+            f"physical dataspace {dataspace_alias!r} lacks a non-empty ready "
+            "manifest validator roster"
+        )
+    else:
+        baseline_members = nonempty[0]["members"]
+        baseline_quorum = nonempty[0]["quorum"]
+        for projection in nonempty[1:]:
+            if (
+                projection["members"] != baseline_members
+                or projection["quorum"] != baseline_quorum
+            ):
+                fail(
+                    f"lanes in physical dataspace {dataspace_alias!r} project "
+                    "different validator rosters or quorums"
+                )
+        if dataspace_alias == "universal" and (
+            len(baseline_members) != global_validator_count
+            or baseline_quorum != global_min_signers
+        ):
+            fail(
+                "the universal manifest roster does not match the frozen global "
+                "validator count and quorum"
+            )
+        rosters[dataspace_alias] = {
+            "source": "lane_manifest",
+            "members": list(baseline_members),
+            "quorum": baseline_quorum,
+            "projected_lanes": sorted(
+                projection["lane_alias"] for projection in lane_projections
+            ),
+            "inherited_lanes": sorted(
+                projection["lane_alias"]
+                for projection in lane_projections
+                if not projection["members"]
+            ),
+        }
+seen_manifest_rosters = {}
+for dataspace_alias, roster in rosters.items():
+    members = roster.get("members")
+    fingerprint = tuple(members)
+    previous = seen_manifest_rosters.get(fingerprint)
+    if previous is not None:
+        fail(
+            f"physical dataspaces {previous!r} and {dataspace_alias!r} reuse "
+            "the same validator roster"
+        )
+    seen_manifest_rosters[fingerprint] = dataspace_alias
+
+print(json.dumps(rosters, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
 PY
 }
 
 capture_validator_fleet_sample() {
-  local records_file status_copy dataspace_summary
+  local records_file status_copy dataspace_summary roster_summary
   local idx label root
   records_file="$(mktemp)"
 
@@ -1623,7 +2243,7 @@ capture_validator_fleet_sample() {
       rm -f "$records_file"
       return 1
     fi
-    if ! dataspace_summary="$(check_boi_dataspace_catalog "validator ${label}" "$root")"; then
+    if ! dataspace_summary="$(check_taira_lane_dataspace_topology "validator ${label}" "$root")"; then
       rm -f "$records_file"
       return 1
     fi
@@ -1645,12 +2265,21 @@ capture_validator_fleet_sample() {
       return 1
     fi
 
-    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$dataspace_summary" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" >>"$records_file" <<'PY'
+    if ! roster_summary="$(check_taira_physical_dataspace_rosters \
+      "validator ${label}" \
+      "$status_copy" \
+      "$last_body" \
+      "$dataspace_summary")"; then
+      rm -f "$status_copy" "$records_file"
+      return 1
+    fi
+
+    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$dataspace_summary" "$roster_summary" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" >>"$records_file" <<'PY'
 import json
 import re
 import sys
 
-label, status_path, sumeragi_path, expected_sha, require_exact_raw, dataspace_summary_raw, expected_dpn_commit = sys.argv[1:]
+label, status_path, sumeragi_path, expected_sha, require_exact_raw, dataspace_summary_raw, roster_summary_raw, expected_dpn_commit = sys.argv[1:]
 require_exact_sha = require_exact_raw == "1"
 with open(status_path, "r", encoding="utf-8") as handle:
     node_status = json.load(handle)
@@ -1661,6 +2290,12 @@ try:
 except json.JSONDecodeError as error:
     raise SystemExit(
         f"validator {label}: dataspace catalog did not produce a canonical identity summary: {error}"
+    ) from error
+try:
+    roster_summary = json.loads(roster_summary_raw)
+except json.JSONDecodeError as error:
+    raise SystemExit(
+        f"validator {label}: physical dataspace rosters did not produce a canonical identity summary: {error}"
     ) from error
 
 required = (
@@ -1715,6 +2350,10 @@ if not isinstance(dataspace_summary.get("catalog_hash"), str):
     raise SystemExit(f"validator {label}: dataspace catalog summary omitted catalog_hash")
 if not isinstance(dataspace_summary.get("dataspaces"), dict):
     raise SystemExit(f"validator {label}: dataspace catalog summary omitted dataspaces")
+if not isinstance(roster_summary, dict) or set(roster_summary) != {
+    "universal", "dpn", "is", "is2", "cbsi"
+}:
+    raise SystemExit(f"validator {label}: physical dataspace roster summary is incomplete")
 
 if expected_sha:
     build = node_status.get("build") or {}
@@ -1776,6 +2415,7 @@ record = {
     "committed_subject": canonical(status.get("last_committed_subject")),
     "commit_qc": canonical(status.get("last_commit_qc")),
     "dataspace_catalog": canonical(dataspace_summary),
+    "dataspace_rosters": canonical(roster_summary),
     "dpn_validator_release_commit": published_dpn_commit,
 }
 print(json.dumps(record, ensure_ascii=True, sort_keys=True))
@@ -1815,6 +2455,7 @@ for record in records[1:]:
         "quorum",
         "status_blocks",
         "dataspace_catalog",
+        "dataspace_rosters",
         "dpn_validator_release_commit",
         "committed_height",
         "committed_block_hash",
@@ -1842,6 +2483,7 @@ summary = {
     "committed_subject": baseline["committed_subject"],
     "commit_qc": baseline["commit_qc"],
     "dataspace_catalog": baseline["dataspace_catalog"],
+    "dataspace_rosters": baseline["dataspace_rosters"],
     "dpn_validator_release_commit": baseline["dpn_validator_release_commit"],
     "nodes": sorted(nodes),
 }
@@ -1879,7 +2521,7 @@ import sys
 
 previous = json.loads(sys.argv[1])
 current = json.loads(sys.argv[2])
-for field in ("build", "config", "nodes", "dataspace_catalog"):
+for field in ("build", "config", "nodes", "dataspace_catalog", "dataspace_rosters"):
     if current[field] != previous[field]:
         raise SystemExit(f"validator fleet changed {field} between progress samples")
 if current["committed_height"] <= previous["committed_height"]:
@@ -2008,7 +2650,7 @@ check_endpoint() {
   root_url="$(mcp_root_from_url "$url")"
   check_ordinary_health "$label" "$root_url"
   check_ordinary_readyz "$label" "$root_url"
-  check_boi_dataspace_catalog "$label" "$root_url" >/dev/null
+  check_taira_lane_dataspace_topology "$label" "$root_url" >/dev/null
   CHECKED_LABELS+=("$label")
   CHECKED_ROOTS+=("$root_url")
   if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then

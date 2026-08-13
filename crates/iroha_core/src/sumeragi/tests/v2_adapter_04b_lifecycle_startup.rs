@@ -242,6 +242,36 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
 
     let mut setup_runner =
         super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    let mut activation =
+        super::super::v2_runner::ProductionLifecycleRunnerActivationV1::current_height_for_test(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&leader_wire_ingress),
+        );
+    launched
+        .with_canonical_body_recovery_ingress(
+            &mut setup_runner,
+            &mut activation,
+            |aperture, executor, services| {
+                assert!(ingress_ready.load(Ordering::Acquire));
+                assert!(leader_wire_ingress.state.lock().open);
+                assert!(std::ptr::eq(
+                    aperture.ingress(),
+                    leader_wire_ingress.as_ref()
+                ));
+                assert!(executor.lifecycle_live_clocks_are_unarmed());
+                assert!(services.matches_lifecycle_executor_output_guard(executor));
+                assert!(crate::sumeragi::status::v2_status().is_none());
+                Ok::<
+                    _,
+                    super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
+                >(())
+            },
+        )
+        .expect("temporarily open the exact preactivation recovery ingress");
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!leader_wire_ingress.state.lock().open);
+    assert!(!output_guard.restart_required());
+    assert!(crate::sumeragi::status::v2_status().is_none());
     let directive = launched
         .with_runner_setup(&mut setup_runner, |executor, _services| {
             executor.local_proposal_directive().map_err(
@@ -273,11 +303,6 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     assert_eq!(joined_directive, directive);
     assert!(local_proposal_state.already_attempted(directive));
 
-    let activation =
-        super::super::v2_runner::ProductionLifecycleRunnerActivationV1::current_height_for_test(
-            Arc::clone(&ingress_ready),
-            Arc::clone(&leader_wire_ingress),
-        );
     let activated = launched
         .activate(Instant::now(), activation, local_proposal_state)
         .unwrap_or_else(|error| panic!("activate exact Kura-bound lifecycle owner: {error}"));
