@@ -2,6 +2,7 @@
 # Execute the source-bound Sumeragi v2 PR or production-release corridor.
 
 set -euo pipefail
+umask 077
 
 profile="${1:---pr}"
 if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; then
@@ -36,6 +37,15 @@ if [[ "$profile" == "--release" \
     || "$SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256" \
       != "${IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256:-}" ]]; then
     echo "production release requires matching protected runtime-helper aliases" >&2
+    exit 1
+  fi
+  if [[ -z "${SUMERAGI_V2_RELEASE_TOOL_PROBE_HELPER:-}" \
+    || "$SUMERAGI_V2_RELEASE_TOOL_PROBE_HELPER" \
+      != "${IROHA_RELEASE_TOOL_PROBE_HELPER:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256:-}" \
+    || "$SUMERAGI_V2_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256" \
+      != "${IROHA_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256:-}" ]]; then
+    echo "production release requires matching protected tool-probe aliases" >&2
     exit 1
   fi
   if [[ -z "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" \
@@ -149,51 +159,33 @@ export GIT_CONFIG_VALUE_0=/dev/null
 export GIT_CONFIG_KEY_1=core.fsmonitor
 export GIT_CONFIG_VALUE_1=false
 
-sha256_file() {
+readonly release_runner_support_components=(
+  scripts/run_sumeragi_v2_release_gates_support.sh
+)
+readonly release_runner_support_sha256="04e0a5a9286502595dbad64ae27d2c79d2e7e694b45f6de895fe182868dd590a"
+if ((${#release_runner_support_components[@]} != 1)); then
+  echo "release runner support manifest is invalid" >&2
+  exit 1
+fi
+release_runner_support_path="${repo_root}/${release_runner_support_components[0]}"
+if [[ ! -f "$release_runner_support_path" || -L "$release_runner_support_path" ]]; then
+  echo "release runner support component must be a regular non-symlink file" >&2
+  exit 1
+fi
+release_runner_support_observed_sha256="$(
   python3 -I -S -c \
     'from pathlib import Path; import hashlib, sys; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
-    "$1"
-}
+    "$release_runner_support_path"
+)" || exit $?
+if [[ "$release_runner_support_observed_sha256" != "$release_runner_support_sha256" ]]; then
+  echo "release runner support component digest mismatch" >&2
+  exit 1
+fi
+# The sealed release boundary is owner-private and quiescent while the exact
+# authenticated bytes are lexically loaded; it does not claim same-UID defense.
+source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"
+unset release_runner_support_path release_runner_support_observed_sha256
 
-canonical_executable() {
-  local executable
-  executable="$(command -v "$1")" || return 1
-  python3 -I -S -c \
-    'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
-    "$executable"
-}
-
-canonical_git_executable() {
-  local executable
-  executable="$(canonical_executable git)" || return 1
-  # `/usr/bin/git` on macOS is an xcode-select launcher. Archiving that shim
-  # would leave the selected developer-tool Git binary outside the protected
-  # digest and evidence directory. Resolve the implementation that the shim
-  # would execute; the caller-supplied SHA-256 policy below then authenticates
-  # those exact bytes before they are used.
-  if [[ "$(uname -s)" == Darwin && "$executable" == /usr/bin/git ]]; then
-    executable="$(/usr/bin/xcrun --find git)" || return 1
-    executable="$(canonical_path "$executable")" || return 1
-  fi
-  printf '%s\n' "$executable"
-}
-
-canonical_path() {
-  python3 -I -S -c \
-    'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
-    "$1"
-}
-
-resolve_pinned_rust_tool_executable() {
-  local rustup_bin="$1"
-  local tool="$2"
-  local resolved_tool
-
-  resolved_tool="$(
-    RUSTUP_AUTO_INSTALL=0 "$rustup_bin" which --toolchain 1.93.1 "$tool"
-  )" || return 1
-  canonical_path "$resolved_tool"
-}
 
 if [[ "$profile" != "--release" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
   pr_rustup_bin="$(canonical_executable rustup)" || {
@@ -217,18 +209,6 @@ fi
 if [[ "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
   unset RUSTUP_HOME
 fi
-release_identity_json() {
-  python3 -I -S scripts/compute_workspace_source_manifest.py \
-    --root "$repo_root" \
-    --release-identity-json
-}
-identity_field() {
-  local identity_path="$1"
-  local field="$2"
-  python3 -I -S -c \
-    'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
-    "$identity_path" "$field"
-}
 # PR validation is deliberately developer evidence, not signed release
 # evidence. Even so, execute every build-capable child in a private independent
 # clone with private runtime roots so neither the caller source nor its Cargo
@@ -507,6 +487,17 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   fi
   readonly release_runtime_helper
+  release_tool_probe_helper="$(
+    canonical_path "$SUMERAGI_V2_RELEASE_TOOL_PROBE_HELPER"
+  )" || exit 1
+  if [[ "$release_tool_probe_helper" \
+      != "$release_bootstrap_evidence_dir/probe-release-tools.py" \
+    || "$(sha256_file "$release_tool_probe_helper")" \
+      != "$SUMERAGI_V2_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256" ]]; then
+    echo "protected tool-probe helper escaped or changed after bootstrap" >&2
+    exit 1
+  fi
+  readonly release_tool_probe_helper
   release_scaling_source_manifest="$(
     canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
   )" || {
@@ -1023,7 +1014,7 @@ PY
   fi
   release_runtime_sources=(
     "$release_python_bin" "$release_git_bin" "$release_ssh_keygen_bin" "$release_bash_bin"
-    "$release_runtime_helper"
+    "$release_bootstrap_evidence_dir/copy-release-runtime.py"
     "$release_cargo_bin" "$release_rustc_bin" "$release_node_bin" "$release_swift_bin"
     "$release_tlapm_bin" "$release_java_bin" "$release_verus_bin" "$release_cargo_verus_bin"
     "$release_tla2tools_jar" "$release_tlapm_stdlib"
@@ -1047,6 +1038,142 @@ PY
     --copy-runtime --runtime-root "$release_child_runtime" \
     --runtime-inventory "$release_runtime_inventory" "${release_runtime_arguments[@]}"
   readonly release_runtime_inventory_sha256="$(sha256_file "$release_runtime_inventory")"
+  readonly release_runtime_tool_probe_manifest="$release_invocation_root/runtime-tool-probe-manifest.json"
+  readonly release_runtime_tool_probe_result="$release_invocation_root/runtime-tool-probe-result.json"
+  readonly release_runtime_tool_probe_output="$release_invocation_root/.runtime-tool-probe-result.tmp"
+  "$release_python_bin" -I -S - \
+    "$release_child_runtime" "$release_runtime_tool_probe_manifest" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import stat
+import sys
+
+runtime = Path(sys.argv[1]).resolve(strict=True)
+manifest = Path(sys.argv[2])
+digest_name = "shasum" if sys.platform == "darwin" else "sha256sum"
+names = {
+    "awk", "basename", "cargo", "cargo-verus", "cat", "chmod", "cmp",
+    "cp", "cut", "diff", "dirname", "env", "find", "git-index-pack",
+    "git-upload-pack", "grep", "java", "ln", "ls", "mkdir", "mkfifo",
+    "mktemp", "mv", "node", "openssl", "rm", "rmdir", "rustc", "sed",
+    "sh", digest_name, "sleep", "swift", "tail", "tee", "tlapm", "tr",
+    "uname", "verus", "wc", "xargs",
+}
+if len(names) != 41:
+    raise SystemExit("runtime release-tool name closure is not exact")
+
+def tool_path(name: str) -> Path:
+    if name in {"cargo", "rustc"}:
+        return runtime / "rust-toolchain" / "bin" / name
+    if name == "swift":
+        return runtime / "swift-toolchain" / "bin" / name
+    if name == "java":
+        return runtime / "java-runtime" / "bin" / name
+    if name in {"verus", "cargo-verus"}:
+        return runtime / "verus-distribution" / name
+    return runtime / "bin" / name
+
+tools = {}
+for name in sorted(names):
+    path = tool_path(name)
+    before = path.lstat()
+    if (
+        path.resolve(strict=True) != path
+        or stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != 0o500
+    ):
+        raise SystemExit(f"private runtime tool {name} is unsafe")
+    data = path.read_bytes()
+    after = path.lstat()
+    if any(
+        getattr(before, field) != getattr(after, field)
+        for field in (
+            "st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size",
+            "st_mtime_ns", "st_ctime_ns",
+        )
+    ):
+        raise SystemExit(f"private runtime tool {name} changed while hashed")
+    tools[name] = {
+        "archive_id": f"release-runtime-tool.{name}.v1",
+        "path": str(path),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+payload = (json.dumps(
+    {"schema_version": 1, "tools": tools},
+    ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+) + "\n").encode("ascii")
+descriptor = os.open(
+    manifest,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+    0o400,
+)
+try:
+    view = memoryview(payload)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise SystemExit("runtime tool-probe manifest write was incomplete")
+        view = view[written:]
+    os.fchmod(descriptor, 0o400)
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
+  readonly release_runtime_tool_probe_manifest_sha256="$(
+    sha256_file "$release_runtime_tool_probe_manifest"
+  )"
+  "$release_child_bin/python3" -I -S "$release_tool_probe_helper" \
+    --tool-manifest "$release_runtime_tool_probe_manifest" \
+    --expected-tool-manifest-sha256 \
+      "$release_runtime_tool_probe_manifest_sha256" \
+    --probe-root "$release_invocation_root/.runtime-tool-probe" \
+    >"$release_runtime_tool_probe_output"
+  "$release_python_bin" -I -S - \
+    "$release_runtime_tool_probe_output" "$release_runtime_tool_probe_result" <<'PY'
+from pathlib import Path
+import json
+import os
+import sys
+
+source, target = map(Path, sys.argv[1:])
+data = source.read_bytes()
+if len(data) > 1024 * 1024:
+    raise SystemExit("runtime tool-probe result exceeds its byte bound")
+try:
+    value = json.loads(data)
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit("runtime tool-probe result is malformed") from error
+canonical = (json.dumps(
+    value, ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+) + "\n").encode("ascii")
+if data != canonical:
+    raise SystemExit("runtime tool-probe result is not canonical")
+descriptor = os.open(
+    target,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+    0o400,
+)
+try:
+    view = memoryview(data)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise SystemExit("runtime tool-probe result write was incomplete")
+        view = view[written:]
+    os.fchmod(descriptor, 0o400)
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+source.unlink()
+PY
+  readonly release_runtime_tool_probe_result_sha256="$(
+    sha256_file "$release_runtime_tool_probe_result"
+  )"
   "$release_python_bin" -I -S \
     "$release_runtime_helper" \
     --source-cargo-home "$inherited_cargo_cache_home" \
@@ -1174,6 +1301,88 @@ PY
   sealed_status=$?
   set -e
   runtime_verification_status=0
+  readonly release_runtime_tool_probe_post_output="$release_invocation_root/.runtime-tool-probe-post.tmp"
+  if [[ "$(sha256_file "$release_tool_probe_helper")" \
+    != "$SUMERAGI_V2_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256" ]]; then
+    echo "protected release tool-probe helper changed while the child executed" >&2
+    runtime_verification_status=1
+  fi
+  if ((runtime_verification_status == 0)); then
+    set -C
+    "$release_child_bin/python3" -I -S "$release_tool_probe_helper" \
+      --tool-manifest "$release_runtime_tool_probe_manifest" \
+      --expected-tool-manifest-sha256 \
+        "$release_runtime_tool_probe_manifest_sha256" \
+      --probe-root "$release_invocation_root/.runtime-tool-probe-post" \
+      >"$release_runtime_tool_probe_post_output" \
+      || runtime_verification_status=$?
+    set +C
+  fi
+  if ((runtime_verification_status == 0)); then
+    "$release_python_bin" -I -S - \
+      "$release_runtime_tool_probe_post_output" \
+      "$release_runtime_tool_probe_result" \
+      "$release_runtime_tool_probe_result_sha256" <<'PY' || runtime_verification_status=$?
+from pathlib import Path
+import hashlib
+import os
+import stat
+import sys
+
+observed_path, retained_path = map(Path, sys.argv[1:3])
+expected_digest = sys.argv[3]
+
+def read_regular(path: Path, mode: int) -> bytes:
+    before = path.lstat()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        chunks = []
+        total = 0
+        while True:
+            block = os.read(descriptor, 65536)
+            if not block:
+                break
+            total += len(block)
+            if total > 1024 * 1024:
+                raise SystemExit("runtime tool-probe replay exceeds its byte bound")
+            chunks.append(block)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    final = path.lstat()
+    fields = (
+        "st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size",
+        "st_mtime_ns", "st_ctime_ns",
+    )
+    if (
+        path.resolve(strict=True) != path
+        or stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != mode
+        or any(
+            getattr(before, field) != getattr(opened, field)
+            or getattr(opened, field) != getattr(after, field)
+            or getattr(after, field) != getattr(final, field)
+            for field in fields
+        )
+    ):
+        raise SystemExit("runtime tool-probe replay metadata is unsafe")
+    return b"".join(chunks)
+
+observed = read_regular(observed_path, 0o600)
+retained = read_regular(retained_path, 0o400)
+if (
+    observed != retained
+    or hashlib.sha256(retained).hexdigest() != expected_digest
+):
+    raise SystemExit("runtime tool-probe post-run replay changed")
+observed_path.unlink()
+PY
+  fi
   "$release_python_bin" -I -S \
     "$release_runtime_helper" \
     --verify-runtime-sources --runtime-root "$release_child_runtime" \
@@ -1346,6 +1555,9 @@ PY
       --sdk-dependency-input-inventory "$release_sdk_inventory" \
       --sdk-dependency-final-work-inventory \
         "$release_sdk_work_final_inventory" \
+      --runtime-tool-probe-manifest \
+        "$release_runtime_tool_probe_manifest" \
+      --runtime-tool-probe-result "$release_runtime_tool_probe_result" \
       --expected-scaling-trial-harness-sha256 \
         "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
       --expected-scaling-configuration-sha256 \
@@ -1423,175 +1635,6 @@ bash ci/check_sumeragi_v2_multilane_release_inventory.sh
 release_gate_boundary "release-inventory:after-natural-completion" || exit $?
 source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
 
-localnet_binary_attestation_valid() {
-  sumeragi_v2_localnet_binary_attestation_valid \
-    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
-}
-
-ensure_source_bound_localnet_binaries() {
-  sumeragi_v2_ensure_source_bound_localnet_binaries \
-    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
-}
-
-export_source_bound_localnet_binaries() {
-  sumeragi_v2_export_source_bound_localnet_binaries \
-    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
-}
-
-verify_release_identity() {
-  local checkpoint="$1"
-  [[ "$profile" == "--release" ]] || return 0
-  if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 \
-    || "${IROHA_RELEASE_SEALED_ROOT:-}" != "$repo_root" \
-    || -z "${IROHA_RELEASE_HOST_ROOT:-}" \
-    || -z "${IROHA_RELEASE_WORKSPACE_TARGET:-}" \
-    || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
-    || -z "${IROHA_RELEASE_INVOCATION_ROOT:-}" \
-    || -z "${CARGO_TARGET_DIR:-}" \
-    || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" \
-    || -z "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" \
-    || -z "${IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_CONFIGURATION_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST:-}" \
-    || -z "${IROHA_RELEASE_SCALING_IROHAD_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_IROHA_CLI_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256:-}" \
-    || -z "${IROHA_RELEASE_PYTHON_BIN:-}" \
-    || -z "${IROHA_RELEASE_SDK_INPUT_ROOT:-}" \
-    || -z "${IROHA_RELEASE_SDK_INPUT_INVENTORY:-}" \
-    || -z "${IROHA_RELEASE_SDK_INPUT_INVENTORY_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SDK_WORK_PARENT:-}" \
-    || -z "${IROHA_RELEASE_SDK_WORK_HELPER:-}" \
-    || -z "${IROHA_RELEASE_SDK_WORK_HELPER_SHA256:-}" \
-    || "$IROHA_RELEASE_SEALED_ROOT" \
-      != "$IROHA_RELEASE_INVOCATION_ROOT/source" \
-    || "$IROHA_RELEASE_WORKSPACE_TARGET" \
-      != "$IROHA_RELEASE_INVOCATION_ROOT/target" \
-    || "$IROHA_RELEASE_ARTIFACT_ROOT" \
-      != "$IROHA_RELEASE_INVOCATION_ROOT/output" \
-    || "$IROHA_RELEASE_HOST_ROOT" != "$IROHA_RELEASE_ARTIFACT_ROOT" \
-    || "$IROHA_RELEASE_SDK_INPUT_ROOT" \
-      != "$IROHA_RELEASE_INVOCATION_ROOT/sdk-inputs" \
-    || "$IROHA_RELEASE_SDK_INPUT_INVENTORY" \
-      != "$IROHA_RELEASE_INVOCATION_ROOT/sdk-dependency-input.json" \
-    || "$IROHA_RELEASE_SDK_WORK_PARENT" != "$IROHA_RELEASE_INVOCATION_ROOT" \
-    || "$IROHA_RELEASE_SDK_WORK_HELPER" \
-      != "$IROHA_RELEASE_INVOCATION_ROOT/runtime/copy-release-runtime.py" \
-    || "${PWD:-}" != "$repo_root" \
-    || ( -n "${OLDPWD:-}" && "$OLDPWD" != "$repo_root" ) \
-    || "${HOME:-}" != "$IROHA_RELEASE_HOST_ROOT/home" \
-    || "${TMPDIR:-}" != "$IROHA_RELEASE_HOST_ROOT/tmp" \
-    || "${TMP:-}" != "$IROHA_RELEASE_HOST_ROOT/tmp" \
-    || "${TEMP:-}" != "$IROHA_RELEASE_HOST_ROOT/tmp" \
-    || "${XDG_CACHE_HOME:-}" != "$IROHA_RELEASE_HOST_ROOT/cache" \
-    || ! -f "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" \
-    || ! -f "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-    || -L "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-    || ! -f "$IROHA_RELEASE_SDK_INPUT_INVENTORY" \
-    || -L "$IROHA_RELEASE_SDK_INPUT_INVENTORY" \
-    || ! -d "$IROHA_RELEASE_SDK_INPUT_ROOT" \
-    || -L "$IROHA_RELEASE_SDK_INPUT_ROOT" \
-    || ! -f "$IROHA_RELEASE_SDK_WORK_HELPER" \
-    || -L "$IROHA_RELEASE_SDK_WORK_HELPER" \
-    || "$(sha256_file "$IROHA_RELEASE_SDK_WORK_HELPER")" \
-      != "$IROHA_RELEASE_SDK_WORK_HELPER_SHA256" \
-    || "$(sha256_file "$IROHA_RELEASE_SDK_INPUT_INVENTORY")" \
-      != "$IROHA_RELEASE_SDK_INPUT_INVENTORY_SHA256" ]]; then
-    echo "production release corridor must run from its signed, sealed independent mirror" >&2
-    return 1
-  fi
-  local withheld_name
-  for withheld_name in \
-    SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION \
-    SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION \
-    SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT \
-    SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY \
-    SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR \
-    SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256 \
-    IROHA_RELEASE_BOOTSTRAP_COMPLETION \
-    IROHA_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION \
-    IROHA_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT \
-    IROHA_RELEASE_BOOTSTRAP_IDENTITY \
-    IROHA_RELEASE_BOOTSTRAP_EVIDENCE_DIR \
-    IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256 \
-    IROHA_RELEASE_CANDIDATE_IDENTITY_PATH \
-    IROHA_RELEASE_AGGREGATE_RECEIPT_PATH \
-    IROHA_RELEASE_BOOTSTRAP_SOURCE_BINDING \
-    IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT \
-    IROHA_RELEASE_BOOTSTRAP_RUNNER \
-    IROHA_RELEASE_SIGNATURE_ATTESTATION \
-    IROHA_RELEASE_SIGNATURE_TRANSCRIPT \
-    IROHA_RELEASE_SIGNATURE_RAW_COMMIT \
-    IROHA_RELEASE_SIGNATURE_CARGO_LOCK \
-    IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS \
-    IROHA_RELEASE_SIGNATURE_REVOCATION \
-    IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST \
-    IROHA_RELEASE_EXPECTED_SDK_DEPENDENCY_BUNDLE_MANIFEST_SHA256; do
-    if [[ -n "${!withheld_name:-}" ]]; then
-      echo "protected outer-only input ${withheld_name} reached the build child" >&2
-      return 1
-    fi
-  done
-  local scaling_digest_name
-  for scaling_digest_name in \
-    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256 \
-    IROHA_RELEASE_SCALING_IROHAD_SHA256 \
-    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256 \
-    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256; do
-    if [[ ! "${!scaling_digest_name}" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "scaling trust anchor ${scaling_digest_name} changed at ${checkpoint}" >&2
-      return 1
-    fi
-  done
-  local observed_scaling_manifest
-  if ! observed_scaling_manifest="$(
-    canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
-  )" \
-    || [[ "$observed_scaling_manifest" \
-        != "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-      || "${observed_scaling_manifest##*/}" != scaling_evidence.json ]]; then
-    echo "G-SCALE evidence path changed or became noncanonical at ${checkpoint}" >&2
-    return 1
-  fi
-  local observed_target expected_target
-  if [[ -e "$repo_root/target" || -L "$repo_root/target" ]]; then
-    echo "sealed source unexpectedly contains a target path at ${checkpoint}" >&2
-    return 1
-  fi
-  if ! require_external_cargo_target_dir "$repo_root" \
-    || ! require_external_release_artifact_root "$repo_root" \
-    || ! require_disjoint_release_roots "$repo_root"; then
-    echo "sealed release output roots changed at ${checkpoint}" >&2
-    return 1
-  fi
-  observed_target="$(
-    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
-      "$CARGO_TARGET_DIR"
-  )"
-  expected_target="$(
-    python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
-      "$IROHA_RELEASE_WORKSPACE_TARGET"
-  )"
-  if [[ "$observed_target" != "$expected_target" ]]; then
-    echo "sealed release target changed at ${checkpoint}" >&2
-    return 1
-  fi
-  local expected observed
-  expected="$(<"$IROHA_RELEASE_EXPECTED_IDENTITY_PATH")"
-  if ! observed="$(release_identity_json)"; then
-    echo "failed to compute release identity at ${checkpoint}" >&2
-    return 1
-  fi
-  if [[ "$observed" != "$expected" ]]; then
-    echo "release source identity changed at ${checkpoint}" >&2
-    return 1
-  fi
-  if ! python3 -I -S scripts/seal_workspace_source.py \
-    --verify --root "$repo_root" --no-writable-paths; then
-    echo "release source seal changed at ${checkpoint}" >&2
-    return 1
-  fi
-}
 
 if [[ "$profile" == "--release" ]]; then
   export CARGO_TARGET_DIR="$IROHA_RELEASE_WORKSPACE_TARGET"
@@ -1803,203 +1846,6 @@ if [[ "$profile" == "--release" ]]; then
 fi
 readonly corridor_enabled
 
-record_corridor_log() {
-  local leg_id="$1"
-  local kind="$2"
-  local required_test_count="$3"
-  local command_text="$4"
-  local log_path="$5"
-  local command_status="$6"
-  local tee_status="$7"
-  corridor_last_log="$log_path"
-  ((corridor_enabled)) || return 0
-  if ((command_status != 0 || tee_status != 0)); then
-    echo "release corridor leg ${leg_id} failed (command=${command_status}, tee=${tee_status})" >&2
-    return 1
-  fi
-  local observed_test_count
-  observed_test_count="$(python3 -I -S - "$kind" "$log_path" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-kind, raw_path = sys.argv[1:]
-lines = Path(raw_path).read_text(encoding="utf-8").splitlines()
-if kind == "cargo-focus":
-    running = [line for line in lines if line == "running 1 test"]
-    results = [
-        line
-        for line in lines
-        if re.fullmatch(
-            r"test result: ok\. 1 passed; 0 failed; 0 ignored; "
-            r"0 measured; [0-9]+ filtered out; finished in .+",
-            line,
-        )
-    ]
-    if not running or len(running) != len(results):
-        raise SystemExit("ambiguous focused Cargo test transcript")
-    print(len(results))
-elif kind.startswith("cargo-"):
-    running = [re.fullmatch(r"running ([0-9]+) tests?", line) for line in lines]
-    running = [match for match in running if match]
-    results = [
-        re.fullmatch(
-            r"test result: ok\. ([0-9]+) passed; 0 failed; 0 ignored; "
-            r"0 measured; [0-9]+ filtered out; finished in .+",
-            line,
-        )
-        for line in lines
-    ]
-    results = [match for match in results if match]
-    if len(running) != 1 or len(results) != 1 or running[0].group(1) != results[0].group(1):
-        raise SystemExit("ambiguous Cargo test transcript")
-    print(results[0].group(1))
-elif kind == "pytest":
-    matches = [
-        re.fullmatch(
-            r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s"
-            r"(?: \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?",
-            line,
-        )
-        for line in lines
-    ]
-    matches = [match for match in matches if match]
-    if len(matches) != 1:
-        raise SystemExit("ambiguous pytest transcript")
-    print(matches[0].group(1))
-elif kind == "node":
-    passed = [re.fullmatch(r"# pass ([0-9]+)", line) for line in lines]
-    passed = [match for match in passed if match]
-    if (
-        len(passed) != 1
-        or lines.count(f"# tests {passed[0].group(1)}") != 1
-        or lines.count("# fail 0") != 1
-        or lines.count("# cancelled 0") != 1
-        or lines.count("# skipped 0") != 1
-        or lines.count("# todo 0") != 1
-    ):
-        raise SystemExit("ambiguous Node test transcript")
-    print(passed[0].group(1))
-elif kind == "native-amx-sdk":
-    matches = [
-        re.fullmatch(
-            r"native-amx-v2-grouped-parity surface=[a-z]+ tests=([0-9]+) "
-            r"fixture_sha256=[0-9a-f]{64} "
-            r"suite_source_manifest_sha256=[0-9a-f]{64}",
-            line,
-        )
-        for line in lines
-    ]
-    matches = [match for match in matches if match]
-    if len(matches) != 1:
-        raise SystemExit("ambiguous grouped Native AMX V2 SDK transcript")
-    print(matches[0].group(1))
-elif kind == "sdk-diagnostics":
-    matches = [
-        re.fullmatch(
-            r"sumeragi-v2-sdk-diagnostics surface=[a-z]+ tests=([0-9]+) "
-            r"suite_source_manifest_sha256=[0-9a-f]{64}",
-            line,
-        )
-        for line in lines
-    ]
-    matches = [match for match in matches if match]
-    if len(matches) != 1:
-        raise SystemExit("ambiguous Sumeragi v2 SDK diagnostics transcript")
-    print(matches[0].group(1))
-elif kind == "command":
-    print(0)
-else:
-    raise SystemExit(f"unknown corridor leg kind: {kind}")
-PY
-)" || {
-    echo "release corridor leg ${leg_id} has invalid test output" >&2
-    return 1
-  }
-  if [[ "$kind" == "native-amx-sdk" ]]; then
-    local expected_surface="${leg_id#native-amx-grouped-}"
-    local expected_marker
-    expected_marker="native-amx-v2-grouped-parity surface=${expected_surface} tests=${observed_test_count} fixture_sha256=${native_amx_grouped_fixture_sha256:-} suite_source_manifest_sha256=${native_amx_grouped_suite_source_manifest_sha256:-}"
-    if [[ "$(grep -Fxc -- "$expected_marker" "$log_path" || true)" != 1 ]]; then
-      echo "release corridor leg ${leg_id} is not bound to the exact grouped Native AMX V2 corpus and suite sources" >&2
-      return 1
-    fi
-  elif [[ "$kind" == "sdk-diagnostics" ]]; then
-    local expected_surface="${leg_id#sumeragi-diagnostics-}"
-    local expected_marker
-    expected_marker="sumeragi-v2-sdk-diagnostics surface=${expected_surface} tests=${observed_test_count} suite_source_manifest_sha256=${sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256:-}"
-    if [[ "$(grep -Fxc -- "$expected_marker" "$log_path" || true)" != 1 ]]; then
-      echo "release corridor leg ${leg_id} is not bound to the exact Sumeragi v2 SDK diagnostics suite sources" >&2
-      return 1
-    fi
-  fi
-  if [[ "$kind" == "cargo-module" ]]; then
-    if ((observed_test_count == 0 || observed_test_count < required_test_count)); then
-      echo "release corridor module ${leg_id} ran fewer tests than its required inventory" >&2
-      return 1
-    fi
-  elif [[ "$observed_test_count" != "$required_test_count" ]]; then
-    echo "release corridor leg ${leg_id} ran ${observed_test_count} tests, expected ${required_test_count}" >&2
-    return 1
-  fi
-  local relative_log log_sha256
-  relative_log="logs/$(basename "$log_path")"
-  log_sha256="$(sha256_file "$log_path")"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$corridor_leg_index" "$leg_id" "$kind" "$required_test_count" \
-    "$observed_test_count" "$command_status" "$tee_status" "$log_sha256" \
-    "$relative_log" "$command_text" >>"$corridor_summary"
-  ((corridor_leg_index += 1))
-}
-
-run_corridor_leg() {
-  local leg_id="$1"
-  local kind="$2"
-  local required_test_count="$3"
-  local command_text="$4"
-  shift 4
-  release_gate_boundary "${leg_id}:before" || return $?
-  if ((!corridor_enabled)); then
-    "$@"
-    release_gate_boundary "${leg_id}:after-natural-completion" || return $?
-    return
-  fi
-  local log_path
-  printf -v log_path '%s/%02d-%s.log' \
-    "$corridor_logs_dir" "$corridor_leg_index" "$leg_id"
-  set +e
-  "$@" 2>&1 | tee "$log_path"
-  local pipeline_status=("${PIPESTATUS[@]}")
-  set -e
-  record_corridor_log \
-    "$leg_id" "$kind" "$required_test_count" "$command_text" "$log_path" \
-    "${pipeline_status[0]}" "${pipeline_status[1]}"
-  release_gate_boundary "${leg_id}:after-natural-completion" || return $?
-}
-
-run_cooperative_gate() {
-  local gate_id="$1"
-  local status
-  shift
-  release_gate_boundary "${gate_id}:before" || return $?
-  if "$@"; then
-    status=0
-  else
-    status=$?
-  fi
-  release_gate_boundary "${gate_id}:after-natural-completion" || return $?
-  return "$status"
-}
-
-corridor_contract_log_path() {
-  local leg_id="$1"
-  if ((corridor_enabled)); then
-    printf '%s/%02d-%s.log\n' \
-      "$corridor_logs_dir" "$corridor_leg_index" "$leg_id"
-  else
-    mktemp "${TMPDIR:-/tmp}/${leg_id}.XXXXXX"
-  fi
-}
 
 # Inventory and execute the production adapter/runtime ownership boundary before
 # the slower network and formal corridors. The pure reducer harness cannot
@@ -2917,14 +2763,6 @@ production_data_model_modules=(
   offline::kagemusha_v4_topup_provenance_tests
   block::consensus_v2::tests
 )
-is_production_data_model_module() {
-  local candidate="$1"
-  local data_model_module
-  for data_model_module in "${production_data_model_modules[@]}"; do
-    [[ "$candidate" == "$data_model_module" ]] && return 0
-  done
-  return 1
-}
 for required_test in "${required_production_liveness_tests[@]}"; do
   required_unit_list="$production_unit_list"
   required_ignored_unit_list="$production_ignored_unit_list"
@@ -3634,47 +3472,6 @@ for required_test in "${required_multilane_integration_lib_focus_tests[@]}"; do
   fi
 done
 
-run_multilane_focus_crate_tests() {
-  local package="$1"
-  shift
-  local focus_test
-  for focus_test in "$@"; do
-    run_cargo test --locked --offline -p "$package" --lib \
-      "$focus_test" -- --exact --test-threads=1 || return
-  done
-}
-
-run_multilane_focus_test_target() {
-  local package="$1"
-  local test_target="$2"
-  shift 2
-  local focus_test
-  for focus_test in "$@"; do
-    run_cargo test --locked --offline -p "$package" --test "$test_target" \
-      "$focus_test" -- --exact --test-threads=1 || return
-  done
-}
-
-append_g_unit_inventory() {
-  local leg_id="$1"
-  local package="$2"
-  shift 2
-  local focus_test
-  for focus_test in "$@"; do
-    printf '%s\t%s\t%s\n' "$leg_id" "$package" "$focus_test" \
-      >>"$corridor_g_unit_inventory"
-  done
-}
-
-require_g_unit_log_results() {
-  local focus_test
-  for focus_test in "$@"; do
-    if [[ "$(grep -Fxc -- "test ${focus_test} ... ok" "$corridor_last_log" || true)" != 1 ]]; then
-      echo "G-UNIT corridor log does not contain one passing result for ${focus_test}" >&2
-      return 1
-    fi
-  done
-}
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one

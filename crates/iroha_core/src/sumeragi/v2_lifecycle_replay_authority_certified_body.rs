@@ -1,0 +1,2579 @@
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CertifiedBodyPipelineReplayFamilyV1 {
+    source: BodyPipelineReplaySourceV1,
+    body_frame: BodyFrameBindingV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CertifiedBodyPipelineCoordinatesV1 {
+    tag: ReplayEventTagV1,
+    certificate: wire::QuorumCertificate,
+    manifest: wire::PayloadManifest,
+    fetch_manifest_present: bool,
+    certified_sources: Vec<PeerId>,
+}
+
+impl AuthenticatedCertifiedFetchReplayOriginV1 {
+    /// Bind the exact selector-authenticated response to its pending Fetch.
+    pub(super) fn from_completion_authority(
+        authority: &CertifiedFetchCompletionAuthority<'_>,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        let response = authority.authenticated_response();
+        if authority.request_hash() != response.request_hash
+            || authority.response_hash() != HashOf::new(response)
+            || !authority
+                .candidate_pending()
+                .exactly_binds_adapter_effect(effect)
+        {
+            return None;
+        }
+        Some(Self {
+            coordinates: exact_certified_fetch_coordinates(effect, response)?,
+            request_hash: authority.request_hash(),
+            response_hash: authority.response_hash(),
+        })
+    }
+
+    /// Consume the authenticated origin into one frame-bound canonical family.
+    pub(super) fn bind_durable_body(
+        self,
+        receipt: &DurableCertifiedFetchBodyReceipt,
+    ) -> Option<CertifiedFetchReplayEvidenceV1> {
+        if receipt.request_hash() != self.request_hash
+            || receipt.response_hash() != self.response_hash
+        {
+            return None;
+        }
+        Some(CertifiedFetchReplayEvidenceV1 {
+            family: exact_certified_body_pipeline_family(
+                &self.coordinates,
+                receipt.durable_body(),
+            )?,
+        })
+    }
+}
+
+impl CertifiedFetchReplayEvidenceV1 {
+    /// Reauthenticate the persisted certificate and exact archive-source order
+    /// against the immutable height context before restart authority is minted.
+    fn authenticated_by_verified_height(&self, verified: &VerifiedHeightContext) -> bool {
+        let BodyPipelineOriginV1::Certified {
+            certificate,
+            certified_sources,
+            ..
+        } = &self.family.source.origin
+        else {
+            return false;
+        };
+        let expected_sources = verified
+            .context()
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        replay_context(certificate.round)
+            == super::projection::lifecycle_context(verified.context())
+            && certified_sources == &expected_sources
+            && verified.verify_quorum_certificate(certificate).is_ok()
+    }
+
+    /// Compare this complete canonical family with the exact installed Fetch.
+    pub(super) fn exactly_matches_fetch(
+        &self,
+        effect: &AdapterEffect,
+        response: &wire::CertifiedBodyResponse,
+        receipt: &DurableCertifiedFetchBodyReceipt,
+    ) -> bool {
+        if receipt.request_hash() != response.request_hash
+            || receipt.response_hash() != HashOf::new(response)
+        {
+            return false;
+        }
+        self.exactly_matches_fetch_body(effect, response, receipt.durable_body())
+    }
+
+    fn exactly_matches_fetch_body(
+        &self,
+        effect: &AdapterEffect,
+        response: &wire::CertifiedBodyResponse,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        exact_certified_fetch_coordinates(effect, response)
+            .and_then(|coordinates| certified_body_pipeline_family(&coordinates, receipt))
+            .is_some_and(|expected| {
+                expected == self.family
+                    && self
+                        .family
+                        .is_exact_for_stage(LifecycleStageKind::FetchBody)
+            })
+    }
+
+    /// Close this family over the exact incumbent runtime binding and durable frame.
+    pub(super) fn project_durable_ready_fetch(
+        &self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<DurableCertifiedFetchReplayProjectionV1> {
+        if exact_certified_fetch_effect(&self.family).as_ref() != Some(effect)
+            || !pending.exactly_binds_adapter_effect(effect)
+            || !certified_body_pipeline_family(&exact_family_coordinates(&self.family)?, receipt)
+                .is_some_and(|expected| expected == self.family)
+        {
+            return None;
+        }
+        durable_certified_fetch_projection(&self.family, effect, pending, receipt)
+    }
+
+    /// Reconstruct the exact Fetch effect and pending binding from a durable owner.
+    ///
+    /// Decoded replay data alone cannot invoke the pending constructor: the
+    /// one-shot permit is minted only while this frame-bound evidence remains
+    /// intact.
+    fn reconstruct_exact_fetch(
+        &self,
+        causal_root: CausalRoot,
+    ) -> Option<(AdapterEffect, PendingRuntimeEffectBinding)> {
+        let effect = exact_certified_fetch_effect(&self.family)?;
+        let pending = PendingRuntimeEffectBinding::from_durable_certified_fetch(
+            DurableCertifiedFetchPendingMintPermit::new(),
+            Hash::prehashed(*causal_root.digest().as_bytes()),
+            &effect,
+        )?;
+        (digest_from_hash(pending.causal_lifecycle_key()) == causal_root.digest()
+            && self
+                .family
+                .is_exact_for_stage(LifecycleStageKind::FetchBody))
+        .then_some((effect, pending))
+    }
+
+    /// Authenticate one opened body-store seal against this exact replay family.
+    pub(super) fn exactly_matches_recovered_body_frame(
+        &self,
+        reference: &DurableBodyFrameReference,
+        manifest: &wire::PayloadManifest,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        let Some(coordinates) = exact_family_coordinates(&self.family) else {
+            return false;
+        };
+        coordinates.manifest == *manifest
+            && self.family.body_frame.durable_reference() == *reference
+            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
+                == Some(*reference)
+            && certified_body_pipeline_family(&coordinates, receipt)
+                .is_some_and(|expected| expected == self.family)
+    }
+
+    /// Derive the direct adapter preview inputs from the sealed durable family.
+    pub(super) fn adapter_preview_inputs<'a>(
+        &'a self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<(EventTag, &'a wire::PayloadManifest)> {
+        let _ready_projection = self.project_durable_ready_fetch(effect, pending, receipt)?;
+        let BodyPipelineOriginV1::Certified { manifest, .. } = &self.family.source.origin else {
+            return None;
+        };
+        Some((
+            EventTag::new(
+                self.family.source.tag.height,
+                self.family.source.tag.view,
+                crate::sumeragi::v2_core::Generation::new(self.family.source.tag.generation),
+            ),
+            manifest,
+        ))
+    }
+
+    #[cfg(test)]
+    fn exactly_matches_signed_response_for_test(
+        &self,
+        effect: &AdapterEffect,
+        response: &wire::CertifiedBodyResponse,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        signature_present(&response.signature)
+            && self.exactly_matches_fetch_body(effect, response, receipt)
+    }
+
+    /// Project the fixed Store-stage evidence without exposing source parts.
+    pub(super) fn project_store(
+        &self,
+        fetch_effect: &AdapterEffect,
+        fetch_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        store_effect: &AdapterEffect,
+    ) -> Option<CertifiedStoreReplayEvidenceV1> {
+        (self
+            .project_durable_ready_fetch(fetch_effect, fetch_pending, receipt)
+            .is_some()
+            && certified_body_stage_matches(
+                &self.family,
+                store_effect,
+                receipt,
+                LifecycleStageKind::StoreBody,
+            ))
+        .then(|| CertifiedStoreReplayEvidenceV1 {
+            family: self.family.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_signed_response_for_test(
+        fetch_effect: &AdapterEffect,
+        response: &wire::CertifiedBodyResponse,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        if !signature_present(&response.signature) {
+            return None;
+        }
+        Some(Self {
+            family: exact_certified_body_pipeline_family(
+                &exact_certified_fetch_coordinates(fetch_effect, response)?,
+                receipt,
+            )?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn project_store_for_test(
+        &self,
+        store_effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<CertifiedStoreReplayEvidenceV1> {
+        certified_body_stage_matches(
+            &self.family,
+            store_effect,
+            receipt,
+            LifecycleStageKind::StoreBody,
+        )
+        .then(|| CertifiedStoreReplayEvidenceV1 {
+            family: self.family.clone(),
+        })
+    }
+}
+
+impl DurableCertifiedFetchReplayProjectionV1 {
+    /// Compare the complete frame-bound projection with one logical restart row.
+    pub(super) fn exactly_matches_recovered_candidate(
+        &self,
+        candidate: &CandidateAdmission,
+        owner: OwnerId,
+    ) -> bool {
+        let slot = PhysicalSlotId::for_capacity(LifecycleWorkClass::Fetch.capacity_class(), 0);
+        candidate.key.phase() == LifecyclePhase::Fetch
+            && candidate.causal_root == owner.causal_root()
+            && candidate.work_class == LifecycleWorkClass::Fetch
+            && candidate.stage
+                == LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent)
+            && candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.reconstruction_source == owner.causal_root().digest()
+            && candidate.payload == self.payload
+            && candidate.replay_authority == self.authority
+            && candidate.producer_turn.is_none()
+            && self.causal_key == Hash::prehashed(*owner.causal_root().digest().as_bytes())
+            && self.authority.structurally_matches_record(
+                LifecycleContext::new(candidate.key.context(), candidate.key.round().height()),
+                candidate.key,
+                candidate.work_class,
+                candidate.stage,
+                candidate.payload,
+            )
+            && candidate.physical_geometry.normalized().is_ok_and(
+                |(physical, universe, consumed)| {
+                    physical.len() == 1
+                        && physical.get(&slot) == Some(&self.completion_digest)
+                        && universe == std::collections::BTreeSet::from([slot])
+                        && consumed == universe
+                },
+            )
+    }
+
+    /// Canonical physical identity of the body-fsynced completion.
+    pub(super) const fn completion_digest(&self) -> LifecycleDigest {
+        self.completion_digest
+    }
+
+    /// Exact manifest hash retained independently by the body-store receipt.
+    pub(super) const fn expected_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
+        self.expected_manifest_hash
+    }
+
+    /// Recheck the exact runtime binding and durable body without exposing fields.
+    pub(super) fn exactly_matches_runtime(
+        &self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        pending.exactly_binds_adapter_effect(effect)
+            && pending.causal_lifecycle_key() == &self.causal_key
+            && pending.exact_effect_identity() == &self.effect_identity
+            && receipt.manifest_hash() == self.expected_manifest_hash
+            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
+                .map(DurablePayloadReference::BodyFrame)
+                == Some(self.payload)
+            && canonical_replay_authority(
+                replay_context(receipt.round()),
+                self.authority.source.clone(),
+                LifecycleStageKind::FetchBody,
+                ReplayPayloadBindingV1::from_payload(self.payload),
+            ) == Some(self.authority.clone())
+    }
+
+    /// Project the exact Ready recovery candidate named by one durable row.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn project_recovered_candidate(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        owner: OwnerId,
+        stage: LifecycleStage,
+        reconstruction_source: LifecycleDigest,
+        payload: DurablePayloadReference,
+        persisted_authority: &LifecycleReplayAuthorityV1,
+    ) -> Option<CandidateAdmission> {
+        if stage
+            != LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent)
+            || !self.exactly_matches_durable_record(
+                active_context,
+                key,
+                owner.causal_root(),
+                payload,
+                reconstruction_source,
+                persisted_authority,
+            )
+        {
+            return None;
+        }
+        let slot = PhysicalSlotId::for_capacity(LifecycleWorkClass::Fetch.capacity_class(), 0);
+        let candidate = CandidateAdmission::new(
+            key,
+            owner.causal_root(),
+            LifecycleWorkClass::Fetch,
+            stage,
+            InitialLifecycleState::Ready,
+            reconstruction_source,
+            self.payload,
+            self.authority.clone(),
+            PhysicalGeometry::new([PhysicalSlot::new(slot, self.completion_digest)], [slot]),
+            None,
+        );
+        candidate
+            .replay_authority_is_exact(active_context)
+            .then_some(candidate)
+    }
+
+    /// Rebind only the durable fields of an exact Waiting Fetch row.
+    pub(super) fn rebind_waiting_fetch_metadata(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        metadata: &mut DurableRecordMetadata,
+    ) -> bool {
+        if key.phase() != LifecyclePhase::Fetch
+            || metadata.payload != DurablePayloadReference::None
+            || metadata.reconstruction_source != digest_from_hash(&self.causal_key)
+            || metadata.continuation != super::schema::DurableContinuation::None
+            || !metadata
+                .replay_authority
+                .same_persisted_family(&self.authority)
+            || !self.authority.structurally_matches_record(
+                active_context,
+                key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+                self.payload,
+            )
+        {
+            return false;
+        }
+        metadata.payload = self.payload;
+        metadata.replay_authority = self.authority.clone();
+        true
+    }
+
+    /// Compare a recovered ledger row without exposing authority parts.
+    pub(super) fn exactly_matches_durable_record(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        causal_root: CausalRoot,
+        metadata_payload: DurablePayloadReference,
+        reconstruction_source: LifecycleDigest,
+        authority: &LifecycleReplayAuthorityV1,
+    ) -> bool {
+        self.payload == metadata_payload
+            && self.authority == *authority
+            && reconstruction_source == causal_root.digest()
+            && self.causal_key == Hash::prehashed(*causal_root.digest().as_bytes())
+            && self.authority.structurally_matches_record(
+                active_context,
+                key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+                self.payload,
+            )
+    }
+}
+
+/// Consume the sole opened-ledger/body-store join into restart authority.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn authenticate_recovered_durable_certified_fetch<
+    F,
+>(
+    _permit: DurableCertifiedFetchLedgerJoinPermit,
+    verified: &VerifiedHeightContext,
+    key: LifecycleKey,
+    owner: OwnerId,
+    ordinal: u128,
+    stage: LifecycleStage,
+    reconstruction_source: LifecycleDigest,
+    payload: DurablePayloadReference,
+    authority: &LifecycleReplayAuthorityV1,
+    authenticate_body: F,
+) -> Result<Option<AuthenticatedRecoveredDurableCertifiedFetchV1>, DurableBodyFrameRecoveryError>
+where
+    F: FnOnce() -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError>,
+{
+    let active_context = super::projection::lifecycle_context(verified.context());
+    if ordinal == 0
+        || owner.first_admission_ordinal() == 0
+        || owner.first_admission_ordinal() > ordinal
+        || reconstruction_source != owner.causal_root().digest()
+    {
+        return Ok(None);
+    }
+    let Some(evidence) =
+        authority.recover_durable_certified_fetch(active_context, key, stage, payload)
+    else {
+        return Ok(None);
+    };
+    if !evidence.authenticated_by_verified_height(verified) {
+        return Ok(None);
+    }
+    // The body-store seal is minted only after the retained source list and QC
+    // have been authenticated by the immutable verified height context.
+    let body = authenticate_body()?;
+    let Some(durable_receipt) = body.into_certified_fetch_body(&evidence) else {
+        return Ok(None);
+    };
+    let Some((effect, pending)) = evidence.reconstruct_exact_fetch(owner.causal_root()) else {
+        return Ok(None);
+    };
+    let Some(ready_projection) =
+        evidence.project_durable_ready_fetch(&effect, &pending, &durable_receipt)
+    else {
+        return Ok(None);
+    };
+    let Some(candidate) = ready_projection.project_recovered_candidate(
+        active_context,
+        key,
+        owner,
+        stage,
+        reconstruction_source,
+        payload,
+        authority,
+    ) else {
+        return Ok(None);
+    };
+    let Ok(completion) = CertifiedFetchCompletion::from_recovered_durable_fetch(
+        owner,
+        ordinal,
+        effect,
+        pending,
+        durable_receipt,
+        evidence,
+        &ready_projection,
+    ) else {
+        return Ok(None);
+    };
+    let recovered = AuthenticatedRecoveredDurableCertifiedFetchV1 {
+        completion,
+        candidate,
+    };
+    Ok(recovered.is_exact().then_some(recovered))
+}
+
+impl CertifiedStoreReplayEvidenceV1 {
+    /// Compare this canonical family with one exact durable Store carrier.
+    pub(super) fn exactly_matches_store(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        certified_body_stage_matches(&self.family, effect, receipt, LifecycleStageKind::StoreBody)
+    }
+
+    /// Project one installed Store carrier without exposing its replay family.
+    ///
+    /// The registry-only one-shot permit proves the evidence, durable frame,
+    /// concrete effect, and pending binding still reside in one closed carrier.
+    pub(in crate::sumeragi) fn project_installed_store_candidate(
+        &self,
+        _permit: InstalledBodyCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        self.project_exact_store_candidate(verified, effect, receipt, pending)
+    }
+
+    /// Project one Store successor still sealed under its exact Fetch parent.
+    pub(in crate::sumeragi) fn project_sealed_store_successor_candidate(
+        &self,
+        _permit: SealedBodySuccessorProjectionPermit,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        self.project_exact_store_candidate(verified, effect, receipt, pending)
+    }
+
+    fn project_exact_store_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        if !self.exactly_matches_store(effect, receipt) {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let active_context = replay_context(receipt.round());
+        let payload = DurablePayloadReference::BodyFrame(
+            durable_body_frame_reference(active_context, receipt)
+                .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?,
+        );
+        let payload_binding = ReplayPayloadBindingV1::from_payload(payload);
+        if payload_binding != ReplayPayloadBindingV1::BodyFrame(self.family.body_frame) {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let authority = canonical_replay_authority(
+            active_context,
+            LifecycleReplaySourceV1::BodyPipeline(self.family.source.clone()),
+            LifecycleStageKind::StoreBody,
+            payload_binding,
+        )
+        .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?;
+        let projected = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            effect,
+            pending,
+        )?;
+        candidate_from_authorized_projection(active_context, projected, payload, authority)
+            .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
+    }
+
+    /// Project the canonical Store candidate for focused transition tests.
+    #[cfg(test)]
+    pub(super) fn project_candidate_for_test(
+        &self,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        self.project_exact_store_candidate(verified, effect, receipt, pending)
+    }
+
+    /// Replace only the retained event origin in a negative test fixture.
+    #[cfg(test)]
+    pub(super) fn replace_with_foreign_origin_for_test(&mut self) -> bool {
+        let previous = self.family.source.tag;
+        self.family.source.tag.generation = previous.generation.wrapping_add(1);
+        self.family.source.tag != previous
+    }
+
+    /// Project the fixed Validate-stage evidence without exposing source parts.
+    pub(super) fn project_validate(
+        &self,
+        store_effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CertifiedValidateReplayEvidenceV1> {
+        if !self.exactly_matches_store(store_effect, receipt)
+            || !certified_body_stage_matches(
+                &self.family,
+                validate_effect,
+                receipt,
+                LifecycleStageKind::ValidateBody,
+            )
+        {
+            return None;
+        }
+        Some(CertifiedValidateReplayEvidenceV1 {
+            family: self.family.clone(),
+            validate_pending: DirectSignedPendingBindingV1::from_exact_effect(
+                validate_effect,
+                validate_pending,
+            )?,
+        })
+    }
+}
+
+impl CertifiedValidateReplayEvidenceV1 {
+    /// Compare this canonical family and causal root with one exact Validate carrier.
+    fn exactly_matches_validate_pending(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        certified_body_stage_matches(
+            &self.family,
+            effect,
+            receipt,
+            LifecycleStageKind::ValidateBody,
+        ) && self.validate_pending.exactly_matches(effect, pending)
+    }
+
+    /// Revalidate the canonical family against its retained durable frame.
+    pub(super) fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
+        exact_family_coordinates(&self.family)
+            .and_then(|coordinates| certified_body_pipeline_family(&coordinates, receipt))
+            .is_some_and(|expected| {
+                expected == self.family
+                    && self
+                        .family
+                        .is_exact_for_stage(LifecycleStageKind::ValidateBody)
+            })
+    }
+}
+
+impl DurableValidateReplayEvidenceV1 {
+    /// Wrap one exact certified Validate family without exposing its source.
+    pub(super) const fn certified(evidence: CertifiedValidateReplayEvidenceV1) -> Self {
+        Self::Certified(evidence)
+    }
+
+    /// Wrap one exact ordinary remote-Proposal Validate family.
+    pub(super) const fn remote_proposal(evidence: RemoteProposalValidateReplayEvidenceV1) -> Self {
+        Self::RemoteProposal(evidence)
+    }
+
+    /// Compare the closed family with one exact Validate effect, body frame,
+    /// and causal pending binding.
+    pub(in crate::sumeragi) fn exactly_matches_validate_pending(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        match self {
+            Self::Certified(evidence) => {
+                evidence.exactly_matches_validate_pending(effect, receipt, pending)
+            }
+            Self::RemoteProposal(evidence) => {
+                evidence.exactly_matches_validate_pending(effect, receipt, pending)
+            }
+        }
+    }
+
+    /// Revalidate the closed family against its retained durable body frame.
+    pub(super) fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
+        match self {
+            Self::Certified(evidence) => evidence.exactly_matches_durable_body(receipt),
+            Self::RemoteProposal(evidence) => {
+                remote_proposal_validate_matches_durable_body(evidence, receipt)
+            }
+        }
+    }
+
+    /// Project one installed Validate carrier without exposing its replay family.
+    ///
+    /// The registry-only one-shot permit proves the evidence, durable frame,
+    /// concrete effect, and pending binding still reside in one closed carrier.
+    pub(in crate::sumeragi) fn project_installed_validate_candidate(
+        &self,
+        _permit: InstalledBodyCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        self.project_exact_validate_candidate(verified, effect, receipt, pending)
+    }
+
+    /// Project one Validate successor still sealed under its exact Store parent.
+    pub(in crate::sumeragi) fn project_sealed_validate_successor_candidate(
+        &self,
+        _permit: SealedBodySuccessorProjectionPermit,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        self.project_exact_validate_candidate(verified, effect, receipt, pending)
+    }
+
+    /// Replace only the retained event origin in a negative test fixture.
+    #[cfg(test)]
+    pub(super) fn replace_with_foreign_origin_for_test(&mut self) -> bool {
+        let source = match self {
+            Self::Certified(evidence) => &mut evidence.family.source,
+            Self::RemoteProposal(evidence) => &mut evidence.family.source,
+        };
+        let previous = source.tag;
+        source.tag.generation = previous.generation.wrapping_add(1);
+        source.tag != previous
+    }
+
+    /// Join this retained Validate origin to the exact body frame and runtime owner.
+    ///
+    /// The canonical body-pipeline authority remains private and is attached
+    /// only after the runtime projection, durable receipt, and retained
+    /// pending fingerprint all agree exactly.
+    pub(in crate::sumeragi) fn project_recovered_validate_candidate(
+        &self,
+        _permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        self.project_exact_validate_candidate(verified, effect, receipt, pending)
+            .ok()
+    }
+
+    fn project_exact_validate_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        if !self.exactly_matches_validate_pending(effect, receipt, pending) {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let active_context = replay_context(receipt.round());
+        let payload = DurablePayloadReference::BodyFrame(
+            durable_body_frame_reference(active_context, receipt)
+                .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?,
+        );
+        let payload_binding = ReplayPayloadBindingV1::from_payload(payload);
+        let source = match self {
+            Self::Certified(evidence) => {
+                if payload_binding != ReplayPayloadBindingV1::BodyFrame(evidence.family.body_frame)
+                {
+                    return Err(AdapterEffectAdmissionError::InvalidCarrier);
+                }
+                evidence.family.source.clone()
+            }
+            Self::RemoteProposal(evidence) => {
+                if payload_binding != ReplayPayloadBindingV1::BodyFrame(evidence.family.body_frame)
+                {
+                    return Err(AdapterEffectAdmissionError::InvalidCarrier);
+                }
+                evidence.family.source.clone()
+            }
+        };
+        let authority = canonical_replay_authority(
+            active_context,
+            LifecycleReplaySourceV1::BodyPipeline(source),
+            LifecycleStageKind::ValidateBody,
+            payload_binding,
+        )
+        .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?;
+        let projected = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            effect,
+            pending,
+        )?;
+        candidate_from_authorized_projection(active_context, projected, payload, authority)
+            .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
+    }
+
+    /// Project the canonical Validate candidate for focused transition tests.
+    #[cfg(test)]
+    pub(super) fn project_candidate_for_test(
+        &self,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        self.project_exact_validate_candidate(verified, effect, receipt, pending)
+    }
+
+    /// Consume the adapter's move-only registered-Prepare proof into the exact
+    /// canonical invalid-body report evidence.
+    ///
+    /// The capability is minted only by the fixed Ready/rejected adapter
+    /// preview. Callers cannot substitute the report certificate or child
+    /// pending binding, and decoded V1 data never reaches this constructor.
+    pub(in crate::sumeragi) fn seal_invalid_body_report(
+        capability: RegisteredPrepareInvalidBodyReportCapability,
+        validate_origin: Self,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        report_effect: &AdapterEffect,
+        report_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<InvalidBodyReportReplayEvidenceV1> {
+        if !capability.exactly_matches_report(report_effect)
+            || !validate_origin.exactly_matches_validate_pending(
+                validate_effect,
+                receipt,
+                validate_pending,
+            )
+        {
+            return None;
+        }
+        let projected_report_pending = validate_pending
+            .project_validate_report_invalid_certified_body_successor(
+                validate_effect,
+                report_effect,
+            )
+            .or_else(|| {
+                validate_pending
+                    .project_validate_report_invalid_certified_body_with_registered_prepare(
+                        validate_effect,
+                        report_effect,
+                        &capability,
+                    )
+            })?;
+        if &projected_report_pending != report_pending {
+            return None;
+        }
+        let authority = exact_invalid_body_report_authority(
+            &validate_origin,
+            validate_effect,
+            receipt,
+            report_effect,
+        )?;
+        let pending_fingerprint =
+            DirectSignedPendingBindingV1::from_exact_effect(report_effect, report_pending)?;
+        let evidence = InvalidBodyReportReplayEvidenceV1 {
+            authority,
+            validate_origin,
+            report_pending: pending_fingerprint,
+        };
+        evidence
+            .exactly_matches(
+                validate_effect,
+                validate_pending,
+                receipt,
+                report_effect,
+                report_pending,
+            )
+            .then_some(evidence)
+    }
+}
+
+impl InvalidBodyReportReplayEvidenceV1 {
+    /// Compare the complete body origin, rejection envelope, report effect,
+    /// and causal binding without exposing any retained part.
+    pub(in crate::sumeragi) fn exactly_matches(
+        &self,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        report_effect: &AdapterEffect,
+        report_pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.validate_origin.exactly_matches_validate_pending(
+            validate_effect,
+            receipt,
+            validate_pending,
+        ) && self
+            .report_pending
+            .exactly_matches(report_effect, report_pending)
+            && exact_invalid_body_report_authority(
+                &self.validate_origin,
+                validate_effect,
+                receipt,
+                report_effect,
+            )
+            .is_some_and(|expected| expected == self.authority)
+    }
+
+    /// Attach the retained invalid-body authority to its exact report shape.
+    ///
+    /// The private transition permit is borrowed across projection and remains
+    /// owned by the registry join. No decoded or caller-supplied report can
+    /// invoke this path.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn project_sealed_invalid_body_report_candidate(
+        &self,
+        _permit: &SealedInvalidBodyReportProjectionPermit,
+        verified: &VerifiedHeightContext,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        report_effect: &AdapterEffect,
+        report_pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        if !self.exactly_matches(
+            validate_effect,
+            validate_pending,
+            receipt,
+            report_effect,
+            report_pending,
+        ) {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let active_context = replay_context(receipt.round());
+        let projected = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            report_effect,
+            report_pending,
+        )?;
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            DurablePayloadReference::None,
+            self.authority.clone(),
+        )
+        .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
+    }
+}
+
+fn remote_proposal_validate_matches_durable_body(
+    evidence: &RemoteProposalValidateReplayEvidenceV1,
+    receipt: &DurableBodyReceipt,
+) -> bool {
+    let BodyPipelineOriginV1::Proposal(proposal) = &evidence.family.source.origin else {
+        return false;
+    };
+    let effect = AdapterEffect::ValidateBody {
+        tag: EventTag::new(
+            evidence.family.source.tag.height,
+            evidence.family.source.tag.view,
+            crate::sumeragi::v2_core::Generation::new(evidence.family.source.tag.generation),
+        ),
+        round: proposal.round,
+        subject: proposal.subject,
+    };
+    evidence.exactly_matches_validate(&effect, receipt)
+}
+
+fn exact_invalid_body_report_authority(
+    validate_origin: &DurableValidateReplayEvidenceV1,
+    validate_effect: &AdapterEffect,
+    receipt: &DurableBodyReceipt,
+    report_effect: &AdapterEffect,
+) -> Option<LifecycleReplayAuthorityV1> {
+    const CANONICAL_REJECTION_CODE: u8 = 0;
+
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = validate_effect
+    else {
+        return None;
+    };
+    let AdapterEffect::ReportInvalidCertifiedBody {
+        subject: report_subject,
+        certificate,
+    } = report_effect
+    else {
+        return None;
+    };
+    if certificate.phase != wire::GlobalPhase::Prepare
+        || certificate.round != *round
+        || certificate.proposal_round != *round
+        || certificate.subject != *subject
+        || *report_subject != *subject
+        || tag.height() != certificate.round.height
+        || tag.view() != certificate.round.view
+        || receipt.context_id() != round.context_id
+        || receipt.round() != *round
+        || receipt.subject() != *subject
+    {
+        return None;
+    }
+
+    let (validation_origin, manifest) = match validate_origin {
+        DurableValidateReplayEvidenceV1::Certified(evidence) => {
+            let coordinates = exact_family_coordinates(&evidence.family)?;
+            if coordinates.certificate != *certificate {
+                return None;
+            }
+            (evidence.family.source.clone(), coordinates.manifest)
+        }
+        DurableValidateReplayEvidenceV1::RemoteProposal(evidence) => {
+            let BodyPipelineOriginV1::Proposal(proposal) = &evidence.family.source.origin else {
+                return None;
+            };
+            if proposal.round != *round || proposal.subject != *subject {
+                return None;
+            }
+            (evidence.family.source.clone(), proposal.manifest.clone())
+        }
+    };
+    if receipt.manifest_hash() != HashOf::new(&manifest) {
+        return None;
+    }
+    let context = replay_context(certificate.round);
+    canonical_replay_authority(
+        context,
+        LifecycleReplaySourceV1::InvalidCertifiedBody(InvalidBodyReplaySourceV1 {
+            validation_origin,
+            certificate: certificate.clone(),
+            outcome: RejectedBodyOutcomeBindingV1 {
+                manifest,
+                body_frame_hash: *receipt.frame_hash().as_ref(),
+                rejection_code: CANONICAL_REJECTION_CODE,
+            },
+        }),
+        LifecycleStageKind::ReportInvalidBody,
+        ReplayPayloadBindingV1::None,
+    )
+}
+
+fn exact_certified_fetch_coordinates(
+    effect: &AdapterEffect,
+    response: &wire::CertifiedBodyResponse,
+) -> Option<CertifiedBodyPipelineCoordinatesV1> {
+    let AdapterEffect::FetchBody {
+        tag,
+        round,
+        subject,
+        manifest,
+        certificate,
+        ..
+    } = effect
+    else {
+        return None;
+    };
+    let certificate = certificate.as_ref()?;
+    if response.manifest.round != *round
+        || response.manifest.subject != *subject
+        || manifest
+            .as_ref()
+            .is_some_and(|expected| expected != &response.manifest)
+        || certificate.proposal_round != *round
+        || certificate.subject != *subject
+        || tag.height() != round.height
+        || tag.view() < round.view
+    {
+        return None;
+    }
+    Some(CertifiedBodyPipelineCoordinatesV1 {
+        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        certificate: certificate.clone(),
+        manifest: response.manifest.clone(),
+        fetch_manifest_present: manifest.is_some(),
+        certified_sources: match effect {
+            AdapterEffect::FetchBody {
+                certified_sources, ..
+            } => certified_sources.clone(),
+            _ => unreachable!("Fetch shape was checked above"),
+        },
+    })
+}
+
+fn exact_certified_body_pipeline_family(
+    coordinates: &CertifiedBodyPipelineCoordinatesV1,
+    receipt: &DurableBodyReceipt,
+) -> Option<CertifiedBodyPipelineReplayFamilyV1> {
+    let family = certified_body_pipeline_family(coordinates, receipt)?;
+    family.is_exact_all_stages().then_some(family)
+}
+
+fn certified_body_pipeline_family(
+    coordinates: &CertifiedBodyPipelineCoordinatesV1,
+    receipt: &DurableBodyReceipt,
+) -> Option<CertifiedBodyPipelineReplayFamilyV1> {
+    let certificate = &coordinates.certificate;
+    let manifest = &coordinates.manifest;
+    if receipt.context_id() != certificate.round.context_id
+        || receipt.round() != manifest.round
+        || receipt.subject() != manifest.subject
+        || receipt.manifest_hash() != HashOf::new(manifest)
+    {
+        return None;
+    }
+    let context = LifecycleContext::new(
+        digest_from_bytes(certificate.round.context_id.0.as_ref()),
+        certificate.round.height,
+    );
+    let frame = durable_body_frame_reference(context, receipt)?;
+    let source = BodyPipelineReplaySourceV1 {
+        tag: coordinates.tag,
+        origin: BodyPipelineOriginV1::Certified {
+            certificate: certificate.clone(),
+            manifest: manifest.clone(),
+            fetch_manifest_present: coordinates.fetch_manifest_present,
+            certified_sources: coordinates.certified_sources.clone(),
+        },
+    };
+    let ReplayPayloadBindingV1::BodyFrame(body_frame) =
+        ReplayPayloadBindingV1::from_payload(DurablePayloadReference::BodyFrame(frame))
+    else {
+        unreachable!("a durable body frame projects one body-frame binding")
+    };
+    Some(CertifiedBodyPipelineReplayFamilyV1 { source, body_frame })
+}
+
+fn canonical_replay_authority(
+    context: LifecycleContext,
+    source: LifecycleReplaySourceV1,
+    stage_kind: LifecycleStageKind,
+    payload: ReplayPayloadBindingV1,
+) -> Option<LifecycleReplayAuthorityV1> {
+    let shape = source.project(context, stage_kind, &payload).ok()?;
+    let authority = LifecycleReplayAuthorityV1 {
+        format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+        payload,
+        source,
+    };
+    authority
+        .validate_record(
+            context,
+            shape.key,
+            shape.work_class,
+            LifecycleStage::new(stage_kind, PredecessorScope::Independent),
+            match &authority.payload {
+                ReplayPayloadBindingV1::None => DurablePayloadReference::None,
+                ReplayPayloadBindingV1::BodyFrame(frame) => {
+                    DurablePayloadReference::BodyFrame(frame.durable_reference())
+                }
+                ReplayPayloadBindingV1::CertifiedServePending { .. }
+                | ReplayPayloadBindingV1::CertifiedServeCompleted { .. }
+                | ReplayPayloadBindingV1::CertifiedServeNegative { .. } => return None,
+            },
+        )
+        .ok()?;
+    let canonical = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode()).ok()?;
+    (canonical == authority).then_some(canonical)
+}
+
+/// Classify the private recovered-Decision body continuation family.
+///
+/// `None` means neither side belongs to this family and the ordinary body-edge
+/// rules apply. `Some(false)` is a hard mismatch: once the payload-free
+/// `FetchDecision` or a recovered-Decision body source appears, it cannot be
+/// spliced to a generic body family or skip an intermediate stage.
+pub(super) fn recovered_decision_body_continuation_is_exact(
+    edge: super::schema::DurableContinuationEdge,
+    parent: &LifecycleReplayAuthorityV1,
+    parent_payload: DurablePayloadReference,
+    child: &LifecycleReplayAuthorityV1,
+    child_payload: DurablePayloadReference,
+) -> Option<bool> {
+    let fetch = recovered_decision_fetch_parts(parent);
+    let parent_body = recovered_decision_body_parts(parent);
+    let child_body = recovered_decision_body_parts(child);
+    let family_present = fetch.is_some() || parent_body.is_some() || child_body.is_some();
+    if !family_present {
+        return None;
+    }
+    let canonical = |authority: &LifecycleReplayAuthorityV1, payload: DurablePayloadReference| {
+        authority.payload.matches(payload)
+            && LifecycleReplayAuthorityV1::decode_canonical(&authority.encode())
+                .is_ok_and(|decoded| decoded == *authority)
+    };
+    if !canonical(parent, parent_payload) || !canonical(child, child_payload) {
+        return Some(false);
+    }
+    Some(match edge {
+        super::schema::DurableContinuationEdge::FetchToStore => {
+            let (fetch_locator, fetch_tag, fetch_certificate) = match fetch {
+                Some(parts) => parts,
+                None => return Some(false),
+            };
+            let (body_source, body_frame) = match child_body {
+                Some(parts) => parts,
+                None => return Some(false),
+            };
+            parent_payload == DurablePayloadReference::None
+                && child_payload
+                    == DurablePayloadReference::BodyFrame(body_frame.durable_reference())
+                && body_source.locator == fetch_locator
+                && body_source.tag == fetch_tag
+                && body_source.certificate == &fetch_certificate
+        }
+        super::schema::DurableContinuationEdge::StoreToValidate => {
+            parent_body.is_some()
+                && child_body.is_some()
+                && parent == child
+                && parent_payload == child_payload
+                && matches!(parent_payload, DurablePayloadReference::BodyFrame(_))
+        }
+        super::schema::DurableContinuationEdge::ValidateToApply => {
+            let (body_source, body_frame) = match parent_body {
+                Some(parts) => parts,
+                None => return Some(false),
+            };
+            let (apply_locator, apply_tag, apply_certificate, apply_frame) =
+                match recovered_decision_apply_parts(child) {
+                    Some(parts) => parts,
+                    None => return Some(false),
+                };
+            parent_payload == DurablePayloadReference::BodyFrame(body_frame.durable_reference())
+                && child_payload
+                    == DurablePayloadReference::BodyFrame(apply_frame.durable_reference())
+                && body_frame == apply_frame
+                && body_source.locator == apply_locator
+                && body_source.tag == apply_tag
+                && body_source.certificate == apply_certificate
+        }
+        super::schema::DurableContinuationEdge::ValidateToInvalidBodyReport
+        | super::schema::DurableContinuationEdge::ValidateToSignPrepare
+        | super::schema::DurableContinuationEdge::ValidateToSignCommit => false,
+    })
+}
+
+fn recovered_decision_fetch_parts(
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<(
+    PersistedWalFrameLocatorV1,
+    ReplayEventTagV1,
+    wire::QuorumCertificate,
+)> {
+    let (
+        ReplayPayloadBindingV1::None,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role,
+            tag,
+            action:
+                WalReplayActionV1::FetchDecision {
+                    certificate,
+                    certified_sources,
+                },
+        }),
+    ) = (&authority.payload, &authority.source)
+    else {
+        return None;
+    };
+    (authority.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+        && locator.is_exact()
+        && role.matches(ReplayWalRoleV1::DECISION)
+        && certificate.phase == wire::GlobalPhase::Commit
+        && certified_sources_are_bounded_unique(certified_sources)
+        && !certified_sources.is_empty())
+    .then_some((*locator, *tag, certificate.clone()))
+}
+
+struct RecoveredDecisionBodyReplayParts<'authority> {
+    locator: PersistedWalFrameLocatorV1,
+    tag: ReplayEventTagV1,
+    certificate: &'authority wire::QuorumCertificate,
+}
+
+fn recovered_decision_body_parts(
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<(RecoveredDecisionBodyReplayParts<'_>, BodyFrameBindingV1)> {
+    let (
+        ReplayPayloadBindingV1::BodyFrame(body_frame),
+        LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag,
+            origin:
+                BodyPipelineOriginV1::RecoveredDecision {
+                    locator,
+                    certificate,
+                    manifest,
+                },
+        }),
+    ) = (&authority.payload, &authority.source)
+    else {
+        return None;
+    };
+    (authority.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+        && locator.is_exact()
+        && certificate.phase == wire::GlobalPhase::Commit
+        && body_frame.matches_origin(
+            replay_context(certificate.round),
+            certificate.proposal_round,
+            certificate.subject,
+        )
+        && body_frame.manifest == *HashOf::new(manifest).as_ref())
+    .then_some((
+        RecoveredDecisionBodyReplayParts {
+            locator: *locator,
+            tag: *tag,
+            certificate,
+        },
+        *body_frame,
+    ))
+}
+
+fn recovered_decision_apply_parts(
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<(
+    PersistedWalFrameLocatorV1,
+    ReplayEventTagV1,
+    &wire::QuorumCertificate,
+    BodyFrameBindingV1,
+)> {
+    let (
+        ReplayPayloadBindingV1::BodyFrame(body_frame),
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role,
+            tag,
+            action: WalReplayActionV1::ApplyDecision(certificate),
+        }),
+    ) = (&authority.payload, &authority.source)
+    else {
+        return None;
+    };
+    (authority.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+        && locator.is_exact()
+        && role.matches(ReplayWalRoleV1::DECISION)
+        && certificate.phase == wire::GlobalPhase::Commit
+        && body_frame.matches_origin(
+            replay_context(certificate.round),
+            certificate.proposal_round,
+            certificate.subject,
+        ))
+    .then_some((*locator, *tag, certificate, *body_frame))
+}
+
+impl CertifiedBodyPipelineReplayFamilyV1 {
+    fn is_exact_all_stages(&self) -> bool {
+        self.is_exact_for_stage(LifecycleStageKind::FetchBody)
+            && self.is_exact_for_stage(LifecycleStageKind::StoreBody)
+            && self.is_exact_for_stage(LifecycleStageKind::ValidateBody)
+    }
+
+    fn is_exact_for_stage(&self, stage: LifecycleStageKind) -> bool {
+        let Some(coordinates) = exact_family_coordinates(self) else {
+            return false;
+        };
+        let context = LifecycleContext::new(
+            digest_from_bytes(coordinates.certificate.round.context_id.0.as_ref()),
+            coordinates.certificate.round.height,
+        );
+        let source = LifecycleReplaySourceV1::BodyPipeline(self.source.clone());
+        let payload = match stage {
+            LifecycleStageKind::FetchBody
+            | LifecycleStageKind::StoreBody
+            | LifecycleStageKind::ValidateBody => {
+                ReplayPayloadBindingV1::BodyFrame(self.body_frame)
+            }
+            _ => return false,
+        };
+        canonical_replay_authority(context, source, stage, payload).is_some()
+    }
+}
+
+fn exact_family_coordinates(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+) -> Option<CertifiedBodyPipelineCoordinatesV1> {
+    let BodyPipelineOriginV1::Certified {
+        certificate,
+        manifest,
+        fetch_manifest_present,
+        certified_sources,
+    } = &family.source.origin
+    else {
+        return None;
+    };
+    Some(CertifiedBodyPipelineCoordinatesV1 {
+        tag: family.source.tag,
+        certificate: certificate.clone(),
+        manifest: manifest.clone(),
+        fetch_manifest_present: *fetch_manifest_present,
+        certified_sources: certified_sources.clone(),
+    })
+}
+
+fn exact_certified_fetch_effect(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+) -> Option<AdapterEffect> {
+    let coordinates = exact_family_coordinates(family)?;
+    Some(AdapterEffect::FetchBody {
+        tag: EventTag::new(
+            coordinates.tag.height,
+            coordinates.tag.view,
+            crate::sumeragi::v2_core::Generation::new(coordinates.tag.generation),
+        ),
+        round: coordinates.certificate.proposal_round,
+        subject: coordinates.certificate.subject,
+        manifest: coordinates
+            .fetch_manifest_present
+            .then_some(coordinates.manifest),
+        certified_sources: coordinates.certified_sources,
+        certificate: Some(coordinates.certificate),
+    })
+}
+
+fn durable_certified_fetch_projection(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+    effect: &AdapterEffect,
+    pending: &PendingRuntimeEffectBinding,
+    receipt: &DurableBodyReceipt,
+) -> Option<DurableCertifiedFetchReplayProjectionV1> {
+    if exact_certified_fetch_effect(family).as_ref() != Some(effect)
+        || !pending.exactly_binds_adapter_effect(effect)
+        || certified_body_pipeline_family(&exact_family_coordinates(family)?, receipt).as_ref()
+            != Some(family)
+    {
+        return None;
+    }
+    let context = replay_context(receipt.round());
+    let payload =
+        DurablePayloadReference::BodyFrame(durable_body_frame_reference(context, receipt)?);
+    let authority = canonical_replay_authority(
+        context,
+        LifecycleReplaySourceV1::BodyPipeline(family.source.clone()),
+        LifecycleStageKind::FetchBody,
+        ReplayPayloadBindingV1::from_payload(payload),
+    )?;
+    let causal_key = *pending.causal_lifecycle_key();
+    let effect_identity = *pending.exact_effect_identity();
+    let completion_digest = canonical_durable_certified_fetch_completion_digest(
+        causal_key,
+        effect_identity,
+        &authority,
+    );
+    Some(DurableCertifiedFetchReplayProjectionV1 {
+        payload,
+        authority,
+        causal_key,
+        effect_identity,
+        completion_digest,
+        expected_manifest_hash: receipt.manifest_hash(),
+    })
+}
+
+fn canonical_durable_certified_fetch_completion_digest(
+    causal_key: Hash,
+    effect_identity: Hash,
+    authority: &LifecycleReplayAuthorityV1,
+) -> LifecycleDigest {
+    const DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:durable-certified-fetch:v1";
+    let encoded_authority = authority.encode();
+    let mut preimage =
+        Vec::with_capacity(DOMAIN.len() + 1 + Hash::LENGTH * 2 + 8 + encoded_authority.len());
+    preimage.extend_from_slice(DOMAIN);
+    preimage.push(0);
+    preimage.extend_from_slice(causal_key.as_ref());
+    preimage.extend_from_slice(effect_identity.as_ref());
+    preimage.extend_from_slice(
+        &u64::try_from(encoded_authority.len())
+            .expect("bounded replay authority encoding fits u64")
+            .to_le_bytes(),
+    );
+    preimage.extend_from_slice(&encoded_authority);
+    digest_from_hash(&Hash::new(preimage))
+}
+
+fn certified_body_stage_matches(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+    effect: &AdapterEffect,
+    receipt: &DurableBodyReceipt,
+    stage: LifecycleStageKind,
+) -> bool {
+    let Some(coordinates) = exact_family_coordinates(family) else {
+        return false;
+    };
+    let exact_effect = match (stage, effect) {
+        (
+            LifecycleStageKind::StoreBody,
+            AdapterEffect::StoreBody {
+                tag,
+                round,
+                subject,
+            },
+        )
+        | (
+            LifecycleStageKind::ValidateBody,
+            AdapterEffect::ValidateBody {
+                tag,
+                round,
+                subject,
+            },
+        ) => {
+            coordinates.tag
+                == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+                && *round == coordinates.certificate.round
+                && *subject == coordinates.certificate.subject
+        }
+        _ => false,
+    };
+    exact_effect
+        && certified_body_pipeline_family(&coordinates, receipt)
+            .is_some_and(|expected| expected == *family && family.is_exact_for_stage(stage))
+}
+
+fn exact_live_wal_replay_projection(
+    wal_identity: &LiveWalFrameIdentity,
+    effect: &AdapterEffect,
+) -> Option<LiveWalReplayProjectionV1> {
+    if !wal_identity.is_exact() {
+        return None;
+    }
+    let (tag, round, role, stage, action) = match effect {
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Proposal(proposal),
+        } => (
+            *tag,
+            proposal.round,
+            ReplayWalRoleV1::PROPOSAL_INTENT,
+            LifecycleStageKind::SignProposal,
+            WalReplayActionV1::SignProposal(proposal.clone()),
+        ),
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(vote),
+        } => {
+            let (role, stage) = match vote.phase {
+                wire::GlobalPhase::Prepare => (
+                    ReplayWalRoleV1::PREPARE_INTENT,
+                    LifecycleStageKind::SignPrepareVote,
+                ),
+                wire::GlobalPhase::Commit => (
+                    ReplayWalRoleV1::LOCK_AND_COMMIT,
+                    LifecycleStageKind::SignCommitVote,
+                ),
+            };
+            (
+                *tag,
+                vote.round,
+                role,
+                stage,
+                WalReplayActionV1::SignVote(vote.clone()),
+            )
+        }
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::TimeoutVote(vote),
+        } => (
+            *tag,
+            vote.round,
+            ReplayWalRoleV1::TIMEOUT_INTENT,
+            LifecycleStageKind::SignTimeoutVote,
+            WalReplayActionV1::SignTimeoutVote(vote.clone()),
+        ),
+        AdapterEffect::Apply {
+            tag, certificate, ..
+        } => (
+            *tag,
+            certificate.round,
+            ReplayWalRoleV1::DECISION,
+            LifecycleStageKind::ApplyDecision,
+            WalReplayActionV1::ApplyDecision(certificate.clone()),
+        ),
+        AdapterEffect::EnterView {
+            tag,
+            certificate,
+            protected_lock,
+        } => (
+            *tag,
+            certificate.round,
+            ReplayWalRoleV1::INSTALL_TIMEOUT,
+            LifecycleStageKind::EnterView,
+            WalReplayActionV1::EnterView {
+                certificate: certificate.clone(),
+                protected_lock: protected_lock.clone(),
+            },
+        ),
+        AdapterEffect::Broadcast(_)
+        | AdapterEffect::FetchBody { .. }
+        | AdapterEffect::StoreBody { .. }
+        | AdapterEffect::ValidateBody { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => return None,
+    };
+    let context = replay_context(round);
+    let replay_tag = ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get());
+    let source = WalReplaySourceV1 {
+        locator: wal_identity.persisted_locator(),
+        role,
+        tag: replay_tag,
+        action,
+    };
+    if stage == LifecycleStageKind::ApplyDecision {
+        let WalReplayActionV1::ApplyDecision(certificate) = &source.action else {
+            unreachable!("Apply stage is constructed from one Decision action")
+        };
+        if !source.locator.is_exact()
+            || !source.role.matches(ReplayWalRoleV1::DECISION)
+            || !qc_shape(context, certificate)
+            || certificate.phase != wire::GlobalPhase::Commit
+            || !source.tag.matches_round(context, certificate.round)
+        {
+            return None;
+        }
+    }
+    Some(LiveWalReplayProjectionV1 {
+        context,
+        stage,
+        source,
+    })
+}
+
+fn canonical_wal_source(source: &WalReplaySourceV1) -> bool {
+    let encoded = source.encode();
+    if encoded.is_empty() || encoded.len() > MAX_REPLAY_AUTHORITY_BYTES {
+        return false;
+    }
+    let mut cursor = encoded.as_slice();
+    WalReplaySourceV1::decode_all(&mut cursor).is_ok_and(|canonical| {
+        cursor.is_empty() && canonical == *source && canonical.encode() == encoded
+    })
+}
+
+fn exact_recovered_wal_control_authority(
+    locator: RecoveredWalFrameIdentity,
+    effect: &AdapterEffect,
+) -> Option<LifecycleReplayAuthorityV1> {
+    if !locator.is_exact() {
+        return None;
+    }
+    let (
+        tag,
+        round,
+        role,
+        work_class,
+        phase,
+        stage_kind,
+        action,
+        proposal_round,
+        subject,
+        execution,
+    ) = match effect {
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Proposal(proposal),
+        } => (
+            *tag,
+            proposal.round,
+            ReplayWalRoleV1::PROPOSAL_INTENT,
+            LifecycleWorkClass::SignProposal,
+            LifecyclePhase::Proposal,
+            LifecycleStageKind::SignProposal,
+            WalReplayActionV1::SignProposal(proposal.clone()),
+            Some(proposal.round),
+            Some(block_subject(proposal.subject)),
+            None,
+        ),
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::TimeoutVote(vote),
+        } => (
+            *tag,
+            vote.round,
+            ReplayWalRoleV1::TIMEOUT_INTENT,
+            LifecycleWorkClass::SignTimeout,
+            LifecyclePhase::Timeout,
+            LifecycleStageKind::SignTimeoutVote,
+            WalReplayActionV1::SignTimeoutVote(vote.clone()),
+            vote.highest_prepare_qc
+                .as_ref()
+                .map(|certificate| certificate.proposal_round),
+            vote.highest_prepare_qc
+                .as_ref()
+                .map(|certificate| block_subject(certificate.subject)),
+            vote.highest_prepare_qc
+                .as_ref()
+                .map(|certificate| execution_commitment(certificate.execution_commitment)),
+        ),
+        AdapterEffect::Sign {
+            request: SignRequest::Vote(_),
+            ..
+        }
+        | AdapterEffect::Broadcast(_)
+        | AdapterEffect::FetchBody { .. }
+        | AdapterEffect::StoreBody { .. }
+        | AdapterEffect::ValidateBody { .. }
+        | AdapterEffect::Apply { .. }
+        | AdapterEffect::EnterView { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => return None,
+    };
+    if tag.height() != round.height || tag.view() != round.view {
+        return None;
+    }
+    let context =
+        LifecycleContext::new(digest_from_bytes(round.context_id.0.as_ref()), round.height);
+    let source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+        locator: locator.persisted_locator(),
+        role,
+        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        action,
+    });
+    let payload = ReplayPayloadBindingV1::None;
+    let shape = source.project(context, stage_kind, &payload).ok()?;
+    if shape.work_class != work_class
+        || shape.stage_kind != stage_kind
+        || shape.key != lifecycle_key(context, round, proposal_round, subject, phase, execution)
+    {
+        return None;
+    }
+    let authority = LifecycleReplayAuthorityV1 {
+        format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+        payload,
+        source,
+    };
+    authority
+        .validate_record(
+            context,
+            shape.key,
+            work_class,
+            LifecycleStage::new(stage_kind, PredecessorScope::Independent),
+            DurablePayloadReference::None,
+        )
+        .ok()
+        .map(|_| authority)
+}
+
+fn exact_recovered_wal_decision_fetch_authority(
+    verified: &VerifiedHeightContext,
+    locator: RecoveredWalFrameIdentity,
+    effect: &AdapterEffect,
+) -> Option<LifecycleReplayAuthorityV1> {
+    if !locator.is_exact() {
+        return None;
+    }
+    let AdapterEffect::FetchBody {
+        tag,
+        round,
+        subject,
+        manifest: None,
+        certified_sources,
+        certificate: Some(certificate),
+    } = effect
+    else {
+        return None;
+    };
+    let expected_sources = verified
+        .context()
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    if certificate.phase != wire::GlobalPhase::Commit
+        || certificate.proposal_round != *round
+        || certificate.subject != *subject
+        || certified_sources != &expected_sources
+        || tag.height() != certificate.round.height
+        || tag.view() < certificate.round.view
+        || verified.verify_quorum_certificate(certificate).is_err()
+    {
+        return None;
+    }
+    let context = super::projection::lifecycle_context(verified.context());
+    let source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+        locator: locator.persisted_locator(),
+        role: ReplayWalRoleV1::DECISION,
+        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        action: WalReplayActionV1::FetchDecision {
+            certificate: certificate.clone(),
+            certified_sources: certified_sources.clone(),
+        },
+    });
+    let payload = ReplayPayloadBindingV1::None;
+    let shape = source
+        .project(context, LifecycleStageKind::FetchBody, &payload)
+        .ok()?;
+    if shape.work_class != LifecycleWorkClass::Fetch
+        || shape.stage_kind != LifecycleStageKind::FetchBody
+        || shape.key
+            != lifecycle_key(
+                context,
+                certificate.round,
+                Some(certificate.proposal_round),
+                Some(block_subject(certificate.subject)),
+                LifecyclePhase::Fetch,
+                Some(execution_commitment(certificate.execution_commitment)),
+            )
+    {
+        return None;
+    }
+    let authority = LifecycleReplayAuthorityV1 {
+        format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+        payload,
+        source,
+    };
+    authority
+        .validate_record(
+            context,
+            shape.key,
+            LifecycleWorkClass::Fetch,
+            LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+            DurablePayloadReference::None,
+        )
+        .ok()?;
+    Some(authority)
+}
+
+fn exact_recovered_wal_vote_authority(
+    locator: RecoveredWalFrameIdentity,
+    tag: EventTag,
+    vote: &wire::Vote,
+) -> Option<LifecycleReplayAuthorityV1> {
+    let tag_matches_vote = tag.height() == vote.round.height
+        && match vote.phase {
+            wire::GlobalPhase::Prepare => tag.view() == vote.round.view,
+            wire::GlobalPhase::Commit => tag.view() >= vote.round.view,
+        };
+    if !locator.is_exact() || !tag_matches_vote {
+        return None;
+    }
+    let (role, phase, stage_kind) = match vote.phase {
+        wire::GlobalPhase::Prepare => (
+            ReplayWalRoleV1::PREPARE_INTENT,
+            LifecyclePhase::Prepare,
+            LifecycleStageKind::SignPrepareVote,
+        ),
+        wire::GlobalPhase::Commit => (
+            ReplayWalRoleV1::LOCK_AND_COMMIT,
+            LifecyclePhase::Commit,
+            LifecycleStageKind::SignCommitVote,
+        ),
+    };
+    let context = LifecycleContext::new(
+        digest_from_bytes(vote.round.context_id.0.as_ref()),
+        vote.round.height,
+    );
+    let payload = ReplayPayloadBindingV1::None;
+    let source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+        locator: locator.persisted_locator(),
+        role,
+        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        action: WalReplayActionV1::SignVote(vote.clone()),
+    });
+    let shape = source.project(context, stage_kind, &payload).ok()?;
+    if shape.work_class != LifecycleWorkClass::SignVote
+        || shape.stage_kind != stage_kind
+        || shape.key
+            != lifecycle_key(
+                context,
+                vote.round,
+                Some(vote.proposal_round),
+                Some(block_subject(vote.subject)),
+                phase,
+                Some(execution_commitment(vote.execution_commitment)),
+            )
+    {
+        return None;
+    }
+    let authority = LifecycleReplayAuthorityV1 {
+        format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+        payload,
+        source,
+    };
+    authority
+        .validate_record(
+            context,
+            shape.key,
+            LifecycleWorkClass::SignVote,
+            LifecycleStage::new(stage_kind, PredecessorScope::Independent),
+            DurablePayloadReference::None,
+        )
+        .ok()?;
+    Some(authority)
+}
+
+impl WalReplaySourceV1 {
+    fn project(
+        &self,
+        context: LifecycleContext,
+        requested_stage: LifecycleStageKind,
+        payload: &ReplayPayloadBindingV1,
+    ) -> Result<ReplayShape, ReplayAuthorityValidationError> {
+        if !self.locator.is_exact() {
+            return Err(ReplayAuthorityValidationError::InvalidSource);
+        }
+        let shape = match &self.action {
+            WalReplayActionV1::SignProposal(proposal) => {
+                if !self.role.matches(ReplayWalRoleV1::PROPOSAL_INTENT)
+                    || !proposal_shape(context, proposal, false)
+                    || !self.tag.matches_round(context, proposal.round)
+                    || self.tag.view != proposal.round.view
+                    || !payload.is_none()
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                }
+                ReplayShape::new(
+                    lifecycle_key(
+                        context,
+                        proposal.round,
+                        Some(proposal.round),
+                        Some(block_subject(proposal.subject)),
+                        LifecyclePhase::Proposal,
+                        None,
+                    ),
+                    LifecycleWorkClass::SignProposal,
+                    LifecycleStageKind::SignProposal,
+                )
+            }
+            WalReplayActionV1::SignVote(vote) => {
+                let (role, phase, stage_kind) = match vote.phase {
+                    wire::GlobalPhase::Prepare => (
+                        ReplayWalRoleV1::PREPARE_INTENT,
+                        LifecyclePhase::Prepare,
+                        LifecycleStageKind::SignPrepareVote,
+                    ),
+                    wire::GlobalPhase::Commit => (
+                        ReplayWalRoleV1::LOCK_AND_COMMIT,
+                        LifecyclePhase::Commit,
+                        LifecycleStageKind::SignCommitVote,
+                    ),
+                };
+                let tag_matches_vote = self.tag.matches_round(context, vote.round)
+                    && match vote.phase {
+                        wire::GlobalPhase::Prepare => self.tag.view == vote.round.view,
+                        wire::GlobalPhase::Commit => true,
+                    };
+                if !self.role.matches(role)
+                    || !vote_shape(context, vote, false)
+                    || !tag_matches_vote
+                    || !payload.is_none()
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                }
+                ReplayShape::new(
+                    lifecycle_key(
+                        context,
+                        vote.round,
+                        Some(vote.proposal_round),
+                        Some(block_subject(vote.subject)),
+                        phase,
+                        Some(execution_commitment(vote.execution_commitment)),
+                    ),
+                    LifecycleWorkClass::SignVote,
+                    stage_kind,
+                )
+            }
+            WalReplayActionV1::SignTimeoutVote(vote) => {
+                if !self.role.matches(ReplayWalRoleV1::TIMEOUT_INTENT)
+                    || !timeout_vote_shape(context, vote, false)
+                    || !self.tag.matches_round(context, vote.round)
+                    || self.tag.view != vote.round.view
+                    || !payload.is_none()
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                }
+                let highest = vote.highest_prepare_qc.as_ref();
+                ReplayShape::new(
+                    lifecycle_key(
+                        context,
+                        vote.round,
+                        highest.map(|qc| qc.proposal_round),
+                        highest.map(|qc| block_subject(qc.subject)),
+                        LifecyclePhase::Timeout,
+                        highest.map(|qc| execution_commitment(qc.execution_commitment)),
+                    ),
+                    LifecycleWorkClass::SignTimeout,
+                    LifecycleStageKind::SignTimeoutVote,
+                )
+            }
+            WalReplayActionV1::ApplyDecision(certificate) => {
+                if !self.role.matches(ReplayWalRoleV1::DECISION)
+                    || !qc_shape(context, certificate)
+                    || certificate.phase != wire::GlobalPhase::Commit
+                    || !self.tag.matches_round(context, certificate.round)
+                    || !payload.matches_body_origin(
+                        context,
+                        certificate.proposal_round,
+                        certificate.subject,
+                    )
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                }
+                ReplayShape::new(
+                    lifecycle_key(
+                        context,
+                        certificate.round,
+                        Some(certificate.proposal_round),
+                        Some(block_subject(certificate.subject)),
+                        LifecyclePhase::Apply,
+                        Some(execution_commitment(certificate.execution_commitment)),
+                    ),
+                    LifecycleWorkClass::Apply,
+                    LifecycleStageKind::ApplyDecision,
+                )
+            }
+            WalReplayActionV1::FetchDecision {
+                certificate,
+                certified_sources,
+            } => {
+                if !self.role.matches(ReplayWalRoleV1::DECISION)
+                    || !qc_shape(context, certificate)
+                    || certificate.phase != wire::GlobalPhase::Commit
+                    || !self.tag.matches_round(context, certificate.round)
+                    || certified_sources.is_empty()
+                    || certified_sources.len() > wire::MAX_VALIDATORS_PER_HEIGHT
+                    || certified_sources
+                        .iter()
+                        .enumerate()
+                        .any(|(index, source)| certified_sources[..index].contains(source))
+                    || !payload.is_none()
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                }
+                ReplayShape::new(
+                    lifecycle_key(
+                        context,
+                        certificate.round,
+                        Some(certificate.proposal_round),
+                        Some(block_subject(certificate.subject)),
+                        LifecyclePhase::Fetch,
+                        Some(execution_commitment(certificate.execution_commitment)),
+                    ),
+                    LifecycleWorkClass::Fetch,
+                    LifecycleStageKind::FetchBody,
+                )
+            }
+            WalReplayActionV1::EnterView {
+                certificate,
+                protected_lock,
+            } => {
+                if !self.role.matches(ReplayWalRoleV1::INSTALL_TIMEOUT)
+                    || !timeout_certificate_shape(context, certificate)
+                    || !enter_view_shape(context, self.tag, certificate, protected_lock.as_ref())
+                    || !payload.is_none()
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                }
+                let execution_round = wire::ConsensusRound {
+                    context_id: certificate.round.context_id,
+                    height: certificate.round.height,
+                    view: self.tag.view,
+                };
+                ReplayShape::new(
+                    lifecycle_key(
+                        context,
+                        execution_round,
+                        protected_lock.as_ref().map(|lock| lock.proposal_round),
+                        protected_lock
+                            .as_ref()
+                            .map(|lock| block_subject(lock.subject)),
+                        LifecyclePhase::EnterView,
+                        protected_lock
+                            .as_ref()
+                            .map(|lock| execution_commitment(lock.execution_commitment)),
+                    ),
+                    LifecycleWorkClass::EnterView,
+                    LifecycleStageKind::EnterView,
+                )
+            }
+        };
+        (shape.stage_kind == requested_stage)
+            .then_some(shape)
+            .ok_or(ReplayAuthorityValidationError::RecordMismatch)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct BodyPipelineReplaySourceV1 {
+    tag: ReplayEventTagV1,
+    origin: BodyPipelineOriginV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum BodyPipelineOriginV1 {
+    #[codec(index = 0)]
+    Proposal(wire::Proposal),
+    #[codec(index = 1)]
+    Certified {
+        certificate: wire::QuorumCertificate,
+        manifest: wire::PayloadManifest,
+        fetch_manifest_present: bool,
+        certified_sources: Vec<PeerId>,
+    },
+    #[codec(index = 2)]
+    LocalBody(wire::PayloadManifest),
+    #[codec(index = 3)]
+    RecoveredDecision {
+        locator: PersistedWalFrameLocatorV1,
+        certificate: wire::QuorumCertificate,
+        manifest: wire::PayloadManifest,
+    },
+}
+
+impl BodyPipelineReplaySourceV1 {
+    fn project(
+        &self,
+        context: LifecycleContext,
+        requested_stage: LifecycleStageKind,
+        payload: &ReplayPayloadBindingV1,
+    ) -> Result<ReplayShape, ReplayAuthorityValidationError> {
+        let (round, proposal_round, subject, commitment, manifest, local_body, recovered_decision) =
+            match &self.origin {
+                BodyPipelineOriginV1::Proposal(proposal) => {
+                    if !proposal_shape(context, proposal, true) {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        proposal.round,
+                        proposal.round,
+                        proposal.subject,
+                        None,
+                        Some(&proposal.manifest),
+                        false,
+                        false,
+                    )
+                }
+                BodyPipelineOriginV1::Certified {
+                    certificate,
+                    manifest,
+                    fetch_manifest_present: _,
+                    certified_sources,
+                } => {
+                    if !qc_shape(context, certificate)
+                        || !manifest_matches_origin(
+                            context,
+                            manifest,
+                            certificate.proposal_round,
+                            certificate.subject,
+                        )
+                        || !certified_sources_are_bounded_unique(certified_sources)
+                    {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        certificate.round,
+                        certificate.proposal_round,
+                        certificate.subject,
+                        Some(execution_commitment(certificate.execution_commitment)),
+                        Some(manifest),
+                        false,
+                        false,
+                    )
+                }
+                BodyPipelineOriginV1::LocalBody(manifest) => {
+                    if !round_matches_context(context, manifest.round) {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        manifest.round,
+                        manifest.round,
+                        manifest.subject,
+                        None,
+                        Some(manifest),
+                        true,
+                        false,
+                    )
+                }
+                BodyPipelineOriginV1::RecoveredDecision {
+                    locator,
+                    certificate,
+                    manifest,
+                } => {
+                    if !locator.is_exact()
+                        || !qc_shape(context, certificate)
+                        || certificate.phase != wire::GlobalPhase::Commit
+                        || !manifest_matches_origin(
+                            context,
+                            manifest,
+                            certificate.proposal_round,
+                            certificate.subject,
+                        )
+                    {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        certificate.round,
+                        certificate.proposal_round,
+                        certificate.subject,
+                        Some(execution_commitment(certificate.execution_commitment)),
+                        Some(manifest),
+                        false,
+                        true,
+                    )
+                }
+            };
+        if !self.tag.matches_round(context, round) {
+            return Err(ReplayAuthorityValidationError::InvalidSource);
+        }
+        let (phase, work_class) = match requested_stage {
+            LifecycleStageKind::FetchBody if !recovered_decision => {
+                (LifecyclePhase::Fetch, LifecycleWorkClass::Fetch)
+            }
+            LifecycleStageKind::StoreBody => (LifecyclePhase::Store, LifecycleWorkClass::Store),
+            LifecycleStageKind::ValidateBody => {
+                (LifecyclePhase::Validate, LifecycleWorkClass::Validate)
+            }
+            _ => return Err(ReplayAuthorityValidationError::RecordMismatch),
+        };
+        if local_body && requested_stage == LifecycleStageKind::FetchBody {
+            return Err(ReplayAuthorityValidationError::RecordMismatch);
+        }
+        let key = lifecycle_key(
+            context,
+            round,
+            Some(proposal_round),
+            Some(block_subject(subject)),
+            phase,
+            commitment,
+        );
+        match requested_stage {
+            LifecycleStageKind::FetchBody
+                if payload.is_none()
+                    || (!local_body
+                        && manifest.is_some_and(|manifest| {
+                            payload.matches_exact_body(context, proposal_round, subject, manifest)
+                        })) => {}
+            LifecycleStageKind::StoreBody | LifecycleStageKind::ValidateBody
+                if manifest.is_some_and(|manifest| {
+                    payload.matches_exact_body(context, proposal_round, subject, manifest)
+                }) => {}
+            _ => return Err(ReplayAuthorityValidationError::PayloadMismatch),
+        }
+        Ok(ReplayShape::new(key, work_class, requested_stage))
+    }
+}
+
+fn certified_sources_are_bounded_unique(certified_sources: &[PeerId]) -> bool {
+    certified_sources.len() <= wire::MAX_VALIDATORS_PER_HEIGHT
+        && certified_sources
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == certified_sources.len()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct InvalidBodyReplaySourceV1 {
+    validation_origin: BodyPipelineReplaySourceV1,
+    certificate: wire::QuorumCertificate,
+    outcome: RejectedBodyOutcomeBindingV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct RejectedBodyOutcomeBindingV1 {
+    manifest: wire::PayloadManifest,
+    body_frame_hash: [u8; 32],
+    rejection_code: u8,
+}
+
+impl InvalidBodyReplaySourceV1 {
+    fn project(
+        &self,
+        context: LifecycleContext,
+        requested_stage: LifecycleStageKind,
+        payload: &ReplayPayloadBindingV1,
+    ) -> Result<ReplayShape, ReplayAuthorityValidationError> {
+        let origin_payload = ReplayPayloadBindingV1::BodyFrame(BodyFrameBindingV1 {
+            context: *context.id().as_bytes(),
+            round_height: self.outcome.manifest.round.height,
+            round_view: self.outcome.manifest.round.view,
+            subject: *block_subject(self.outcome.manifest.subject).as_bytes(),
+            manifest: *HashOf::new(&self.outcome.manifest).as_ref(),
+            frame: self.outcome.body_frame_hash,
+        });
+        let origin_shape = self.validation_origin.project(
+            context,
+            LifecycleStageKind::ValidateBody,
+            &origin_payload,
+        )?;
+        if requested_stage != LifecycleStageKind::ReportInvalidBody
+            || !payload.is_none()
+            || !qc_shape(context, &self.certificate)
+            || self.certificate.phase != wire::GlobalPhase::Prepare
+            || self.certificate.round != self.certificate.proposal_round
+            || self.outcome.rejection_code != 0
+            || !manifest_matches_origin(
+                context,
+                &self.outcome.manifest,
+                self.certificate.proposal_round,
+                self.certificate.subject,
+            )
+        {
+            return Err(ReplayAuthorityValidationError::InvalidSource);
+        }
+        match &self.validation_origin.origin {
+            BodyPipelineOriginV1::Proposal(proposal)
+                if proposal.round == self.certificate.proposal_round
+                    && proposal.subject == self.certificate.subject
+                    && proposal.manifest == self.outcome.manifest => {}
+            BodyPipelineOriginV1::Certified {
+                certificate,
+                manifest,
+                ..
+            } if certificate == &self.certificate && manifest == &self.outcome.manifest => {}
+            BodyPipelineOriginV1::Proposal(_)
+            | BodyPipelineOriginV1::Certified { .. }
+            | BodyPipelineOriginV1::LocalBody(_)
+            | BodyPipelineOriginV1::RecoveredDecision { .. } => {
+                return Err(ReplayAuthorityValidationError::InvalidSource);
+            }
+        }
+        if origin_shape.work_class != LifecycleWorkClass::Validate
+            || origin_shape.stage_kind != LifecycleStageKind::ValidateBody
+            || origin_shape.key.context() != context.id()
+            || origin_shape.key.round()
+                != LifecycleRound::new(
+                    self.certificate.proposal_round.height,
+                    self.certificate.proposal_round.view,
+                )
+            || origin_shape.key.proposal_round()
+                != Some(LifecycleRound::new(
+                    self.certificate.proposal_round.height,
+                    self.certificate.proposal_round.view,
+                ))
+            || origin_shape.key.subject() != Some(block_subject(self.certificate.subject))
+        {
+            return Err(ReplayAuthorityValidationError::InvalidSource);
+        }
+        Ok(ReplayShape::new(
+            lifecycle_key(
+                context,
+                self.certificate.round,
+                Some(self.certificate.proposal_round),
+                Some(block_subject(self.certificate.subject)),
+                LifecyclePhase::DiagnosticInvalidBody,
+                Some(execution_commitment(self.certificate.execution_commitment)),
+            ),
+            LifecycleWorkClass::InvalidBodyReport,
+            LifecycleStageKind::ReportInvalidBody,
+        ))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct CertifiedServeStorageSourceV1 {
+    request: wire::CertifiedBodyRequest,
+    payload_hash: [u8; 32],
+    local_retainer: wire::ValidatorIndex,
+}
+
+impl CertifiedServeStorageSourceV1 {
+    fn project(
+        &self,
+        context: LifecycleContext,
+        requested_stage: LifecycleStageKind,
+        payload: &ReplayPayloadBindingV1,
+    ) -> Result<ReplayShape, ReplayAuthorityValidationError> {
+        let certificate = &self.request.certificate;
+        let local_retainer = usize::try_from(self.local_retainer)
+            .map_err(|_| ReplayAuthorityValidationError::InvalidSource)?;
+        if local_retainer >= wire::MAX_VALIDATORS_PER_HEIGHT
+            || !signature_present(&self.request.signature)
+            || !round_matches_context(context, self.request.round)
+            || !qc_shape(context, certificate)
+            || certificate.proposal_round != self.request.round
+            || certificate.subject != self.request.subject
+            || certificate
+                .signers
+                .binary_search(&self.local_retainer)
+                .is_err()
+        {
+            return Err(ReplayAuthorityValidationError::InvalidSource);
+        }
+        let request_hash = HashOf::new(&self.request);
+        let request_digest = digest_from_bytes(request_hash.as_ref());
+        let certificate_digest = digest_from_bytes(HashOf::new(certificate).as_ref());
+        let phase = match requested_stage {
+            LifecycleStageKind::CertifiedServe => LifecyclePhase::Serve,
+            LifecycleStageKind::ProducerTurn => LifecyclePhase::ProducerTurn,
+            _ => return Err(ReplayAuthorityValidationError::RecordMismatch),
+        };
+        let key = lifecycle_key(
+            context,
+            certificate.round,
+            Some(self.request.round),
+            Some(certified_serve_key_subject(
+                self.request.subject,
+                request_hash,
+            )),
+            phase,
+            Some(execution_commitment(certificate.execution_commitment)),
+        );
+        let work_class = match requested_stage {
+            LifecycleStageKind::CertifiedServe => {
+                if !payload.matches_certified_serve(request_digest, certificate_digest) {
+                    return Err(ReplayAuthorityValidationError::PayloadMismatch);
+                }
+                LifecycleWorkClass::CertifiedServe
+            }
+            LifecycleStageKind::ProducerTurn => {
+                if !payload.is_none() {
+                    return Err(ReplayAuthorityValidationError::PayloadMismatch);
+                }
+                LifecycleWorkClass::ProducerTurn
+            }
+            _ => unreachable!("stage was checked above"),
+        };
+        Ok(ReplayShape::new(key, work_class, requested_stage))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[allow(variant_size_differences)]
+enum ReplayPayloadBindingV1 {
+    #[codec(index = 0)]
+    None,
+    #[codec(index = 1)]
+    BodyFrame(BodyFrameBindingV1),
+    #[codec(index = 2)]
+    CertifiedServePending {
+        request: [u8; 32],
+        certificate: [u8; 32],
+    },
+    #[codec(index = 3)]
+    CertifiedServeCompleted {
+        request: [u8; 32],
+        certificate: [u8; 32],
+        response: [u8; 32],
+    },
+    #[codec(index = 4)]
+    CertifiedServeNegative {
+        request: [u8; 32],
+        certificate: [u8; 32],
+        outcome_kind: u8,
+        outcome_code: Option<u16>,
+    },
+}
+
+impl ReplayPayloadBindingV1 {
+    fn from_payload(payload: DurablePayloadReference) -> Self {
+        match payload {
+            DurablePayloadReference::None => Self::None,
+            DurablePayloadReference::BodyFrame(frame) => Self::BodyFrame(BodyFrameBindingV1 {
+                context: *frame.context.as_bytes(),
+                round_height: frame.round.height(),
+                round_view: frame.round.view(),
+                subject: *frame.subject.as_bytes(),
+                manifest: *frame.manifest.as_bytes(),
+                frame: *frame.frame.as_bytes(),
+            }),
+            DurablePayloadReference::CertifiedServePending {
+                request,
+                certificate,
+            } => Self::CertifiedServePending {
+                request: *request.as_bytes(),
+                certificate: *certificate.as_bytes(),
+            },
+            DurablePayloadReference::CertifiedServeCompleted {
+                request,
+                certificate,
+                response,
+            } => Self::CertifiedServeCompleted {
+                request: *request.as_bytes(),
+                certificate: *certificate.as_bytes(),
+                response: *response.as_bytes(),
+            },
+            DurablePayloadReference::CertifiedServeNegative {
+                request,
+                certificate,
+                outcome,
+            } => {
+                let (outcome_kind, outcome_code) = match outcome {
+                    DurableServeNegativeOutcome::Cancelled => (0, None),
+                    DurableServeNegativeOutcome::Rejected(code) => (1, Some(code)),
+                    DurableServeNegativeOutcome::Failed(code) => (2, Some(code)),
+                };
+                Self::CertifiedServeNegative {
+                    request: *request.as_bytes(),
+                    certificate: *certificate.as_bytes(),
+                    outcome_kind,
+                    outcome_code,
+                }
+            }
+        }
+    }
+
+    fn matches(&self, payload: DurablePayloadReference) -> bool {
+        *self == Self::from_payload(payload)
+    }
+
+    fn durable_payload(&self) -> Option<DurablePayloadReference> {
+        Some(match self {
+            Self::None => DurablePayloadReference::None,
+            Self::BodyFrame(frame) => DurablePayloadReference::BodyFrame(frame.durable_reference()),
+            Self::CertifiedServePending {
+                request,
+                certificate,
+            } => DurablePayloadReference::CertifiedServePending {
+                request: LifecycleDigest::new(*request),
+                certificate: LifecycleDigest::new(*certificate),
+            },
+            Self::CertifiedServeCompleted {
+                request,
+                certificate,
+                response,
+            } => DurablePayloadReference::CertifiedServeCompleted {
+                request: LifecycleDigest::new(*request),
+                certificate: LifecycleDigest::new(*certificate),
+                response: LifecycleDigest::new(*response),
+            },
+            Self::CertifiedServeNegative {
+                request,
+                certificate,
+                outcome_kind,
+                outcome_code,
+            } => DurablePayloadReference::CertifiedServeNegative {
+                request: LifecycleDigest::new(*request),
+                certificate: LifecycleDigest::new(*certificate),
+                outcome: match (*outcome_kind, *outcome_code) {
+                    (0, None) => DurableServeNegativeOutcome::Cancelled,
+                    (1, Some(code)) => DurableServeNegativeOutcome::Rejected(code),
+                    (2, Some(code)) => DurableServeNegativeOutcome::Failed(code),
+                    _ => return None,
+                },
+            },
+        })
+    }
+
+    const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    fn matches_exact_body(
+        &self,
+        context: LifecycleContext,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        manifest: &wire::PayloadManifest,
+    ) -> bool {
+        let Self::BodyFrame(frame) = self else {
+            return false;
+        };
+        frame.matches_origin(context, proposal_round, subject)
+            && frame.manifest == *digest_from_bytes(HashOf::new(manifest).as_ref()).as_bytes()
+    }
+
+    fn matches_body_origin(
+        &self,
+        context: LifecycleContext,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        match self {
+            Self::BodyFrame(frame) => frame.matches_origin(context, proposal_round, subject),
+            Self::None
+            | Self::CertifiedServePending { .. }
+            | Self::CertifiedServeCompleted { .. }
+            | Self::CertifiedServeNegative { .. } => false,
+        }
+    }
+
+    fn matches_certified_serve(
+        &self,
+        expected_request: LifecycleDigest,
+        expected_certificate: LifecycleDigest,
+    ) -> bool {
+        let (request, certificate) = match self {
+            Self::CertifiedServePending {
+                request,
+                certificate,
+            }
+            | Self::CertifiedServeCompleted {
+                request,
+                certificate,
+                ..
+            }
+            | Self::CertifiedServeNegative {
+                request,
+                certificate,
+                ..
+            } => (request, certificate),
+            Self::None | Self::BodyFrame(_) => return false,
+        };
+        request == expected_request.as_bytes() && certificate == expected_certificate.as_bytes()
+    }
+}

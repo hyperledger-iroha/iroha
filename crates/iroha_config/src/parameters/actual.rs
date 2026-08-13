@@ -10983,8 +10983,8 @@ pub struct SorafsProviderAttestationRuntimeBinding {
 /// daemon registry projects as three independent public roles. Live adapter
 /// qualification and consumption remain gated, and stock `irohad` continues
 /// to reject activation until that wiring is complete.
-/// TODO: consume these projected bindings only after all three adapters and
-/// the capture child satisfy their qualification contracts.
+/// Stock daemon activation stays closed; an activation-qualified coordinator
+/// is the only supported consumer of these three adapter/capture bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsProviderAttestationJournal {
     /// Qualified rollback-resistant UNIX-time seal provider.

@@ -89,12 +89,9 @@ from .native_amx import (
 )
 from .norito_frame import validate_norito_frame
 from .orderbook_submission import (
-    ORDERBOOK_RECEIPT_MAX_BYTES_V1,
-    SorafsOrderbookSubmissionAmbiguousError,
-    prepare_orderbook_submission,
-    validate_fixed_request_headers,
-    validate_response_headers,
-    verify_receipt,
+    SorafsOrderbookSubmissionAmbiguousError, SorafsOrderbookSubmissionIdentity,
+    SorafsOrderbookSubmissionMixin, SorafsOrderbookSubmissionReceipt,
+    SorafsOrderbookSubmissionReceiptPayload, require_orderbook_chain_discriminant,
 )
 from .offline_models import (
     KagemushaArtifactBindingV4Json,
@@ -703,6 +700,7 @@ def inspect_i105_network_prefix(
 
 __all__ = [
     "ToriiClient",
+    "SorafsOrderbookSubmissionAmbiguousError", "SorafsOrderbookSubmissionIdentity", "SorafsOrderbookSubmissionReceipt", "SorafsOrderbookSubmissionReceiptPayload",
     "decode_pdp_commitment_header",
     "inspect_i105_network_prefix",
     "I105NetworkPrefix",
@@ -10357,13 +10355,23 @@ _ToriiClientGovernanceBallotMixin = create_governance_ballot_client_mixin(
 )
 
 
-class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin):
+class ToriiClient(
+    SorafsOrderbookSubmissionMixin,
+    _ToriiClientGovernanceBallotMixin,
+    RuntimeGovernanceAuthMixin,
+):
     """HTTP helper for Torii attachments, prover, and governance endpoints."""
-
-    def __init__(self, base_url: str, session: Optional[requests.Session] = None) -> None:
+    def __init__(
+        self, base_url: str, session: Optional[requests.Session] = None, *, orderbook_native_verifier: Any = None, orderbook_chain_discriminant: Optional[int] = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._session = session or requests.Session()
         self._status_state = _StatusMetricsState()
+        self._configure_sorafs_orderbook_native_verifier(orderbook_native_verifier)
+        self._orderbook_chain_discriminant = orderbook_chain_discriminant
+
+    def _sorafs_orderbook_expected_chain_discriminant(self, context: str) -> int:
+        return require_orderbook_chain_discriminant(self._orderbook_chain_discriminant, context)
 
     # ------------------------------------------------------------------
     # Attachments
@@ -10647,134 +10655,6 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         return self._parse_sorafs_orderbook_receipt_page_response(
             payload,
             context="sorafs orderbook receipts response",
-        )
-
-    def submit_sorafs_orderbook_order(
-        self,
-        signed_transaction: Any,
-        *,
-        headers: Optional[Mapping[str, str]] = None,
-        expected_network_id: Any = None,
-        expected_receipt_signer: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Submit a caller-signed native transaction containing one order ISI."""
-
-        return self._submit_sorafs_orderbook_transaction(
-            "/v1/sorafs/orderbook/orders",
-            signed_transaction,
-            route="order",
-            headers=headers,
-            expected_network_id=expected_network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            context="submit_sorafs_orderbook_order",
-        )
-
-    def submit_sorafs_orderbook_cancel(
-        self,
-        signed_transaction: Any,
-        *,
-        headers: Optional[Mapping[str, str]] = None,
-        expected_network_id: Any = None,
-        expected_receipt_signer: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Submit a caller-signed native transaction containing one cancel ISI."""
-
-        return self._submit_sorafs_orderbook_transaction(
-            "/v1/sorafs/orderbook/cancel",
-            signed_transaction,
-            route="cancel",
-            headers=headers,
-            expected_network_id=expected_network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            context="submit_sorafs_orderbook_cancel",
-        )
-
-    def submit_sorafs_orderbook_receipt(
-        self,
-        signed_transaction: Any,
-        *,
-        headers: Optional[Mapping[str, str]] = None,
-        expected_network_id: Any = None,
-        expected_receipt_signer: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Submit a caller-signed native transaction containing one receipt ISI."""
-
-        return self._submit_sorafs_orderbook_transaction(
-            "/v1/sorafs/orderbook/receipts",
-            signed_transaction,
-            route="receipt",
-            headers=headers,
-            expected_network_id=expected_network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            context="submit_sorafs_orderbook_receipt",
-        )
-
-    def _submit_sorafs_orderbook_transaction(
-        self,
-        path: str,
-        signed_transaction: Any,
-        *,
-        route: str,
-        headers: Optional[Mapping[str, str]],
-        expected_network_id: Any,
-        expected_receipt_signer: Optional[str],
-        context: str,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        native = self._sorafs_orderbook_native_verifier()
-        body, identity = prepare_orderbook_submission(
-            native=native,
-            route=route,
-            signed_transaction=signed_transaction,
-            expected_network_id=expected_network_id,
-            expected_receipt_signer=expected_receipt_signer,
-            context=context,
-        )
-        request_headers = validate_fixed_request_headers(headers, context=context)
-        request_headers.update(
-            {
-                "Accept": "application/x-norito",
-                "Accept-Encoding": "identity",
-                "Content-Type": "application/x-norito",
-            }
-        )
-        request_options: Dict[str, Any] = {
-            "headers": request_headers,
-            "data": body,
-            "stream": True,
-            "allow_retry": False,
-            "allow_redirects": False,
-        }
-        if timeout is not None:
-            request_options["timeout"] = timeout
-        try:
-            response = self._request("POST", path, **request_options)
-            self._expect_status(
-                response,
-                {202},
-                maximum_body_bytes=0,
-                context=context,
-            )
-            validate_response_headers(response, identity, context)
-            receipt = _read_bounded_sccp_response_body(
-                response, ORDERBOOK_RECEIPT_MAX_BYTES_V1, context
-            )
-        except Exception as error:
-            if "response" in locals():
-                response.close()
-            raise SorafsOrderbookSubmissionAmbiguousError(route, identity) from error
-        return verify_receipt(
-            native=native,
-            receipt_norito=receipt,
-            identity=identity,
-            expected_receipt_signer=expected_receipt_signer,
-            context=context,
-        )
-
-    def _sorafs_orderbook_native_verifier(self) -> Any:
-        raise RuntimeError(
-            "SoraFS orderbook submission requires an injected native verifier; "
-            "use iroha_python.client.ToriiClient"
         )
 
     def list_sorafs_orderbook_events(
@@ -13861,6 +13741,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         stream: bool = False,
         allow_retry: bool = True,
         allow_redirects: bool = True,
+        timeout: Optional[float] = None,
     ) -> requests.Response:
         del allow_retry  # This transport never retries; keep the one-shot contract explicit.
         url = f"{self._base_url}{path}"
@@ -13872,6 +13753,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
             data=data,
             stream=stream,
             allow_redirects=allow_redirects,
+            timeout=timeout,
         )
         return response
 
@@ -13925,40 +13807,6 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 continue
             cleaned[key] = value
         return cleaned or None
-
-    @classmethod
-    def _sorafs_orderbook_transaction_bytes(cls, value: Any, context: str) -> bytes:
-        if not isinstance(value, (bytes, bytearray, memoryview)):
-            raise TypeError(
-                f"{context} must be the bytes-like canonical versioned SignedTransaction"
-            )
-        payload = bytes(value)
-        if not payload:
-            raise ValueError(f"{context} must not be empty")
-        return payload
-
-    @classmethod
-    def _sorafs_orderbook_submit_headers(
-        cls,
-        *,
-        headers: Optional[Mapping[str, str]],
-        context: str,
-    ) -> Dict[str, str]:
-        final_headers: Dict[str, str] = {}
-        if headers is not None:
-            if not isinstance(headers, Mapping):
-                raise TypeError(f"{context}.headers must be a mapping")
-            for key, value in headers.items():
-                name = str(key)
-                if name.lower() in {"accept", "content-type"}:
-                    raise ValueError(
-                        f"{context}.headers must not override {name}; "
-                        "native orderbook ingress has a fixed media type"
-                    )
-                final_headers[name] = str(value)
-        final_headers["Accept"] = "application/json"
-        final_headers["Content-Type"] = "application/x-norito"
-        return final_headers
 
     @classmethod
     def _sorafs_orderbook_headers(

@@ -9276,7 +9276,7 @@ mod evidence_http_tests {
             name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
         });
         assert!(has_content_type, "Content-Type header missing");
-        assert_canonical_account_signed_json_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_json_request(&client, snapshot);
     }
 
     #[test]
@@ -10219,7 +10219,7 @@ mod evidence_http_tests {
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
-        assert_canonical_account_signed_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_request(&client, snapshot);
     }
 
     #[test]
@@ -10243,7 +10243,7 @@ mod evidence_http_tests {
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
-        assert_canonical_account_signed_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_request(&client, snapshot);
     }
 
     type SorafsFetchHook = Arc<
@@ -13406,10 +13406,6 @@ impl Client {
     }
 
     /// Encode and hash a signed transaction once for later submission.
-    #[expect(
-        clippy::unused_self,
-        reason = "this remains an instance method in the stable client workflow API"
-    )]
     pub fn prepare_transaction_payload(
         transaction: &SignedTransaction,
     ) -> PreparedTransactionPayload {
@@ -18003,6 +17999,7 @@ impl Client {
     }
 
     /// Fetch the active chain-authoritative reserve policy at an optional finalized anchor.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_policy(
@@ -18012,14 +18009,14 @@ impl Client {
         reserve::validate_anchor_request(&finalized, "policy")?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/policy");
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_policy_response(response, &finalized))
     }
 
     /// Fetch a finalized page of chain-authoritative provider reserve accounts.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_providers(
@@ -18029,14 +18026,14 @@ impl Client {
         reserve::validate_providers_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/providers");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_providers_response(response, &filter))
     }
 
     /// Fetch one chain-authoritative provider reserve account.
+    ///
     /// # Errors
     /// Returns an error if the provider ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -18050,16 +18047,16 @@ impl Client {
         let path = format!("v1/sorafs/reserve/providers/{provider_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| {
             reserve::validate_provider_response(response, &provider_id_hex, &finalized)
         })
     }
 
     /// Fetch a finalized page of chain-authoritative reserve movements.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_movements(
@@ -18069,14 +18066,14 @@ impl Client {
         reserve::validate_movements_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/movements");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_movements_response(response, &filter))
     }
 
     /// Fetch one chain-authoritative reserve movement.
+    ///
     /// # Errors
     /// Returns an error if the movement ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -18090,16 +18087,16 @@ impl Client {
         let path = format!("v1/sorafs/reserve/movements/{movement_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| {
             reserve::validate_movement_response(response, &movement_id_hex, &finalized)
         })
     }
 
     /// Fetch a finalized page of chain-authoritative reserve appeals.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_appeals(
@@ -18109,14 +18106,14 @@ impl Client {
         reserve::validate_appeals_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/appeals");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_appeals_response(response, &filter))
     }
 
     /// Fetch one chain-authoritative reserve appeal.
+    ///
     /// # Errors
     /// Returns an error if the appeal ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -18130,16 +18127,16 @@ impl Client {
         let path = format!("v1/sorafs/reserve/appeals/{appeal_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| {
             reserve::validate_appeal_response(response, &appeal_id_hex, &finalized)
         })
     }
 
     /// Fetch a finalized page of committed reserve-ledger events.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_events(
@@ -18149,10 +18146,9 @@ impl Client {
         reserve::validate_events_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/events");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_events_response(response, &filter))
     }
 
@@ -22514,7 +22510,7 @@ mod tx_hash_tests {
 
     use eyre::eyre;
 
-    use super::hashes_match;
+    use super::{hashes_match, test_network_id};
     use crate::{
         crypto::{Hash, HashOf},
         data_model::transaction::{SignedTransaction, TransactionEntrypoint},
@@ -24202,7 +24198,6 @@ mod tests {
             },
         },
         domain::DomainId,
-        id::MAX_CHAIN_ID_BYTES,
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
         name::{MAX_NAME_BYTES, Name},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
@@ -24325,14 +24320,14 @@ mod tests {
             });
 
             let response = runtime
-                .block_on(
+                .block_on(async {
                     build_async_http_client()
                         .post(format!("http://{redirect_addr}/transaction"))
                         .body(vec![0x01, 0x02, 0x03])
-                        .send(),
-                )
+                        .send()
+                        .await
+                })
                 .expect("redirect response");
-
             redirect_server.join().expect("redirect server");
             let followed = target_server.join().expect("target server");
             assert_eq!(response.status().as_u16(), status_code);
@@ -24380,14 +24375,14 @@ mod tests {
             .build()
             .expect("build async HTTP test runtime");
         let response = runtime
-            .block_on(
+            .block_on(async {
                 build_async_http_client()
                     .post(format!("http://{address}/transaction"))
                     .body(vec![0x01, 0x02, 0x03])
-                    .send(),
-            )
+                    .send()
+                    .await
+            })
             .expect("server response");
-
         assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
         assert!(
             !server.join().expect("test server"),
@@ -24490,10 +24485,10 @@ mod tests {
         let foreign_network = foreign_alias_plan_network_id();
         let foreign_error = assert_no_http(|| {
             client.post_gov_ballot_plain_json(&norito::json!({
-                "authority": authority.as_str(),
-                "network_id": foreign_network,
+                "authority": (authority.as_str()),
+                "network_id": (foreign_network),
                 "referendum_id": "referendum-1",
-                "owner": authority.as_str(),
+                "owner": (authority.as_str()),
                 "amount": "1",
                 "duration_blocks": "0",
                 "direction": "Aye"
@@ -24503,8 +24498,8 @@ mod tests {
 
         for retired in ["chain_id", "genesis_hash"] {
             let mut payload = norito::json!({
-                "authority": authority.as_str(),
-                "network_id": client.network_id,
+                "authority": (authority.as_str()),
+                "network_id": (client.network_id.clone()),
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "cHJvb2Y="
@@ -24520,7 +24515,7 @@ mod tests {
         let error = assert_no_http(|| {
             client.post_gov_ballot_plain_json(&norito::json!({
                 "authority": TEST_AUDITOR_I105,
-                "network_id": client.network_id,
+                "network_id": (client.network_id.clone()),
                 "referendum_id": "referendum-1",
                 "owner": TEST_AUDITOR_I105,
                 "amount": "1",
@@ -24549,8 +24544,8 @@ mod tests {
                 if is_zk {
                     client
                         .post_gov_ballot_zk_v1_json(&norito::json!({
-                            "authority": authority.as_str(),
-                            "network_id": client.network_id,
+                            "authority": (authority.as_str()),
+                            "network_id": (client.network_id.clone()),
                             "election_id": "election-1",
                             "backend": "halo2/ipa",
                             "envelope_b64": "cHJvb2Y="
@@ -24559,10 +24554,10 @@ mod tests {
                 } else {
                     client
                         .post_gov_ballot_plain_json(&norito::json!({
-                            "authority": authority.as_str(),
-                            "network_id": client.network_id,
+                            "authority": (authority.as_str()),
+                            "network_id": (client.network_id.clone()),
                             "referendum_id": "referendum-1",
-                            "owner": authority.as_str(),
+                            "owner": (authority.as_str()),
                             "amount": "1",
                             "duration_blocks": "0",
                             "direction": "Aye"
@@ -25092,8 +25087,10 @@ mod tests {
     }
 
     impl rand::rand_core::TryCryptoRng for FailingClientRng {}
-
-    fn assert_canonical_account_signed_request(client: &Client, snapshot: &RequestSnapshot) {
+    pub(super) fn assert_canonical_account_signed_request(
+        client: &Client,
+        snapshot: &RequestSnapshot,
+    ) {
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
         for header in [
             HEADER_ACCOUNT,
@@ -25146,7 +25143,10 @@ mod tests {
             .expect("signature must cover the exact method, path, query, and body");
     }
 
-    fn assert_canonical_account_signed_json_request(client: &Client, snapshot: &RequestSnapshot) {
+    pub(super) fn assert_canonical_account_signed_json_request(
+        client: &Client,
+        snapshot: &RequestSnapshot,
+    ) {
         assert_canonical_account_signed_request(client, snapshot);
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
         assert_eq!(
@@ -28998,7 +28998,7 @@ mod tests {
 
     #[test]
     fn prepared_transaction_payload_allows_foreign_network_for_server_rejection_tests() {
-        let client = client_with_base_url(base_url());
+        let _client = client_with_base_url(base_url());
         let (authority, keypair) = gen_account_in("foreign-chain-authority");
         let foreign_network = NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -29013,7 +29013,7 @@ mod tests {
         .with_instructions(Vec::<InstructionBox>::new())
         .try_sign(keypair.private_key())
         .expect("foreign-network fixture transaction should sign");
-        let prepared = client.prepare_transaction_payload(&tx);
+        let prepared = Client::prepare_transaction_payload(&tx);
 
         assert_eq!(prepared.hash(), tx.hash());
         let decoded = SignedTransaction::decode_all_versioned(prepared.as_bytes())

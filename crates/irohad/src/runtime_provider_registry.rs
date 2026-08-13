@@ -2171,11 +2171,11 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
         return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
     }
     qualify_musubi_provider_attestation_dependencies(bindings, &dependencies)?;
-    // TODO: Before the provider-attestation startup rejection can be removed,
-    // run authenticated readiness and revalidate all three live effects
-    // against these exact bindings around every operation, and fence approval
-    // authority against finalized package-owner state. This registry probe is
-    // deliberately inert and does not establish operation-time readiness.
+    // This registry probe deliberately performs metadata-only pre/post
+    // qualification and no readiness or effects. Before the startup rejection
+    // is removed, the activation coordinator must run bounded authenticated
+    // readiness and supply the governed operation-time wrappers that fence all
+    // three effects and finalized package-owner authority.
     qualify_bootle_lantern_issuance_dependency(bindings, &dependencies)?;
     qualify_fenced_privacy_dependencies(bindings, &dependencies)?;
     qualify_governance_dag_signer_dependency(bindings, &dependencies)?;

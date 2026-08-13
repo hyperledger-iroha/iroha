@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -9,6 +10,7 @@ import os
 import shlex
 import stat
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,8 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 import check_sorafs_production_readiness as CHECKER  # noqa: E402
+import sorafs_production_readiness_contract as CONTRACT  # noqa: E402
+import sorafs_software_signer_receipt as RECEIPT  # noqa: E402
 import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
 import sorafs_l1_lane_evidence_inventory as LANE_INVENTORY  # noqa: E402
 from sorafs_l1_lane_inventory_test_support import (  # noqa: E402
@@ -905,7 +909,7 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     ) == 0o600
 
     unsigned = decode_unsigned(signing_payload)
-    assert set(unsigned) == MODULE.FOUNDATIONAL_PREREQUISITE_FIELDS
+    assert set(unsigned) == MODULE.UNSIGNED_FOUNDATIONAL_FIELDS
     assert set(unsigned["signature"]) == MODULE.UNSIGNED_SIGNATURE_FIELDS
     assert "signature_hex" not in unsigned["signature"]
     assert unsigned["signature"] == {
@@ -973,7 +977,8 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     )
     assert signing_payload == MODULE.foundational_signing_payload(unsigned)
 
-    assert MODULE.main(finalize_args(tmp_path, public_key)) == 0
+    finalize_values = finalize_args(tmp_path, public_key)
+    assert MODULE.main(finalize_values) == 0
     envelope_path = tmp_path / "foundational-prerequisites.json"
     envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
     assert stat.S_IMODE(envelope_path.stat().st_mode) == 0o600
@@ -983,6 +988,14 @@ def test_prepare_and_finalize_external_signer_roundtrip(
         signing_payload,
     )
     assert MODULE.foundational_signing_payload(envelope) == signing_payload
+    assert set(envelope["signer_receipt_bundle"]) == (
+        CONTRACT.FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_FIELDS
+    )
+
+    verifier = Path(finalize_values[finalize_values.index("--signer-verifier") + 1])
+    verifier_sha256 = finalize_values[
+        finalize_values.index("--expected-signer-verifier-sha256") + 1
+    ]
 
     _summary, errors, context = CHECKER.validate_foundational_prerequisite_summary(
         envelope,
@@ -994,10 +1007,205 @@ def test_prepare_and_finalize_external_signer_roundtrip(
             foundational_signer_public_key=public_key,
             foundational_release_sequence=RELEASE_SEQUENCE,
             foundational_previous_envelope_sha256=PREDECESSOR_SHA256,
+            foundational_signer_verifier=verifier,
+            foundational_signer_verifier_sha256=verifier_sha256,
         ),
     )
     assert errors == []
     assert context == (DEPLOYMENT_ID, ENVIRONMENT)
+
+
+def test_aggregate_rejects_signed_envelope_without_external_signer_receipt(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+) -> None:
+    """A raw signature and self-declared software metadata are insufficient."""
+
+    seed, public_key = signer
+    prepare_and_sign(tmp_path, seed, public_key)
+    finalize_values = finalize_args(tmp_path, public_key)
+    assert MODULE.main(finalize_values) == 0
+    envelope = json.loads(
+        (tmp_path / "foundational-prerequisites.json").read_text(encoding="utf-8")
+    )
+    envelope.pop("signer_receipt_bundle")
+    verifier = Path(finalize_values[finalize_values.index("--signer-verifier") + 1])
+    options = CHECKER.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_summary_artifact_age_secs=MAX_AGE_SECS,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+        foundational_signer_public_key=public_key,
+        foundational_release_sequence=RELEASE_SEQUENCE,
+        foundational_previous_envelope_sha256=PREDECESSOR_SHA256,
+        foundational_signer_verifier=verifier,
+        foundational_signer_verifier_sha256=hashlib.sha256(verifier.read_bytes()).hexdigest(),
+    )
+    _summary, errors, _context = CHECKER.validate_foundational_prerequisite_summary(
+        envelope, options
+    )
+    assert "foundational prerequisite requires a signer receipt bundle" in errors
+
+
+def test_aggregate_replays_receipt_and_independent_verifier_trust(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+) -> None:
+    """Post-sign receipt bytes remain replayed against a separately pinned tool."""
+
+    seed, public_key = signer
+    prepare_and_sign(tmp_path, seed, public_key)
+    finalize_values = finalize_args(tmp_path, public_key)
+    assert MODULE.main(finalize_values) == 0
+    envelope = json.loads(
+        (tmp_path / "foundational-prerequisites.json").read_text(encoding="utf-8")
+    )
+    verifier = Path(finalize_values[finalize_values.index("--signer-verifier") + 1])
+    options = CHECKER.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_summary_artifact_age_secs=MAX_AGE_SECS,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+        foundational_signer_public_key=public_key,
+        foundational_release_sequence=RELEASE_SEQUENCE,
+        foundational_previous_envelope_sha256=PREDECESSOR_SHA256,
+        foundational_signer_verifier=verifier,
+        foundational_signer_verifier_sha256=hashlib.sha256(verifier.read_bytes()).hexdigest(),
+    )
+    tampered = json.loads(json.dumps(envelope))
+    encoded = tampered["signer_receipt_bundle"]["receipt_base64"]
+    tampered["signer_receipt_bundle"]["receipt_base64"] = (
+        ("A" if encoded[0] != "A" else "B") + encoded[1:]
+    )
+    assert MODULE.foundational_signing_payload(tampered) == (
+        MODULE.foundational_signing_payload(envelope)
+    )
+    _summary, errors, _context = CHECKER.validate_foundational_prerequisite_summary(
+        tampered, options
+    )
+    assert "external software signer receipt verification failed" in errors
+
+    untrusted_options = dataclasses.replace(
+        options, foundational_signer_verifier_sha256="ab" * 32
+    )
+    _summary, errors, _context = CHECKER.validate_foundational_prerequisite_summary(
+        envelope, untrusted_options
+    )
+    assert any("independently reviewed digest" in error for error in errors)
+
+
+def _run_test_receipt_verifier(verifier: bytes) -> tuple[bytes | None, list[str]]:
+    """Run a synthetic verifier with inert exact-byte inputs."""
+
+    return RECEIPT.run_offline_receipt_verifier(
+        verifier=verifier,
+        binding=b"binding",
+        payload=b"payload",
+        signature=b"signature",
+        receipt=b"receipt",
+        operation_id_hex="11" * 32,
+    )
+
+
+@pytest.mark.parametrize("descriptor", [1, 2])
+def test_receipt_verifier_rejects_bounded_payload_free_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    descriptor: int,
+) -> None:
+    """Noisy stdout/stderr is bounded, killed, and never reflected in errors."""
+
+    secret = b"verifier-controlled-sensitive-diagnostic"
+    monkeypatch.setattr(RECEIPT, "MAX_RECEIPT_VERIFIER_DIAGNOSTIC_BYTES", 64)
+    monkeypatch.setattr(RECEIPT, "RECEIPT_VERIFIER_TIMEOUT_SECS", 0.5)
+    validation, errors = _run_test_receipt_verifier(
+        b"#!/usr/bin/env python3\n"
+        b"import os\n"
+        + f"os.write({descriptor}, {secret!r} * 4096)\n".encode("ascii")
+    )
+    assert validation is None
+    assert errors == ["external software signer receipt verification failed"]
+    assert secret.decode("ascii") not in " ".join(errors)
+
+
+def test_receipt_verifier_hard_timeout_reaps_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A silent verifier cannot outlive the hard replay deadline."""
+
+    monkeypatch.setattr(RECEIPT, "RECEIPT_VERIFIER_TIMEOUT_SECS", 0.15)
+    started = time.monotonic()
+    validation, errors = _run_test_receipt_verifier(
+        b"#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n"
+    )
+    assert time.monotonic() - started < 2
+    assert validation is None
+    assert errors == ["external software signer receipt verifier could not run"]
+
+
+def test_receipt_verifier_timeout_kills_inherited_pipe_descendant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A descendant holding diagnostics open is killed with its process group."""
+
+    process_ids = tmp_path / "verifier-process-ids"
+    monkeypatch.setattr(RECEIPT, "RECEIPT_VERIFIER_TIMEOUT_SECS", 1.0)
+    validation, errors = _run_test_receipt_verifier(
+        (
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "import subprocess\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "child = subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(60)'])\n"
+            f"Path({str(process_ids)!r}).write_text("
+            "f'{os.getpgrp()} {child.pid}', encoding='ascii')\n"
+        ).encode("ascii")
+    )
+    assert validation is None
+    assert errors == ["external software signer receipt verifier could not run"]
+    process_group, child_pid = map(
+        int, process_ids.read_text(encoding="ascii").split()
+    )
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process_group, 0)
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.01)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(process_group, 0)
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+@pytest.mark.parametrize("output_kind", ["fifo", "public-file"])
+def test_receipt_verifier_requires_private_regular_output(
+    output_kind: str,
+) -> None:
+    """Verifier output must be nonblocking, regular, and owner-only."""
+
+    output_action = {
+        "fifo": "os.mkfifo(output)",
+        "public-file": "output.write_bytes(b'{}'); output.chmod(0o644)",
+    }[output_kind]
+    started = time.monotonic()
+    validation, errors = _run_test_receipt_verifier(
+        (
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "output = Path(sys.argv[sys.argv.index('--validation-out') + 1])\n"
+            f"{output_action}\n"
+        ).encode("ascii")
+    )
+    assert time.monotonic() - started < 2
+    assert validation is None
+    assert errors == ["external software signer receipt verifier could not run"]
 
 
 @pytest.mark.parametrize(
@@ -1366,6 +1574,12 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
                 ENVIRONMENT,
                 "--foundational-prerequisite-signer-public-key-hex",
                 public_key.hex(),
+                "--foundational-prerequisite-signer-verifier",
+                str(tmp_path / "test-external-software-signer"),
+                "--foundational-prerequisite-signer-verifier-sha256",
+                hashlib.sha256(
+                    (tmp_path / "test-external-software-signer").read_bytes()
+                ).hexdigest(),
                 "--foundational-prerequisite-release-sequence",
                 str(RELEASE_SEQUENCE),
                 "--foundational-prerequisite-previous-envelope-sha256",

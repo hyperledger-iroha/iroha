@@ -2309,13 +2309,27 @@ for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
   console.log("orderbook websocket event", event.event, event.data);
   break;
 }
+// LocalSigningContext must carry the deployment's exact NetworkId and I105
+// chain discriminant (369 for Taira; the constructor default is 753/Sora).
 const orderResult =
-  await torii.submitSorafsOrderbookOrder(signedSubmitOrderTransaction);
+  await torii.submitSorafsOrderbookOrder(signedSubmitOrderTransaction, {
+    expectedReceiptSigner: toriiReceiptPublicKey,
+  });
 console.log("order transaction hash", orderResult.payload?.tx_hash);
 // Each route accepts a full caller-signed transaction containing exactly one
 // route-matching native orderbook instruction.
-await torii.submitSorafsOrderbookCancel(signedCancelOrderTransaction);
-await torii.submitSorafsOrderbookReceipt(signedRecordReceiptTransaction);
+// Catch SorafsOrderbookSubmissionAmbiguousError after dispatch, reconcile its
+// expectedIdentity against finalized state, and never resubmit automatically.
+// Strict submits require HTTPS unless allowInsecure:true is explicitly set.
+// timeoutMs is a whole-operation AbortSignal deadline covering preflight,
+// dispatch, and receipt read. A custom fetchImpl is part of the trusted
+// one-shot boundary and must honor that signal, redirect:"error", and zero replay.
+await torii.submitSorafsOrderbookCancel(signedCancelOrderTransaction, {
+  expectedReceiptSigner: toriiReceiptPublicKey,
+});
+await torii.submitSorafsOrderbookReceipt(signedRecordReceiptTransaction, {
+  expectedReceiptSigner: toriiReceiptPublicKey,
+});
 
 for await (const manifest of torii.iterateSorafsPinManifests({ pageSize: 25 })) {
   console.log("manifest digest", Buffer.from(manifest.digest).toString("hex"));

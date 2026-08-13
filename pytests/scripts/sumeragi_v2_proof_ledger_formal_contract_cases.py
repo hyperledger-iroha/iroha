@@ -239,12 +239,31 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
         Path("tests/v2_lifecycle_coordinator_explorer_cases.rs"),
     ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"): (
+        Path("v2_lifecycle_ledger_store.rs"),
+        Path("v2_lifecycle_ledger_tests.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs"): (
+        Path("v2_lifecycle_ledger_tests_durable_recovery_01.rs"),
+        Path("v2_lifecycle_ledger_tests_durable_recovery_02.rs"),
+        Path("v2_lifecycle_ledger_tests_frame_and_store.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"): (
+        Path("tests/v2_lifecycle_projection_cases.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"): (
+        Path("v2_lifecycle_replay_authority_certified_body.rs"),
         Path("v2_lifecycle_replay_authority_payload_projection.rs"),
         Path("tests/v2_lifecycle_replay_authority_fixtures.rs"),
         Path("tests/v2_lifecycle_replay_authority_cases.rs"),
     ),
+    Path(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs"
+    ): (
+        Path("v2_lifecycle_work_registry_validate_recovery_parent.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
+        Path("v2_lifecycle_work_registry_recovered_wal.rs"),
         Path("v2_lifecycle_work_registry_validate_recovery.rs"),
         Path("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs"),
@@ -339,6 +358,45 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("verus_proofs/production_kernel_tail.rs"),
     ),
 }
+
+REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
+        Path(
+            "crates/iroha_core/src/sumeragi/"
+            "v2_lifecycle_work_registry_validate_recovery.rs"
+        ),
+    ),
+}
+REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS = tuple(
+    companion
+    for companions in REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.values()
+    for companion in companions
+)
+REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
+    parent
+    for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
+    if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
+)
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 41
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 4
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 4
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 37
+assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
+    REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
+)
+assert (
+    set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS)
+    | set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)
+    == set(REVIEWED_RUST_INCLUDE_MANIFESTS)
+)
+assert set(REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS).issubset(
+    REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS
+)
 
 
 def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
@@ -1994,7 +2052,10 @@ def test_reviewed_rust_include_manifest_rejects_ignored_untracked_component(
     ), errors
 
 
-@pytest.mark.parametrize("parent_relative", REVIEWED_RUST_INCLUDE_MANIFESTS)
+@pytest.mark.parametrize(
+    "parent_relative",
+    REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS,
+)
 def test_each_reviewed_rust_include_manifest_fails_closed(
     tmp_path: Path,
     parent_relative: Path,
@@ -2005,13 +2066,20 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
     parent.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT_DIR / parent_relative, parent)
     components = REVIEWED_RUST_INCLUDE_MANIFESTS[parent_relative]
-    for component_relative in components:
-        destination = parent.parent / component_relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(
-            (ROOT_DIR / parent_relative).parent / component_relative,
-            destination,
-        )
+    pending_parents = [parent_relative]
+    copied_components: set[Path] = set()
+    while pending_parents:
+        include_parent = pending_parents.pop()
+        for component_relative in REVIEWED_RUST_INCLUDE_MANIFESTS[include_parent]:
+            component = include_parent.parent / component_relative
+            if component in copied_components:
+                continue
+            copied_components.add(component)
+            destination = repo_root / component
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / component, destination)
+            if component in REVIEWED_RUST_INCLUDE_MANIFESTS:
+                pending_parents.append(component)
     relative = parent_relative.as_posix()
     errors: list[str] = []
     _path, expanded = module._read_reviewed_rust_source(
@@ -2094,6 +2162,19 @@ def test_each_reviewed_rust_include_manifest_fails_closed(
         "negative-control split source",
     )
     assert any("reviewed Rust include inventory must equal" in error for error in errors)
+    for index, companion in enumerate(
+        REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.get(parent_relative, ())
+    ):
+        try:
+            test_each_reviewed_rust_include_manifest_fails_closed(
+                tmp_path / f"companion-{index:02d}", companion
+            )
+        except Exception as error:
+            raise AssertionError(
+                "reviewed Rust include-manifest companion failed: "
+                f"index={index}; owner={parent_relative.as_posix()!r}; "
+                f"parent={companion.as_posix()!r}"
+            ) from error
 
 
 @pytest.mark.parametrize("component_relative", KURA_PRODUCTION_COMPONENT_FILES)

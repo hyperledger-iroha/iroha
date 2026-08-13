@@ -982,7 +982,7 @@ fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
 
 #[cfg(not(unix))]
 fn unsupported_secure_filesystem_error() -> io::Error {
-    // TODO: Add stable handle-relative identity and no-follow support for non-Unix hosts.
+    // Non-Unix hosts fail closed: stable handle identity and no-follow are required.
     io::Error::new(
         io::ErrorKind::Unsupported,
         "secure SoraFS file-backed payloads require Unix file identities and no-follow opens",

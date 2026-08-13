@@ -139,8 +139,12 @@ summary: Current SF-6 release automation and QA surfaces.
   candidate into a metadata-normalized tar/gzip archive with a canonical
   per-file digest manifest. It rejects symlinks, hardlinks, non-regular or
   mutable inputs, missing or unexpected changelog/license/runbook/reference-
-  validator inventory, overlapping output paths, unsupported targets, and
-  failed clean-consumer smoke runs. The workflow invokes it twice per native
+  validator inventory, an embedded `version-map.toml` whose top-level release
+  version differs from the candidate label, overlapping output paths,
+  unsupported targets, and failed clean-consumer smoke runs. The downstream
+  aggregate-manifest builder repeats that exact embedded-map version binding
+  before the candidate inventory can enter the externally signed manifest.
+  The workflow invokes it twice per native
   target and compares the archive and manifest bytes before staging
   run-specific SBOM/SARIF evidence. This keeps volatile scanner metadata
   outside the deterministic archive while the final exact `SHA256SUMS`,
@@ -252,12 +256,19 @@ summary: Current SF-6 release automation and QA surfaces.
   summary paths, requires exactly one summary input per required gate plus one
   `--foundational-prerequisite-summary`, and requires the reviewed
   `--foundational-prerequisite-signer-public-key-hex`,
+  `--foundational-prerequisite-signer-verifier`,
+  `--foundational-prerequisite-signer-verifier-sha256`,
   `--foundational-prerequisite-release-sequence`, and
   `--foundational-prerequisite-previous-envelope-sha256` trust/continuity
-  values. The schema-closed foundational metadata row in its dry-run plan
+  values. The verifier path and independently reviewed digest are runtime trust
+  inputs used to replay the retained signer receipt; they do not add a replay
+  evidence slot. The schema-closed foundational metadata row in its dry-run plan
   records only the prerequisite envelope path, exact required IDs, signer
   fingerprint, sequence, and predecessor digest; neither the aggregate row nor
-  that metadata row stores signatures or evidence payload. The runner also requires
+  that metadata row stores signatures or evidence payload. Deterministic replay
+  therefore remains the exact 22-input set: topology summary and signed
+  envelope, resilience summary, signed lane inventory, foundational envelope,
+  and 17 lane summaries. The runner also requires
   an explicit canonical `--deployment-id`/`--environment` pair whose deployment
   id passes the reviewed deployment-id policy, carries no staging markers, and
   whose environment is `prod` or `production`, advertises both flags as
@@ -307,10 +318,11 @@ summary files supplied to the promotion run. The singular
 `readiness_summary` form, missing or reassigned lanes, reordered mappings,
 digest-only packages, and compatibility fallback all fail closed.
 
-Deterministic promotion and replay operate on 20 top-level inputs: topology
-qualification, resilience qualification, the foundational envelope, and 17
-lane summaries. The nine package files are transitively committed by the
-envelope and do not increase that aggregate count. The repository has no
+Deterministic promotion and replay operate on 22 top-level inputs: the topology
+summary and signed envelope, resilience qualification, the signed L1 lane
+inventory, the foundational envelope, and 17 lane summaries. The nine package
+files are transitively committed by the envelope and do not increase that
+aggregate count. The repository has no
 genuine production instance of this set today: test fixtures, dry runs,
 configuration, and locally signed or fabricated summaries do not close the
 external-evidence requirement.
@@ -337,6 +349,10 @@ external-evidence requirement.
   Python, MSBuild, or a canonical plain-SemVer source such as
   `IrohaSwift/VERSION`. The release workflow consumes the validated top-level
   release version and rejects a mismatched release tag before building artifacts.
+  That top-level `release_version` must exactly equal the source-verified
+  versions of the three shipping CLI binary packages `sorafs-orchestrator`,
+  `sorafs-car`, and `sorafs-manifest`, so tags and archive labels cannot relabel
+  different Cargo binaries.
 
 ## SBOM & Vulnerability Scanning
 

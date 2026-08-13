@@ -67,8 +67,7 @@ from sorafs_response_args import (  # noqa: E402
 )
 import sorafs_software_signer_evidence as software_signer_evidence  # noqa: E402
 foundational_signing_payload = software_signer_evidence.foundational_signing_payload
-parse_foundational_signer_public_key = (
-    software_signer_evidence.parse_foundational_signer_public_key)
+parse_foundational_signer_public_key = software_signer_evidence.parse_foundational_signer_public_key
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as AI_PRESCREEN_REQUIRED_KINDS,
     KIND_BY_NAME as AI_PRESCREEN_KIND_BY_NAME,
@@ -452,6 +451,9 @@ class ValidationOptions:
     foundational_signer_public_key: bytes | None = None
     foundational_release_sequence: int | None = None
     foundational_previous_envelope_sha256: str | None = None
+    foundational_signer_verifier: Path | None = None
+    foundational_signer_verifier_sha256: str | None = None
+    replay_foundational_signer_receipt: bool = True
     topology_qualification: Mapping[str, str] | None = None
     resilience_qualification: Mapping[str, Any] | None = None
     resilience_qualification_errors: tuple[str, ...] = ()
@@ -2179,6 +2181,7 @@ def validate_foundational_prerequisite_summary(
             signature_valid = False
         if not signature_valid:
             errors.append("foundational prerequisite signature verification failed")
+    software_signer_evidence.validate_foundational_receipt_from_options(payload, signature, options, errors)
     signer_provenance["signer_public_key_fingerprint_sha256"] = signer_fingerprint
     errors.extend(
         validate_signer_independence(
@@ -6820,28 +6823,19 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--foundational-prerequisite-signer-public-key-hex",
         dest="foundational_signer_public_key_hex",
-        help=(
-            "Required operator-trusted 32-byte Ed25519 public key for the signed "
-            "foundational prerequisite envelope. The key is runtime-only input "
-            "and is not copied into the aggregate summary."
-        ),
+        help="Required operator-trusted 32-byte Ed25519 public key for the signed foundational prerequisite envelope. The key is runtime-only input and is not copied into the aggregate summary.",
     )
+    software_signer_evidence.add_foundational_receipt_verifier_arguments(parser)
     parser.add_argument(
         "--foundational-prerequisite-release-sequence",
         dest="foundational_release_sequence",
         type=positive_int_arg,
-        help=(
-            "Required operator-reviewed monotonic release sequence expected in "
-            "the foundational prerequisite envelope."
-        ),
+        help="Required operator-reviewed monotonic release sequence expected in the foundational prerequisite envelope.",
     )
     parser.add_argument(
         "--foundational-prerequisite-previous-envelope-sha256",
         dest="foundational_previous_envelope_sha256",
-        help=(
-            "Required operator-reviewed lowercase SHA-256 of the preceding "
-            "foundational envelope (all zeroes only for sequence 1)."
-        ),
+        help="Required operator-reviewed lowercase SHA-256 of the preceding foundational envelope (all zeroes only for sequence 1).",
     )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
@@ -6899,6 +6893,12 @@ def main(argv: list[str] | None = None) -> int:
         if foundational_key_errors:
             emit_checker_error_lines(foundational_key_errors)
             return 2
+    foundational_signer_verifier_sha256, verifier_errors = (
+        software_signer_evidence.verifier_sha256_from_args(args)
+    )
+    if verifier_errors:
+        emit_checker_error_lines(verifier_errors)
+        return 2
     resilience_signer_public_key: bytes | None = None
     if args.resilience_qualification_signer_public_key_hex is not None:
         resilience_key_errors: list[str] = []
@@ -6988,9 +6988,9 @@ def main(argv: list[str] | None = None) -> int:
         environment=args.environment,
         foundational_signer_public_key=foundational_signer_public_key,
         foundational_release_sequence=args.foundational_release_sequence,
-        foundational_previous_envelope_sha256=(
-            foundational_previous_envelope_sha256
-        ),
+        foundational_previous_envelope_sha256=foundational_previous_envelope_sha256,
+        foundational_signer_verifier=args.foundational_signer_verifier,
+        foundational_signer_verifier_sha256=foundational_signer_verifier_sha256,
         topology_qualification=topology_qualification,
         resilience_qualification=resilience_qualification,
         resilience_qualification_errors=tuple(resilience_errors),

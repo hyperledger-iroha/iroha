@@ -704,7 +704,7 @@ mod tests {
 
     use crate::{
         PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
-        PreparedValidator, Swarm,
+        PreparedValidator, Swarm, base64_standard,
         peer::{self, PeerOverride},
     };
 

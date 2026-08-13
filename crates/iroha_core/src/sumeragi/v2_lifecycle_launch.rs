@@ -732,6 +732,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test;
 
     fn empty_leader_wire_gate_for_binding_test(
         directory: &TempDir,
@@ -892,7 +893,7 @@ mod tests {
         let adjacent_store_source = include_str!("serviced_candidate_store.rs");
         let worker_source = include_str!("v2_worker.rs");
         let runner_source = include_str!("v2_runner.rs");
-        let ledger_source = include_str!("v2_lifecycle_ledger.rs");
+        let ledger_source = reviewed_lifecycle_ledger_source_for_test();
         let bound_launch = ledger_source
             .split_once("// COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_BEGIN")
             .expect("the bound CompleteTip launch has one sealed source region")

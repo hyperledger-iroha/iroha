@@ -20,6 +20,8 @@ use super::{
     SorafsRepairFinalizedAnchor, SorafsRepairTasksFilter, StatusCode,
 };
 
+const REPAIR_DEFAULT_PAGE_LIMIT_V1: u32 = 50;
+
 fn response_error(kind: &str, detail: &str) -> eyre::Report {
     eyre!("invalid finalized SoraFS repair {kind} response: {detail}")
 }
@@ -110,7 +112,7 @@ fn validate_finalized_cursor(
 }
 
 fn response_limit(limit: Option<u32>, kind: &str) -> Result<usize> {
-    let limit = limit.unwrap_or(REPAIR_QUERY_MAX_ITEMS_V1);
+    let limit = limit.unwrap_or(REPAIR_DEFAULT_PAGE_LIMIT_V1);
     if !(1..=REPAIR_QUERY_MAX_ITEMS_V1).contains(&limit) {
         return Err(response_error(
             kind,
@@ -904,6 +906,33 @@ mod tests {
     }
 
     #[test]
+    fn repair_task_page_response_binding_rejects_omitted_limit_over_torii_default() {
+        let client = client_with_base_url(base_url());
+        let page = RepairLedgerTaskPageV1 {
+            finalized_cursor: finalized_cursor(),
+            tasks: (1..=REPAIR_DEFAULT_PAGE_LIMIT_V1 + 1)
+                .map(|id| {
+                    let id = u8::try_from(id).expect("bounded test task id fits u8");
+                    repair_task(&client, &format!("REP-{id}"), [id; 32])
+                })
+                .collect(),
+            has_more: false,
+            next_after_task_id: None,
+        };
+        let error = validate_tasks_response(
+            exact_response("tasks", &page),
+            &SorafsRepairTasksFilter::default(),
+        )
+        .err()
+        .expect("omitted task limit must retain Torii's default response bound");
+        assert!(
+            error
+                .to_string()
+                .contains("payload exceeds the requested limit")
+        );
+    }
+
+    #[test]
     fn repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations() {
         let client = client_with_base_url(base_url());
         let cursor = finalized_cursor();
@@ -958,6 +987,32 @@ mod tests {
             ..SorafsRepairEventsFilter::default()
         };
         assert!(validate_events_response(exact_response("events", &page), &continued).is_err());
+    }
+
+    #[test]
+    fn repair_event_page_response_binding_rejects_omitted_limit_over_torii_default() {
+        let client = client_with_base_url(base_url());
+        let page = RepairFinalizedEventPageV1 {
+            finalized_cursor: finalized_cursor(),
+            events: (1..=REPAIR_DEFAULT_PAGE_LIMIT_V1 + 1)
+                .map(|sequence| {
+                    repair_event(&client, u64::from(sequence), 5, [0x51; 32], sequence - 1)
+                })
+                .collect(),
+            has_more: false,
+            next_after: None,
+        };
+        let error = validate_events_response(
+            exact_response("events", &page),
+            &SorafsRepairEventsFilter::default(),
+        )
+        .err()
+        .expect("omitted event limit must retain Torii's default response bound");
+        assert!(
+            error
+                .to_string()
+                .contains("payload exceeds the requested limit")
+        );
     }
 
     #[test]

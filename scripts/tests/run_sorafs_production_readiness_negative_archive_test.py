@@ -73,6 +73,7 @@ def write_promotion_args(root: Path) -> Path:
 
     FIXTURES.write_all_gates(root)
     foundation = FIXTURES.write_foundational_summary(root)
+    foundational_verifier = FIXTURES.receipt_verifier(root)
     qualification_args = FIXTURES.topology_cli_args(root)
     assert len(qualification_args) % 2 == 0
     qualification_lines = [
@@ -108,6 +109,18 @@ def write_promotion_args(root: Path) -> Path:
             [
                 "--foundational-prerequisite-signer-public-key-hex",
                 FIXTURES.FOUNDATIONAL_SIGNER_PUBLIC_KEY.hex(),
+            ]
+        ),
+        shlex.join(
+            [
+                "--foundational-prerequisite-signer-verifier",
+                str(foundational_verifier),
+            ]
+        ),
+        shlex.join(
+            [
+                "--foundational-prerequisite-signer-verifier-sha256",
+                hashlib.sha256(foundational_verifier.read_bytes()).hexdigest(),
             ]
         ),
         shlex.join(
@@ -243,6 +256,65 @@ def test_toolchain_snapshot_binds_runner_checker_and_inventory() -> None:
     assert snapshot.runner_sha256 == digests[MODULE.BUNDLED_RUNNER.name]
     assert snapshot.checker_sha256 == digests[MODULE.BUNDLED_CHECKER.name]
     assert len(snapshot.aggregate_sha256) == 64
+
+
+def test_foundational_verifier_is_staged_and_forwarded_outside_inventory(
+    tmp_path: Path,
+) -> None:
+    promotion_args_path = write_promotion_args(tmp_path)
+    args = MODULE._load_promotion_args(promotion_args_path)
+    baseline = MODULE._snapshot_baseline(args)
+    verifier = MODULE._snapshot_foundational_verifier(args)
+    trust_root = tmp_path / "isolated-runtime-trust"
+    staged = MODULE._install_foundational_verifier(verifier, trust_root)
+    runtime = MODULE.PythonRuntime(
+        executable=Path(sys.executable),
+        implementation="test",
+        version="0",
+        executable_sha256="12" * 32,
+    )
+
+    try:
+        runner_command = MODULE._promotion_runner_command(
+            args,
+            tmp_path / "isolated-toolchain",
+            runtime,
+            staged,
+        )
+        checker_command = MODULE._checker_command(
+            args,
+            tmp_path / "isolated-toolchain",
+            runtime,
+            staged,
+            now_unix=args.now_unix,
+            predecessor_sha256=args.foundational_previous_envelope_sha256,
+            evidence_files=(),
+        )
+
+        assert staged.read_bytes() == verifier.raw
+        assert hashlib.sha256(staged.read_bytes()).hexdigest() == verifier.sha256
+        assert stat.S_IMODE(staged.stat().st_mode) == 0o500
+        assert MODULE.BASELINE_INPUT_COUNT == len(baseline.rows)
+        assert tuple(slot for slot, _path, _raw in baseline.rows) == (
+            MODULE.promotion_runner.REPLAY_INPUT_SLOTS
+        )
+        assert "foundational_signer_verifier" not in (
+            MODULE.promotion_runner.REPLAY_INPUT_SLOTS
+        )
+        for command in (runner_command, checker_command):
+            verifier_index = command.index(
+                "--foundational-prerequisite-signer-verifier"
+            )
+            digest_index = command.index(
+                "--foundational-prerequisite-signer-verifier-sha256"
+            )
+            assert command[verifier_index + 1] == str(staged)
+            assert command[digest_index + 1] == verifier.sha256
+            assert str(verifier.source) not in command
+        MODULE._require_foundational_verifier_unchanged(verifier)
+    finally:
+        trust_root.chmod(0o700)
+        staged.chmod(0o700)
 
 
 def test_bounded_process_rejects_output_before_buffering_past_limit(

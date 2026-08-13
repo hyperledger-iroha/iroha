@@ -9,7 +9,7 @@ use iroha_torii_shared::connect_sdk;
 use pyo3::{
     Bound, Py, PyResult, Python,
     exceptions::{PyRuntimeError, PyValueError},
-    types::{PyAny, PyBytes, PyModule},
+    types::{PyAny, PyBytes, PyModule, PyModuleMethods},
     wrap_pyfunction,
 };
 use x25519_dalek::StaticSecret;

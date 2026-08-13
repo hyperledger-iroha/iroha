@@ -3742,10 +3742,10 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
 
     /// Invoke one structurally qualified signer inside the live sealed-time lease.
     ///
-    /// TODO: expose signing only through a daemon wrapper which compares the
-    /// runtime handle, adapter revision, and adapter-policy digest with the
-    /// exact independently configured signer binding on every call. This local
-    /// operation proves qualification validity and stability only.
+    /// The standard daemon composer supplies a governed signer that fences the
+    /// configured handle, revision, policy, deployment context, and finalized
+    /// owner around every approval. This operation additionally enforces the
+    /// signer's structural validity and snapshot stability.
     ///
     /// # Errors
     ///
@@ -3802,10 +3802,10 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
             .await
     }
 
-    // TODO: expose this only through a daemon wrapper which compares handle,
-    // adapter revision, and adapter-policy digest with the exact independently
-    // configured binding on every call, not only at startup. These local
-    // snapshots prove structural validity and operation stability only.
+    // The standard daemon composer supplies a governed inventory that fences
+    // configured handle, revision, policy, and local scope around readiness and
+    // every fallible call. This operation additionally enforces structural
+    // validity and snapshot stability.
     #[allow(dead_code)]
     pub(crate) async fn handoff_claim_with_inventory<Inventory>(
         &self,
@@ -4303,11 +4303,10 @@ fn checkpoint_future_reserve_bytes(
         })
 }
 
-// TODO: activate the sealed two-slot file adapter in the daemon deployment
-// layer only after the real HSM signer, authenticated monotonic clock-seal,
-// rollback-resistant checkpoint-head, and qualified coordinator inventory
-// bindings are configured. A receipt is only an acknowledgement record and is
-// not independently authenticated evidence.
+// The daemon leaves the sealed two-slot file adapter inactive until qualified
+// HSM signer, combined time/head/blob durability, and coordinator-inventory
+// bindings are configured. A receipt remains an acknowledgement record, not
+// independently authenticated evidence.
 
 #[cfg(test)]
 mod tests;

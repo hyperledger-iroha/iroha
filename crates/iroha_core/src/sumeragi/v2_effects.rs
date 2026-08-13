@@ -124,10 +124,11 @@ use super::{
         ValidatedBodyReceipt,
     },
     v2_chunks::{V2ChunkError, encode_payload},
-    v2_lifecycle_coordinator::{
+    v2_first_release_recovery::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
-        LocalValidateReplayEvidenceV1, RecoveredDecisionApplyDispatchKeyV1,
+        LocalValidateReplayEvidenceV1,
     },
+    v2_lifecycle_coordinator::RecoveredDecisionApplyDispatchKeyV1,
     v2_recovery::PendingKuraApply,
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,

@@ -51,6 +51,9 @@ from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_notice,
     plan_rendered_path_is_safe,
 )
+from sorafs_software_signer_evidence import (  # noqa: E402
+    MAX_EXTERNAL_SIGNER_VERIFIER_BYTES,
+)
 
 
 ARCHIVE_SCHEMA = "sorafs.production_readiness.negative_archive.v1"
@@ -217,6 +220,15 @@ class ToolchainSnapshot:
     aggregate_sha256: str
     runner_sha256: str
     checker_sha256: str
+
+
+@dataclass(frozen=True)
+class VerifierSnapshot:
+    """Exact reviewed foundational receipt verifier staged for isolated runs."""
+
+    source: Path
+    raw: bytes
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -741,6 +753,91 @@ def _require_toolchain_unchanged(snapshot: ToolchainSnapshot) -> None:
         )
 
 
+def _snapshot_foundational_verifier(args: argparse.Namespace) -> VerifierSnapshot:
+    """Read the bounded verifier and bind it to its reviewed SHA-256."""
+
+    source = getattr(args, "foundational_signer_verifier", None)
+    expected_sha256 = getattr(
+        args,
+        "foundational_signer_verifier_sha256",
+        None,
+    )
+    if not isinstance(source, Path) or (
+        canonical_lower_hex(expected_sha256, 64) is None
+        or not any(bytes.fromhex(expected_sha256))
+    ):
+        raise NegativeArchiveError(
+            "reviewed foundational signer verifier inputs are incomplete"
+        )
+    try:
+        raw = read_evidence_bytes(
+            source,
+            MAX_EXTERNAL_SIGNER_VERIFIER_BYTES,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        raise NegativeArchiveError(
+            "foundational signer verifier could not be snapshotted safely"
+        ) from error
+    observed_sha256 = _sha256(raw)
+    if not raw or observed_sha256 != expected_sha256:
+        raise NegativeArchiveError(
+            "foundational signer verifier does not match its reviewed SHA-256"
+        )
+    return VerifierSnapshot(
+        source=source,
+        raw=raw,
+        sha256=observed_sha256,
+    )
+
+
+def _install_foundational_verifier(
+    snapshot: VerifierSnapshot,
+    destination: Path,
+) -> Path:
+    """Install one exact executable verifier below the private work root."""
+
+    destination.mkdir(mode=0o700)
+    target = destination / "foundational-signer-verifier"
+    _write_new_file(target, snapshot.raw)
+    target.chmod(0o500)
+    try:
+        installed = read_evidence_bytes(
+            target,
+            MAX_EXTERNAL_SIGNER_VERIFIER_BYTES,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        raise NegativeArchiveError(
+            "staged foundational signer verifier could not be read back"
+        ) from error
+    if installed != snapshot.raw or _sha256(installed) != snapshot.sha256:
+        raise NegativeArchiveError(
+            "staged foundational signer verifier failed exact readback"
+        )
+    _fsync_directory(destination)
+    destination.chmod(0o500)
+    return target
+
+
+def _require_foundational_verifier_unchanged(
+    snapshot: VerifierSnapshot,
+) -> None:
+    """Require the reviewed verifier source to retain its exact bytes."""
+
+    try:
+        observed = read_evidence_bytes(
+            snapshot.source,
+            MAX_EXTERNAL_SIGNER_VERIFIER_BYTES,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        raise NegativeArchiveError(
+            "foundational signer verifier could not be rehashed safely"
+        ) from error
+    if observed != snapshot.raw or _sha256(observed) != snapshot.sha256:
+        raise NegativeArchiveError(
+            "foundational signer verifier changed during negative qualification"
+        )
+
+
 def _python_runtime() -> PythonRuntime:
     """Bind the external interpreter while keeping its filesystem path private."""
 
@@ -882,6 +979,7 @@ def _promotion_runner_command(
     args: argparse.Namespace,
     toolchain_root: Path,
     runtime: PythonRuntime,
+    foundational_verifier: Path,
 ) -> list[str]:
     command = [
         str(runtime.executable),
@@ -944,6 +1042,10 @@ def _promotion_runner_command(
         args.environment,
         "--foundational-prerequisite-signer-public-key-hex",
         args.foundational_signer_public_key_hex,
+        "--foundational-prerequisite-signer-verifier",
+        str(foundational_verifier),
+        "--foundational-prerequisite-signer-verifier-sha256",
+        args.foundational_signer_verifier_sha256,
         "--foundational-prerequisite-release-sequence",
         str(args.foundational_release_sequence),
         "--foundational-prerequisite-previous-envelope-sha256",
@@ -965,9 +1067,15 @@ def _baseline_output_hashes(
     root: Path,
     toolchain_root: Path,
     runtime: PythonRuntime,
+    foundational_verifier: Path,
 ) -> dict[str, str]:
     result = _run_bounded(
-        _promotion_runner_command(args, toolchain_root, runtime),
+        _promotion_runner_command(
+            args,
+            toolchain_root,
+            runtime,
+            foundational_verifier,
+        ),
         root,
     )
     if result.exit_code != 0:
@@ -1023,6 +1131,7 @@ def _checker_command(
     args: argparse.Namespace,
     toolchain_root: Path,
     runtime: PythonRuntime,
+    foundational_verifier: Path,
     *,
     now_unix: int,
     predecessor_sha256: str,
@@ -1092,6 +1201,10 @@ def _checker_command(
             args.environment,
             "--foundational-prerequisite-signer-public-key-hex",
             args.foundational_signer_public_key_hex,
+            "--foundational-prerequisite-signer-verifier",
+            str(foundational_verifier),
+            "--foundational-prerequisite-signer-verifier-sha256",
+            args.foundational_signer_verifier_sha256,
             "--foundational-prerequisite-release-sequence",
             str(args.foundational_release_sequence),
             "--foundational-prerequisite-previous-envelope-sha256",
@@ -1275,6 +1388,7 @@ def _execute_mutation(
     toolchain_sha256: str,
     toolchain_root: Path,
     runtime: PythonRuntime,
+    foundational_verifier: Path,
     root: Path,
 ) -> dict[str, Any]:
     _copy_baseline(snapshot, root)
@@ -1284,6 +1398,7 @@ def _execute_mutation(
             args,
             toolchain_root,
             runtime,
+            foundational_verifier,
             now_unix=now_unix,
             predecessor_sha256=predecessor,
             evidence_files=evidence_files,
@@ -1736,6 +1851,7 @@ def main(argv: list[str] | None = None) -> int:
         toolchain = _snapshot_toolchain()
         runtime = _python_runtime()
         promotion_args = _load_promotion_args(args.promotion_args_file)
+        verifier = _snapshot_foundational_verifier(promotion_args)
         snapshot = _snapshot_baseline(promotion_args)
         with tempfile.TemporaryDirectory(
             prefix="sorafs-negative-promotion-work-"
@@ -1752,6 +1868,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             toolchain_root = work_root / "toolchain"
             _install_toolchain(toolchain, toolchain_root)
+            foundational_verifier = _install_foundational_verifier(
+                verifier,
+                work_root / "runtime-trust",
+            )
             baseline_root = work_root / "baseline"
             _copy_baseline(snapshot, baseline_root)
             baseline_hashes = _baseline_output_hashes(
@@ -1760,6 +1880,7 @@ def main(argv: list[str] | None = None) -> int:
                 baseline_root,
                 toolchain_root,
                 runtime,
+                foundational_verifier,
             )
             receipts = []
             for index, case in enumerate(MUTATION_CASES, start=1):
@@ -1772,10 +1893,12 @@ def main(argv: list[str] | None = None) -> int:
                         toolchain.aggregate_sha256,
                         toolchain_root,
                         runtime,
+                        foundational_verifier,
                         work_root / f"negative-{index:02d}",
                     )
                 )
         _require_baseline_unchanged(snapshot)
+        _require_foundational_verifier_unchanged(verifier)
         _require_toolchain_unchanged(toolchain)
         _require_python_runtime_unchanged(runtime)
         _publish_archive(

@@ -984,7 +984,9 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     complete.write_text(
         "module.exports = {"
         "connectNoritoBridgeAbiVersion() { return 22; },"
+        "inspectSorafsOrderbookSubmissionV1() {},"
         "sorafsValidateAppealFinanceCancelAssetLockJson() {}"
+        ",verifySorafsOrderbookSubmissionReceiptV1() {}"
         "};\n",
         encoding="utf-8",
     )
@@ -995,6 +997,18 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
         )
         == 22
     )
+
+    source = complete.read_text(encoding="utf-8")
+    for symbol in (
+        "inspectSorafsOrderbookSubmissionV1",
+        "verifySorafsOrderbookSubmissionReceiptV1",
+    ):
+        incomplete = tmp_path / f"missing-{symbol}.cjs"
+        incomplete.write_text(
+            re.sub(rf"{symbol}\(\) \{{\}},?", "", source), encoding="utf-8"
+        )
+        with pytest.raises(checker.ArtifactContractError, match="missing required exports"):
+            checker.probe_node_abi(incomplete, checker.REQUIRED_SYMBOLS["node"])
 
     complete.write_text(
         "module.exports = {connectNoritoBridgeAbiVersion() { return 19; }};\n",
@@ -1011,7 +1025,11 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
     complete.write_text(
         "def connect_norito_bridge_abi_version():\n"
         "    return 22\n"
+        "def inspect_sorafs_orderbook_submission_v1():\n"
+        "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
+        "    return '{}'\n"
+        "def verify_sorafs_orderbook_submission_receipt_v1():\n"
         "    return '{}'\n",
         encoding="utf-8",
     )
@@ -1023,10 +1041,27 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         == 22
     )
 
+    source = complete.read_text(encoding="utf-8")
+    for symbol in (
+        "inspect_sorafs_orderbook_submission_v1",
+        "verify_sorafs_orderbook_submission_receipt_v1",
+    ):
+        incomplete = tmp_path / f"missing-{symbol}.py"
+        incomplete.write_text(
+            re.sub(rf"def {symbol}\(\):\n    return .*\n", "", source),
+            encoding="utf-8",
+        )
+        with pytest.raises(checker.ArtifactContractError, match="missing required exports"):
+            checker.probe_python_abi(incomplete, checker.REQUIRED_SYMBOLS["python"])
+
     complete.write_text(
         "def connect_norito_bridge_abi_version():\n"
         "    return '22'\n"
+        "def inspect_sorafs_orderbook_submission_v1():\n"
+        "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
+        "    return '{}'\n"
+        "def verify_sorafs_orderbook_submission_receipt_v1():\n"
         "    return '{}'\n",
         encoding="utf-8",
     )
@@ -1404,15 +1439,22 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     for token in (
         'export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;',
         '"connectNoritoBridgeAbiVersion"',
+        '"inspectSorafsOrderbookSubmissionV1"',
         '"sorafsValidateAppealFinanceCancelAssetLockJson"',
+        '"verifySorafsOrderbookSubmissionReceiptV1"',
         "buildProvenance.source_tree_clean !== true",
     ):
         assert token in node_copy
 
     python_native = read("python/iroha_python/iroha_python_rs/src/lib.rs")
+    python_orderbook_native = read(
+        "python/iroha_python/iroha_python_rs/src/sorafs_orderbook_submission.rs"
+    )
     assert '#[pyo3(name = "connect_norito_bridge_abi_version")]' in python_native
     assert "fn connect_norito_bridge_abi_version_py() -> u32" in python_native
     assert "connect_norito_bridge_abi_version_py," in python_native
+    assert 'name = "inspect_sorafs_orderbook_submission_v1"' in python_orderbook_native
+    assert 'name = "verify_sorafs_orderbook_submission_receipt_v1"' in python_orderbook_native
 
     csharp = read(
         "csharp/src/Hyperledger.Iroha.Sdk/SoraFs/SoraFsReferenceValidators.cs"

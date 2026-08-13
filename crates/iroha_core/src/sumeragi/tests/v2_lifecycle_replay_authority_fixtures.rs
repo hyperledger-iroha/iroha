@@ -19,11 +19,20 @@
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
         v2_transport::authenticate_certified_body_request,
     };
+
     #[cfg(feature = "bls")]
     use crate::sumeragi::{
         v2::VerifiedHeightContext, v2_body_store::V2BodyStore,
         v2_certified_serve_payload_store::CertifiedServePayloadNegativeOutcome,
     };
+
+    fn replay_authority_source_for_test() -> String {
+        include_str!("../v2_lifecycle_replay_authority.rs").replacen(
+            "include!(\"v2_lifecycle_replay_authority_certified_body.rs\");\n",
+            include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),
+            1,
+        )
+    }
 
     pub(in crate::sumeragi::v2_lifecycle_coordinator) struct ReplayCase {
         pub(in crate::sumeragi::v2_lifecycle_coordinator) authority: LifecycleReplayAuthorityV1,

@@ -81,8 +81,11 @@ use super::{
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
+        RecoveredWalVoteReplayEvidenceV1,
+    },
+    v2_first_release_recovery::{
         LocalBodyPreIntentReplaySealV1, LocalValidateReplayEvidenceV1,
-        RecoveredWalVoteReplayEvidenceV1, RemoteProposalFetchReplayEvidenceV1,
+        RemoteProposalFetchReplayEvidenceV1,
     },
 };
 

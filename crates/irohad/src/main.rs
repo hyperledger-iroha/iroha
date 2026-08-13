@@ -8169,14 +8169,10 @@ fn validate_provider_ingest_archive_presence(
     }
 }
 
-fn validate_provider_attestation_journal_activation(
-    journal_configured: bool,
-) -> Result<(), &'static str> {
-    // TODO: Replace this gate with the supervised capture child only after its
-    // scanner is sealed to the concrete finalized archive and the local store
-    // initialization, durable time, approval-signer, and authenticated
-    // inventory boundaries are activation-qualified.
-    if journal_configured {
+fn validate_provider_attestation_journal_activation(configured: bool) -> Result<(), &'static str> {
+    // Keep this pre-supervisor gate until the supervised child's archive scanner, local store,
+    // durable time, approval-signer, and authenticated-inventory boundaries qualify.
+    if configured {
         Err(
             "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it",
         )

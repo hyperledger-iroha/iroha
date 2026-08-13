@@ -1593,7 +1593,7 @@ test("required-export probe accepts a complete module and rejects missing symbol
   );
 });
 
-test("required-export probe rejects missing privacy and authenticated-finality symbols", (t) => {
+test("required-export probe rejects missing strict boundary symbols", (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-symbol-gate-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -1604,6 +1604,8 @@ test("required-export probe rejects missing privacy and authenticated-finality s
     "privacyValidateCompiledProfileCatalogV1",
     "privacyValidateExact12CapabilityManifestV1",
     "blockProofsVerifyAuthenticatedV1",
+    "inspectSorafsOrderbookSubmissionV1",
+    "verifySorafsOrderbookSubmissionReceiptV1",
   ]) {
     const fixture = path.join(root, `${missing}.cjs`);
     writeFileSync(fixture, nativeProbeFixtureSource({ omit: [missing] }));

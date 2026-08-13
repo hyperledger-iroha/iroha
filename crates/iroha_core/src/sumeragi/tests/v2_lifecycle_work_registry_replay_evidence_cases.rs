@@ -1,6 +1,6 @@
     #[test]
     fn certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier() {
-        let source = include_str!("../v2_lifecycle_work_registry.rs");
+        let source = reviewed_lifecycle_work_registry_source_for_test();
         let production = source
             .split("\n#[cfg(test)]\nmod tests {")
             .next()

@@ -519,12 +519,29 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs": (
         "tests/v2_lifecycle_coordinator_explorer_cases.rs",
     ),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs": (
+        "v2_lifecycle_ledger_store.rs",
+        "v2_lifecycle_ledger_tests.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs": (
+        "v2_lifecycle_ledger_tests_durable_recovery_01.rs",
+        "v2_lifecycle_ledger_tests_durable_recovery_02.rs",
+        "v2_lifecycle_ledger_tests_frame_and_store.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs": (
+        "tests/v2_lifecycle_projection_cases.rs",
+    ),
     "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs": (
+        "v2_lifecycle_replay_authority_certified_body.rs",
         "v2_lifecycle_replay_authority_payload_projection.rs",
         "tests/v2_lifecycle_replay_authority_fixtures.rs",
         "tests/v2_lifecycle_replay_authority_cases.rs",
     ),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs": (
+        "v2_lifecycle_work_registry_validate_recovery_parent.rs",
+    ),
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs": (
+        "v2_lifecycle_work_registry_recovered_wal.rs",
         "v2_lifecycle_work_registry_validate_recovery.rs",
         "tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs",
         "tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs",
@@ -627,10 +644,15 @@ def _read_reviewed_rust_source_fixture(
     errors: list[str],
     description: str,
     expanded_components: tuple[str, ...] | None = None,
+    _expansion_stack: tuple[str, ...] = (),
 ) -> tuple[Path, str]:
-    """Expand a non-Git mutation fixture using the reviewed direct manifest."""
+    """Expand a non-Git mutation fixture using the reviewed recursive manifest."""
 
     path = repo_root / relative
+    if relative in _expansion_stack:
+        cycle = _expansion_stack + (relative,)
+        errors.append(f"{path}: reviewed Rust include fixture cycle through {cycle!r}")
+        return path, ""
     if not path.is_file() or path.is_symlink():
         errors.append(f"{path}: {description} must be a regular non-symlink file")
         return path, ""
@@ -691,6 +713,14 @@ def _read_reviewed_rust_source_fixture(
                     f"component for {path}: {error}"
                 )
                 component_source = ""
+        if expanded_components is None or component_relative in expanded_components:
+            component_repo_relative = Path(relative).parent / component_relative
+            component_repo_relative = component_repo_relative.as_posix()
+            if component_repo_relative in _REVIEWED_RUST_INCLUDE_MANIFESTS:
+                _, component_source = _read_reviewed_rust_source_fixture(
+                    repo_root, component_repo_relative, errors, description,
+                    _expansion_stack=_expansion_stack + (relative,),
+                )
         component_sources[component_relative] = component_source
 
     def expand(match: re.Match[str]) -> str:

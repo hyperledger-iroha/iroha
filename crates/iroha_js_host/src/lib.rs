@@ -169,7 +169,15 @@ use iroha_data_model::{
         encode_bundle_with_materials_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
     },
-    sorafs::pin_registry::StorageClass,
+    sorafs::{
+        orderbook_submission::{
+            parse_sorafs_orderbook_cancel_reason_v1, parse_sorafs_orderbook_decimal_u64_v1,
+            parse_sorafs_orderbook_fee_bps_v1, parse_sorafs_orderbook_payload_kind_v1,
+            parse_sorafs_orderbook_side_v1, parse_sorafs_orderbook_tier_v1,
+            parse_sorafs_orderbook_xor_quantity_v1, validate_sorafs_orderbook_owner_account_v1,
+        },
+        pin_registry::StorageClass,
+    },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
         executable::{ContractArgumentRecord, ContractInvocation},
@@ -227,10 +235,9 @@ use sorafs_car::{
     },
 };
 use sorafs_manifest::{
-    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
-    OrderbookValidationPayloadKindV1, XorQuantity,
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, OrderCancelReasonV1, OrderSideV1,
+    OrderTierV1, OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{
         AliasCachePolicy, AliasProofEvaluation, AliasProofState,
         decode_alias_proof_untrusted_signers, unix_now_secs,
@@ -6207,93 +6214,54 @@ fn validate_sorafs_reference_governance_cid<'a>(
 fn parse_sorafs_orderbook_payload_kind(
     kind: &str,
 ) -> napi::Result<OrderbookValidationPayloadKindV1> {
-    match kind {
-        "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
-        "order-cancel" => Ok(OrderbookValidationPayloadKindV1::OrderCancel),
-        "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
-        "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
-        "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_payload_kind_v1(kind).ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook payload kind `{kind}`"),
-        )),
-    }
+        )
+    })
 }
 
 fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
-    match side {
-        "bid" => Ok(OrderSideV1::Bid),
-        "ask" => Ok(OrderSideV1::Ask),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_side_v1(side).ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook side `{side}`"),
-        )),
-    }
+        )
+    })
 }
 
 fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
-    match tier {
-        "hot" => Ok(OrderTierV1::Hot),
-        "warm" => Ok(OrderTierV1::Warm),
-        "archive" => Ok(OrderTierV1::Archive),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_tier_v1(tier).ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook tier `{tier}`"),
-        )),
-    }
+        )
+    })
 }
 
 fn parse_sorafs_orderbook_cancel_reason(reason: &str) -> napi::Result<OrderCancelReasonV1> {
-    match reason {
-        "owner-requested" => Ok(OrderCancelReasonV1::OwnerRequested),
-        "expired" => Ok(OrderCancelReasonV1::Expired),
-        "governance" => Ok(OrderCancelReasonV1::Governance),
-        "replaced" => Ok(OrderCancelReasonV1::Replaced),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_cancel_reason_v1(reason, "owner-requested").ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook cancel reason `{reason}`"),
-        )),
-    }
+        )
+    })
 }
 
 fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
-    value.trim().parse::<u64>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be an unsigned 64-bit decimal integer: {err}"),
-        )
-    })
+    parse_sorafs_orderbook_decimal_u64_v1(value, context)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 
 fn parse_sorafs_xor_quantity(value: &str, context: &str) -> napi::Result<XorQuantity> {
-    if value.len() > 155 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} exceeds the canonical XOR quantity text bound"),
-        ));
-    }
-    let quantity = value.parse::<XorQuantity>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be a canonical non-negative XOR quantity: {err}"),
-        )
-    })?;
-    if quantity.to_string() != value {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must use canonical XOR quantity spelling"),
-        ));
-    }
-    Ok(quantity)
+    parse_sorafs_orderbook_xor_quantity_v1(value, context)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 
 fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
-    u16::try_from(value).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must fit in u16 basis points"),
-        )
-    })
+    parse_sorafs_orderbook_fee_bps_v1(value, context)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 
 fn parse_sorafs_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
@@ -6460,19 +6428,8 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
 }
 
 fn validate_sorafs_orderbook_owner_account(owner_account: &[u8]) -> napi::Result<()> {
-    if owner_account.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "owner_account must not be empty",
-        ));
-    }
-    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("owner_account must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"),
-        ));
-    }
-    Ok(())
+    validate_sorafs_orderbook_owner_account_v1(owner_account)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 
 /// Build and sign a canonical `SoraFS` settlement receipt from fields.
@@ -6811,44 +6768,6 @@ pub fn sorafs_validate_governance_dag_head_chain_json(
 #[cfg(test)]
 mod sorafs_orderbook_validation_tests {
     use super::*;
-
-    #[test]
-    fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
-        assert_eq!(
-            parse_sorafs_orderbook_payload_kind("order-request").unwrap(),
-            OrderbookValidationPayloadKindV1::OrderRequest
-        );
-        assert_eq!(
-            parse_sorafs_orderbook_payload_kind("settlement-channel").unwrap(),
-            OrderbookValidationPayloadKindV1::SettlementChannel
-        );
-        for retired in [
-            "order",
-            "order_request",
-            " ORDER-REQUEST",
-            "request",
-            "runtime-snapshot",
-        ] {
-            assert!(parse_sorafs_orderbook_payload_kind(retired).is_err());
-        }
-        assert!(parse_sorafs_orderbook_side("Bid").is_err());
-        assert!(parse_sorafs_orderbook_tier(" hot").is_err());
-        assert!(parse_sorafs_orderbook_cancel_reason("owner_requested").is_err());
-    }
-
-    #[test]
-    fn orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
-        assert!(
-            validate_sorafs_orderbook_owner_account(&[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1])
-                .is_ok()
-        );
-        assert!(
-            validate_sorafs_orderbook_owner_account(
-                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
-            )
-            .is_err()
-        );
-    }
 
     #[test]
     fn parse_sorafs_pdp_payload_kind_requires_exact_v1_name() {
@@ -19762,9 +19681,8 @@ seiyaku Privacy {
         };
         let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
         let bytes = to_bytes(&receipt).expect("encode receipt");
-        let decoded =
-            sorafs_orderbook_submission::decode_transaction_receipt_json(bytes.into())
-                .expect("decode receipt into json");
+        let decoded = sorafs_orderbook_submission::decode_transaction_receipt_json(bytes.into())
+            .expect("decode receipt into json");
         let expected = json::to_json(&receipt).expect("serialize receipt json");
         assert_eq!(decoded, expected);
     }

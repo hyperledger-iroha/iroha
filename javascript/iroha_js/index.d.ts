@@ -4,6 +4,7 @@ import type { BrowserFeePayment } from "./transaction-codec.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
 import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
+import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./src/sorafsOrderbookSubmission.js";
 import { NetworkId } from "./src/networkId.js";
 export { NetworkId };
 export * from "./kotodama-compiler.js";
@@ -12,6 +13,7 @@ export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
 export * from "./src/blockProofTypes.js";
 export * from "./src/toriiBrowserExplorerTypes.js";
+export * from "./src/sorafsOrderbookSubmission.js";
 
 export type JsonValue =
   | null
@@ -3866,6 +3868,7 @@ type ToriiRuntimeNamespaceExport =
   | "LocalSigningContext"
   | "ToriiClient"
   | "TransactionBatchAdmissionAmbiguousError"
+  | "SorafsOrderbookSubmissionAmbiguousError"
   | "ToriiDataModelMismatchError"
   | "ToriiHttpError"
   | "TransactionStatusError"
@@ -4096,8 +4099,8 @@ export type ToriiHealthStatus = { status: string } & Record<string, unknown>;
 
 /** Immutable NetworkId context required by APIs that return local-signing drafts. */
 export class LocalSigningContext {
-  constructor(networkId: NetworkId);
-  readonly networkId: NetworkId;
+  constructor(networkId: NetworkId, chainDiscriminant?: number);
+  readonly networkId: NetworkId; readonly chainDiscriminant: number;
 }
 
 export interface ToriiClientOptions extends ToriiClientRetryOptions {
@@ -9010,10 +9013,6 @@ export interface SorafsOrderbookEventsWebSocketStreamOptions<T = unknown>
   closeOnReturn?: boolean;
 }
 
-export interface SorafsOrderbookTransactionSubmitOptions {
-  signal?: AbortSignal;
-}
-
 export interface SorafsOrderbookFinalizedCursor {
   height: number;
   block_hash: string;
@@ -10932,17 +10931,17 @@ export declare class ToriiClient {
     options?: SorafsReplicationListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsReplicationOrderRecord, void, unknown>;
   submitSorafsOrderbookOrder(
-    signedTransaction: BinaryLike,
-    options?: SorafsOrderbookTransactionSubmitOptions,
-  ): Promise<unknown>;
+    signedTransaction: SorafsOrderbookSignedTransaction,
+    options: SorafsOrderbookTransactionSubmitOptions,
+  ): Promise<SorafsOrderbookSubmissionReceipt>;
   submitSorafsOrderbookCancel(
-    signedTransaction: BinaryLike,
-    options?: SorafsOrderbookTransactionSubmitOptions,
-  ): Promise<unknown>;
+    signedTransaction: SorafsOrderbookSignedTransaction,
+    options: SorafsOrderbookTransactionSubmitOptions,
+  ): Promise<SorafsOrderbookSubmissionReceipt>;
   submitSorafsOrderbookReceipt(
-    signedTransaction: BinaryLike,
-    options?: SorafsOrderbookTransactionSubmitOptions,
-  ): Promise<unknown>;
+    signedTransaction: SorafsOrderbookSignedTransaction,
+    options: SorafsOrderbookTransactionSubmitOptions,
+  ): Promise<SorafsOrderbookSubmissionReceipt>;
   getSorafsOrderbook(
     options?: SorafsOrderbookReadOptions,
   ): Promise<SorafsOrderbookBookResponse>;

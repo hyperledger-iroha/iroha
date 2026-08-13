@@ -921,9 +921,9 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
     /// material in place for a later retry. This method remains crate-private
     /// until the qualified journal/inventory coordinator can consume scanner
     /// output without exposing claims or requests.
-    // TODO: Invoke this only from the future qualified, supervised effect
-    // coordinator after it owns the sealed journal and authenticated inventory
-    // drivers; the current daemon intentionally retains the tenure inert.
+    // The opaque attestation driver is the sole production caller and invokes
+    // this after binding its journal, signer, and inventory. Stock daemon
+    // startup retains that driver inert until supervision is qualified.
     #[allow(
         dead_code,
         reason = "activation stays closed until the qualified effect coordinator is complete"

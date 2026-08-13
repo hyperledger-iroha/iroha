@@ -76,8 +76,10 @@ JUNIT_REPORT="${SDK_SESSION}/pytest.xml"
   tests/cancel_asset_lock_client_helpers_test.py \
   tests/client_hard_cut_contract_test.py \
   tests/client_ledger_helpers_test.py \
+  tests/client_sorafs_orderbook_test.py \
   tests/sorafs_reference_validation_test.py \
-  tests/sorafs_replication_instruction_test.py
+  tests/sorafs_replication_instruction_test.py \
+  ../iroha_torii_client/tests/orderbook_submission_test.py
 "${VENV_PYTHON}" -I - "${JUNIT_REPORT}" <<'PY'
 from pathlib import Path
 import sys

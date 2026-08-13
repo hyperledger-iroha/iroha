@@ -224,6 +224,10 @@ def complete_args(tmp_path: Path) -> list[str]:
         str(write_json(tmp_path / "foundational_prerequisites.json")),
         "--foundational-prerequisite-signer-public-key-hex",
         FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX,
+        "--foundational-prerequisite-signer-verifier",
+        str(CHECKER_PATH),
+        "--foundational-prerequisite-signer-verifier-sha256",
+        hashlib.sha256(CHECKER_PATH.read_bytes()).hexdigest(),
         "--foundational-prerequisite-release-sequence",
         str(FOUNDATIONAL_RELEASE_SEQUENCE),
         "--foundational-prerequisite-previous-envelope-sha256",
@@ -276,6 +280,8 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
         "sorafs_production_readiness_gate_replay"
     )
     assert "check_sorafs_production_readiness.py" in payload["steps"][0]["command"][1]
+    assert len(MODULE.production_input_paths(MODULE.parse_args(complete_args(tmp_path)))) == 22
+    assert "--foundational-prerequisite-signer-verifier" in payload["steps"][0]["command"]
     assert payload["steps"][0]["artifact"] != payload["steps"][1]["artifact"]
 
 
@@ -329,6 +335,21 @@ def test_foundational_prerequisite_runner_rejects_malformed_trust_without_echo(
             "foundational_previous_envelope_sha256",
             "RUNTIME-ONLY-PREDECESSOR",
             "foundational predecessor must be canonical lowercase SHA-256",
+        ),
+        (
+            "foundational_signer_verifier",
+            None,
+            "requires a foundational signer receipt verifier",
+        ),
+        (
+            "foundational_signer_verifier_sha256",
+            None,
+            "requires a foundational signer verifier SHA-256",
+        ),
+        (
+            "foundational_signer_verifier_sha256",
+            "RUNTIME-ONLY-VERIFIER-DIGEST",
+            "must be a non-zero canonical lowercase SHA-256",
         ),
         (
             "foundational_release_sequence",

@@ -39,7 +39,7 @@ use super::{
         production_durable_predecessor_identity_kernel,
     },
     v2_lane_work::durable_lane_completion_matches_finality,
-    v2_lifecycle_coordinator::{LifecycleContext, LifecycleDigest},
+    v2_first_release_recovery::{LifecycleContext, LifecycleDigest},
 };
 use crate::{
     kura::{
@@ -1346,7 +1346,7 @@ impl RecoveredCompleteTipActivationAuthority {
     /// same Kura-authenticated Commit decision which created the successor.
     pub(in crate::sumeragi) fn authorizes_terminal_apply_replay(
         &self,
-        replay: &crate::sumeragi::v2_lifecycle_coordinator::LifecycleReplayAuthorityV1,
+        replay: &crate::sumeragi::v2_first_release_recovery::LifecycleReplayAuthorityV1,
     ) -> bool {
         DurableV2PredecessorIdentity::authenticate(&self.artifact, &self.receipt)
             .is_ok_and(|predecessor| predecessor == self.activation.predecessor())
@@ -1477,8 +1477,8 @@ impl RecoveredCompleteTipActivationAuthority {
         self,
         local_signer: &KeyPair,
     ) -> Result<
-        crate::sumeragi::v2_lifecycle_coordinator::AuthenticatedCompleteTipPredecessorStorageV1,
-        crate::sumeragi::v2_lifecycle_coordinator::CompleteTipPredecessorStorageErrorV1,
+        crate::sumeragi::v2_first_release_recovery::AuthenticatedCompleteTipPredecessorStorageV1,
+        crate::sumeragi::v2_first_release_recovery::CompleteTipPredecessorStorageErrorV1,
     > {
         let predecessor_root = self.lifecycle_storage.predecessor.root.clone();
         let successor_root = self.lifecycle_storage.successor.root.clone();
@@ -1492,7 +1492,7 @@ impl RecoveredCompleteTipActivationAuthority {
         let body_store_root = self.lifecycle_storage.body_store_root.clone();
         let verified_predecessor = self.verified_predecessor.clone();
         let signature_policy = self.predecessor_signature_policy.clone();
-        crate::sumeragi::v2_lifecycle_coordinator::open_complete_tip_predecessor_storage(
+        crate::sumeragi::v2_first_release_recovery::open_complete_tip_predecessor_storage(
             &predecessor_root,
             &successor_root,
             successor_context,

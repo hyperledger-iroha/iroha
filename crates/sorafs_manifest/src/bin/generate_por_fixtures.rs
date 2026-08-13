@@ -83,7 +83,7 @@ fn require_secure_fixture_filesystem() -> io::Result<()> {
 
 #[cfg(not(unix))]
 fn unsupported_secure_fixture_filesystem_error() -> io::Error {
-    // TODO: Add stable handle-relative identity and no-follow support for non-Unix hosts.
+    // Non-Unix generation fails closed: handle-relative identity and no-follow are required.
     io::Error::new(
         io::ErrorKind::Unsupported,
         "secure SoraFS fixture generation requires Unix file identities and handle-relative directory binding",

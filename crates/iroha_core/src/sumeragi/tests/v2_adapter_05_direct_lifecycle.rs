@@ -2742,7 +2742,7 @@
             );
         }
 
-        let ledger = include_str!("../v2_lifecycle_ledger.rs");
+        let ledger = reviewed_lifecycle_ledger_source_for_test();
         let parent_start = ledger
             .find("pub(crate) struct AuthenticatedRecoveredWalValidateLedgerParent")
             .expect("locate opaque recovered ledger parent");
@@ -2782,7 +2782,7 @@
             );
         }
 
-        let registry = include_str!("../v2_lifecycle_work_registry.rs");
+        let registry = reviewed_lifecycle_work_registry_source_for_test();
         let exact_store = registry
             .split_once("pub(crate) struct OpenedRecoveredWalValidateLedger")
             .expect("locate exact recovered-WAL store cut")

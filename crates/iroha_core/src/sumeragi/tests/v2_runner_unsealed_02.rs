@@ -930,7 +930,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         };
 
         let (_kura, _predecessor_root, exact_context, retirement) =
-            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+            super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let activation = PendingSuccessorActivation::RecoveredCompleteTip {
             authority: retirement,
         };
@@ -961,7 +961,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         super::super::status::clear_v2_status();
 
         let (drift_kura, _predecessor_root, drift_context, retirement) =
-            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+            super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let successor_ledger = drift_kura
             .sumeragi_v2_storage_root()
             .join("lifecycle-v1")
@@ -997,7 +997,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(super::super::status::v2_status().is_none());
 
         let (predecessor_kura, predecessor_root, predecessor_context, retirement) =
-            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+            super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let predecessor_ledger = predecessor_root.join("lifecycle-ledger-v1.norito");
         std::fs::write(&predecessor_ledger, b"replaced predecessor frame")
             .expect("replace the predecessor frame after retirement authentication");
@@ -1033,7 +1033,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         drop(predecessor_kura);
 
         let (_foreign_kura, _predecessor_root, foreign_context, retirement) =
-            super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
+            super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let mut foreign_status = successor_status(&foreign_context);
         let foreign_context_id =
             wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(

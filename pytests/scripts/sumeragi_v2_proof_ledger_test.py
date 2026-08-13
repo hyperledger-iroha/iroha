@@ -99,6 +99,15 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
             "sumeragi_v2_proof_ledger_async_fairness_cases.py",
         "test_exact_output_production_source_mutations_fail_closed":
             "sumeragi_v2_proof_ledger_exact_output_cases.py",
+        "complete_ledger": "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "write_tlaps_fixture_logs":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "build_test_evidence":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "complete_cross_tool_ledger":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "build_cross_tool_fixture":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     }
 
     def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
@@ -108,7 +117,10 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
             for node in tree.body:
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                if not node.name.startswith("test_"):
+                if (
+                    not node.name.startswith("test_")
+                    and node.name not in expected_component_providers
+                ):
                     continue
                 providers.setdefault(node.name, []).append(path.name)
 
@@ -161,56 +173,56 @@ def checker_source_paths() -> tuple[Path, ...]:
 
 
 def test_release_inventory_checker_has_one_component_owned_provider() -> None:
-    """Reject a monolithic shadow of the release-inventory component."""
+    """Reject monolithic shadows of component-owned checker providers."""
 
-    component_name = "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
-    expected_provider_name = component_name
+    expected_providers = {
+        "_production_liveness_release_inventory_errors": (
+            "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
+        ),
+        "_cross_tool_kernel_views": (
+            "sumeragi_v2_proof_ledger_cross_tool_contracts.py"
+        ),
+    }
 
     def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
-        providers = [
-            (path.name, node.lineno)
-            for path, source in sources
-            for node in ast.parse(source, filename=str(path)).body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "_production_liveness_release_inventory_errors"
-        ]
-        if len(providers) == 1 and providers[0][0] == expected_provider_name:
-            return []
+        providers: dict[str, list[str]] = {}
+        for path, source in sources:
+            for node in ast.parse(source, filename=str(path)).body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if node.name in expected_providers:
+                    providers.setdefault(node.name, []).append(path.name)
         return [
-            "release-inventory checker provider must be unique and component-owned; "
-            f"found {providers!r}"
+            f"checker provider {name} must be uniquely component-owned; "
+            f"found {providers.get(name)!r}"
+            for name, expected_provider in expected_providers.items()
+            if providers.get(name) != [expected_provider]
         ]
 
     canonical_sources = tuple(
-        (path, path.read_text(encoding="utf-8")) for path in checker_source_paths()
+        (path, path.read_text(encoding="utf-8"))
+        for path in checker_source_paths()
     )
     assert provider_errors(canonical_sources) == []
 
-    shadow = (
-        "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
-        "    return []\n"
-    )
-    mutated_sources = tuple(
-        (path, source + shadow if path == SCRIPT else source)
-        for path, source in canonical_sources
-    )
-    errors = provider_errors(mutated_sources)
-    component_provider = next(
-        provider
-        for provider in [
-            (path.name, node.lineno)
+    shadows = {
+        "_production_liveness_release_inventory_errors": (
+            "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
+            "    return []\n"
+        ),
+        "_cross_tool_kernel_views": (
+            "\n\ndef _cross_tool_kernel_views(claim):\n"
+            "    return ()\n"
+        ),
+    }
+    for name, shadow in shadows.items():
+        mutated_sources = tuple(
+            (path, source + shadow if path == SCRIPT else source)
             for path, source in canonical_sources
-            for node in ast.parse(source, filename=str(path)).body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "_production_liveness_release_inventory_errors"
-        ]
-        if provider[0] == expected_provider_name
-    )
-    assert errors == [
-        "release-inventory checker provider must be unique and component-owned; "
-        f"found [({SCRIPT.name!r}, "
-        f"{len(canonical_sources[0][1].splitlines()) + 3}), {component_provider!r}]"
-    ]
+        )
+        errors = provider_errors(mutated_sources)
+        assert len(errors) == 1
+        assert name in errors[0] and SCRIPT.name in errors[0], errors
 
 
 def test_checker_remains_python39_compatible() -> None:
@@ -1636,402 +1648,6 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
 
 
 
-def complete_ledger(module):
-    ledger = copy.deepcopy(module.load_ledger())
-    ledger["machine_checked_completion"] = True
-    for obligation in ledger["obligations"]:
-        expected_status = (
-            module.MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID.get(
-                obligation["id"]
-            )
-        )
-        if expected_status is not None:
-            obligation["status"] = expected_status
-    return ledger
-
-
-def write_tlaps_fixture_logs(
-    module, formal_dir: Path, root_dir: Path, log_dir: Path
-):
-    """Write canonical positive module and exact-target logs for unit fixtures."""
-
-    log_dir.mkdir(parents=True, exist_ok=True)
-    (log_dir / "targets").mkdir(parents=True, exist_ok=True)
-    source_manifest_sha256 = module._formal_source_manifest(
-        formal_dir, root_dir
-    )["sha256"]
-    ledger_sha256 = module._proof_ledger_sha256(formal_dir)
-    for name in module.RELEASE_PROOF_MODULES:
-        (log_dir / f"{name}.preflight.log").write_text(
-            "frontend summary passed\n"
-            f"{module._tlapm_preflight_marker(name, source_manifest_sha256, ledger_sha256)}\n",
-            encoding="utf-8",
-        )
-        (log_dir / f"{name}.log").write_text(
-            "[INFO]: All 1 obligation proved.\n"
-            f"{module._tlapm_runner_marker(name, source_manifest_sha256, ledger_sha256)}\n",
-            encoding="utf-8",
-        )
-    for target in module._promotion_target_entries(formal_dir, root_dir):
-        (log_dir / "targets" / f"{target['obligation_id']}.log").write_text(
-            "[INFO]: All 1 obligation proved.\n"
-            + module._tlapm_target_marker(
-                target,
-                obligations_proved=1,
-                source_manifest_sha256=source_manifest_sha256,
-                ledger_sha256=ledger_sha256,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-    return source_manifest_sha256, ledger_sha256
-
-
-def build_test_evidence(module, tmp_path: Path):
-    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
-    shutil.copytree(module.FORMAL_DIR, formal_dir)
-    (formal_dir / "proof_coverage.json").write_text(
-        json.dumps(complete_ledger(module), indent=2) + "\n",
-        encoding="utf-8",
-    )
-    log_dir = tmp_path / module.FORMAL_EVIDENCE_LOGICAL_ROOT / "tlaps"
-    write_tlaps_fixture_logs(module, formal_dir, tmp_path, log_dir)
-    evidence = module.build_release_evidence(
-        tlapm_version=module.TLAPM_COMMIT[:7],
-        log_dir=log_dir,
-        formal_dir=formal_dir,
-        root_dir=tmp_path,
-    )
-    return formal_dir, log_dir, evidence
-
-
-def complete_cross_tool_ledger(module):
-    """Return a synthetic complete ledger using the reviewed cross-tool status."""
-
-    return complete_ledger(module)
-
-
-def build_cross_tool_fixture(module, tmp_path: Path):
-    """Build canonical synthetic component logs for checker-only negative tests."""
-
-    # Materialize compact exact non-vacuous synthetic contracts so the
-    # promotion validator and every mutation below run through the full
-    # signature/kernel/call-site path without duplicating production sources.
-    hardened_contracts = []
-    shared_kernel_source = "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        claims = []
-        for claim in contract.claims:
-            if claim.proof_mode == "total_checked_gate":
-                claims.append(claim)
-                continue
-            kernel = f"synthetic_{claim.verus_theorem}_kernel"
-            projection_builder = f"synthetic_{claim.verus_theorem}_projection"
-            projection_builder_source = (
-                f"pub closed spec fn {projection_builder}(projection: u64) "
-                "-> u64 { projection }"
-            )
-            projection_builder_sha256 = hashlib.sha256(
-                "\0".join(
-                    module.rust_code_tokens(projection_builder_source)
-                ).encode("utf-8")
-            ).hexdigest()
-            call_source = claim.production_sources[0]
-            call_item = f"enforce_{claim.verus_theorem}"
-            call_expression = f"assert!({kernel}(projection));"
-            synthetic_call_source = (
-                f"fn {call_item}(projection: u64) {{\n"
-                f"    {call_expression}\n"
-                "}\n"
-            )
-            extracted_call_items = module.rust_items(
-                synthetic_call_source, call_item
-            )
-            assert len(extracted_call_items) == 1
-            call_item_sha256 = module._rust_sealed_item_token_sha256(
-                extracted_call_items[0]
-            )
-            claims.append(
-                module.CrossToolClaimContract(
-                    constant=claim.constant,
-                    verus_theorem=claim.verus_theorem,
-                    verus_source=claim.verus_source,
-                    production_sources=claim.production_sources,
-                    verus_parameters="projection: u64",
-                    verus_requires="projection > 0",
-                    verus_ensures=(
-                        f"{kernel}({projection_builder}(projection)), "
-                        f"{projection_builder}(projection) >= 1"
-                    ),
-                    verified_kernel=kernel,
-                    verified_kernel_source=shared_kernel_source,
-                    verified_kernel_parameters="projection: u64",
-                    verified_kernel_body="projection > 0",
-                    theorem_kernel_projection=(
-                        f"{projection_builder}(projection)"
-                    ),
-                    theorem_projection_builder=projection_builder,
-                    theorem_projection_builder_parameters="projection: u64",
-                    theorem_projection_builder_return="u64",
-                    theorem_projection_builder_item_sha256=(
-                        projection_builder_sha256
-                    ),
-                    production_call_sites=(
-                        module.CrossToolProductionCallContract(
-                            source=call_source,
-                            item=call_item,
-                            projection="projection",
-                            required_expression=call_expression,
-                            item_token_sha256=call_item_sha256,
-                        ),
-                    ),
-                )
-            )
-        hardened_contracts.append(
-            module.CrossToolObligationContract(
-                obligation_id=contract.obligation_id,
-                module=contract.module,
-                ledger_symbol=contract.ledger_symbol,
-                tla_theorem=contract.tla_theorem,
-                tla_statement=contract.tla_statement,
-                claims=tuple(claims),
-                ledger_declaration_kind=contract.ledger_declaration_kind,
-                ledger_statement=contract.ledger_statement,
-                tla_proof=contract.tla_proof,
-            )
-        )
-    module.CROSS_TOOL_REFINEMENT_CONTRACTS = tuple(hardened_contracts)
-    module.CROSS_TOOL_REFINEMENT_BY_ID = {
-        contract.obligation_id: contract
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-    }
-
-    ledger = complete_cross_tool_ledger(module)
-    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
-    shutil.copytree(
-        module.FORMAL_DIR,
-        formal_dir,
-        ignore=shutil.ignore_patterns(".tlacache"),
-    )
-
-    contracts_by_module = {}
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        contracts_by_module.setdefault(contract.module, []).append(contract)
-    for module_name, contracts in contracts_by_module.items():
-        path = formal_dir / f"{module_name}.tla"
-        source = path.read_text(encoding="utf-8")
-        original_source = source
-        inherited_source = "\n".join(
-            provider_source
-            for _, _, provider_source in module._cross_tool_tla_module_closure(
-                formal_dir, module_name
-            )
-        )
-        model_side_declarations = ""
-        for contract in contracts:
-            premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
-            if module._expanded_tla_alias(
-                inherited_source, premise
-            ) == module._expanded_tla_alias(
-                inherited_source, contract.ledger_symbol
-            ):
-                synthetic = f"{contract.tla_theorem}SyntheticModelSide"
-                old = f"THEOREM {contract.ledger_symbol} ==\n  {premise}"
-                assert source.count(old) == 1
-                source = source.replace(
-                    old,
-                    f"THEOREM {contract.ledger_symbol} ==\n"
-                    f"  /\\ {premise}\n"
-                    f"  /\\ {synthetic}",
-                    1,
-                )
-                model_side_declarations += f"\n{synthetic} == FALSE\n"
-        end = source.rfind("====")
-        assert end >= 0
-        declarations = model_side_declarations + "".join(
-            "\nTHEOREM "
-            f"{contract.tla_theorem} ==\n"
-            f"  {contract.tla_statement}\n"
-            "PROOF\n"
-            "  OBVIOUS\n"
-            for contract in contracts
-            if module._top_level_theorem_body(
-                inherited_source, contract.tla_theorem
-            )
-            is None
-        )
-        if source != original_source or declarations:
-            path.write_text(
-                source[:end] + declarations + "\n====\n",
-                encoding="utf-8",
-            )
-
-    verus_contract = module._verus_evidence_contract_module()
-    production_sources = {
-        relative
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-        for claim in contract.claims
-        for relative in claim.production_sources
-    }
-    copied_sources = (
-        set(verus_contract.REQUIRED_SOURCE_PATHS)
-        | production_sources
-        | {"crates/iroha_core/src/sumeragi/v2_core.rs"}
-    )
-    for relative in sorted(copied_sources):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        source = ROOT_DIR / relative
-        if source.is_file():
-            shutil.copyfile(source, destination)
-        else:
-            # The fixture exercises the evidence schema independently of
-            # unrelated source-inventory migrations in the shared worktree.
-            destination.write_text("// synthetic fixture source\n", encoding="utf-8")
-
-    theorem_claims_by_source = {}
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        for claim in contract.claims:
-            theorem_claims_by_source.setdefault(claim.verus_source, []).append(
-                claim
-            )
-    for relative, claims in theorem_claims_by_source.items():
-        path = tmp_path / relative
-        legacy_claims = [
-            claim
-            for claim in claims
-            if claim.proof_mode == "legacy_requires_builder"
-        ]
-        if not legacy_claims:
-            continue
-        assert len(legacy_claims) == len(claims)
-        source = ""
-        synthetic_proofs = "\nverus! {\n"
-        for claim in legacy_claims:
-            expected_call = (
-                f"{claim.verified_kernel}({claim.theorem_kernel_projection})"
-            )
-            synthetic_proofs += (
-                f"pub closed spec fn {claim.theorem_projection_builder}("
-                f"{claim.theorem_projection_builder_parameters}) -> "
-                f"{claim.theorem_projection_builder_return} {{\n"
-                "    projection\n"
-                "}\n"
-                f"pub closed spec fn {claim.verified_kernel}("
-                f"{claim.verified_kernel_parameters}) -> bool {{\n"
-                f"    {claim.verified_kernel_body}\n"
-                "}\n"
-                f"pub proof fn {claim.verus_theorem}({claim.verus_parameters})\n"
-                f"    requires {claim.verus_requires},\n"
-                f"    ensures {claim.verus_ensures},\n"
-                "{\n"
-                f"    assert({expected_call});\n"
-                "}\n"
-            )
-        synthetic_proofs += "}\n"
-        path.write_text(source + synthetic_proofs, encoding="utf-8")
-
-    kernel_path = tmp_path / shared_kernel_source
-    kernel_source = kernel_path.read_text(encoding="utf-8")
-    kernel_source += "\n" + "".join(
-        f"pub(crate) const fn {claim.verified_kernel}"
-        f"({claim.verified_kernel_parameters}) -> bool {{\n"
-        f"    {claim.verified_kernel_body}\n"
-        "}\n"
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-        for claim in contract.claims
-        if claim.proof_mode == "legacy_requires_builder"
-    )
-    kernel_path.write_text(kernel_source, encoding="utf-8")
-
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        for claim in contract.claims:
-            if claim.proof_mode != "legacy_requires_builder":
-                continue
-            for call_site in claim.production_call_sites:
-                path = tmp_path / call_site.source
-                source = path.read_text(encoding="utf-8")
-                source += (
-                    "\n"
-                    f"fn {call_site.item}(projection: u64) {{\n"
-                    f"    {call_site.required_expression}\n"
-                    "}\n"
-                )
-                path.write_text(source, encoding="utf-8")
-
-    # Cross-tool release evidence must describe the exact ledger that is part
-    # of the source-bound checkout, not a separately supplied archive mutant.
-    (formal_dir / "proof_coverage.json").write_text(
-        json.dumps(ledger, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    log_dir = tmp_path / module.FORMAL_EVIDENCE_LOGICAL_ROOT / "tlaps"
-    write_tlaps_fixture_logs(module, formal_dir, tmp_path, log_dir)
-    tlaps_evidence = module.build_release_evidence(
-        tlapm_version=module.TLAPM_COMMIT[:7],
-        log_dir=log_dir,
-        formal_dir=formal_dir,
-        root_dir=tmp_path,
-    )
-
-    host = verus_contract._host_key()
-    if host not in verus_contract.EXPECTED_TOOL_SHA256:
-        pytest.skip(f"cross-tool evidence fixture has no pinned Verus host {host}")
-    pinned_tool = verus_contract.EXPECTED_TOOL_SHA256[host]
-    workspace_manifest_sha256 = "a" * 64
-    nonce = "b" * 64
-    verus_log = tmp_path / verus_contract.EXPECTED_LOG_PATH
-    verus_log.parent.mkdir(parents=True, exist_ok=True)
-    verus_log.write_text(
-        verus_contract.begin_marker(nonce, workspace_manifest_sha256)
-        + "\n"
-        + "verification results:: "
-        + f"{verus_contract.EXPECTED_DEPENDENCY_VERIFIED} verified, 0 errors\n"
-        + "verification results:: "
-        + f"{verus_contract.EXPECTED_ROOT_VERIFIED} verified, 0 errors\n"
-        + verus_contract.success_marker(nonce, workspace_manifest_sha256)
-        + "\n",
-        encoding="utf-8",
-    )
-    verus_evidence = {
-        "schema_version": verus_contract.SCHEMA_VERSION,
-        "verification_contract_sha256": verus_contract.verification_contract_sha256(),
-        "source_manifest_sha256": workspace_manifest_sha256,
-        "sources": verus_contract._source_entries(tmp_path),
-        "tool": {
-            "version": verus_contract.EXPECTED_VERUS_VERSION,
-            "platform": pinned_tool["platform"],
-            "verus_sha256": pinned_tool["verus"],
-            "cargo_verus_sha256": pinned_tool["cargo_verus"],
-        },
-        "invocation": list(verus_contract.EXPECTED_INVOCATION),
-        "log": verus_contract.EXPECTED_LOG_PATH,
-        "log_sha256": module._sha256_file(verus_log),
-        "nonce": nonce,
-        "results": {
-            "dependency_verified": verus_contract.EXPECTED_DEPENDENCY_VERIFIED,
-            "root_verified": verus_contract.EXPECTED_ROOT_VERIFIED,
-            "errors": 0,
-        },
-        "backend_verification": True,
-    }
-    cross_tool_evidence = module.build_cross_tool_evidence(
-        ledger,
-        tlaps_evidence=tlaps_evidence,
-        verus_evidence=verus_evidence,
-        formal_dir=formal_dir,
-        root_dir=tmp_path,
-        expected_verus_source_manifest_sha256=workspace_manifest_sha256,
-    )
-    return (
-        ledger,
-        formal_dir,
-        tlaps_evidence,
-        verus_evidence,
-        cross_tool_evidence,
-        workspace_manifest_sha256,
-    )
 
 
 def test_release_gate_requires_every_deductive_module_and_positive_counts(
@@ -15379,9 +14995,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
     ), errors
 
 
-@pytest.mark.parametrize(
-    ("relative_path", "region_marker", "old", "new", "error_fragment"),
-    (
+SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
             "fn exactly_matches_successor_owner(",
@@ -15884,7 +15498,20 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "sumeragi::v2_block_sync::tests::catch_up_is_not_release_bound",
             "production refinement test must be pinned exactly once",
         ),
-    ),
+)
+
+SUCCESSOR_PRODUCTION_SOURCE_MAPPING_COMPANIONS = (
+    SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS[:30]
+)
+SUCCESSOR_PRODUCTION_SOURCE_MAPPING_PRIMARY = SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS[30:]
+assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
+    set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
+) == 63
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "region_marker", "old", "new", "error_fragment"),
+    SUCCESSOR_PRODUCTION_SOURCE_MAPPING_PRIMARY,
 )
 def test_successor_production_source_mapping_mutations_fail_closed(
     tmp_path: Path,
@@ -15967,6 +15594,22 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         path.write_text(source.replace(successor_reload, "true", 1), encoding="utf-8")
         errors = module._successor_production_source_fidelity_errors(tmp_path)
         assert any(error_fragment in error for error in errors), errors
+    mutation = (relative_path, region_marker, old, new, error_fragment)
+    if mutation == SUCCESSOR_PRODUCTION_SOURCE_MAPPING_PRIMARY[0]:
+        for index, companion in enumerate(
+            SUCCESSOR_PRODUCTION_SOURCE_MAPPING_COMPANIONS
+        ):
+            try:
+                test_successor_production_source_mapping_mutations_fail_closed(
+                    tmp_path / f"companion-{index:02d}", *companion
+                )
+            except Exception as error:
+                path, region, _old, _new, expected = companion
+                raise AssertionError(
+                    "successor production-source mutation companion failed: "
+                    f"index={index}; path={path!r}; region={region!r}; "
+                    f"expected_error={expected!r}"
+                ) from error
 
 
 def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mutants(
@@ -29785,9 +29428,7 @@ def test_serviced_candidate_production_contract_is_complete(
     safety_path.write_text(canonical_safety, encoding="utf-8")
 
 
-@pytest.mark.parametrize(
-    ("relative", "old", "new", "expected_error"),
-    (
+SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS = (
         (
             Path("crates/iroha_core/src/sumeragi/safety_wal.rs"),
             "let linked = fs::symlink_metadata(self.expected_path.join(name))?;",
@@ -30149,7 +29790,20 @@ def test_serviced_candidate_production_contract_is_complete(
                 "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity"
             ),
         ),
-    ),
+)
+
+SERVICED_CANDIDATE_PRODUCTION_CONTRACT_COMPANIONS = (
+    SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS[:3]
+)
+SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY = SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS[3:]
+assert len(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS) == len(
+    set(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS)
+) == 31
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY,
 )
 def test_serviced_candidate_production_contract_rejects_mutations(
     tmp_path: Path,
@@ -30173,6 +29827,22 @@ def test_serviced_candidate_production_contract_rejects_mutations(
     )
 
     assert any(expected_error in error for error in errors), errors
+    mutation = (relative, old, new, expected_error)
+    if mutation == SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY[0]:
+        for index, companion in enumerate(
+            SERVICED_CANDIDATE_PRODUCTION_CONTRACT_COMPANIONS
+        ):
+            try:
+                test_serviced_candidate_production_contract_rejects_mutations(
+                    tmp_path / f"companion-{index:02d}", *companion
+                )
+            except Exception as error:
+                path, _old, _new, expected = companion
+                raise AssertionError(
+                    "serviced-candidate production mutation companion failed: "
+                    f"index={index}; path={path.as_posix()!r}; "
+                    f"expected_error={expected!r}"
+                ) from error
 
 
 @pytest.mark.parametrize(

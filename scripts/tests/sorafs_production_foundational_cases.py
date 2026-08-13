@@ -166,7 +166,7 @@ def test_complete_aggregate_without_topology_qualification_stays_blocked(
                 "--environment",
                 ENVIRONMENT,
                 *resilience_cli_args(tmp_path),
-                *foundational_cli_args(),
+                *foundational_cli_args(tmp_path),
                 "--summary-out",
                 str(summary),
             ]
@@ -251,6 +251,11 @@ def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
         "prerequisites",
         "lane_summaries",
         "signature",
+        "signer_receipt_bundle",
+    }
+    assert RECEIPT_SUPPORT.SIGNER_EVIDENCE.FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_FIELDS == {
+        "schema", "verifier_sha256", "operation_id_hex", "binding_base64",
+        "receipt_base64", "validation_sha256",
     }
     assert MODULE.FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS == {
         "deployment_id",
@@ -889,7 +894,7 @@ def test_foundational_prerequisite_missing_duplicate_and_untrusted_inputs_block(
                 "--environment",
                 ENVIRONMENT,
                 *topology_cli_args(missing_root),
-                *foundational_cli_args(),
+                *foundational_cli_args(missing_root),
                 "--summary-out",
                 str(missing_summary),
             ]
@@ -986,7 +991,7 @@ def test_foundational_prerequisite_path_policy_rejects_symlink_and_traversal(
                 "--environment",
                 ENVIRONMENT,
                 *topology_cli_args(root),
-                *foundational_cli_args(),
+                *foundational_cli_args(root),
             ]
         )
         == 1
@@ -1013,7 +1018,7 @@ def test_foundational_prerequisite_path_policy_rejects_symlink_and_traversal(
                 "--environment",
                 ENVIRONMENT,
                 *topology_cli_args(root),
-                *foundational_cli_args(),
+                *foundational_cli_args(root),
             ]
         )
         == 2
@@ -1065,7 +1070,7 @@ def test_foundational_prerequisite_cli_trust_values_fail_closed_without_echo(
                     "--environment",
                     ENVIRONMENT,
                     *topology_cli_args(tmp_path),
-                    *foundational_cli_args(),
+                    *foundational_cli_args(tmp_path),
                     flag,
                     value,
                 ]

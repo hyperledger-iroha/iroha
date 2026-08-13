@@ -1,3 +1,8 @@
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    reviewed_lifecycle_ledger_source_for_test,
+    reviewed_lifecycle_work_registry_source_for_test,
+};
+
 #[test]
 fn exact_install_borrow_and_take_are_one_shot() {
     let work = concrete(effect(1), 91);
@@ -418,7 +423,7 @@ fn direct_signed_replay_pre_admission_is_closed_exact_and_drop_inert() {
 
 #[test]
 fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -481,7 +486,7 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
         "the inert prerequisite has no production admission caller"
     );
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -492,7 +497,7 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
 
 #[test]
 fn direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -577,7 +582,7 @@ fn direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired() {
 
 #[test]
 fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -681,7 +686,7 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
 
 #[test]
 fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -751,7 +756,7 @@ fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
         "only the fixed Ready registry join may invoke the adapter seal"
     );
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -767,7 +772,7 @@ fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
 
 #[test]
 fn live_validate_sign_join_is_linear_opaque_and_unwired_from_runner() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -922,7 +927,7 @@ fn sealed_validate_no_successor_branch_inventory_is_exact() {
 
 #[test]
 fn registry_remains_inert_and_scheduler_free() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("#[cfg(test)]")
         .next()
@@ -979,7 +984,7 @@ fn registry_remains_inert_and_scheduler_free() {
 
 #[test]
 fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let permit = source
         .split("pub(in crate::sumeragi) struct InstalledBodyCandidateProjectionPermit")
         .nth(1)
@@ -1037,7 +1042,11 @@ fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed
         );
     }
 
-    let replay = include_str!("../v2_lifecycle_replay_authority.rs");
+    let replay = include_str!("../v2_lifecycle_replay_authority.rs").replacen(
+        "include!(\"v2_lifecycle_replay_authority_certified_body.rs\");\n",
+        include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),
+        1,
+    );
     for required in [
         "fn project_installed_store_candidate(",
         "fn project_installed_validate_candidate(",
@@ -1106,7 +1115,7 @@ fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed
 
 #[test]
 fn certified_fetch_execution_surface_is_borrow_bound_and_commit_free() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let execution_impl = source
         .split("impl<'a> PreparedCertifiedFetchExecution<'a>")
         .nth(1)
@@ -1143,7 +1152,7 @@ fn certified_fetch_execution_surface_is_borrow_bound_and_commit_free() {
 
 #[test]
 fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1302,7 +1311,7 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
 
 #[test]
 fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1610,7 +1619,7 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
 
 #[test]
 fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2044,7 +2053,7 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         "only the closed concrete carrier may borrow the durable child effect"
     );
 
-    let ledger_source = include_str!("../v2_lifecycle_ledger.rs");
+    let ledger_source = reviewed_lifecycle_ledger_source_for_test();
     let frame_revalidation = ledger_source
         .split("pub(super) fn revalidates_durable_authenticated_wal_vote_repair(")
         .nth(1)

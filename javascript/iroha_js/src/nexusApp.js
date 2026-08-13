@@ -365,7 +365,7 @@ const TRANSACTION_HASH_ALIASES = Object.freeze([
   Object.freeze({ key: "hash" }),
 ]);
 const SUBMISSION_HASH_ALIASES = Object.freeze([
-  // `signed_transaction_hash` is a distinct inner-wire identity in Torii receipts.
+  // Torii's three External transaction receipt identities are authoritative aliases.
   Object.freeze({ key: "hashHex", hexOnly: true }),
   Object.freeze({ key: "hash_hex", hexOnly: true }),
   Object.freeze({ key: "transactionHashHex", hexOnly: true }),
@@ -376,6 +376,10 @@ const SUBMISSION_HASH_ALIASES = Object.freeze([
   Object.freeze({ key: "transaction_hash" }),
   Object.freeze({ key: "entrypointHash" }),
   Object.freeze({ key: "entrypoint_hash" }),
+  Object.freeze({ key: "signedTransactionHashHex", hexOnly: true }),
+  Object.freeze({ key: "signed_transaction_hash_hex", hexOnly: true }),
+  Object.freeze({ key: "signedTransactionHash" }),
+  Object.freeze({ key: "signed_transaction_hash" }),
   Object.freeze({ key: "hash" }),
   Object.freeze({ key: "txHash" }),
   Object.freeze({ key: "tx_hash" }),

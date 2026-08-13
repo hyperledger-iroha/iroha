@@ -67,7 +67,32 @@ The flow has two phases:
    domain, Ed25519 key, positive key/policy revisions, policy SHA-256, payload,
    signature, audit commit, live provenance and response attestations. Revoked,
    substituted, stale-head, noisy, malformed, or unverifiable receipts block.
-   Only then does `finalize` atomically create the final JSON envelope.
+   Only then does `finalize` atomically create the final JSON envelope. That
+   envelope retains the public post-sign evidence in the schema-closed
+   `sorafs.production_readiness.foundational_signer_receipt_bundle.v1` object.
+   Its exact fields are `schema`, `verifier_sha256`, `operation_id_hex`,
+   `binding_base64`, `receipt_base64`, and `validation_sha256`; the binding and
+   receipt use canonical base64 and each decodes to at most 64 KiB of non-empty
+   public bytes. The bundle is deliberately excluded from
+   `foundational_signing_payload`, together with `signature.signature_hex`,
+   because neither exists until after the isolated signer has signed the
+   reviewed body. It is post-sign verification evidence, not a field that can
+   change those signed bytes.
+
+   The aggregate checker does not trust the finalization result or the bundle's
+   declared verifier digest alone. It requires the independently reviewed
+   `--foundational-prerequisite-signer-verifier` and
+   `--foundational-prerequisite-signer-verifier-sha256`, securely reopens and
+   hashes that exact verifier, and requires the digest to match both runtime
+   trust and the retained bundle. It then copies the verifier, retained binding
+   and receipt, reconstructed domain-separated signing payload, and detached
+   signature into a private directory and reruns `verify-receipt`. Acceptance
+   requires the same exact operation, payload length, signer identities,
+   role/domain, key and policy revisions, live commit/audit head, non-revoked
+   provenance, payload signature, and provenance/response attestations, plus a
+   canonical validation artifact whose SHA-256 matches `validation_sha256`.
+   Verifier input is capped at 128 MiB, validation output at 16 KiB, the signed
+   payload at 64 KiB, and the retained final envelope at 256 KiB.
    `finalize` independently takes the same
    `--topology-qualification-summary`, resilience summary, and resilience
    signer public key. It also reopens the independently signed L1 lane-evidence
@@ -215,13 +240,15 @@ public key outside the envelope invocation plan used for approval.
 Pass the finalized envelope to
 `scripts/run_sorafs_production_readiness.py` as
 `--foundational-prerequisite-summary`, with the same trusted public key,
-release sequence, predecessor digest, deployment ID, environment, explicit
-clock, freshness window, exact `--topology-qualification-summary`, exact
-`--resilience-qualification-summary`, and its separately reviewed signer
-public key. Deterministic replay snapshots the topology summary and envelope,
-resilience summary, signed lane inventory, foundational envelope, and the 17
-lanes as exactly 22 inputs. The inventory is an additional bound input, so
-aggregate summary counts remain exactly 17/17. The
+the pinned receipt-verifier path and independently reviewed SHA-256, release
+sequence, predecessor digest, deployment ID, environment, explicit clock,
+freshness window, exact `--topology-qualification-summary`, exact
+`--resilience-qualification-summary`, and its separately reviewed signer public
+key. The verifier is runtime trust, not a replay evidence input. Deterministic
+replay snapshots the topology summary and envelope, resilience summary, signed
+lane inventory, foundational envelope, and the 17 lanes as exactly 22 inputs.
+The inventory is an additional bound input, so aggregate summary counts remain
+exactly 17/17. The
 aggregate gate remains authoritative:
 creating or signing this envelope does not make any readiness lane ready and
 does not authorize Taira or Minamoto cutover. The repository currently

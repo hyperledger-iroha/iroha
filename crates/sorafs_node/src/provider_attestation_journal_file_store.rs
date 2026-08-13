@@ -17,11 +17,11 @@
 //! explicit asynchronous initialize/open paths, which bind the local store to
 //! the exact network/provider/policy checkpoint scope.
 //!
-//! TODO: before daemon activation, construct this sealed runtime only below the
-//! supervised provider-ingest child, qualify the full crash/corruption matrix,
-//! require a singleton rooted runtime session for each exact external provider
-//! scope across machines, and qualify Windows only after exact SID/DACL
-//! pinning. The local OS lease fences only processes sharing this state root.
+//! Daemon activation requires construction below the supervised provider-ingest
+//! child, accepted crash/corruption evidence, and a singleton rooted runtime
+//! session or provider-side cross-machine fencing for each external scope.
+//! Windows remains unsupported until exact SID/DACL pinning is qualified; the
+//! local OS lease fences only processes sharing this state root.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{ffi::OsStr, time::Duration};

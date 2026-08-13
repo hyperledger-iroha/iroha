@@ -318,8 +318,10 @@ integration_tests/fixtures/sumeragi_da*
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Ignore lock files
-Cargo.lock
+# Keep transient nested lockfiles ignored. The root workspace lock is an
+# authenticated release input and must be committed with the source tree.
+**/Cargo.lock
+!/Cargo.lock
 # Ignore local JSON corpora and generated tapes used in tests
 crates/norito/tests/corpora/*.json
 crates/norito/tests/corpora/*.tape

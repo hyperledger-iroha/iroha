@@ -71,9 +71,9 @@ not immutable-candidate execution or release receipts.
   mutation, or cross-tool certificate is claimed.
 - Mutable source-budget checks do not currently report within their configured
   bounds, so source-budget closure remains a release blocker. The
-  reviewed Rust include topology contains 37 parents and 229 direct entries;
+  reviewed Rust include topology contains 41 parents and 238 direct entries;
   its canonical payload SHA-256 is
-  `82cbfd14b681b83e6d10ec5dfa8267e501812ce05415eb3401c935136f7d4647`.
+  `46aaff06ea487b2db81116883c9f1b616b62c8c33d0f1c98fb7e94a9f6e43cd3`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
@@ -1692,13 +1692,13 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,348 grouped and 1,347 diagnostics records. The checked-in grouped fixture has
+1,351 grouped and 1,350 diagnostics records. The checked-in grouped fixture has
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
+`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
 and
-`7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`.
+`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1973,22 +1973,24 @@ Swift `4`, Kotlin `6`, and Java `5`, with exactly 55 grouped Native negative
 controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `26`, and Java `24`. The recursive
 source-closure design covers every transitive production input, including the
-browser JavaScript distribution, Kotlin/Java Native models, grouped JSON, and
-wire TSV; the mutable closure enumerates 1,348 grouped and 1,347 diagnostics
-records. The current grouped JSON and wire TSV SHA-256 values are
+browser JavaScript distribution, SoraFS orderbook JavaScript implementation
+and types, the standalone Python orderbook module, Kotlin/Java Native models,
+grouped JSON, and wire TSV; the mutable closure enumerates 1,351 grouped and
+1,350 diagnostics records. The current grouped JSON and wire TSV SHA-256
+values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
+`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
 and
-`7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`.
+`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
 
-Those are development-source inventories, not SDK results. The JavaScript
-source and distribution trees match in this mutable checkout. The five OpenAPI
-artifacts require fresh deterministic regeneration from a clean exact
-candidate. No complete immutable-candidate grouped or diagnostics harness
-execution, parity hash, or archived result is claimed, so `G-SDK` remains Open.
+Those are development-source inventories, not SDK results. The changed
+JavaScript production roots require fresh deterministic source/distribution
+regeneration from a clean exact candidate, as do the five OpenAPI artifacts.
+No complete immutable-candidate grouped or diagnostics harness execution,
+parity hash, or archived result is claimed, so `G-SDK` remains Open.
 
 ### G-FINAL — clean release validation
 

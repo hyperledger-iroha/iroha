@@ -75,35 +75,33 @@ use sorafs_node::provider_ingest_runtime::{
 };
 use sorafs_node::{
     AdmittedPayloadReadLeaseErrorV1, FinalizedProviderIngestAuthorizationV1,
-    MusubiProviderAttestationClaimOwnerV1,
-    MusubiProviderAttestationInventoryErrorV1, MusubiProviderAttestationInventoryItemV1,
-    MusubiProviderAttestationInventoryQualificationV1,
+    MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationInventoryErrorV1,
+    MusubiProviderAttestationInventoryItemV1, MusubiProviderAttestationInventoryQualificationV1,
     MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
     MusubiProviderAttestationInventoryRuntimeErrorV1, MusubiProviderAttestationInventoryRuntimeV1,
     MusubiProviderAttestationInventoryScopeV1, MusubiProviderAttestationInventorySinkV1,
     MusubiProviderAttestationInventoryV1, MusubiProviderAttestationJournalPolicyV1,
-    MusubiProviderAttestationJournalRuntimeV1,
-    MusubiProviderAttestationSignerErrorV1, MusubiProviderAttestationSignerQualificationV1,
-    MusubiProviderAttestationSignerV1, NodeHandle, NodeStorageError,
-    ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestCheckpointExternalErrorV1,
-    ProviderIngestCheckpointProviderQualificationV1, ProviderIngestCheckpointRuntimeV1,
-    ProviderIngestClaimOwnerV1, ProviderIngestCompletedMusubiAttestationDriverV1,
-    ProviderIngestCompletedMusubiCaptureCoordinatorV1,
-    ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
-    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
-    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolutionContextV1,
+    MusubiProviderAttestationJournalRuntimeV1, MusubiProviderAttestationSignerErrorV1,
+    MusubiProviderAttestationSignerQualificationV1, MusubiProviderAttestationSignerV1, NodeHandle,
+    NodeStorageError, ProviderIngestAuthenticatedSourceFetchV1,
+    ProviderIngestCheckpointExternalErrorV1, ProviderIngestCheckpointProviderQualificationV1,
+    ProviderIngestCheckpointRuntimeV1, ProviderIngestClaimOwnerV1,
+    ProviderIngestCompletedMusubiAttestationDriverV1,
+    ProviderIngestCompletedMusubiCaptureCoordinatorV1, ProviderIngestCompletionPayloadBuilderV1,
+    ProviderIngestCompletionPayloadErrorV1, ProviderIngestCompletionPayloadRequestV1,
+    ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerPolicyV1,
+    ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
     ProviderIngestFinalizedClaimFactoryV1, ProviderIngestFinalizedCursorV1,
     ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1,
-    ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFinalizedMusubiCompletionClaimV1,
-    ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
-    ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestMusubiAttestationApprovalRequestV1,
-    ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeV1,
-    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
-    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
-    ProviderIngestTransactionObservationV1,
+    ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFutureV1,
+    ProviderIngestIngressDispositionV1, ProviderIngestIngressPrepareErrorV1,
+    ProviderIngestLocalStorageErrorV1, ProviderIngestLocalStorageV1,
+    ProviderIngestMusubiAttestationApprovalRequestV1, ProviderIngestRuntimeErrorV1,
+    ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1,
+    ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1,
+    ProviderIngestTransactionIngressV1, ProviderIngestTransactionObservationV1,
     musubi_provider_attestation_controller_policy_digest_v1,
     store::{StorageError, StoredManifest},
     validate_musubi_provider_attestation_inventory_binding_v1,
@@ -714,10 +712,10 @@ impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
     }
 }
 
-// TODO: instantiate this adapter only after the provider-attestation archive,
-// checkpoint-head seal, and supervised journal activation gates are complete.
-// Keeping the adapter private prevents an unqualified signer from entering the
-// journal through a public construction surface in the meantime.
+// The standard daemon keeps this governed signer uninstantiated until the
+// provider-attestation archive, checkpoint-head seal, and supervised journal
+// are activation-qualified. Its private construction surface prevents
+// unqualified stock-daemon use.
 #[derive(Clone)]
 #[allow(dead_code)]
 struct GovernedMusubiProviderAttestationSignerV1 {
@@ -971,10 +969,10 @@ impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSign
     }
 }
 
-// TODO: instantiate this adapter only after the provider-attestation archive,
-// checkpoint-head seal, and supervised journal activation gates are complete.
-// Keeping the adapter private prevents an inventory implementation from
-// bypassing the daemon-owned deployment binding in the meantime.
+// The standard daemon keeps this governed inventory uninstantiated until the
+// provider-attestation archive, checkpoint-head seal, and supervised journal
+// are activation-qualified. Its private construction surface prevents an
+// inventory implementation from bypassing the daemon-owned deployment binding.
 #[derive(Clone)]
 #[allow(dead_code)]
 struct GovernedMusubiProviderAttestationInventoryV1 {
@@ -1316,54 +1314,6 @@ impl NativeProviderIngestLocalStorageV1 {
             operation_timeout,
         }
     }
-
-    // TODO: Invoke this boundary from the finalized post-completion attestation coordinator once
-    // its governed signer/approval handoff exists. Keeping it uncalled makes this slice externally
-    // inert while fixing the only admissible way to derive the unsigned request.
-    #[allow(
-        dead_code,
-        reason = "the post-completion coordinator is intentionally not activated in this slice"
-    )]
-    fn prepare_musubi_attestation_approval_request(
-        &self,
-        retained_authorization: &FinalizedProviderIngestAuthorizationV1,
-        completed_claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
-    ) -> std::result::Result<
-        ProviderIngestMusubiAttestationApprovalRequestV1,
-        ProviderIngestLocalStorageErrorV1,
-    > {
-        if !completed_claim.matches_authorization(retained_authorization) {
-            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
-        }
-        let stored = self
-            .node
-            .manifest_metadata_by_digest(&retained_authorization.manifest_digest())
-            .map_err(|error| classify_completed_attestation_manifest_lookup_error(&error))?;
-        if stored.manifest_digest() != &retained_authorization.manifest_digest()
-            || stored.manifest_cid() != retained_authorization.manifest_cid()
-            || stored.content_length() != retained_authorization.content_length()
-            || stored.chunk_profile_handle() != retained_authorization.chunker_handle()
-        {
-            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
-        }
-        let manifest = stored
-            .load_manifest()
-            .map_err(|error| classify_storage_backend_error(&error))?;
-        validate_manifest_binding(retained_authorization, &manifest)?;
-        let registered_profile = validate_registered_chunker_profile(&manifest.chunking)
-            .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
-        let plan = stored
-            .try_to_car_plan_with_hint(registered_profile.profile, None)
-            .map_err(|error| classify_storage_backend_error(&error))?;
-        validate_verified_payload(retained_authorization, &manifest, &plan)?;
-
-        self.node
-            .verify_provider_ingest_completed_musubi_capture_bundle(
-                &plan,
-                retained_authorization,
-                completed_claim,
-            )
-    }
 }
 
 struct DeadlineBoundedReaderV1 {
@@ -1642,8 +1592,8 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
 /// a permanent verification failure cannot safely evict the object. `Quarantined` instead requires
 /// the provider-ingest runtime to retain the object, durably dead-letter the exact authorization,
 /// and make the completion path unreachable. Transient verification failures remain retryable.
-// TODO: keep daemon activation fail-closed until supported storage targets prove crash/restart
-// recovery across the admission-to-dead-letter interval and shared-object replay.
+// Durable restart recovery revalidates admitted storage before refetch and dead-letters permanent
+// failures without evicting shared chunks; the native regression covers a second reopen and replay.
 fn finish_newly_admitted_manifest_verification(
     manifest_id: &str,
     verification: std::result::Result<

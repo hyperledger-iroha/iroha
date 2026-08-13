@@ -842,14 +842,29 @@ signed_order_request_from_fields = build_signed_orderbook_order_request(
 # nine fractional digits. Integer JSON numbers and retired micro-XOR fields are rejected.
 # Embed `signed_order_request_from_fields` in a SubmitSorafsOrderbookOrder ISI,
 # build and sign the native transaction, then encode its versioned Norito bytes.
+# Configure `ToriiClient(chain_discriminant=...)` for the deployment before
+# submitting (`369` for Taira); the default `753` is the Sora discriminant.
+# Strict submission requires canonical HTTPS and uses an internally owned,
+# zero-retry Requests adapter with only explicit headers/proxies/verify/cert.
+# It ignores trust_env/netrc/environment proxy or CA discovery, hooks, cookies,
+# persistence and elapsed timing, and rejects custom transport state. The
+# configured positive timeout is connect/read inactivity, not an absolute
+# deadline: a slow drip may exceed it; explicit None is rejected here.
 signed_order_transaction = b"...versioned caller-signed SignedTransaction bytes..."
-submission_receipt = client.submit_sorafs_orderbook_order(signed_order_transaction)
+submission_receipt = client.submit_sorafs_orderbook_order(
+    signed_order_transaction,
+    expected_receipt_signer=torii_receipt_public_key,
+)
 print(submission_receipt["payload"]["signed_transaction_hash"])
+# Catch SorafsOrderbookSubmissionAmbiguousError after dispatch, reconcile its
+# expected_identity against finalized state, and never resubmit automatically.
 client.submit_sorafs_orderbook_cancel(
-    b"...versioned SignedTransaction with one CancelSorafsOrderbookOrder ISI..."
+    b"...versioned SignedTransaction with one CancelSorafsOrderbookOrder ISI...",
+    expected_receipt_signer=torii_receipt_public_key,
 )
 client.submit_sorafs_orderbook_receipt(
-    b"...versioned SignedTransaction with one RecordSorafsOrderbookSettlementReceipt ISI..."
+    b"...versioned SignedTransaction with one RecordSorafsOrderbookSettlementReceipt ISI...",
+    expected_receipt_signer=torii_receipt_public_key,
 )
 
 # Validate SoraFS reference payloads locally

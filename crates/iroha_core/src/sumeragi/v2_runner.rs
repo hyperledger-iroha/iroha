@@ -82,7 +82,7 @@ use super::{
         persist_canonical_historical_recovery_payload_custody,
         plan_lane_application_evidence_repair, require_validator_storage_platform,
     },
-    v2_lifecycle_coordinator::{
+    v2_first_release_recovery::{
         CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
     },
     v2_lifecycle_recovery::{

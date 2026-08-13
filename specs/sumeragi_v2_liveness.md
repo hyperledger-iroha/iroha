@@ -2202,9 +2202,13 @@ canonical, and below trusted non-writable ancestry. Its command records use
 relative arguments and stable archive/evidence IDs, never caller checkout,
 tool, cache, or evidence paths. These files record filesystem-protected
 operator decisions; they are not signatures and do not claim cryptographic
-approver identity. Bootstrap, validator, and receipt-writer import, archive,
-and independent-replay integration remains pending, so this source contract
-does not close a release gate.
+approver identity. Bootstrap authenticates and privately archives all four raw
+records, validates their exact candidate/tree/tool/evidence/duration bindings,
+and publishes only path-free sanitized attestations. The standalone validator
+and receipt writer independently replay the four records before acknowledgment
+or publication, and bootstrap authenticates the retained path-free result after
+private-state pruning. This machinery does not claim that an operator has
+granted an approval and does not by itself close a release gate.
 
 A production run cannot be started by invoking the candidate runner directly.
 The release operator first authenticates an out-of-tree copy of

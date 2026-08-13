@@ -73271,7 +73271,7 @@ fn decode_query_projection_archive_payload(
         ))
     })?;
     let archive =
-        norito::decode_from_bytes::<QueryProjectionShardArchive>(&decompressed).map_err(|err| {
+        norito::decode_canonical::<QueryProjectionShardArchive>(&decompressed).map_err(|err| {
             query_projection_archive_validation_error(format!(
                 "failed to decode query projection archive payload: {err}"
             ))

@@ -2118,12 +2118,12 @@ fn queue_plan_synced_certificate_binds_exact_durable_journal_claim() {
             .admission_binding
             .signed_transaction_hash
             .as_ref(),
-        "ingress must expect the same inner signed-wire hash carried by the durable binding"
+        "ingress must expect the same signed transaction identity carried by the durable binding"
     );
-    assert_ne!(
+    assert_eq!(
         expected_signed_hash.as_ref(),
         expectation.entrypoint_hash.as_ref(),
-        "the inner signed-wire hash must remain distinct from the external entrypoint hash"
+        "external signed transaction and entrypoint identities must be equal"
     );
     let exact_receipt =
         exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 30_001);

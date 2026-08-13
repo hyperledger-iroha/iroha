@@ -44,8 +44,18 @@ def _write_package_sources(root: Path) -> list[dict[str, str]]:
     return rows
 
 
-def _write_map(root: Path, rows: list[dict[str, object]], *, extra: str = "") -> None:
-    lines = ['schema_version = 1', 'release_version = "0.1.0"', extra]
+def _write_map(
+    root: Path,
+    rows: list[dict[str, object]],
+    *,
+    release_version: str = "0.1.0",
+    extra: str = "",
+) -> None:
+    lines = [
+        "schema_version = 1",
+        f"release_version = {json.dumps(release_version)}",
+        extra,
+    ]
     for row in rows:
         lines.extend(
             [
@@ -127,6 +137,7 @@ def test_validate_version_map_emits_schema_closed_summary(tmp_path: Path) -> Non
     summary = version_map.validate_version_map(
         tmp_path,
         required_package_contracts=None,
+        release_package_ids=None,
     )
     assert summary == {
         "schema": version_map.SCHEMA,
@@ -165,6 +176,7 @@ def test_validate_version_map_rejects_adversarial_rows(
         version_map.validate_version_map(
             tmp_path,
             required_package_contracts=None,
+            release_package_ids=None,
         )
 
 
@@ -176,11 +188,47 @@ def test_validate_version_map_rejects_version_drift_and_extra_fields(tmp_path: P
         version_map.validate_version_map(
             tmp_path,
             required_package_contracts=None,
+            release_package_ids=None,
         )
 
     rows[0]["version"] = "0.1.0"
     _write_map(tmp_path, rows, extra='unexpected = "payload"')
     with pytest.raises(ValueError, match="schema-closed"):
+        version_map.validate_version_map(
+            tmp_path,
+            required_package_contracts=None,
+            release_package_ids=None,
+        )
+
+
+@pytest.mark.parametrize("mismatched_id", sorted(version_map.RELEASE_PACKAGE_IDS))
+def test_release_version_must_match_every_cli_release_package(
+    tmp_path: Path, mismatched_id: str
+) -> None:
+    rows: list[dict[str, object]] = []
+    for identifier in sorted(version_map.RELEASE_PACKAGE_IDS):
+        version = "0.1.1" if identifier == mismatched_id else "0.1.0"
+        relative = f"crates/{identifier}/Cargo.toml"
+        source = tmp_path / relative
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            f'[package]\nname = "{identifier}"\nversion = "{version}"\n',
+            encoding="utf-8",
+        )
+        rows.append(
+            {
+                "id": identifier,
+                "ecosystem": "cargo",
+                "path": relative,
+                "version": version,
+            }
+        )
+    _write_map(tmp_path, rows)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"release_version must match every CLI release package version .*{mismatched_id}",
+    ):
         version_map.validate_version_map(
             tmp_path,
             required_package_contracts=None,
@@ -213,6 +261,7 @@ def test_required_first_release_inventory_rejects_replaced_package(
         version_map.validate_version_map(
             tmp_path,
             required_package_contracts=required,
+            release_package_ids=None,
         )
 
 

@@ -333,6 +333,7 @@ FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
         "prerequisites",
         "lane_summaries",
         "signature",
+        "signer_receipt_bundle",
     }
 )
 FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS = frozenset(
@@ -362,6 +363,19 @@ FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS = frozenset(
         "policy_digest_sha256",
         "public_key_fingerprint_sha256",
         "signature_hex",
+    }
+)
+FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_SCHEMA = (
+    "sorafs.production_readiness.foundational_signer_receipt_bundle.v1"
+)
+FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_sha256",
+        "operation_id_hex",
+        "binding_base64",
+        "receipt_base64",
+        "validation_sha256",
     }
 )
 AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
@@ -1455,6 +1469,8 @@ __all__ = (
     "FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS",
     "AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS",
     "FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS",
+    "FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_FIELDS",
+    "FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_SCHEMA",
     "AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS",
     "AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_SCHEMA",
     "AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_FIELDS",

@@ -2934,10 +2934,10 @@ where
         cursor: ProviderIngestFinalizedCursorV1,
         outcome: &mut ProviderIngestTickOutcomeV1,
     ) -> Result<bool, ProviderIngestRuntimeErrorV1> {
-        // TODO: After completion is finalized, seal a separate completed-row
-        // claim, rerun the verifier, and durably prepare an approval-only
-        // provider attestation. This pre-completion claim and receipt never
-        // authorize an attestation by themselves.
+        // This is intentionally the pre-completion path. Finalized completed
+        // rows are independently scanned and reverified by the completed-Musubi
+        // capture driver before an approval-only attestation enters its journal;
+        // neither this claim nor its receipt authorizes one.
         let claim = match self.outbox.claim_source(
             authorization.job_id(),
             self.claim_owner,

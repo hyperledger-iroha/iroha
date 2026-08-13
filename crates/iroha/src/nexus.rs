@@ -282,7 +282,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(4);
         let header = header_with_da_hash(NonZeroU64::new(11).expect("nonzero height"), None);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-        let proof = CrossLaneTransferBuilder::new(header, None, None, settlement)
+        let proof = CrossLaneTransferBuilder::new(header, None, settlement)
             .build()
             .expect("envelope should be valid");
         let envelope = proof.envelope().clone();
@@ -316,29 +316,24 @@ mod tests {
             None,
         );
         let duplicate_settlement = sample_settlement(lane_id, dataspace_id, duplicate_height);
-        let first = CrossLaneTransferBuilder::new(
-            duplicate_header,
-            None,
-            None,
-            duplicate_settlement.clone(),
-        )
-        .build()
-        .expect("first envelope should be valid")
-        .envelope()
-        .clone();
-        let third =
-            CrossLaneTransferBuilder::new(duplicate_header, None, None, duplicate_settlement)
+        let first =
+            CrossLaneTransferBuilder::new(duplicate_header, None, duplicate_settlement.clone())
                 .build()
-                .expect("third envelope should be valid")
+                .expect("first envelope should be valid")
                 .envelope()
                 .clone();
+        let third = CrossLaneTransferBuilder::new(duplicate_header, None, duplicate_settlement)
+            .build()
+            .expect("third envelope should be valid")
+            .envelope()
+            .clone();
 
         let middle_header = header_with_da_hash(
             NonZeroU64::new(duplicate_height + 1).expect("nonzero height"),
             None,
         );
         let middle_settlement = sample_settlement(lane_id, dataspace_id, duplicate_height + 1);
-        let middle = CrossLaneTransferBuilder::new(middle_header, None, None, middle_settlement)
+        let middle = CrossLaneTransferBuilder::new(middle_header, None, middle_settlement)
             .build()
             .expect("middle envelope should be valid")
             .envelope()
@@ -369,12 +364,12 @@ mod tests {
         let first_settlement = sample_settlement(lane_id, first_dataspace, header.height().get());
         let second_settlement = sample_settlement(lane_id, second_dataspace, header.height().get());
 
-        let first = CrossLaneTransferBuilder::new(header, None, None, first_settlement)
+        let first = CrossLaneTransferBuilder::new(header, None, first_settlement)
             .build()
             .expect("first envelope should be valid")
             .envelope()
             .clone();
-        let second = CrossLaneTransferBuilder::new(header, None, None, second_settlement)
+        let second = CrossLaneTransferBuilder::new(header, None, second_settlement)
             .build()
             .expect("second envelope should be valid")
             .envelope()
@@ -393,12 +388,12 @@ mod tests {
         let first_settlement = sample_settlement(first_lane, dataspace_id, header.height().get());
         let second_settlement = sample_settlement(second_lane, dataspace_id, header.height().get());
 
-        let first = CrossLaneTransferBuilder::new(header, None, None, first_settlement)
+        let first = CrossLaneTransferBuilder::new(header, None, first_settlement)
             .build()
             .expect("first envelope should be valid")
             .envelope()
             .clone();
-        let second = CrossLaneTransferBuilder::new(header, None, None, second_settlement)
+        let second = CrossLaneTransferBuilder::new(header, None, second_settlement)
             .build()
             .expect("second envelope should be valid")
             .envelope()
@@ -418,7 +413,7 @@ mod tests {
             let header =
                 header_with_da_hash(NonZeroU64::new(block_height).expect("nonzero height"), None);
             let settlement = sample_settlement(lane_id, dataspace_id, block_height);
-            CrossLaneTransferBuilder::new(header, None, None, settlement)
+            CrossLaneTransferBuilder::new(header, None, settlement)
                 .build()
                 .expect("envelope should be valid")
                 .envelope()
@@ -470,7 +465,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(8);
         let header = header_with_da_hash(NonZeroU64::new(15).expect("nonzero height"), None);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-        let valid = CrossLaneTransferBuilder::new(header, None, None, settlement)
+        let valid = CrossLaneTransferBuilder::new(header, None, settlement)
             .build()
             .expect("envelope should be valid")
             .envelope()
@@ -494,7 +489,7 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(12).expect("nonzero height"), None);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get() - 1);
 
-        let proof = CrossLaneTransferBuilder::new(header, None, None, settlement)
+        let proof = CrossLaneTransferBuilder::new(header, None, settlement)
             .build()
             .expect("lane-local settlement height may differ from global proposal height");
 
@@ -515,7 +510,7 @@ mod tests {
             header_with_da_hash(NonZeroU64::new(12).expect("nonzero height"), header_da_hash);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
 
-        let err = CrossLaneTransferBuilder::new(header, None, provided_da_hash, settlement)
+        let err = CrossLaneTransferBuilder::new(header, provided_da_hash, settlement)
             .build()
             .expect_err("da mismatch should fail");
         assert!(matches!(

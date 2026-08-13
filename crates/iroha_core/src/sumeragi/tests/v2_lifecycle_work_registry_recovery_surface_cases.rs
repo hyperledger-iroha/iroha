@@ -1,6 +1,6 @@
     #[test]
     fn recovered_wal_sign_open_is_opaque_precommit_checked_and_runner_inert() {
-        let source = include_str!("../v2_lifecycle_work_registry.rs");
+        let source = reviewed_lifecycle_work_registry_source_for_test();
         let production = source
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
@@ -167,7 +167,7 @@
     }
     #[test]
     fn durable_validate_async_handoff_surface_is_move_only_scheduler_free_and_inert() {
-        let source = include_str!("../v2_lifecycle_work_registry.rs");
+        let source = reviewed_lifecycle_work_registry_source_for_test();
         let production = source
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
@@ -328,7 +328,7 @@
 
     #[test]
     fn durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired() {
-        let registry_source = include_str!("../v2_lifecycle_work_registry.rs");
+        let registry_source = reviewed_lifecycle_work_registry_source_for_test();
         let registry_production = registry_source
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
@@ -552,7 +552,7 @@
 
     #[test]
     fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
-        let registry_source = include_str!("../v2_lifecycle_work_registry.rs");
+        let registry_source = reviewed_lifecycle_work_registry_source_for_test();
         let registry_production = registry_source
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
@@ -862,7 +862,7 @@
 
     #[test]
     fn certified_fetch_dequeue_commit_requires_the_durable_token() {
-        let source = include_str!("../v2_lifecycle_work_registry.rs");
+        let source = reviewed_lifecycle_work_registry_source_for_test();
         let production = source
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
@@ -955,7 +955,7 @@
 
     #[test]
     fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() {
-        let registry = include_str!("../v2_lifecycle_work_registry.rs");
+        let registry = reviewed_lifecycle_work_registry_source_for_test();
         let adapter = include_str!("../v2.rs");
         let recovery = include_str!("../v2_lifecycle_work_registry_validate_recovery.rs");
         let boundary = include_str!("../v2_lifecycle_concrete_admission.rs");

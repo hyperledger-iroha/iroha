@@ -1430,6 +1430,10 @@ fn digest_from_hash(hash: &iroha_crypto::Hash) -> super::LifecycleDigest {
 mod static_tests {
     use super::super::{LifecycleDigest, LifecycleKey, LifecycleRound, LifecycleStage};
     use super::*;
+    use crate::sumeragi::v2_lifecycle_coordinator::{
+        reviewed_lifecycle_ledger_source_for_test,
+        reviewed_lifecycle_work_registry_source_for_test,
+    };
 
     fn key(
         phase: LifecyclePhase,
@@ -1972,7 +1976,7 @@ mod static_tests {
                 include_str!("v2_worker.rs"),
                 include_str!("v2_runtime.rs"),
                 include_str!("v2_lifecycle_concrete_admission.rs"),
-                include_str!("v2_lifecycle_work_registry.rs"),
+                reviewed_lifecycle_work_registry_source_for_test(),
             ]
             .iter()
             .map(|source| {
@@ -1988,7 +1992,7 @@ mod static_tests {
             exact_fsync_callers, 1,
             "the sealed live Validate-to-Sign transaction must be the sole exact-fsync caller"
         );
-        let ledger_production = include_str!("v2_lifecycle_ledger.rs")
+        let ledger_production = reviewed_lifecycle_ledger_source_for_test()
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
             .expect("ledger source has one production prefix");

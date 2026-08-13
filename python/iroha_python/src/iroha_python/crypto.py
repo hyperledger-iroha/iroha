@@ -183,6 +183,8 @@ __all__ = [
     "sign_ed25519",
     "sign_sm2",
     "decode_transaction_receipt_json",
+    "inspect_sorafs_orderbook_submission_v1",
+    "verify_sorafs_orderbook_submission_receipt_v1",
     "verify_signed_transaction_versioned",
     "verify",
     "verify_ed25519",
@@ -651,6 +653,13 @@ if not TYPE_CHECKING:
         """Signed transaction envelope produced by the Python SDK."""
     )
 
+_INSPECT_SORAFS_ORDERBOOK_SUBMISSION_V1 = getattr(
+    _crypto, "inspect_sorafs_orderbook_submission_v1", None
+)
+_VERIFY_SORAFS_ORDERBOOK_SUBMISSION_RECEIPT_V1 = getattr(
+    _crypto, "verify_sorafs_orderbook_submission_receipt_v1", None
+)
+
 
 def signed_transaction_envelope_from_json(payload: str) -> SignedTransactionEnvelope:
     """Reconstruct a `SignedTransactionEnvelope` from its JSON representation."""
@@ -662,6 +671,54 @@ def decode_transaction_receipt_json(payload: bytes) -> str:
     """Decode a Norito-framed transaction receipt into a JSON string."""
 
     return _crypto.decode_transaction_receipt_json(payload)
+
+
+def inspect_sorafs_orderbook_submission_v1(
+    route: str,
+    expected_network_id: NetworkId,
+    expected_chain_discriminant: int,
+    expected_receipt_signer: str,
+    signed_transaction_versioned: bytes,
+) -> Mapping[str, str]:
+    """Authenticate and identify one exact route-bound orderbook transaction."""
+
+    inspect = _INSPECT_SORAFS_ORDERBOOK_SUBMISSION_V1
+    if not callable(inspect):
+        raise RuntimeError("native crypto module lacks strict orderbook inspection")
+    result = inspect(
+        route,
+        _require_network_id(expected_network_id),
+        expected_chain_discriminant,
+        expected_receipt_signer,
+        signed_transaction_versioned,
+    )
+    if not isinstance(result, Mapping):
+        raise RuntimeError("native orderbook inspector returned a malformed identity")
+    return result
+
+
+def verify_sorafs_orderbook_submission_receipt_v1(
+    receipt_norito: bytes,
+    tx_hash: str,
+    entrypoint_hash: str,
+    signed_transaction_hash: str,
+    expected_receipt_signer: str,
+) -> str:
+    """Authenticate and bind one exact orderbook submission receipt."""
+
+    verify_receipt = _VERIFY_SORAFS_ORDERBOOK_SUBMISSION_RECEIPT_V1
+    if not callable(verify_receipt):
+        raise RuntimeError("native crypto module lacks strict orderbook receipt verification")
+    result = verify_receipt(
+        receipt_norito,
+        tx_hash,
+        entrypoint_hash,
+        signed_transaction_hash,
+        expected_receipt_signer,
+    )
+    if not isinstance(result, str):
+        raise RuntimeError("native orderbook receipt verifier returned malformed JSON")
+    return result
 
 
 def decode_zk_vk_transaction_payload(

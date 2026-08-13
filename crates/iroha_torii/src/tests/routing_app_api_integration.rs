@@ -1713,12 +1713,10 @@ mod app_api_integration_tests {
     async fn confidential_asset_transitions_reports_pending_window_metadata() {
         let _guard = app_query_limits_guard();
         use axum::routing::get;
-
         let alice_id = checked_app_api_account_id(
             0x85,
             "derive confidential asset transition fixture account key",
         );
-
         let vk_hash = Hash::new(b"vk-set-hash");
         let transition_id = Hash::new(b"transition-window");
         let expected_vk_hex = encode_hash_hex(&vk_hash);
@@ -1762,7 +1760,6 @@ mod app_api_integration_tests {
             LiveQueryStore::start_test(),
         ));
         bind_permanent_asset_alias_for_test(&state, &alice_id, &asset_def_id, "rose#centralbank");
-
         let app = Router::new().route(
             "/v1/confidential/assets/{definition_id}/transitions",
             get({
@@ -1773,13 +1770,11 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let req = http::Request::builder()
             .method("GET")
             .uri("/v1/confidential/assets/rose%23centralbank/transitions")
             .body(axum::body::Body::empty())
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
         let bytes = http_body_util::BodyExt::collect(resp.into_body())
@@ -1816,13 +1811,11 @@ mod app_api_integration_tests {
     async fn confidential_asset_transitions_rejects_prefixed_path_selector() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
-
         let result = handle_v1_confidential_asset_transitions(
             state,
             axum::extract::Path("prefix:550e8400e29b41d4a7164466554400dd".to_string()),
         )
         .await;
-
         match result {
             Err(Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))) => {}
             Err(other) => panic!("unexpected error: {other:?}"),
@@ -1835,13 +1828,11 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use axum::routing::get;
         use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
-
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let app = Router::new().route(
             "/v1/parameters",
             get({
@@ -1849,16 +1840,13 @@ mod app_api_integration_tests {
                 move || async move { handle_v1_parameters(state.clone()).await }
             }),
         );
-
         let req = http::Request::builder()
             .method("GET")
             .uri("/v1/parameters")
             .body(axum::body::Body::empty())
             .unwrap();
-
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
-
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let s = String::from_utf8(bytes.to_vec()).unwrap();
         let json: norito::json::Value = norito::json::from_str(&s).unwrap();
@@ -1871,7 +1859,6 @@ mod app_api_integration_tests {
     async fn asset_holders_query_uses_canonical_i105_literals() {
         let _guard = app_query_limits_guard();
         use axum::routing::post;
-
         let (state, alice_id, bob_id) = build_asset_holder_fixture_state();
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
@@ -1897,7 +1884,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![(
             "pagination",
             obj(vec![("limit", val(&8u64)), ("offset", val(&0u64))]),
@@ -1919,7 +1905,6 @@ mod app_api_integration_tests {
             .expect("items array should exist");
         assert_eq!(parsed["total"].as_u64(), Some(2));
         assert_eq!(items.len(), 2);
-
         let expected = [i105_literal(&alice_id), i105_literal(&bob_id)];
         for literal in expected {
             assert!(
@@ -1938,7 +1923,6 @@ mod app_api_integration_tests {
     async fn asset_holders_query_filter_accepts_account_alias() {
         let _guard = app_query_limits_guard();
         use axum::routing::post;
-
         let (state, alice_id, _) = build_asset_holder_fixture_state();
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
@@ -1964,7 +1948,6 @@ mod app_api_integration_tests {
                 }
             }),
         );
-
         let body = json_string(obj(vec![
             (
                 "filter",
@@ -2007,15 +1990,12 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn asset_holders_query_aggregate_groups_pkrs_by_primary_alias_domain() {
         let _guard = app_query_limits_guard();
-
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
         let parsed = run_asset_holder_alias_aggregate_query(None, state).await;
-
         assert_eq!(parsed["total"].as_u64(), Some(2));
         assert_eq!(parsed["query_source"].as_str(), Some("live_debug"));
         assert!(parsed["indexed_height"].as_u64().is_some());
         assert!(parsed["indexed_block_hash"].is_string() || parsed["indexed_block_hash"].is_null());
-
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
         assert_eq!(
@@ -2036,16 +2016,13 @@ mod app_api_integration_tests {
     async fn asset_holders_query_aggregate_uses_cached_projection_shards_when_published() {
         let _guard = app_query_limits_guard();
         clear_query_projection_archive_cache_for_tests();
-
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();
         let published = publish_asset_holder_checkpoint_with_real_manifests(&state).await;
         for (archive, _) in &published {
             cache_query_projection_archive_for_query(archive.clone());
         }
-
         let parsed = run_asset_holder_alias_aggregate_query(None, state).await;
         assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
-
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
         assert_eq!(
@@ -2964,6 +2941,29 @@ mod app_api_integration_tests {
         }
         state.publish_query_projection_checkpoint(1_714_111_000, checkpoint_shards);
         published
+    }
+
+    #[test]
+    fn query_projection_archive_decoder_rejects_noncanonical_norito() {
+        let archive = QueryProjectionShardArchive::from_index_status(
+            iroha_core::query::index_status::QueryIndexStatus::default(),
+            1,
+            QueryProjectionResourceKind::Accounts,
+            0,
+            None,
+            1,
+            b"row".to_vec(),
+        );
+        let alternate = {
+            let flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            norito::to_bytes(&archive).expect("encode alternate-layout archive")
+        };
+        assert!(norito::decode_from_bytes::<QueryProjectionShardArchive>(&alternate).is_ok());
+        let compressed = zstd::bulk::compress(&alternate, 3).expect("compress archive");
+
+        assert!(decode_query_projection_archive_payload(&compressed).is_err());
     }
 
     fn i105_literal(account_id: &AccountId) -> String {

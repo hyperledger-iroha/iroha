@@ -2620,8 +2620,8 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     if !query.is_empty() {
         endpoint.set_query(Some(&query));
     }
-
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let response = client
@@ -2734,8 +2734,8 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
         .join(&format!("v1/sorafs/por/report/{iso_week}"))
         .map_err(|err| format!("failed to resolve PoR report endpoint: {err}"))?;
-
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let response = client
@@ -6976,8 +6976,8 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
     if payload.is_empty() {
         return Err("`--payload` file must not be empty".to_string());
     }
-
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_millis(timeout_ms))
         .build()
         .map_err(|err| format!("failed to construct runner canary HTTP client: {err}"))?;
@@ -9134,8 +9134,8 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
     )?;
     let request =
         moderation_committee_canary_aggregate_request_json(&result_values, notes.as_deref());
-
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_millis(timeout_ms))
         .build()
         .map_err(|err| format!("failed to construct committee canary HTTP client: {err}"))?;
@@ -15915,8 +15915,8 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         ),
         None => None,
     };
-
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
 

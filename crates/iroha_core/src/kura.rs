@@ -217,65 +217,6 @@ const KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME: &str =
 const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_receiver_finality";
 const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
 const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
-/// Legacy hard limit for one version-two canonical block-retention record.
-///
-/// The 512-message first-release cap and 4 KiB canonical payload cap require a
-/// little over 2 MiB at their joint maximum. Four MiB leaves deterministic
-/// framing/context headroom while preventing hostile on-disk data from turning
-/// startup or proof serving into an unbounded allocation.
-const MAX_RETAINED_BLOCK_RECORD_V2_BYTES: usize = 4 * 1024 * 1024;
-/// Hard limit for the compact merge reference added by retained-record version three.
-///
-/// Consensus accepts at most a 4 MiB merge QC. The remaining 256 KiB bounds
-/// reference metadata and Norito framing without coupling Kura to an
-/// implementation-specific encoded-size estimate.
-const MAX_RETAINED_MERGE_REFERENCE_BYTES: usize = 4 * 1024 * 1024 + 256 * 1024;
-/// Norito envelope headroom when the version-three optional field is present.
-///
-/// The two component maxima are complete independent encodings; this separate
-/// allowance covers the option tag, field framing, and any packed-struct
-/// envelope delta instead of assuming those bytes disappear into either
-/// component's budget.
-const MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES: usize = 256 * 1024;
-/// Hard limit for one immutable version-three canonical block-retention record.
-///
-/// This is the sum of the complete legacy SCCP/archive envelope and the new
-/// independently bounded merge-reference witness. Keeping the joint maximum
-/// explicit prevents a valid near-maximum archive and merge QC from making
-/// finality persistence or pre-eviction retention fail.
-const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = MAX_RETAINED_BLOCK_RECORD_V2_BYTES
-    + MAX_RETAINED_MERGE_REFERENCE_BYTES
-    + MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES;
-const RETAINED_BLOCK_RECORD_VERSION_V2: u16 = 2;
-const RETAINED_BLOCK_RECORD_VERSION: u16 = 3;
-/// Hard limit for the consensus artifact embedded in one Kura finality record.
-///
-/// The maximum 31-validator revision-4 roster, its current PoPs, and a boundary
-/// snapshot containing the next roster and PoPs fit well below this limit.
-const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
-/// Hard limit for the complete private record, including its retained block header.
-const MAX_KURA_V2_FINALITY_RECORD_BYTES: usize = MAX_V2_FINALITY_ARTIFACT_BYTES + 256 * 1024;
-const KURA_V2_FINALITY_RECORD_VERSION: u16 = 3;
-/// Hard limit for one startup replay WSV checkpoint.
-const MAX_WSV_CHECKPOINT_BYTES: usize = 64 * 1024;
-/// Hard limit for one startup replay commit manifest.
-const MAX_COMMIT_MANIFEST_BYTES: usize = 64 * 1024;
-/// Number of immutable sidecar identities whose successful BLS verification
-/// is remembered. Entries retain only stable path/file/directory metadata and
-/// an artifact hash, not the potentially multi-megabyte artifact itself.
-const V2_FINALITY_VERIFICATION_CACHE_CAPACITY: usize = 64;
-/// Maximum number of finality artifacts retained by one parallel startup
-/// verification batch.
-///
-/// Each artifact is independently bounded, but may still be several MiB for a
-/// maximum-size validator roster. Keeping the batch fixed bounds aggregate
-/// transient memory independently of the host's Rayon worker count.
-const V2_FINALITY_STARTUP_VERIFICATION_BATCH_SIZE: usize = 8;
-const CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY: usize = 64;
-const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
-const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
-const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
-
 include!("kura/startup_finality_support.rs");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

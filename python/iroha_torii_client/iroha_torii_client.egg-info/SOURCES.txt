@@ -5,6 +5,7 @@ identifier_receipts.py
 mock.py
 native_amx.py
 norito_frame.py
+orderbook_submission.py
 pyproject.toml
 sccp.py
 vpn_validation.py
@@ -14,6 +15,7 @@ vpn_validation.py
 ./mock.py
 ./native_amx.py
 ./norito_frame.py
+./orderbook_submission.py
 ./sccp.py
 ./vpn_validation.py
 iroha_torii_client.egg-info/PKG-INFO
@@ -22,4 +24,5 @@ iroha_torii_client.egg-info/dependency_links.txt
 iroha_torii_client.egg-info/requires.txt
 iroha_torii_client.egg-info/top_level.txt
 tests/test_client.py
+tests/orderbook_submission_test.py
 tests/test_strict_wire_profiles.py

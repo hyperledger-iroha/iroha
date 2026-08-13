@@ -826,16 +826,13 @@ mod offline_escrow_account_tests {
 
     #[test]
     fn derivation_is_stable_without_a_public_signing_seed() {
-        let network_id = network_id(1);
+        let network = network_id(1);
         let definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
         );
-        let custody = offline_escrow_account_id(&network_id, &definition_id);
-        assert_eq!(
-            custody,
-            offline_escrow_account_id(&network_id, &definition_id)
-        );
+        let custody = offline_escrow_account_id(&network, &definition_id);
+        assert_eq!(custody, offline_escrow_account_id(&network, &definition_id));
 
         let legacy_seed_material =
             format!("iroha.offline.escrow|offline-custody-chain|{definition_id}");

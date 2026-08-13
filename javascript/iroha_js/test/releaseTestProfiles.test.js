@@ -39,6 +39,7 @@ test("release test profiles separate provisioned lanes and reject skipped result
     '"sorafsChunker.oneGib.test.js"',
     '"sorafsAppealFinanceValidation.test.js"',
     '"sorafsFixtureBundleValidation.test.js"',
+    '"sorafsOrderbookSubmission.test.js"',
     '"sorafsOrchestrator.parity.test.js"',
     '"sorafsPdpValidation.test.js"',
     '/# (?:SKIP|TODO)(?:\\s|$)/u',
@@ -137,4 +138,12 @@ test("release workflows require platform provenance, heavy, and SoraFS native la
     readRepositoryFile("ci/sdk_sorafs_orchestrator.sh"),
     /node scripts\/run-test-profile\.mjs sorafs-native/u,
   );
+  const privacyWorkflow = readRepositoryFile(".github/workflows/pr_privacy_sdk_guard.yml");
+  for (const path of [
+    "javascript/iroha_js/src/sorafsOrderbookSubmission.js",
+    "javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts",
+    "javascript/iroha_js/test/sorafsOrderbookSubmission.test.js",
+  ]) {
+    assert.ok(privacyWorkflow.includes(`- \"${path}\"`), `${path} must trigger ABI-22 checks`);
+  }
 });
